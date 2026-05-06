@@ -102,15 +102,13 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let mut diagnostics = Vec::new();
 
     let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
-    if let Some(map) = raw.as_mapping() {
-        for key in map.keys() {
-            if let Some(k) = key.as_str() {
-                if !known_keys.contains(&k) {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Warning,
-                        message: format!("unknown field '{k}' (ignored)"),
-                    });
-                }
+    for key in mapping.keys() {
+        if let Some(k) = key.as_str() {
+            if !known_keys.contains(&k) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("unknown field '{k}' (ignored)"),
+                });
             }
         }
     }
@@ -120,18 +118,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 message: format!("node '{}': missing prompt_file", node.id),
-            });
-        }
-
-        let known_types = ["doc-only", "code-mutating"];
-        let type_str = match &node.node_type {
-            NodeType::DocOnly => "doc-only",
-            NodeType::CodeMutating => "code-mutating",
-        };
-        if !known_types.contains(&type_str) {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                message: format!("node '{}': unknown type '{}'", node.id, type_str),
             });
         }
     }
@@ -230,12 +216,9 @@ nodes: []
     }
 
     #[test]
-    fn warns_on_unknown_node_type() {
-        // serde_yaml will fail to deserialize an unknown enum variant,
-        // so an unknown type like "transformer" produces an error not a warning.
-        // Per ADR-0001, we should be lenient. But serde_yaml strict parsing
-        // of the enum means truly unknown types are parse errors. This is
-        // acceptable for v1 — only doc-only and code-mutating are valid.
+    fn errors_on_unknown_node_type() {
+        // Unknown enum variant → YAML parse error. Only doc-only and
+        // code-mutating are valid NodeType variants for v1.
         let yaml = r#"
 name: bad-type
 nodes:
@@ -245,10 +228,7 @@ nodes:
     inputs: []
     outputs: []
 "#;
-        let err = parse_pipeline(yaml);
-        // Unknown enum variant → YAML parse error (acceptable per ADR-0001
-        // sharp-tool: we don't silently accept unknown types)
-        assert!(err.is_err());
+        assert!(parse_pipeline(yaml).is_err());
     }
 
     #[test]

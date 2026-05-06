@@ -382,13 +382,7 @@ async fn create_run(
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
-    (
-        StatusCode::CREATED,
-        Json(CreateRunResponse {
-            run_id: run_id.clone(),
-        }),
-    )
-        .into_response()
+    (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
@@ -405,12 +399,12 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if let Some(state) = event_log::project(&events) {
+        if let Some(run_state) = event_log::project(&events) {
             runs.push(RunListEntry {
-                run_id: state.run_id,
-                pipeline_name: state.pipeline_name,
-                status: state.status,
-                started_at: state.started_at,
+                run_id: run_state.run_id,
+                pipeline_name: run_state.pipeline_name,
+                status: run_state.status,
+                started_at: run_state.started_at,
             });
         }
     }

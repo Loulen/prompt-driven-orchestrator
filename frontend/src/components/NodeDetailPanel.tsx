@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal, ExternalLink } from "lucide-react";
-import type { NodeState } from "../types";
+import type { NodeState, NodeStatus } from "../types";
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
   running: "Running",
   completed: "Completed",
@@ -79,13 +79,7 @@ export default function NodeDetailPanel({ node, runId }: Props) {
         >
           {terminalContent || (
             <span className="text-fg-4">
-              {node.status === "pending"
-                ? "Waiting to start..."
-                : node.status === "completed"
-                  ? "Session ended."
-                  : node.status === "failed"
-                    ? `Failed: ${node.failure_reason ?? "unknown reason"}`
-                    : "Connecting..."}
+              {terminalPlaceholder(node)}
             </span>
           )}
         </pre>
@@ -120,6 +114,19 @@ export default function NodeDetailPanel({ node, runId }: Props) {
       </div>
     </aside>
   );
+}
+
+function terminalPlaceholder(node: NodeState): string {
+  switch (node.status) {
+    case "pending":
+      return "Waiting to start...";
+    case "completed":
+      return "Session ended.";
+    case "failed":
+      return `Failed: ${node.failure_reason ?? "unknown reason"}`;
+    case "running":
+      return "Connecting...";
+  }
 }
 
 function formatTime(iso: string): string {

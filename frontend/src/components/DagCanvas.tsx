@@ -8,7 +8,7 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeState, NodeStatus, RunState } from "../types";
+import type { NodeState, NodeStatus, RunState, RunStatus } from "../types";
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
   pending: "border-st-pending",
@@ -26,6 +26,12 @@ const STATUS_BG: Record<NodeStatus, string> = {
 
 const STATUS_DOTS: Record<NodeStatus, string> = {
   pending: "bg-st-pending",
+  running: "bg-st-running",
+  completed: "bg-st-done",
+  failed: "bg-st-failed",
+};
+
+const RUN_STATUS_DOTS: Record<RunStatus, string> = {
   running: "bg-st-running",
   completed: "bg-st-done",
   failed: "bg-st-failed",
@@ -118,9 +124,7 @@ export default function DagCanvas({ run, onSelectNode, selectedNodeId }: Props) 
         </div>
         <div className="mt-1 flex items-center gap-1.5">
           <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              STATUS_DOTS[run.status as NodeStatus] ?? "bg-fg-4"
-            }`}
+            className={`h-1.5 w-1.5 rounded-full ${RUN_STATUS_DOTS[run.status]}`}
           />
           <span className="text-fg-3">{run.status}</span>
         </div>

@@ -275,8 +275,8 @@ function EditCanvasInner() {
     );
   }
 
-  function handleAddNode(type: NodeType) {
-    const existingIds = pipeline!.nodes.map((n) => n.id);
+  const handleAddNode = (type: NodeType) => {
+    const existingIds = pipeline.nodes.map((n) => n.id);
     let id = type === "code-mutating" ? "implementer" : "node";
     let counter = 1;
     while (existingIds.includes(id)) {
@@ -290,10 +290,10 @@ function EditCanvasInner() {
       inputs: [{ name: "in", repeated: false }],
       outputs: [{ name: "out", repeated: false }],
       interactive: false,
-      view: { x: 200, y: 80 + pipeline!.nodes.length * 140 },
+      view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
     };
     addNodeToStore(newNode);
-  }
+  };
 
   return (
     <div className="relative flex-1" ref={reactFlowRef}>

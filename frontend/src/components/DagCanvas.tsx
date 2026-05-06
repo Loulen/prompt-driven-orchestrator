@@ -176,6 +176,8 @@ function formatWhenClause(when: Record<string, unknown>): string {
   return parts.join(" & ");
 }
 
+const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
+
 interface Props {
   run: RunState | null;
   onSelectNode: (nodeId: string | null) => void;
@@ -347,7 +349,6 @@ function DagCanvasInner({
     );
   }
 
-  const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
   const isTerminal = TERMINAL_STATUSES.includes(run.status);
 
   async function handleCleanup() {

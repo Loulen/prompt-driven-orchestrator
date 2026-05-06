@@ -273,7 +273,6 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
               <IOSection
                 title="Inputs"
                 ports={inputs}
-                runId={runId}
                 onOpenFile={(portName, files) =>
                   setModal({ portName, files })
                 }
@@ -285,7 +284,6 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
               <IOSection
                 title="Outputs"
                 ports={outputs}
-                runId={runId}
                 showFrontmatter
                 onOpenFile={(portName, files) =>
                   setModal({ portName, files })
@@ -335,13 +333,11 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
 function IOSection({
   title,
   ports,
-  runId,
   showFrontmatter,
   onOpenFile,
 }: {
   title: string;
   ports: PortIO[];
-  runId: string;
   showFrontmatter?: boolean;
   onOpenFile: (portName: string, files: FileInfo[]) => void;
 }) {
@@ -364,7 +360,6 @@ function IOSection({
           <PortRow
             key={port.port}
             port={port}
-            runId={runId}
             showFrontmatter={showFrontmatter}
             onOpen={() => onOpenFile(port.port, port.files)}
           />
@@ -382,24 +377,23 @@ function PortRow({
   onOpen,
 }: {
   port: PortIO;
-  runId: string;
   showFrontmatter?: boolean;
   onOpen: () => void;
 }) {
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
-  const dotClass = anyExists
-    ? port.repeated && port.files.length > 1
-      ? "bg-st-running"
-      : "bg-st-done"
-    : "bg-fg-5";
 
-  const displayPath =
-    port.files.length === 1
-      ? firstFile?.path ?? ""
-      : port.repeated
-        ? `${port.files.length} files`
-        : firstFile?.path ?? "";
+  let dotClass = "bg-fg-5";
+  if (anyExists && port.repeated && port.files.length > 1) {
+    dotClass = "bg-st-running";
+  } else if (anyExists) {
+    dotClass = "bg-st-done";
+  }
+
+  let displayPath = firstFile?.path ?? "";
+  if (port.files.length > 1 && port.repeated) {
+    displayPath = `${port.files.length} files`;
+  }
 
   const totalSize = port.files.reduce(
     (sum, f) => sum + (f.size ?? 0),

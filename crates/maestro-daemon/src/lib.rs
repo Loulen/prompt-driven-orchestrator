@@ -2024,6 +2024,74 @@ fn create_worktree(
 
 // --- tmux ---
 
+/// Env var that, when set, replaces the `claude --dangerously-skip-permissions ...`
+/// tail of the tmux script. Used by integration tests to spawn `sleep 60` instead
+/// of actually launching Claude Code.
+pub const TMUX_CMD_OVERRIDE_ENV: &str = "MAESTRO_TMUX_CMD_OVERRIDE";
+
+/// Quote a value so it survives expansion inside a single-quoted bash string.
+/// Wraps in `'…'` and escapes any embedded single quote as `'\''`.
+fn sh_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Construct the script tmux launches for a node run.
+///
+/// Shape:
+/// ```text
+/// exec bash -c '<exports> && <tail_cmd>'
+/// ```
+/// where `tail_cmd` defaults to `exec claude --dangerously-skip-permissions "$(cat <prompt>)"`.
+/// Both `exec`s are deliberate so the tmux session leader becomes claude (signals
+/// propagate, the session lives exactly as long as claude). The default can be
+/// overridden via `TMUX_CMD_OVERRIDE_ENV` for tests that don't have claude on PATH.
+///
+/// Verified empirically (2026-05-06): `claude "<prompt>"` is accepted as the
+/// initial message in interactive mode — the prompt-as-arg form works, no
+/// `tmux send-keys` fallback needed. First launch in a fresh worktree path
+/// also triggers claude's one-time "trust this folder" dialog; the user must
+/// confirm before the prompt lands. That gate is orthogonal to this primitive.
+///
+/// Public so integration tests can assert the produced shape without invoking tmux.
+pub fn build_tmux_script(
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    daemon_port: u16,
+    prompt_path: &std::path::Path,
+) -> String {
+    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV).unwrap_or_else(|_| {
+        format!(
+            "exec claude --dangerously-skip-permissions \"$(cat {})\"",
+            sh_single_quote(&prompt_path.to_string_lossy())
+        )
+    });
+
+    let inner = format!(
+        "export MAESTRO_RUN_ID={run_id_q} && \
+         export MAESTRO_NODE_ID={node_id_q} && \
+         export MAESTRO_NODE_ITER={iter_q} && \
+         export MAESTRO_DAEMON_URL={daemon_url_q} && \
+         {tail_cmd}",
+        run_id_q = sh_single_quote(run_id),
+        node_id_q = sh_single_quote(node_id),
+        iter_q = sh_single_quote(&iter.to_string()),
+        daemon_url_q = sh_single_quote(&format!("http://localhost:{daemon_port}")),
+    );
+
+    format!("exec bash -c {}", sh_single_quote(&inner))
+}
+
 fn spawn_tmux_session(
     session_name: &str,
     prompt: &str,
@@ -2033,32 +2101,17 @@ fn spawn_tmux_session(
     iter: i64,
     daemon_port: u16,
 ) -> Result<()> {
-    // Write prompt to a temp file the agent can read
     let prompt_dir = working_dir.join(".maestro").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
     let prompt_path = prompt_dir.join(format!("{node_id}-iter-{iter}.md"));
     std::fs::write(&prompt_path, prompt)?;
 
-    // Build the command that runs inside tmux
-    let claude_cmd = format!(
-        "export MAESTRO_RUN_ID='{run_id}' && \
-         export MAESTRO_NODE_ID='{node_id}' && \
-         export MAESTRO_NODE_ITER='{iter}' && \
-         export MAESTRO_DAEMON_URL='http://localhost:{daemon_port}' && \
-         echo 'Maestro NodeRun: {node_id} iter {iter}' && \
-         echo 'Prompt file: {}' && \
-         echo '---' && \
-         cat '{}' && \
-         echo '---' && \
-         echo 'Run: maestro complete when done, maestro fail --reason \"...\" on failure'",
-        prompt_path.display(),
-        prompt_path.display(),
-    );
+    let script = build_tmux_script(run_id, node_id, iter, daemon_port, &prompt_path);
 
     let output = std::process::Command::new("tmux")
         .args(["new-session", "-d", "-s", session_name, "-c"])
         .arg(working_dir)
-        .arg(&claude_cmd)
+        .arg(&script)
         .output()
         .context("failed to run tmux new-session")?;
 

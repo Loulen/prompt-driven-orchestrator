@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -8,7 +9,9 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Trash2 } from "lucide-react";
 import type { NodeState, NodeStatus, RunState, RunStatus } from "../types";
+import { cleanupRun } from "../api";
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
   pending: "border-st-pending",
@@ -35,6 +38,7 @@ const RUN_STATUS_DOTS: Record<RunStatus, string> = {
   running: "bg-st-running",
   completed: "bg-st-done",
   failed: "bg-st-failed",
+  archived: "bg-st-archived",
 };
 
 interface PipelineNodeData {
@@ -82,6 +86,8 @@ interface Props {
 }
 
 export default function DagCanvas({ run, onSelectNode, selectedNodeId }: Props) {
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
+
   if (!run) {
     return (
       <div className="flex flex-1 items-center justify-center text-fg-4">
@@ -111,6 +117,17 @@ export default function DagCanvas({ run, onSelectNode, selectedNodeId }: Props) 
 
   const edges: Edge[] = [];
 
+  const isTerminal = run.status === "completed" || run.status === "failed";
+
+  async function handleCleanup() {
+    try {
+      await cleanupRun(run!.run_id);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+    setConfirmCleanup(false);
+  }
+
   return (
     <div className="relative flex-1">
       {/* Run overlay */}
@@ -128,6 +145,16 @@ export default function DagCanvas({ run, onSelectNode, selectedNodeId }: Props) 
           />
           <span className="text-fg-3">{run.status}</span>
         </div>
+        {isTerminal && (
+          <button
+            onClick={() => setConfirmCleanup(true)}
+            className="mt-2 flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            style={{ fontSize: "10px" }}
+          >
+            <Trash2 size={10} />
+            Cleanup
+          </button>
+        )}
       </div>
 
       <ReactFlow
@@ -142,6 +169,36 @@ export default function DagCanvas({ run, onSelectNode, selectedNodeId }: Props) 
       >
         <Background color="var(--color-line-soft)" gap={20} size={1} />
       </ReactFlow>
+
+      {/* Cleanup confirmation modal */}
+      {confirmCleanup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg">
+            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+              Cleanup Run
+            </h3>
+            <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
+              This will remove worktrees and artifacts. Event history is kept. Proceed?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmCleanup(false)}
+                className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                style={{ fontSize: "11.5px" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCleanup}
+                className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+                style={{ fontSize: "11.5px" }}
+              >
+                Cleanup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

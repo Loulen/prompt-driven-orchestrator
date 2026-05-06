@@ -1,4 +1,4 @@
-export type RunStatus = "running" | "completed" | "failed";
+export type RunStatus = "running" | "completed" | "failed" | "archived";
 export type NodeStatus = "pending" | "running" | "completed" | "failed";
 
 export interface RunListEntry {

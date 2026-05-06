@@ -19,3 +19,12 @@ export async function fetchRunEvents(runId: string): Promise<unknown[]> {
   if (!resp.ok) throw new Error(`GET /runs/${runId}/events failed: ${resp.status}`);
   return resp.json();
 }
+
+export async function cleanupRun(runId: string): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "cleanup_run" }),
+  });
+  if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+}

@@ -12,9 +12,10 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
 interface Props {
   node: NodeState;
   runId: string;
+  isArchived?: boolean;
 }
 
-export default function NodeDetailPanel({ node, runId }: Props) {
+export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
   const [terminalContent, setTerminalContent] = useState<string>("");
   const terminalRef = useRef<HTMLPreElement>(null);
 
@@ -88,9 +89,18 @@ export default function NodeDetailPanel({ node, runId }: Props) {
       {/* Actions */}
       <div className="border-t border-line px-3 py-2">
         <button
-          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+          className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
+            isArchived
+              ? "cursor-not-allowed text-fg-4"
+              : "text-fg-2 hover:bg-bg-4 hover:text-fg"
+          }`}
           style={{ fontSize: "11.5px" }}
-          title="Open terminal — full implementation in Slice 8"
+          title={
+            isArchived
+              ? "Run is archived. History is queryable via GET /runs/:id/events."
+              : "Open terminal — full implementation in Slice 8"
+          }
+          disabled={isArchived}
         >
           <ExternalLink size={12} />
           Open terminal

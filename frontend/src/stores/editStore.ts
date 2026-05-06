@@ -138,7 +138,13 @@ function dumpYaml(val: unknown, indent: number): string {
         const child = dumpYaml(v, indent + 1);
         if (typeof v === "object" && v !== null && !Array.isArray(v)) {
           const lines = child.split("\n");
-          return `${prefix}- ${lines[0]}\n${lines.slice(1).map((l) => `${prefix}  ${l}`).join("\n")}`;
+          // The recursive call already indented continuation lines at indent+1,
+          // which lines up with the column where the first key lands after `- `
+          // — so pass them through verbatim.
+          const rest = lines.slice(1).join("\n");
+          return rest
+            ? `${prefix}- ${lines[0]}\n${rest}`
+            : `${prefix}- ${lines[0]}`;
         }
         return `${prefix}- ${child}`;
       })

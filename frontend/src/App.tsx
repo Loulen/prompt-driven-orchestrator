@@ -94,6 +94,8 @@ export default function App() {
       ? selectedRun.nodes[selectedNodeId] ?? null
       : null;
 
+  const isArchived = selectedRun?.status === "archived";
+
   return (
     <div className="flex h-full flex-col bg-bg-1 text-fg">
       <TopBar />
@@ -109,7 +111,19 @@ export default function App() {
           selectedNodeId={selectedNodeId}
         />
         {selectedNode && selectedRun && (
-          <NodeDetailPanel node={selectedNode} runId={selectedRun.run_id} />
+          <NodeDetailPanel
+            node={selectedNode}
+            runId={selectedRun.run_id}
+            isArchived={isArchived}
+          />
+        )}
+        {!selectedNode && isArchived && selectedRun && (
+          <aside className="flex w-[340px] shrink-0 flex-col items-center justify-center border-l border-line bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
+            <div className="text-center px-6">
+              <div className="font-medium text-fg-3">Run archived</div>
+              <div className="mt-1">No live state available. Select a node to view its final status.</div>
+            </div>
+          </aside>
         )}
       </main>
       <StatusBar status={status} />

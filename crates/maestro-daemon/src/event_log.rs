@@ -30,6 +30,7 @@ pub enum EventKind {
     NodeFailed,
     RunCompleted,
     RunFailed,
+    RunArchived,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,7 @@ pub enum RunStatus {
     AwaitingUser,
     Completed,
     Failed,
+    Archived,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +190,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::RunFailed => {
                 state.status = RunStatus::Failed;
                 state.completed_at = Some(event.ts.clone());
+            }
+            EventKind::RunArchived => {
+                state.status = RunStatus::Archived;
             }
         }
     }
@@ -349,6 +354,27 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Completed);
         assert_eq!(state.nodes["griller"].status, NodeStatus::Completed);
+    }
+
+    #[test]
+    fn projects_archived_run() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "archival-test", "input": "test input" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+            make_event(EventKind::RunArchived, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Archived);
+        assert_eq!(state.pipeline_name, "archival-test");
+        assert_eq!(state.nodes.len(), 1);
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Completed);
     }
 
     #[test]

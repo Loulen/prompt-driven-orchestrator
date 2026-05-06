@@ -43,3 +43,13 @@ export async function attachSession(sessionId: string): Promise<void> {
   );
   if (!resp.ok) throw new Error(`attach failed: ${resp.status}`);
 }
+
+export async function cleanupRun(runId: string): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "cleanup_run" }),
+  });
+  if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+
+}

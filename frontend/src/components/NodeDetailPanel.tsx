@@ -14,9 +14,10 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
 interface Props {
   node: NodeState;
   runId: string;
+  isArchived?: boolean;
 }
 
-export default function NodeDetailPanel({ node, runId }: Props) {
+export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
   const [terminalContent, setTerminalContent] = useState<string>("");
   const terminalRef = useRef<HTMLPreElement>(null);
   const sessionName = `maestro-${runId}-${node.node_id}-iter-${node.iter}`;
@@ -117,15 +118,20 @@ export default function NodeDetailPanel({ node, runId }: Props) {
         {showOpenTerminal && (
           <button
             onClick={handleOpenTerminal}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+            className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
+              isArchived
+                ? "cursor-not-allowed text-fg-4"
+                : "text-fg-2 hover:bg-bg-4 hover:text-fg"
+            }`}
             style={{ fontSize: "11.5px" }}
+            disabled={isArchived}
           >
             <ExternalLink size={12} />
             Open terminal
           </button>
         )}
 
-        {node.status === "awaiting_user" && (
+        {node.status === "awaiting_user" && !isArchived && (
           <button
             onClick={handleMarkComplete}
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"

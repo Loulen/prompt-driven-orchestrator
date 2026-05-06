@@ -716,7 +716,6 @@ async fn run_command(
             };
             let iter = req.iter.unwrap_or(1);
 
-            // Verify the node is in awaiting_user state
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -754,7 +753,6 @@ async fn run_command(
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
 
-            // Check if all nodes completed → emit run_completed
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -792,9 +790,10 @@ async fn run_command(
             info!("mark_node_done: node {node_id} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        _ => (
+        "cleanup_run" => cleanup_run(&state, &run_id).await,
+        other => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("unknown command kind: {}", req.kind) })),
+            Json(serde_json::json!({ "error": format!("unknown command: {other}") })),
         )
             .into_response(),
     }
@@ -932,6 +931,85 @@ fn spawn_terminal_attach(terminal: &str, session_name: &str) -> Result<()> {
     std::mem::forget(child);
 
     Ok(())
+}
+
+async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        }
+    };
+
+    if run_state.status == event_log::RunStatus::Archived {
+        return (StatusCode::CONFLICT, "run is already archived").into_response();
+    }
+
+    for node in run_state.nodes.values() {
+        let session_name = format!("maestro-{run_id}-{}-iter-{}", node.node_id, node.iter);
+        kill_tmux_session(&session_name);
+    }
+    let mgr_session = format!("maestro-mgr-{run_id}");
+    kill_tmux_session(&mgr_session);
+
+    let run_dir = state.repo_root.join(".maestro").join("runs").join(run_id);
+    let worktree_dir = run_dir.join("worktree");
+
+    if worktree_dir.exists() {
+        let output = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree_dir)
+            .current_dir(&state.repo_root)
+            .output();
+        if let Ok(o) = output {
+            if !o.status.success() {
+                warn!(
+                    "git worktree remove failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+        }
+    }
+
+    let branch_name = format!("maestro/run-{run_id}");
+    let _ = std::process::Command::new("git")
+        .args(["branch", "-D", &branch_name])
+        .current_dir(&state.repo_root)
+        .output();
+
+    if run_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&run_dir) {
+            warn!("failed to remove run dir {}: {e}", run_dir.display());
+        }
+    }
+
+    let archived_event = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunArchived,
+        node_id: None,
+        iter: None,
+        payload: None,
+    };
+    if let Err(e) = append_event(state, &archived_event).await {
+        error!("failed to append run_archived: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
+    }
+
+    info!("Run {run_id} archived (cleanup complete)");
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "archived" })),
+    )
+        .into_response()
 }
 
 // --- WebSocket handler with event broadcasting ---
@@ -1391,6 +1469,221 @@ mod tests {
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Failed
         );
+    }
+
+    async fn seed_completed_run(state: &Arc<AppState>, run_id: &str) {
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test-pipe" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunCompleted,
+                node_id: None,
+                iter: None,
+                payload: None,
+            },
+        ];
+        for ev in &events {
+            append_event(state, ev).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_run_archives_and_preserves_events() {
+        let state = test_state().await;
+        let run_id = "cleanup-test-1";
+        seed_completed_run(&state, run_id).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["status"], "archived");
+
+        // Events are preserved — run projects as Archived
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(!events.is_empty());
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Archived);
+        // Node state is preserved
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_run_already_archived_returns_conflict() {
+        let state = test_state().await;
+        let run_id = "cleanup-conflict";
+        seed_completed_run(&state, run_id).await;
+
+        // First cleanup
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Second cleanup — should conflict
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn cleanup_nonexistent_run_returns_404() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/nonexistent/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn unknown_command_returns_bad_request() {
+        let state = test_state().await;
+        let run_id = "cmd-unknown";
+        seed_completed_run(&state, run_id).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "bogus_command"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn archived_run_still_appears_in_list() {
+        let state = test_state().await;
+        let run_id = "list-archive-test";
+        seed_completed_run(&state, run_id).await;
+
+        // Archive it
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // List runs — should still include the archived run
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["status"], "archived");
+
+        // GET /runs/:id/events still returns full history
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/events"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(events.len() >= 5); // run_started + node_started + node_completed + run_completed + run_archived
     }
 
     #[tokio::test]

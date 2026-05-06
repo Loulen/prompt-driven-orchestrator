@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -9,7 +10,10 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Trash2 } from "lucide-react";
 import type { NodeStatus, NodeType, RunState, RunStatus } from "../types";
+import { cleanupRun } from "../api";
+import CleanupConfirmModal from "./CleanupConfirmModal";
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
   pending: "border-st-pending",
@@ -40,6 +44,7 @@ const RUN_STATUS_DOTS: Record<RunStatus, string> = {
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
   failed: "bg-st-failed",
+  archived: "bg-st-archived",
 };
 
 const TYPE_LABELS: Record<NodeType, string> = {
@@ -121,6 +126,8 @@ export default function DagCanvas({
   onSelectNode,
   selectedNodeId,
 }: Props) {
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
+
   if (!run) {
     return (
       <div className="flex flex-1 items-center justify-center text-fg-4">
@@ -200,6 +207,17 @@ export default function DagCanvas({
     labelBgPadding: [4, 2] as [number, number],
   }));
 
+  const isTerminal = run.status === "completed" || run.status === "failed";
+
+  async function handleCleanup() {
+    try {
+      await cleanupRun(run!.run_id);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+    setConfirmCleanup(false);
+  }
+
   return (
     <div className="relative flex-1">
       {/* Run overlay */}
@@ -220,6 +238,16 @@ export default function DagCanvas({
           />
           <span className="text-fg-3">{run.status}</span>
         </div>
+        {isTerminal && (
+          <button
+            onClick={() => setConfirmCleanup(true)}
+            className="mt-2 flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            style={{ fontSize: "10px" }}
+          >
+            <Trash2 size={10} />
+            Cleanup
+          </button>
+        )}
       </div>
 
       <ReactFlow
@@ -234,6 +262,13 @@ export default function DagCanvas({
       >
         <Background color="var(--color-line-soft)" gap={20} size={1} />
       </ReactFlow>
+
+      {confirmCleanup && (
+        <CleanupConfirmModal
+          onConfirm={handleCleanup}
+          onCancel={() => setConfirmCleanup(false)}
+        />
+      )}
     </div>
   );
 }

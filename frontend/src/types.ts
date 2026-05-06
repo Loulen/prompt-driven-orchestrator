@@ -1,4 +1,4 @@
-export type RunStatus = "running" | "awaiting_user" | "completed" | "failed";
+export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed";
 export type NodeType = "doc-only" | "code-mutating";
 

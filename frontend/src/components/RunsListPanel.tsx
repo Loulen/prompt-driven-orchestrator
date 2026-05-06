@@ -1,10 +1,15 @@
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import type { RunListEntry, RunStatus } from "../types";
+import { cleanupRun } from "../api";
+import CleanupConfirmModal from "./CleanupConfirmModal";
 
 const STATUS_STYLES: Record<RunStatus, { dot: string; bg: string }> = {
   running: { dot: "bg-st-running", bg: "bg-st-running-bg" },
   awaiting_user: { dot: "bg-st-await", bg: "bg-st-await-bg" },
   completed: { dot: "bg-st-done", bg: "bg-st-done-bg" },
   failed: { dot: "bg-st-failed", bg: "bg-st-failed-bg" },
+  archived: { dot: "bg-st-archived", bg: "bg-st-archived-bg" },
 };
 
 interface Props {
@@ -18,6 +23,17 @@ export default function RunsListPanel({
   selectedRunId,
   onSelectRun,
 }: Props) {
+  const [confirmCleanup, setConfirmCleanup] = useState<string | null>(null);
+
+  async function handleCleanup(runId: string) {
+    try {
+      await cleanupRun(runId);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+    setConfirmCleanup(null);
+  }
+
   return (
     <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-bg-2">
       <div
@@ -38,16 +54,17 @@ export default function RunsListPanel({
         {runs.map((run) => {
           const isSelected = run.run_id === selectedRunId;
           const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
+          const isTerminal = run.status === "completed" || run.status === "failed";
 
           return (
             <button
               key={run.run_id}
               onClick={() => onSelectRun(run.run_id)}
-              className={`flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
+              className={`group flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
                 isSelected
                   ? "bg-bg-3 text-fg"
                   : "text-fg-2 hover:bg-bg-3/50"
-              }`}
+              } ${run.status === "archived" ? "opacity-60" : ""}`}
               style={{ fontSize: "11.5px" }}
             >
               <span
@@ -64,10 +81,30 @@ export default function RunsListPanel({
                   {run.run_id.slice(0, 20)}
                 </div>
               </div>
+              {isTerminal && (
+                <span
+                  role="button"
+                  title="Cleanup run"
+                  className="hidden shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmCleanup(run.run_id);
+                  }}
+                >
+                  <Trash2 size={12} />
+                </span>
+              )}
             </button>
           );
         })}
       </div>
+
+      {confirmCleanup && (
+        <CleanupConfirmModal
+          onConfirm={() => handleCleanup(confirmCleanup)}
+          onCancel={() => setConfirmCleanup(null)}
+        />
+      )}
     </aside>
   );
 }

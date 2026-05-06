@@ -10,9 +10,9 @@ mod variable_resolver;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
@@ -70,6 +70,31 @@ struct AppState {
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
+    /// Paths the daemon has just written. The pipeline watcher consults this map
+    /// and suppresses `pipeline_changed` broadcasts for paths it sees within the
+    /// TTL window — that's how we tell our own writes apart from external ones
+    /// (vim, git checkout, future Pipeline Manager) without ignoring the latter.
+    recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+}
+
+/// TTL during which a recorded self-write suppresses watcher broadcasts.
+/// Larger than the debouncer interval (1s) with margin for filesystem latency.
+pub(crate) const SELF_WRITE_TTL: Duration = Duration::from_secs(2);
+
+/// Entries older than this are GCed when a new write is recorded.
+const SELF_WRITE_GC: Duration = Duration::from_secs(5);
+
+/// Record a path the daemon is about to write so the file watcher can skip its
+/// own broadcast when notify reports the change. Call this *before* `std::fs::write`
+/// — the watcher otherwise races against the insert.
+fn mark_self_write(map: &Mutex<HashMap<PathBuf, Instant>>, path: &Path) {
+    let now = Instant::now();
+    let mut guard = match map.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    guard.retain(|_, t| now.duration_since(*t) < SELF_WRITE_GC);
+    guard.insert(path.to_path_buf(), now);
 }
 
 #[derive(Deserialize)]
@@ -213,7 +238,13 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
     let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
 
-    let watcher = pipeline_watcher::spawn_watcher(repo_root.clone(), pipeline_tx.clone());
+    let recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let watcher = pipeline_watcher::spawn_watcher(
+        repo_root.clone(),
+        pipeline_tx.clone(),
+        recent_writes.clone(),
+    );
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -229,6 +260,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         repo_root,
         port: bound_addr.port(),
         merge_lock: tokio::sync::Mutex::new(()),
+        recent_writes,
     });
 
     let app = build_router(state);
@@ -553,6 +585,7 @@ async fn save_pipeline(
             .into_response();
     }
 
+    mark_self_write(&state.recent_writes, &path);
     if let Err(e) = std::fs::write(&path, &req.yaml) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -567,6 +600,7 @@ async fn save_pipeline(
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        mark_self_write(&state.recent_writes, &prompt_path);
         if let Err(e) = std::fs::write(&prompt_path, content) {
             warn!("failed to write prompt for {node_id}: {e}");
         }
@@ -2126,6 +2160,7 @@ mod tests {
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            recent_writes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -3021,6 +3056,7 @@ mod tests {
             repo_root: dir.to_path_buf(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            recent_writes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 

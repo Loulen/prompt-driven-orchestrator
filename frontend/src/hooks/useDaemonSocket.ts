@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DaemonEvent, WsMessage } from "../types";
+import type { WsMessage } from "../types";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -9,9 +9,9 @@ export function useDaemonSocket() {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const listenersRef = useRef<Set<(event: DaemonEvent) => void>>(new Set());
+  const listenersRef = useRef<Set<(msg: WsMessage) => void>>(new Set());
 
-  const subscribe = useCallback((listener: (event: DaemonEvent) => void) => {
+  const subscribe = useCallback((listener: (msg: WsMessage) => void) => {
     listenersRef.current.add(listener);
     return () => {
       listenersRef.current.delete(listener);
@@ -33,9 +33,9 @@ export function useDaemonSocket() {
       ws.addEventListener("message", (e) => {
         try {
           const msg: WsMessage = JSON.parse(e.data);
-          if (msg.type === "event" && msg.event) {
+          if (msg.type === "event" || msg.type === "pipeline_changed") {
             for (const listener of listenersRef.current) {
-              listener(msg.event);
+              listener(msg);
             }
           }
         } catch {

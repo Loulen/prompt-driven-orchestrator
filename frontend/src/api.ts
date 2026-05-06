@@ -1,4 +1,4 @@
-import type { RunListEntry, RunState } from "./types";
+import type { RunListEntry, RunState, PipelineListEntry, PipelineDetail } from "./types";
 
 const BASE = "";
 
@@ -51,5 +51,44 @@ export async function cleanupRun(runId: string): Promise<void> {
     body: JSON.stringify({ kind: "cleanup_run" }),
   });
   if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+}
 
+// --- Pipeline CRUD ---
+
+export async function fetchPipelines(): Promise<PipelineListEntry[]> {
+  const resp = await fetch(`${BASE}/pipelines`);
+  if (!resp.ok) throw new Error(`GET /pipelines failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function fetchPipeline(id: string): Promise<PipelineDetail> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`);
+  if (!resp.ok) throw new Error(`GET /pipelines/${id} failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function savePipeline(
+  id: string,
+  yaml: string,
+  prompts: Record<string, string>,
+): Promise<void> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml, prompts }),
+  });
+  if (!resp.ok) throw new Error(`PUT /pipelines/${id} failed: ${resp.status}`);
+}
+
+export async function createPipeline(
+  name: string,
+  scope: string,
+): Promise<{ id: string; scope: string; path: string }> {
+  const resp = await fetch(`${BASE}/pipelines`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, scope }),
+  });
+  if (!resp.ok) throw new Error(`POST /pipelines failed: ${resp.status}`);
+  return resp.json();
 }

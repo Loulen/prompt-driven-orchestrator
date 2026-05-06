@@ -7,6 +7,13 @@ import type { RunListEntry, RunState } from "./types";
 import RunsListPanel from "./components/RunsListPanel";
 import DagCanvas from "./components/DagCanvas";
 import NodeDetailPanel from "./components/NodeDetailPanel";
+import PipelinesListPanel from "./components/PipelinesListPanel";
+import EditCanvas from "./components/EditCanvas";
+import TabBar from "./components/TabBar";
+import NodeInspector from "./components/NodeInspector";
+import EdgeInspector from "./components/EdgeInspector";
+import PipelineInspector from "./components/PipelineInspector";
+import { useEditStore } from "./stores/editStore";
 
 function useRuns() {
   const [runs, setRuns] = useState<RunListEntry[]>([]);
@@ -62,9 +69,12 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
   const mountedRef = useRef(false);
+  const reloadPipeline = useEditStore((s) => s.reloadPipeline);
+  const loadPipelines = useEditStore((s) => s.loadPipelines);
+  const selection = useEditStore((s) => s.selection);
 
-  // Load runs on mount
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -81,13 +91,17 @@ export default function App() {
     [selectRun],
   );
 
-  // Subscribe to events — refresh runs list and selected run
   useEffect(() => {
-    return subscribe(() => {
-      refreshRuns();
-      refreshRun();
+    return subscribe((msg) => {
+      if (msg.type === "pipeline_changed" && msg.pipeline_id) {
+        reloadPipeline(msg.pipeline_id);
+        loadPipelines();
+      } else {
+        refreshRuns();
+        refreshRun();
+      }
     });
-  }, [subscribe, refreshRuns, refreshRun]);
+  }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines]);
 
   const selectedNode =
     selectedNodeId && selectedRun
@@ -98,32 +112,47 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg-1 text-fg">
-      <TopBar />
+      <TopBar editMode={editMode} onToggleEditMode={() => setEditMode(!editMode)} />
       <main className="flex min-h-0 flex-1">
-        <RunsListPanel
-          runs={runs}
-          selectedRunId={selectedRunId}
-          onSelectRun={handleSelectRun}
-        />
-        <DagCanvas
-          run={selectedRun}
-          onSelectNode={setSelectedNodeId}
-          selectedNodeId={selectedNodeId}
-        />
-        {selectedNode && selectedRun && (
-          <NodeDetailPanel
-            node={selectedNode}
-            runId={selectedRun.run_id}
-            isArchived={isArchived}
-          />
-        )}
-        {!selectedNode && isArchived && selectedRun && (
-          <aside className="flex w-[340px] shrink-0 flex-col items-center justify-center border-l border-line bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
-            <div className="text-center px-6">
-              <div className="font-medium text-fg-3">Run archived</div>
-              <div className="mt-1">No live state available. Select a node to view its final status.</div>
+        {editMode ? (
+          <>
+            <PipelinesListPanel />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <TabBar />
+              <EditCanvas />
             </div>
-          </aside>
+            {selection.kind === "node" && <NodeInspector />}
+            {selection.kind === "edge" && <EdgeInspector />}
+            {selection.kind === "none" && <PipelineInspector />}
+          </>
+        ) : (
+          <>
+            <RunsListPanel
+              runs={runs}
+              selectedRunId={selectedRunId}
+              onSelectRun={handleSelectRun}
+            />
+            <DagCanvas
+              run={selectedRun}
+              onSelectNode={setSelectedNodeId}
+              selectedNodeId={selectedNodeId}
+            />
+            {selectedNode && selectedRun && (
+              <NodeDetailPanel
+                node={selectedNode}
+                runId={selectedRun.run_id}
+                isArchived={isArchived}
+              />
+            )}
+            {!selectedNode && isArchived && selectedRun && (
+              <aside className="flex w-[340px] shrink-0 flex-col items-center justify-center border-l border-line bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
+                <div className="text-center px-6">
+                  <div className="font-medium text-fg-3">Run archived</div>
+                  <div className="mt-1">No live state available. Select a node to view its final status.</div>
+                </div>
+              </aside>
+            )}
+          </>
         )}
       </main>
       <StatusBar status={status} />
@@ -131,10 +160,18 @@ export default function App() {
   );
 }
 
-function TopBar() {
+function TopBar({
+  editMode,
+  onToggleEditMode,
+}: {
+  editMode: boolean;
+  onToggleEditMode: () => void;
+}) {
   return (
     <header
-      className="flex h-[44px] shrink-0 items-center gap-3 border-b border-line bg-bg-2 px-3"
+      className={`flex h-[44px] shrink-0 items-center gap-3 border-b border-line bg-bg-2 px-3 ${
+        editMode ? "shadow-[inset_0_2px_0_0_var(--color-edit-tint)]" : ""
+      }`}
       style={{ fontSize: "12.5px" }}
     >
       <div className="flex items-center gap-2 border-r border-line pr-3 font-semibold tracking-tight text-fg">
@@ -153,14 +190,26 @@ function TopBar() {
       </div>
 
       <nav className="flex min-w-0 flex-1 items-center gap-1.5 text-fg-3" style={{ fontSize: "12.5px" }}>
-        <span className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-2" style={{ fontSize: "11px", fontWeight: 500 }}>
-          Run
+        <span
+          className={`rounded border px-1.5 py-0.5 ${
+            editMode
+              ? "border-edit-tint bg-edit-tint/10 text-edit-tint"
+              : "border-line-strong bg-bg-3 text-fg-2"
+          }`}
+          style={{ fontSize: "11px", fontWeight: 500 }}
+        >
+          {editMode ? "Edit" : "Run"}
         </span>
       </nav>
 
       <div className="ml-auto flex items-center gap-1">
         <button
-          className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+          onClick={onToggleEditMode}
+          className={`grid h-7 w-7 place-items-center rounded-md border transition-colors ${
+            editMode
+              ? "border-edit-tint bg-edit-tint/10 text-edit-tint hover:bg-edit-tint/20"
+              : "border-transparent bg-transparent text-fg-3 hover:bg-bg-3 hover:text-fg"
+          }`}
           title="Toggle edit mode"
         >
           <Pencil size={14} />

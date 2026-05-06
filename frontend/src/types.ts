@@ -59,7 +59,85 @@ export interface DaemonEvent {
 }
 
 export interface WsMessage {
-  type: "ready" | "heartbeat" | "event";
+  type: "ready" | "heartbeat" | "event" | "pipeline_changed";
   event?: DaemonEvent;
+  pipeline_id?: string;
+  path?: string;
   ts?: string;
+}
+
+// --- Edit mode types ---
+
+export type PipelineScope = "repo" | "user";
+
+export interface PipelineListEntry {
+  id: string;
+  name: string;
+  scope: PipelineScope;
+  path: string;
+  node_count: number;
+  modified: string | null;
+}
+
+export interface PortDef {
+  name: string;
+  repeated: boolean;
+  frontmatter?: Record<string, FrontmatterFieldDecl> | null;
+}
+
+export interface FrontmatterFieldDecl {
+  type: string;
+  allowed?: string[] | null;
+}
+
+export interface VariableDef {
+  type: string;
+  default: unknown;
+}
+
+export interface NodeDef {
+  id: string;
+  type: NodeType;
+  prompt_file?: string | null;
+  inputs: PortDef[];
+  outputs: PortDef[];
+  interactive: boolean;
+  view?: { x: number; y: number } | null;
+}
+
+export interface EdgeEndpoint {
+  node: string;
+  port: string;
+}
+
+export interface HaltTarget {
+  message?: string | null;
+}
+
+export type EdgeTargetDef =
+  | { node: string; port: string }
+  | { halt: HaltTarget };
+
+export interface EdgeDef {
+  source: EdgeEndpoint;
+  target: EdgeTargetDef;
+  when?: Record<string, unknown> | null;
+}
+
+export interface PipelineDef {
+  name: string;
+  version?: string | null;
+  variables: Record<string, VariableDef>;
+  nodes: NodeDef[];
+  edges: EdgeDef[];
+}
+
+export interface PipelineDetail {
+  id: string;
+  scope: PipelineScope;
+  path: string;
+  yaml: string;
+  pipeline: PipelineDef;
+  prompts: Record<string, string>;
+  diagnostics: string[];
 }

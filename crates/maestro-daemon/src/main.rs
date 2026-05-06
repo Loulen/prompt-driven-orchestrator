@@ -3,6 +3,7 @@ mod condition;
 mod event_log;
 mod frontmatter_parser;
 mod pipeline;
+mod pipeline_watcher;
 mod prompt_augmenter;
 mod scheduler;
 mod variable_resolver;
@@ -47,6 +48,7 @@ struct Cli {
 struct AppState {
     db: sqlx::SqlitePool,
     event_tx: broadcast::Sender<event_log::Event>,
+    pipeline_tx: broadcast::Sender<serde_json::Value>,
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
@@ -122,10 +124,14 @@ async fn main() -> Result<()> {
     init_db(&db).await?;
 
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
+    let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
+
+    let _watcher = pipeline_watcher::spawn_watcher(repo_root.clone(), pipeline_tx.clone());
 
     let state = Arc::new(AppState {
         db,
         event_tx,
+        pipeline_tx,
         repo_root,
         port: cli.port,
         merge_lock: tokio::sync::Mutex::new(()),
@@ -145,6 +151,13 @@ async fn main() -> Result<()> {
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route("/pipelines", get(list_pipelines))
+        .route("/pipelines/{pipeline_id}", get(get_pipeline))
+        .route(
+            "/pipelines/{pipeline_id}",
+            axum::routing::put(save_pipeline),
+        )
+        .route("/pipelines", post(create_pipeline))
         .route("/runs", post(create_run))
         .route("/runs", get(list_runs))
         .route("/runs/{run_id}", get(get_run))
@@ -256,6 +269,251 @@ impl EventRow {
             payload,
         }
     }
+}
+
+// --- Pipeline CRUD ---
+
+#[derive(Serialize)]
+struct PipelineListEntry {
+    id: String,
+    name: String,
+    scope: String,
+    path: String,
+    node_count: usize,
+    modified: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreatePipelineRequest {
+    name: String,
+    scope: String,
+}
+
+#[derive(Deserialize)]
+struct SavePipelineRequest {
+    yaml: String,
+    #[serde(default)]
+    prompts: HashMap<String, String>,
+}
+
+fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntry> {
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return entries;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let file_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|t| {
+                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            });
+
+        let (name, node_count) = match std::fs::read_to_string(&path) {
+            Ok(yaml) => match pipeline::parse_pipeline(&yaml) {
+                Ok(r) => (r.pipeline.name.clone(), r.pipeline.nodes.len()),
+                Err(_) => (file_stem.clone(), 0),
+            },
+            Err(_) => (file_stem.clone(), 0),
+        };
+
+        entries.push(PipelineListEntry {
+            id: file_stem,
+            name,
+            scope: scope.to_string(),
+            path: path.to_string_lossy().to_string(),
+            node_count,
+            modified,
+        });
+    }
+    entries
+}
+
+async fn list_pipelines(State(state): State<Arc<AppState>>) -> Response {
+    let repo_dir = state.repo_root.join(".maestro").join("pipelines");
+    let mut pipelines = scan_pipeline_dir(&repo_dir, "repo");
+
+    if let Some(home) = dirs_next_home() {
+        let user_dir = home.join(".maestro").join("pipelines");
+        pipelines.extend(scan_pipeline_dir(&user_dir, "user"));
+    }
+
+    Json(pipelines).into_response()
+}
+
+async fn get_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(y) => y,
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
+        }
+    };
+
+    let parse_result = match pipeline::parse_pipeline(&yaml) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("parse error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let scope = if path.starts_with(&state.repo_root) {
+        "repo"
+    } else {
+        "user"
+    };
+
+    let prompts_dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let mut prompts: HashMap<String, String> = HashMap::new();
+    for node in &parse_result.pipeline.nodes {
+        if let Some(ref pf) = node.prompt_file {
+            if let Ok(content) = pipeline::load_prompt_file(prompts_dir, pf) {
+                prompts.insert(node.id.clone(), content);
+            }
+        }
+    }
+
+    let diagnostics: Vec<String> = parse_result
+        .diagnostics
+        .iter()
+        .map(|d| d.message.clone())
+        .collect();
+
+    Json(serde_json::json!({
+        "id": pipeline_id,
+        "scope": scope,
+        "path": path.to_string_lossy(),
+        "yaml": yaml,
+        "pipeline": parse_result.pipeline,
+        "prompts": prompts,
+        "diagnostics": diagnostics,
+    }))
+    .into_response()
+}
+
+async fn save_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Json(req): Json<SavePipelineRequest>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
+    if !path.exists() {
+        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
+    }
+
+    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid YAML: {e}") })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = std::fs::write(&path, &req.yaml) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("write failed: {e}") })),
+        )
+            .into_response();
+    }
+
+    let prompts_dir = path.parent().unwrap_or(std::path::Path::new("."));
+    for (node_id, content) in &req.prompts {
+        let prompt_path = prompts_dir.join(format!("{pipeline_id}.prompts/{node_id}.md"));
+        if let Some(parent) = prompt_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&prompt_path, content) {
+            warn!("failed to write prompt for {node_id}: {e}");
+        }
+    }
+
+    info!("Pipeline {pipeline_id} saved");
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+async fn create_pipeline(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreatePipelineRequest>,
+) -> Response {
+    let safe_name = req
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    let dir = if req.scope == "user" {
+        match dirs_next_home() {
+            Some(home) => home.join(".maestro").join("pipelines"),
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "cannot determine home directory",
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        state.repo_root.join(".maestro").join("pipelines")
+    };
+
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{safe_name}.yaml"));
+
+    if path.exists() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "pipeline already exists" })),
+        )
+            .into_response();
+    }
+
+    let scaffold = format!(
+        "name: {safe_name}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes: []\n\nedges: []\n"
+    );
+    if let Err(e) = std::fs::write(&path, &scaffold) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("write failed: {e}") })),
+        )
+            .into_response();
+    }
+
+    info!("Created pipeline {safe_name} at {}", path.display());
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": safe_name,
+            "scope": req.scope,
+            "path": path.to_string_lossy(),
+        })),
+    )
+        .into_response()
 }
 
 // --- API handlers ---
@@ -1335,6 +1593,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     let mut event_rx = state.event_tx.subscribe();
+    let mut pipeline_rx = state.pipeline_tx.subscribe();
     let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
 
     loop {
@@ -1362,6 +1621,17 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("WebSocket client lagged by {n} events");
                     }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            pipeline_event = pipeline_rx.recv() => {
+                match pipeline_event {
+                    Ok(msg) => {
+                        if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -1694,9 +1964,11 @@ mod tests {
             .unwrap();
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
+        let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
             db,
             event_tx,
+            pipeline_tx,
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
@@ -2577,5 +2849,303 @@ mod tests {
         let events = load_events(&state.db, run_id).await.unwrap();
         let run_state = event_log::project(&events).unwrap();
         assert_eq!(find_node_type(&run_state, "impl-1"), Some("code-mutating"));
+    }
+
+    async fn test_state_with_dir(dir: &std::path::Path) -> Arc<AppState> {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        let (event_tx, _) = broadcast::channel(64);
+        let (pipeline_tx, _) = broadcast::channel(16);
+        Arc::new(AppState {
+            db,
+            event_tx,
+            pipeline_tx,
+            repo_root: dir.to_path_buf(),
+            port: 0,
+            merge_lock: tokio::sync::Mutex::new(()),
+        })
+    }
+
+    fn write_test_pipeline(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n  - id: worker\n    type: doc-only\n    prompt_file: prompts/worker.md\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_pipelines_scans_repo_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        write_test_pipeline(tmp.path(), "another-pipe");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|p| p["id"] == "test-pipe"));
+        assert!(list.iter().any(|p| p["id"] == "another-pipe"));
+        assert!(list.iter().all(|p| p["scope"] == "repo"));
+    }
+
+    #[tokio::test]
+    async fn list_pipelines_empty_when_no_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_pipeline_returns_parsed_definition() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "my-pipe");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/my-pipe")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(detail["id"], "my-pipe");
+        assert_eq!(detail["pipeline"]["name"], "my-pipe");
+        assert_eq!(detail["pipeline"]["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(detail["pipeline"]["nodes"][0]["id"], "worker");
+        assert!(detail["yaml"].as_str().unwrap().contains("name: my-pipe"));
+    }
+
+    #[tokio::test]
+    async fn get_pipeline_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_pipeline_writes_scaffold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/pipelines")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "new-pipeline", "scope": "repo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["id"], "new-pipeline");
+        assert_eq!(result["scope"], "repo");
+
+        let yaml_path = tmp
+            .path()
+            .join(".maestro")
+            .join("pipelines")
+            .join("new-pipeline.yaml");
+        assert!(yaml_path.exists());
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+        assert!(content.contains("name: new-pipeline"));
+    }
+
+    #[tokio::test]
+    async fn create_pipeline_conflict_on_duplicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "existing");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/pipelines")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "existing", "scope": "repo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn save_pipeline_updates_yaml_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "editable");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let new_yaml = "name: editable\nversion: \"2.0\"\nnodes: []\nedges: []\n";
+        let body = serde_json::json!({
+            "yaml": new_yaml,
+            "prompts": {}
+        });
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/editable")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let yaml_path = tmp
+            .path()
+            .join(".maestro")
+            .join("pipelines")
+            .join("editable.yaml");
+        let content = std::fs::read_to_string(&yaml_path).unwrap();
+        assert!(content.contains("version: \"2.0\""));
+    }
+
+    #[tokio::test]
+    async fn save_pipeline_rejects_invalid_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "bad-save");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "yaml": "{{invalid yaml:::",
+            "prompts": {}
+        });
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/bad-save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn pipeline_list_entry_includes_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "meta-pipe");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        let entry = &list[0];
+        assert_eq!(entry["name"], "meta-pipe");
+        assert_eq!(entry["scope"], "repo");
+        assert_eq!(entry["node_count"], 1);
+        assert!(entry["modified"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn scan_pipeline_dir_ignores_non_yaml_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("readme.md"), "not a pipeline").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a pipeline").unwrap();
+        write_test_pipeline(tmp.path(), "real-pipe");
+
+        let entries = scan_pipeline_dir(&dir, "repo");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "real-pipe");
     }
 }

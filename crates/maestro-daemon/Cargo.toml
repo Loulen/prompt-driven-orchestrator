@@ -25,6 +25,8 @@ serde_yaml.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

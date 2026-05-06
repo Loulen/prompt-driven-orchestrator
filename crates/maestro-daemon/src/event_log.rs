@@ -33,6 +33,7 @@ pub enum EventKind {
     NodeCompleted,
     NodeFailed,
     MergeConflictDetected,
+    PipelineModified,
     RunCompleted,
     RunFailed,
     RunHalted,
@@ -192,6 +193,11 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             }
             EventKind::MergeConflictDetected => {
                 // Informational event — the run is halted via a subsequent RunFailed
+            }
+            EventKind::PipelineModified => {
+                // Informational — the run-scoped pipeline changed on disk.
+                // RunState.node_defs/edges are re-parsed from the file at
+                // augmentation time (see augment_run_state_from_disk), not here.
             }
             EventKind::RunCompleted => {
                 state.status = RunStatus::Completed;

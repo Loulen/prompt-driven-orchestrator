@@ -4,7 +4,7 @@ import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { fetchRuns, fetchRun } from "./api";
-import type { RunListEntry, RunState } from "./types";
+import type { RunListEntry, RunState, EditScope } from "./types";
 import RunsListPanel from "./components/RunsListPanel";
 import DagCanvas from "./components/DagCanvas";
 import NodeDetailPanel from "./components/NodeDetailPanel";
@@ -81,9 +81,13 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [editScope, setEditScope] = useState<EditScope>(null);
+  const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
+  const openRunPipeline = useEditStore((s) => s.openRunPipeline);
+  const closeRunPipeline = useEditStore((s) => s.closeRunPipeline);
   const selection = useEditStore((s) => s.selection);
 
   useEffect(() => {
@@ -93,13 +97,22 @@ export default function App() {
     }
   }, [refreshRuns]);
 
+  const exitRunEdit = useCallback(() => {
+    if (editingRunId) {
+      closeRunPipeline(editingRunId);
+    }
+    setEditScope(null);
+    setEditingRunId(null);
+  }, [editingRunId, closeRunPipeline]);
+
   const handleSelectRun = useCallback(
     (runId: string) => {
+      if (editScope === "run") exitRunEdit();
       setSelectedRunId(runId);
       selectRun(runId);
       setSelectedNodeId(null);
     },
-    [selectRun],
+    [selectRun, editScope, exitRunEdit],
   );
 
   const handleRunCreated = useCallback(
@@ -110,6 +123,18 @@ export default function App() {
     [refreshRuns, handleSelectRun],
   );
 
+  const handleToggleRunEdit = useCallback(
+    async (runId: string) => {
+      if (editScope === "run" && editingRunId === runId) {
+        exitRunEdit();
+      } else {
+        await openRunPipeline(runId);
+        setEditScope("run");
+        setEditingRunId(runId);
+      }
+    },
+    [editScope, editingRunId, openRunPipeline, exitRunEdit],
+  );
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -137,7 +162,10 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg-1 text-fg">
-      <TopBar editMode={editMode} onToggleEditMode={() => setEditMode(!editMode)} />
+      <TopBar editMode={editMode} onToggleEditMode={() => {
+        if (editScope === "run") exitRunEdit();
+        setEditMode(!editMode);
+      }} />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
           orientation="horizontal"
@@ -166,11 +194,16 @@ export default function App() {
                 <TabBar />
                 <EditCanvas />
               </div>
+            ) : editScope === "run" ? (
+              <div className="flex h-full min-w-0 flex-col">
+                <EditCanvas />
+              </div>
             ) : (
               <DagCanvas
                 run={selectedRun}
                 onSelectNode={setSelectedNodeId}
                 selectedNodeId={selectedNodeId}
+                onToggleEdit={handleToggleRunEdit}
               />
             )}
           </ResizablePanel>
@@ -178,11 +211,17 @@ export default function App() {
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right">
-            {editMode ? (
+            {editMode || editScope === "run" ? (
               <>
                 {selection.kind === "node" && <NodeInspector />}
                 {selection.kind === "edge" && <EdgeInspector />}
-                {selection.kind === "none" && <PipelineInspector />}
+                {selection.kind === "none" && editScope === "run" && selectedRun && (
+                  <RunEditSidebar
+                    run={selectedRun}
+                    onStopEditing={() => handleToggleRunEdit(selectedRun.run_id)}
+                  />
+                )}
+                {selection.kind === "none" && editScope !== "run" && <PipelineInspector />}
               </>
             ) : (
               <>
@@ -272,6 +311,35 @@ function TopBar({
         </button>
       </div>
     </header>
+  );
+}
+
+function RunEditSidebar({
+  run,
+  onStopEditing,
+}: {
+  run: RunState;
+  onStopEditing: () => void;
+}) {
+  return (
+    <aside className="flex h-full flex-col bg-bg-2" style={{ fontSize: "12px" }}>
+      <div className="border-b border-line px-3 py-3">
+        <div className="font-medium text-fg">{run.pipeline_name}</div>
+        <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          {run.run_id}
+        </div>
+        <div className="mt-2 rounded border border-edit-tint/30 bg-edit-tint/5 px-2 py-1.5 text-edit-tint" style={{ fontSize: "10.5px" }}>
+          Editing run-scoped copy &middot; template unchanged
+        </div>
+        <button
+          onClick={onStopEditing}
+          className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          style={{ fontSize: "10.5px" }}
+        >
+          Stop editing
+        </button>
+      </div>
+    </aside>
   );
 }
 

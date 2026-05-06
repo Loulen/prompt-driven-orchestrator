@@ -92,6 +92,21 @@
    At minimum `_input.md` is present; depending on what claude wrote, an
    `only.md` artifact may also be there.
 
+### Step 1c — Edit-this-run toggle (refs #28)
+
+9. With the Run still visible (any status), click the **"Edit this run"**
+   button on the run overlay. Assert:
+   - The **AddPalette** appears (buttons to add `code-mutating` / `doc-only`
+     nodes are visible).
+   - The right panel swaps to the **editor inspector** (node inspector form
+     instead of terminal preview).
+   - A footnote reading **"Editing run-scoped copy · template unchanged"**
+     is visible beneath the run overlay.
+10. Click **"Stop editing"** (or the same toggle again). Assert:
+    - The **AddPalette** disappears.
+    - The right panel returns to the **NodeDetailPanel** (terminal preview).
+    - The **"Edit this run"** button is visible again on the overlay.
+
 ## Negative checks
 
 - **Tmux session must persist** until `maestro complete` is called. If the

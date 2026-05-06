@@ -109,6 +109,27 @@ export async function cleanupRun(runId: string): Promise<void> {
   if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
 }
 
+// --- Run-scoped pipeline ---
+
+export async function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/pipeline`);
+  if (!resp.ok) throw new Error(`GET /runs/${runId}/pipeline failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function saveRunPipeline(
+  runId: string,
+  yaml: string,
+  prompts: Record<string, string>,
+): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/pipeline`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml, prompts }),
+  });
+  if (!resp.ok) throw new Error(`PUT /runs/${runId}/pipeline failed: ${resp.status}`);
+}
+
 // --- Pipeline CRUD ---
 
 export async function fetchPipeline(id: string): Promise<PipelineDetail> {

@@ -9,30 +9,34 @@ use tracing::{info, warn};
 
 use crate::SELF_WRITE_TTL;
 
+#[derive(Debug, Clone)]
+pub struct RunPipelineModified {
+    pub run_id: String,
+    pub kind: &'static str, // "yaml" or "prompt"
+    pub path: PathBuf,
+}
+
 pub fn spawn_watcher(
     repo_root: PathBuf,
     event_tx: broadcast::Sender<serde_json::Value>,
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+    run_modified_tx: tokio::sync::mpsc::UnboundedSender<RunPipelineModified>,
 ) -> Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>> {
     let repo_pipelines_dir = repo_root.join(".maestro").join("pipelines");
+    let runs_dir = repo_root.join(".maestro").join("runs");
     let user_pipelines_dir = std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|h| h.join(".maestro").join("pipelines"));
 
     let tx = Arc::new(event_tx);
-    // Last observed content-mtime per path. Used to filter out spurious events
-    // notify reports for read-only opens (we observed the watcher firing on
-    // plain `read_to_string` calls — see Bug F notes in #17). Tracking mtime
-    // gives a content-based answer regardless of which inotify mask the
-    // platform actually surfaces.
     let mtimes: Arc<Mutex<HashMap<PathBuf, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
-    // Pre-populate from the dirs we're about to watch so the very first event
-    // for a known file can compare against a real value (otherwise we'd treat
-    // the platform's initial debounced batch as a content change).
     seed_mtimes(&mtimes, &repo_pipelines_dir);
     if let Some(ref user_dir) = user_pipelines_dir {
         seed_mtimes(&mtimes, user_dir);
     }
+    seed_run_mtimes(&mtimes, &runs_dir);
+
+    let runs_dir_for_closure = runs_dir.clone();
 
     let mut debouncer = match new_debouncer(
         Duration::from_secs(1),
@@ -57,6 +61,18 @@ pub fn spawn_watcher(
                         "Pipeline file changed (self-write, suppressed): {}",
                         path.display()
                     );
+                    continue;
+                }
+
+                // Detect run-scoped pipeline changes
+                if let Some(modified) = detect_run_scoped_change(path, &runs_dir_for_closure) {
+                    info!(
+                        "Run-scoped pipeline modified: run={} kind={} path={}",
+                        modified.run_id,
+                        modified.kind,
+                        modified.path.display()
+                    );
+                    let _ = run_modified_tx.send(modified);
                     continue;
                 }
 
@@ -127,7 +143,55 @@ pub fn spawn_watcher(
         }
     }
 
+    // Watch runs directory for run-scoped pipeline edits
+    if !runs_dir.exists() {
+        let _ = std::fs::create_dir_all(&runs_dir);
+    }
+    if let Err(e) = debouncer
+        .watcher()
+        .watch(&runs_dir, notify::RecursiveMode::Recursive)
+    {
+        warn!("Failed to watch runs dir: {e}");
+    } else {
+        info!("Watching runs dir: {}", runs_dir.display());
+    }
+
     Some(debouncer)
+}
+
+/// Detect if a changed path is a run-scoped pipeline file.
+/// Expected patterns:
+///   `<runs_dir>/<run-id>/pipeline.yaml` → kind "yaml"
+///   `<runs_dir>/<run-id>/pipeline.prompts/<node-id>.md` → kind "prompt"
+fn detect_run_scoped_change(
+    path: &std::path::Path,
+    runs_dir: &std::path::Path,
+) -> Option<RunPipelineModified> {
+    let relative = path.strip_prefix(runs_dir).ok()?;
+    let mut components = relative.components();
+    let run_id = components.next()?.as_os_str().to_str()?.to_string();
+    let second = components.next()?.as_os_str().to_str()?;
+
+    if second == "pipeline.yaml" && components.next().is_none() {
+        return Some(RunPipelineModified {
+            run_id,
+            kind: "yaml",
+            path: path.to_path_buf(),
+        });
+    }
+
+    if second == "pipeline.prompts" {
+        let file = components.next()?.as_os_str().to_str()?;
+        if file.ends_with(".md") && components.next().is_none() {
+            return Some(RunPipelineModified {
+                run_id,
+                kind: "prompt",
+                path: path.to_path_buf(),
+            });
+        }
+    }
+
+    None
 }
 
 fn is_recent_self_write(map: &Mutex<HashMap<PathBuf, Instant>>, path: &std::path::Path) -> bool {
@@ -140,10 +204,6 @@ fn is_recent_self_write(map: &Mutex<HashMap<PathBuf, Instant>>, path: &std::path
         .is_some_and(|t| t.elapsed() < SELF_WRITE_TTL)
 }
 
-/// Walks `dir` (yaml at the top level, md inside `*.prompts/` subdirs) and
-/// records the current mtime of each file we care about. Run once at startup
-/// so `content_actually_changed` has a reference point for files that already
-/// exist when the daemon boots.
 fn seed_mtimes(map: &Mutex<HashMap<PathBuf, SystemTime>>, dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -179,11 +239,42 @@ fn seed_mtimes(map: &Mutex<HashMap<PathBuf, SystemTime>>, dir: &std::path::Path)
     }
 }
 
-/// Compares the file's current modified-time against the last value we saw and
-/// records the new one. Returns true only if the mtime advanced — events without
-/// a real content change (read-only opens, atime-only updates) are filtered
-/// out by this check. If the file is missing (deletion), returns true so the
-/// caller still emits a `pipeline_changed` and the frontend can refetch.
+/// Seed mtimes for existing run-scoped pipeline files.
+fn seed_run_mtimes(map: &Mutex<HashMap<PathBuf, SystemTime>>, runs_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(runs_dir) else {
+        return;
+    };
+    let mut guard = match map.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    for entry in entries.flatten() {
+        let run_dir = entry.path();
+        if !run_dir.is_dir() {
+            continue;
+        }
+        let yaml_path = run_dir.join("pipeline.yaml");
+        if yaml_path.is_file() {
+            if let Ok(t) = std::fs::metadata(&yaml_path).and_then(|m| m.modified()) {
+                guard.insert(yaml_path, t);
+            }
+        }
+        let prompts_dir = run_dir.join("pipeline.prompts");
+        if prompts_dir.is_dir() {
+            if let Ok(prompts) = std::fs::read_dir(&prompts_dir) {
+                for p in prompts.flatten() {
+                    let pp = p.path();
+                    if pp.extension().and_then(|e| e.to_str()) == Some("md") {
+                        if let Ok(t) = p.metadata().and_then(|m| m.modified()) {
+                            guard.insert(pp, t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn content_actually_changed(
     map: &Mutex<HashMap<PathBuf, SystemTime>>,
     path: &std::path::Path,
@@ -204,7 +295,6 @@ fn content_actually_changed(
             }
         }
         None => {
-            // File no longer there — let the frontend learn about it.
             guard.remove(path);
             true
         }

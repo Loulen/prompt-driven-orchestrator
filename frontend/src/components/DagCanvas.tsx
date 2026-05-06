@@ -13,7 +13,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import type { NodeStatus, NodeType, RunState, RunStatus } from "../types";
 import { cleanupRun } from "../api";
 import CleanupConfirmModal from "./CleanupConfirmModal";
@@ -182,6 +182,7 @@ interface Props {
   run: RunState | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedNodeId: string | null;
+  onToggleEdit?: (runId: string) => void;
 }
 
 function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
@@ -308,6 +309,7 @@ function DagCanvasInner({
   run,
   onSelectNode,
   selectedNodeId,
+  onToggleEdit,
 }: Props) {
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -380,16 +382,28 @@ function DagCanvasInner({
           />
           <span className="text-fg-3">{run.status}</span>
         </div>
-        {isTerminal && (
-          <button
-            onClick={() => setConfirmCleanup(true)}
-            className="mt-2 flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
-            style={{ fontSize: "10px" }}
-          >
-            <Trash2 size={10} />
-            Cleanup
-          </button>
-        )}
+        <div className="mt-2 flex items-center gap-1.5">
+          {onToggleEdit && (
+            <button
+              onClick={() => onToggleEdit(run.run_id)}
+              className="flex items-center gap-1 rounded border border-edit-tint bg-edit-tint/10 px-2 py-1 text-edit-tint transition-colors hover:bg-edit-tint/20"
+              style={{ fontSize: "10px" }}
+            >
+              <Pencil size={10} />
+              Edit this run
+            </button>
+          )}
+          {isTerminal && (
+            <button
+              onClick={() => setConfirmCleanup(true)}
+              className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+              style={{ fontSize: "10px" }}
+            >
+              <Trash2 size={10} />
+              Cleanup
+            </button>
+          )}
+        </div>
       </div>
 
       <ReactFlow

@@ -66,6 +66,8 @@ export interface WsMessage {
   ts?: string;
 }
 
+export type EditScope = null | "run";
+
 export interface PipelineVariableInfo {
   var_type: string;
   default: unknown;

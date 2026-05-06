@@ -5,7 +5,7 @@ import type {
   NodeDef,
   EdgeDef,
 } from "../types";
-import { fetchPipeline, fetchPipelines, savePipeline } from "../api";
+import { fetchPipeline, fetchPipelines, savePipeline, fetchRunPipeline, saveRunPipeline } from "../api";
 
 export type SelectionKind = "node" | "edge" | "none";
 
@@ -21,6 +21,7 @@ export interface OpenPipeline {
   prompts: Record<string, string>;
   dirty: boolean;
   externalDirty: boolean;
+  runId?: string;
 }
 
 interface EditState {
@@ -31,6 +32,8 @@ interface EditState {
 
   loadPipelines: () => Promise<void>;
   openPipeline: (id: string) => Promise<void>;
+  openRunPipeline: (runId: string) => Promise<void>;
+  closeRunPipeline: (runId: string) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   setSelection: (sel: Selection) => void;
@@ -259,6 +262,38 @@ export const useEditStore = create<EditState>((set, get) => ({
     }
   },
 
+  openRunPipeline: async (runId: string) => {
+    const tabId = `__run__${runId}`;
+    const existing = get().openTabs.find((t) => t.id === tabId);
+    if (existing) {
+      set({ activeTabId: tabId, selection: { kind: "none", id: null } });
+      return;
+    }
+    try {
+      const detail = await fetchRunPipeline(runId);
+      const tab: OpenPipeline = {
+        id: tabId,
+        scope: "run",
+        pipeline: detail.pipeline,
+        prompts: detail.prompts,
+        dirty: false,
+        externalDirty: false,
+        runId,
+      };
+      set((s) => ({
+        openTabs: [...s.openTabs, tab],
+        activeTabId: tabId,
+        selection: { kind: "none", id: null },
+      }));
+    } catch {
+      // ignore
+    }
+  },
+
+  closeRunPipeline: (runId: string) => {
+    get().closeTab(`__run__${runId}`);
+  },
+
   closeTab: (id: string) => {
     set((s) => {
       const tabs = s.openTabs.filter((t) => t.id !== id);
@@ -364,7 +399,11 @@ export const useEditStore = create<EditState>((set, get) => ({
     if (!tab) return;
     try {
       const yaml = serializePipeline(tab.pipeline);
-      await savePipeline(id, yaml, tab.prompts);
+      if (tab.runId) {
+        await saveRunPipeline(tab.runId, yaml, tab.prompts);
+      } else {
+        await savePipeline(id, yaml, tab.prompts);
+      }
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === id ? { ...t, dirty: false } : t,

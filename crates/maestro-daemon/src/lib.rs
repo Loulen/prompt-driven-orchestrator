@@ -251,10 +251,14 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
 
     let recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
+    let (run_modified_tx, run_modified_rx) =
+        tokio::sync::mpsc::unbounded_channel::<pipeline_watcher::RunPipelineModified>();
+
     let watcher = pipeline_watcher::spawn_watcher(
         repo_root.clone(),
         pipeline_tx.clone(),
         recent_writes.clone(),
+        run_modified_tx,
     );
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -296,9 +300,16 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         }
     });
 
+    // Background task: process run-scoped pipeline modifications
+    let mod_state = state.clone();
+    let _run_modified_handle = tokio::spawn(async move {
+        handle_run_pipeline_modifications(mod_state, run_modified_rx).await;
+    });
+
     let task = tokio::spawn(async move {
         let _watcher = watcher; // keep the file watcher alive for the server's lifetime
         let _reaper = _reaper_handle; // keep the reaper alive
+        let _run_modified = _run_modified_handle; // keep the pipeline_modified handler alive
         axum::serve(listener, app).await.context("server error")?;
         Ok(())
     });
@@ -334,6 +345,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
         .route("/runs/{run_id}/nodes/{node_id}/prompt", get(node_prompt))
+        .route("/runs/{run_id}/pipeline", get(get_run_pipeline))
+        .route(
+            "/runs/{run_id}/pipeline",
+            axum::routing::put(save_run_pipeline),
+        )
         .route("/runs/{run_id}/commands", post(run_command))
         .route("/sessions/{session_id}/attach", post(session_attach))
         .fallback(static_handler)
@@ -818,7 +834,14 @@ async fn handle_node_completion(
     completed_node_id: &str,
     events: &[event_log::Event],
 ) {
-    let pipeline_path = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
+    let pipeline_path = {
+        let run_scoped = run_scoped_pipeline_path(&state.repo_root, run_id);
+        if run_scoped.exists() {
+            run_scoped
+        } else {
+            resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name)
+        }
+    };
     let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
         return;
     };
@@ -968,45 +991,11 @@ async fn create_run(
     let pipeline = parse_result.pipeline;
     let run_id = event_log::generate_run_id();
 
-    let edge_infos: Vec<event_log::EdgeInfo> = pipeline
-        .edges
-        .iter()
-        .map(|e| {
-            let (target_node, target_port, halt_message) = match &e.target {
-                pipeline::EdgeTarget::Node(ep) => {
-                    (ep.node.clone(), ep.port.clone(), None::<String>)
-                }
-                pipeline::EdgeTarget::Halt(h) => {
-                    ("__halt__".into(), String::new(), h.message.clone())
-                }
-            };
-            let when_json = e.when.as_ref().and_then(|w| serde_json::to_value(w).ok());
-            event_log::EdgeInfo {
-                source_node: e.source.node.clone(),
-                source_port: e.source.port.clone(),
-                target_node,
-                target_port,
-                halt_message,
-                when_clause: when_json,
-            }
-        })
-        .collect();
+    let edge_infos: Vec<event_log::EdgeInfo> =
+        pipeline.edges.iter().map(edge_info_from_pipeline).collect();
 
-    let node_def_infos: Vec<event_log::NodeDefInfo> = pipeline
-        .nodes
-        .iter()
-        .map(|n| event_log::NodeDefInfo {
-            id: n.id.clone(),
-            node_type: match n.node_type {
-                pipeline::NodeType::DocOnly => "doc-only".into(),
-                pipeline::NodeType::CodeMutating => "code-mutating".into(),
-            },
-            view_x: n.view.as_ref().map(|v| v.x),
-            view_y: n.view.as_ref().map(|v| v.y),
-            inputs: n.inputs.iter().map(|p| p.name.clone()).collect(),
-            outputs: n.outputs.iter().map(|p| p.name.clone()).collect(),
-        })
-        .collect();
+    let node_def_infos: Vec<event_log::NodeDefInfo> =
+        pipeline.nodes.iter().map(node_def_from_pipeline).collect();
 
     let variables_json = if req.variables.is_empty() {
         None
@@ -1055,6 +1044,11 @@ async fn create_run(
             Json(serde_json::json!({ "error": format!("worktree creation failed: {e}") })),
         )
             .into_response();
+    }
+
+    // Copy pipeline YAML + prompts to run-scoped location
+    if let Err(e) = copy_pipeline_to_run(&state.repo_root, &pipeline_path, &req.pipeline, &run_id) {
+        error!("failed to copy pipeline to run dir: {e}");
     }
 
     // Write _input.md
@@ -1167,7 +1161,10 @@ async fn get_run(
     };
 
     match event_log::project(&events) {
-        Some(run_state) => Json(run_state).into_response(),
+        Some(mut run_state) => {
+            augment_run_state_from_disk(&mut run_state, &state.repo_root);
+            Json(run_state).into_response()
+        }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
     }
 }
@@ -1184,6 +1181,192 @@ async fn get_run_events(
     };
 
     Json(events).into_response()
+}
+
+// --- Run-scoped pipeline modification handler ---
+
+async fn handle_run_pipeline_modifications(
+    state: Arc<AppState>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<pipeline_watcher::RunPipelineModified>,
+) {
+    while let Some(modified) = rx.recv().await {
+        let event = event_log::Event {
+            id: None,
+            run_id: modified.run_id.clone(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::PipelineModified,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "kind": modified.kind,
+                "path": modified.path.to_string_lossy(),
+            })),
+        };
+        if let Err(e) = append_event(&state, &event).await {
+            error!("failed to append pipeline_modified: {e}");
+            continue;
+        }
+
+        // Re-evaluate scheduler for this run
+        let events = match load_events(&state.db, &modified.run_id).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let Some(mut run_state) = event_log::project(&events) else {
+            continue;
+        };
+        augment_run_state_from_disk(&mut run_state, &state.repo_root);
+
+        if run_state.status != event_log::RunStatus::Running
+            && run_state.status != event_log::RunStatus::AwaitingUser
+        {
+            continue;
+        }
+
+        let pipeline_path = run_scoped_pipeline_path(&state.repo_root, &modified.run_id);
+        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+            continue;
+        };
+        let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+            continue;
+        };
+        let pipeline = parse_result.pipeline;
+
+        let ready = scheduler::ready_nodes(&pipeline, &run_state);
+        if ready.is_empty() {
+            continue;
+        }
+
+        let worktree_dir = state
+            .repo_root
+            .join(".maestro")
+            .join("runs")
+            .join(&modified.run_id)
+            .join("worktree");
+        let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+        let resolved_vars = resolve_run_variables(&pipeline, &events);
+
+        let spawn_ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id: &modified.run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &worktree_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+        };
+
+        for node_id in &ready {
+            if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                spawn_node(&state, &spawn_ctx, node, 1).await;
+            }
+        }
+
+        info!(
+            "Re-evaluated scheduler for run {} after pipeline_modified, spawned {} node(s)",
+            modified.run_id,
+            ready.len()
+        );
+    }
+}
+
+// --- Run-scoped pipeline GET / PUT ---
+
+async fn get_run_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let yaml_path = run_scoped_pipeline_path(&state.repo_root, &run_id);
+    let yaml = match std::fs::read_to_string(&yaml_path) {
+        Ok(y) => y,
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "run-scoped pipeline not found").into_response();
+        }
+    };
+
+    let parse_result = match pipeline::parse_pipeline(&yaml) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("parse error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let prompts_dir = run_scoped_prompts_dir(&state.repo_root, &run_id);
+    let mut prompts: HashMap<String, String> = HashMap::new();
+    if prompts_dir.is_dir() {
+        for entry in std::fs::read_dir(&prompts_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let (Some(stem), Ok(content)) = (
+                    p.file_stem().and_then(|s| s.to_str()),
+                    std::fs::read_to_string(&p),
+                ) {
+                    prompts.insert(stem.to_string(), content);
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "id": run_id,
+        "scope": "run",
+        "path": yaml_path.to_string_lossy(),
+        "yaml": yaml,
+        "pipeline": parse_result.pipeline,
+        "prompts": prompts,
+        "diagnostics": parse_result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+async fn save_run_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+    Json(req): Json<SavePipelineRequest>,
+) -> Response {
+    let yaml_path = run_scoped_pipeline_path(&state.repo_root, &run_id);
+    if !yaml_path.exists() {
+        return (StatusCode::NOT_FOUND, "run-scoped pipeline not found").into_response();
+    }
+
+    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid YAML: {e}") })),
+        )
+            .into_response();
+    }
+
+    mark_self_write(&state.recent_writes, &yaml_path);
+    if let Err(e) = std::fs::write(&yaml_path, &req.yaml) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("write failed: {e}") })),
+        )
+            .into_response();
+    }
+
+    let prompts_dir = run_scoped_prompts_dir(&state.repo_root, &run_id);
+    for (node_id, content) in &req.prompts {
+        let prompt_path = prompts_dir.join(format!("{node_id}.md"));
+        if let Some(parent) = prompt_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        mark_self_write(&state.recent_writes, &prompt_path);
+        if let Err(e) = std::fs::write(&prompt_path, content) {
+            warn!("failed to write run prompt for {node_id}: {e}");
+        }
+    }
+
+    info!("Run-scoped pipeline for {run_id} saved");
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
 // --- Orphan sweep / reaper ---
@@ -2069,6 +2252,101 @@ fn unix_timestamp_secs() -> String {
 }
 
 // --- Pipeline path resolution ---
+
+fn run_scoped_pipeline_path(repo_root: &std::path::Path, run_id: &str) -> PathBuf {
+    repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("pipeline.yaml")
+}
+
+fn run_scoped_prompts_dir(repo_root: &std::path::Path, run_id: &str) -> PathBuf {
+    repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("pipeline.prompts")
+}
+
+fn copy_pipeline_to_run(
+    repo_root: &std::path::Path,
+    pipeline_path: &std::path::Path,
+    pipeline_name: &str,
+    run_id: &str,
+) -> Result<()> {
+    let dest_yaml = run_scoped_pipeline_path(repo_root, run_id);
+    if let Some(parent) = dest_yaml.parent() {
+        std::fs::create_dir_all(parent).context("create run dir")?;
+    }
+    std::fs::copy(pipeline_path, &dest_yaml).context("copy pipeline yaml")?;
+
+    let src_prompts = pipeline_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(format!("{pipeline_name}.prompts"));
+    if src_prompts.is_dir() {
+        let dest_prompts = run_scoped_prompts_dir(repo_root, run_id);
+        std::fs::create_dir_all(&dest_prompts).context("create prompts dir")?;
+        for entry in std::fs::read_dir(&src_prompts)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(name) = p.file_name() {
+                    std::fs::copy(&p, dest_prompts.join(name))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn augment_run_state_from_disk(run_state: &mut event_log::RunState, repo_root: &std::path::Path) {
+    let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
+    let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+    let pipe = &parse_result.pipeline;
+
+    run_state.node_defs = pipe.nodes.iter().map(node_def_from_pipeline).collect();
+    run_state.edges = pipe.edges.iter().map(edge_info_from_pipeline).collect();
+}
+
+fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
+    event_log::NodeDefInfo {
+        id: n.id.clone(),
+        node_type: match n.node_type {
+            pipeline::NodeType::DocOnly => "doc-only".into(),
+            pipeline::NodeType::CodeMutating => "code-mutating".into(),
+        },
+        view_x: n.view.as_ref().map(|v| v.x),
+        view_y: n.view.as_ref().map(|v| v.y),
+        inputs: n.inputs.iter().map(|p| p.name.clone()).collect(),
+        outputs: n.outputs.iter().map(|p| p.name.clone()).collect(),
+    }
+}
+
+fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> event_log::EdgeInfo {
+    let (target_node, target_port, halt_message) = match &e.target {
+        pipeline::EdgeTarget::Node(ep) => (ep.node.clone(), ep.port.clone(), None::<String>),
+        pipeline::EdgeTarget::Halt(h) => ("__halt__".into(), String::new(), h.message.clone()),
+    };
+    let when_json = e.when.as_ref().and_then(|w| serde_json::to_value(w).ok());
+    event_log::EdgeInfo {
+        source_node: e.source.node.clone(),
+        source_port: e.source.port.clone(),
+        target_node,
+        target_port,
+        halt_message,
+        when_clause: when_json,
+    }
+}
 
 fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
     // Check repo-scoped pipelines first, then user-scoped

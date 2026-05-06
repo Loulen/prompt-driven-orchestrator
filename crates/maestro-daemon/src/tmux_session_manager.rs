@@ -469,19 +469,15 @@ mod tests {
     }
 
     #[test]
-    fn build_script_contains_exec_bash_and_claude() {
+    fn build_script_default_and_override() {
         std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
         let prompt_path = Path::new("/tmp/test-prompt.md");
         let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("MAESTRO_RUN_ID"));
-    }
 
-    #[test]
-    fn build_script_uses_override() {
         std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
-        let prompt_path = Path::new("/tmp/test-prompt.md");
         let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);
         assert!(script.contains("exec sleep 60"));
         assert!(!script.contains("claude"));
@@ -489,13 +485,10 @@ mod tests {
     }
 
     #[test]
-    fn reaper_ttl_default() {
+    fn reaper_ttl_default_and_from_env() {
         std::env::remove_var(REAPER_TTL_SECS_ENV);
         assert_eq!(reaper_ttl(), Duration::from_secs(3600));
-    }
 
-    #[test]
-    fn reaper_ttl_from_env() {
         std::env::set_var(REAPER_TTL_SECS_ENV, "5");
         assert_eq!(reaper_ttl(), Duration::from_secs(5));
         std::env::remove_var(REAPER_TTL_SECS_ENV);

@@ -93,29 +93,71 @@ pub enum ParseError {
 }
 
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
-    let raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;
-    let mapping = raw
-        .as_mapping()
-        .ok_or_else(|| ParseError::MissingField("root must be a mapping".into()))?;
+    let mut raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;
 
-    if mapping
+    if raw
+        .as_mapping()
+        .ok_or_else(|| ParseError::MissingField("root must be a mapping".into()))?
         .get(serde_yaml::Value::String("name".into()))
         .is_none()
     {
         return Err(ParseError::MissingField("name".into()));
     }
 
-    let pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
     let mut diagnostics = Vec::new();
+    let valid_types = ["doc-only", "code-mutating"];
+
+    if let Some(nodes) = raw
+        .as_mapping_mut()
+        .and_then(|m| m.get_mut(serde_yaml::Value::String("nodes".into())))
+        .and_then(|v| v.as_sequence_mut())
+    {
+        for node_val in nodes.iter_mut() {
+            if let Some(node_map) = node_val.as_mapping_mut() {
+                let type_key = serde_yaml::Value::String("type".into());
+                let node_id = node_map
+                    .get(serde_yaml::Value::String("id".into()))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>")
+                    .to_string();
+
+                match node_map.get(&type_key).and_then(|v| v.as_str()) {
+                    None => {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "node '{node_id}': missing 'type', defaulting to 'doc-only'"
+                            ),
+                        });
+                        node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+                    }
+                    Some(t) if !valid_types.contains(&t) => {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "node '{node_id}': unknown node type '{t}', defaulting to 'doc-only'"
+                            ),
+                        });
+                        node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
     let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
-    for key in mapping.keys() {
-        if let Some(k) = key.as_str() {
-            if !known_keys.contains(&k) {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    message: format!("unknown field '{k}' (ignored)"),
-                });
+    if let Some(mapping) = raw.as_mapping() {
+        for key in mapping.keys() {
+            if let Some(k) = key.as_str() {
+                if !known_keys.contains(&k) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!("unknown field '{k}' (ignored)"),
+                    });
+                }
             }
         }
     }
@@ -265,9 +307,7 @@ nodes: []
     }
 
     #[test]
-    fn errors_on_unknown_node_type() {
-        // Unknown enum variant → YAML parse error. Only doc-only and
-        // code-mutating are valid NodeType variants for v1.
+    fn unknown_type_defaults_to_doc_only_with_warning() {
         let yaml = r#"
 name: bad-type
 nodes:
@@ -277,7 +317,30 @@ nodes:
     inputs: []
     outputs: []
 "#;
-        assert!(parse_pipeline(yaml).is_err());
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.nodes[0].node_type, NodeType::DocOnly);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unknown node type 'transformer'")));
+    }
+
+    #[test]
+    fn missing_type_defaults_to_doc_only_with_warning() {
+        let yaml = r#"
+name: no-type
+nodes:
+  - id: x
+    prompt_file: x.md
+    inputs: []
+    outputs: []
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.nodes[0].node_type, NodeType::DocOnly);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("missing 'type'")));
     }
 
     #[test]

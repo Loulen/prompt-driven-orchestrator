@@ -28,6 +28,7 @@ pub enum EventKind {
     NodeAwaitingUser,
     NodeCompleted,
     NodeFailed,
+    MergeConflictDetected,
     RunCompleted,
     RunFailed,
     RunArchived,
@@ -182,6 +183,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                         }
                     }
                 }
+            }
+            EventKind::MergeConflictDetected => {
+                // Informational event — the run is halted via a subsequent RunFailed
             }
             EventKind::RunCompleted => {
                 state.status = RunStatus::Completed;
@@ -375,6 +379,34 @@ mod tests {
         assert_eq!(state.pipeline_name, "archival-test");
         assert_eq!(state.nodes.len(), 1);
         assert_eq!(state.nodes["worker"].status, NodeStatus::Completed);
+    }
+
+    #[test]
+    fn projects_merge_conflict_halts_run() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "merge-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("impl-1"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("impl-1"), Some(1)),
+            Event {
+                id: None,
+                run_id: "run-1".into(),
+                ts: "2026-01-01T00:00:00.000Z".into(),
+                kind: EventKind::MergeConflictDetected,
+                node_id: Some("impl-1".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({
+                    "reason": "conflict merging impl-1 into pipeline branch"
+                })),
+            },
+            make_event(EventKind::RunFailed, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Failed);
     }
 
     #[test]

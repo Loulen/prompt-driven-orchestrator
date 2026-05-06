@@ -46,6 +46,7 @@ struct AppState {
     event_tx: broadcast::Sender<event_log::Event>,
     repo_root: PathBuf,
     port: u16,
+    merge_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +125,7 @@ async fn main() -> Result<()> {
         event_tx,
         repo_root,
         port: cli.port,
+        merge_lock: tokio::sync::Mutex::new(()),
     });
 
     let app = build_router(state);
@@ -288,6 +290,22 @@ async fn spawn_node(state: &AppState, spawn_ctx: &SpawnContext<'_>, node: &pipel
 
     let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
+    let working_dir = if node.node_type == pipeline::NodeType::CodeMutating {
+        let sub_wt_dir = sub_worktree_path(&state.repo_root, run_id, &node.id, 1);
+        let sub_branch = sub_worktree_branch(run_id, &node.id, 1);
+        let pipeline_branch = format!("maestro/run-{run_id}");
+
+        if let Err(e) =
+            create_sub_worktree(&state.repo_root, &sub_wt_dir, &sub_branch, &pipeline_branch)
+        {
+            error!("failed to create sub-worktree for {}: {e}", node.id);
+            return;
+        }
+        sub_wt_dir
+    } else {
+        spawn_ctx.worktree_dir.to_path_buf()
+    };
+
     let node_started = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -297,6 +315,10 @@ async fn spawn_node(state: &AppState, spawn_ctx: &SpawnContext<'_>, node: &pipel
         iter: Some(1),
         payload: Some(serde_json::json!({
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
+            "node_type": match node.node_type {
+                pipeline::NodeType::DocOnly => "doc-only",
+                pipeline::NodeType::CodeMutating => "code-mutating",
+            },
         })),
     };
     if let Err(e) = append_event(state, &node_started).await {
@@ -307,7 +329,7 @@ async fn spawn_node(state: &AppState, spawn_ctx: &SpawnContext<'_>, node: &pipel
     if let Err(e) = spawn_tmux_session(
         &session_name,
         &full_prompt,
-        spawn_ctx.worktree_dir,
+        &working_dir,
         run_id,
         &node.id,
         1,
@@ -588,12 +610,143 @@ async fn get_run_events(
     Json(events).into_response()
 }
 
+fn find_node_type(run_state: &event_log::RunState, node_id: &str) -> Option<String> {
+    run_state
+        .node_defs
+        .iter()
+        .find(|nd| nd.id == node_id)
+        .map(|nd| nd.node_type.clone())
+}
+
 async fn node_done(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     body: Option<Json<NodeDoneRequest>>,
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
+
+    let session_name = format!("maestro-{run_id}-{node_id}-iter-{iter}");
+    kill_tmux_session(&session_name);
+
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let pre_run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        }
+    };
+
+    let node_type = find_node_type(&pre_run_state, &node_id);
+    let worktree_dir = state
+        .repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(&run_id)
+        .join("worktree");
+
+    if let Some(ref nt) = node_type {
+        if nt == "code-mutating" {
+            let sub_wt_dir = sub_worktree_path(&state.repo_root, &run_id, &node_id, iter);
+            let sub_branch = sub_worktree_branch(&run_id, &node_id, iter);
+
+            let _lock = state.merge_lock.lock().await;
+            match commit_and_merge_sub_worktree(
+                &state.repo_root,
+                &sub_wt_dir,
+                &worktree_dir,
+                &sub_branch,
+                &node_id,
+                iter,
+            ) {
+                Ok(MergeResult::Success) => {}
+                Ok(MergeResult::Conflict(detail)) => {
+                    let conflict_event = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::MergeConflictDetected,
+                        node_id: Some(node_id.clone()),
+                        iter: Some(iter),
+                        payload: Some(serde_json::json!({
+                            "reason": format!("conflict merging {node_id} into pipeline branch"),
+                            "detail": detail,
+                        })),
+                    };
+                    let _ = append_event(&state, &conflict_event).await;
+
+                    let run_failed = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::RunFailed,
+                        node_id: None,
+                        iter: None,
+                        payload: Some(serde_json::json!({
+                            "reason": format!("merge conflict on {node_id}")
+                        })),
+                    };
+                    let _ = append_event(&state, &run_failed).await;
+
+                    warn!("Merge conflict for node {node_id} in run {run_id}");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({ "status": "merge_conflict" })),
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    error!("failed to commit/merge sub-worktree for {node_id}: {e}");
+                }
+            }
+        } else if nt == "doc-only" {
+            match worktree_has_tracked_changes(&worktree_dir) {
+                Ok(true) => {
+                    let fail_event = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::NodeFailed,
+                        node_id: Some(node_id.clone()),
+                        iter: Some(iter),
+                        payload: Some(serde_json::json!({
+                            "reason": "doc_violated_code_immutability"
+                        })),
+                    };
+                    let _ = append_event(&state, &fail_event).await;
+
+                    let run_failed = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::RunFailed,
+                        node_id: None,
+                        iter: None,
+                        payload: Some(serde_json::json!({
+                            "reason": format!("doc-only node {node_id} violated code immutability")
+                        })),
+                    };
+                    let _ = append_event(&state, &run_failed).await;
+
+                    warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({ "status": "doc_violated_code_immutability" })),
+                    )
+                        .into_response();
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    warn!("Could not check worktree cleanliness for {node_id}: {e}");
+                }
+            }
+        }
+    }
 
     let event = event_log::Event {
         id: None,
@@ -609,9 +762,6 @@ async fn node_done(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    let session_name = format!("maestro-{run_id}-{node_id}-iter-{iter}");
-    kill_tmux_session(&session_name);
-
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -622,7 +772,6 @@ async fn node_done(
     if let Some(run_state) = event_log::project(&events) {
         try_spawn_ready_nodes(&state, &run_state, &run_id, &events).await;
 
-        // Use node_defs from event payload if available, fall back to known nodes
         let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
             run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
         } else {
@@ -960,8 +1109,33 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     kill_tmux_session(&mgr_session);
 
     let run_dir = state.repo_root.join(".maestro").join("runs").join(run_id);
-    let worktree_dir = run_dir.join("worktree");
 
+    // Remove sub-worktrees (nodes/) before the main worktree
+    let nodes_dir = run_dir.join("nodes");
+    if nodes_dir.exists() {
+        for node_entry in std::fs::read_dir(&nodes_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            for iter_entry in std::fs::read_dir(node_entry.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let sub_wt = iter_entry.path();
+                if sub_wt.is_dir() {
+                    let _ = std::process::Command::new("git")
+                        .args(["worktree", "remove", "--force"])
+                        .arg(&sub_wt)
+                        .current_dir(&state.repo_root)
+                        .output();
+                }
+            }
+        }
+    }
+
+    let worktree_dir = run_dir.join("worktree");
     if worktree_dir.exists() {
         let output = std::process::Command::new("git")
             .args(["worktree", "remove", "--force"])
@@ -978,11 +1152,28 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
-    let branch_name = format!("maestro/run-{run_id}");
-    let _ = std::process::Command::new("git")
-        .args(["branch", "-D", &branch_name])
-        .current_dir(&state.repo_root)
-        .output();
+    // Remove all branches for this run (pipeline branch + sub-worktree branches)
+    for pattern in [
+        format!("maestro/run-{run_id}"),
+        format!("maestro/sub-{run_id}*"),
+    ] {
+        let branch_output = std::process::Command::new("git")
+            .args(["branch", "--list", &pattern])
+            .current_dir(&state.repo_root)
+            .output();
+        if let Ok(o) = branch_output {
+            let branches = String::from_utf8_lossy(&o.stdout);
+            for branch in branches.lines() {
+                let branch = branch.trim().trim_start_matches("* ");
+                if !branch.is_empty() {
+                    let _ = std::process::Command::new("git")
+                        .args(["branch", "-D", branch])
+                        .current_dir(&state.repo_root)
+                        .output();
+                }
+            }
+        }
+    }
 
     if run_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&run_dir) {
@@ -1106,6 +1297,134 @@ fn dirs_next_home() -> Option<PathBuf> {
 }
 
 // --- Git worktree ---
+
+fn sub_worktree_path(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> PathBuf {
+    repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("nodes")
+        .join(node_id)
+        .join(format!("iter-{iter}"))
+}
+
+fn sub_worktree_branch(run_id: &str, node_id: &str, iter: i64) -> String {
+    format!("maestro/sub-{run_id}-{node_id}-iter-{iter}")
+}
+
+fn create_sub_worktree(
+    repo_root: &std::path::Path,
+    sub_worktree_dir: &std::path::Path,
+    sub_branch: &str,
+    base_branch: &str,
+) -> Result<()> {
+    std::fs::create_dir_all(
+        sub_worktree_dir
+            .parent()
+            .unwrap_or(std::path::Path::new(".")),
+    )?;
+
+    let output = std::process::Command::new("git")
+        .args(["worktree", "add", "-b", sub_branch])
+        .arg(sub_worktree_dir)
+        .arg(base_branch)
+        .current_dir(repo_root)
+        .output()
+        .context("failed to run git worktree add for sub-worktree")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree add (sub) failed: {stderr}");
+    }
+
+    info!("Created sub-worktree at {}", sub_worktree_dir.display());
+    Ok(())
+}
+
+enum MergeResult {
+    Success,
+    Conflict(String),
+}
+
+fn commit_and_merge_sub_worktree(
+    repo_root: &std::path::Path,
+    sub_worktree_dir: &std::path::Path,
+    pipeline_worktree_dir: &std::path::Path,
+    sub_branch: &str,
+    node_id: &str,
+    iter: i64,
+) -> Result<MergeResult> {
+    let _ = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(sub_worktree_dir)
+        .output()
+        .context("git add failed in sub-worktree")?;
+
+    let status_output = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(sub_worktree_dir)
+        .output()
+        .context("git diff --cached failed")?;
+
+    if !status_output.status.success() {
+        let commit_msg = format!("{node_id} iter-{iter}: completed");
+        let output = std::process::Command::new("git")
+            .args(["commit", "-m", &commit_msg])
+            .current_dir(sub_worktree_dir)
+            .output()
+            .context("git commit failed in sub-worktree")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git commit in sub-worktree failed: {stderr}");
+        }
+    }
+
+    let output = std::process::Command::new("git")
+        .args(["merge", sub_branch, "--no-edit"])
+        .current_dir(pipeline_worktree_dir)
+        .output()
+        .context("git merge failed")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = std::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(pipeline_worktree_dir)
+            .output();
+        return Ok(MergeResult::Conflict(stderr.to_string()));
+    }
+
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(sub_worktree_dir)
+        .current_dir(repo_root)
+        .output();
+
+    let _ = std::process::Command::new("git")
+        .args(["branch", "-d", sub_branch])
+        .current_dir(repo_root)
+        .output();
+
+    info!("Merged sub-worktree {sub_branch} into pipeline branch");
+    Ok(MergeResult::Success)
+}
+
+fn worktree_has_tracked_changes(worktree_dir: &std::path::Path) -> Result<bool> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(worktree_dir)
+        .output()
+        .context("git status failed")?;
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    Ok(status.lines().any(|line| !line.starts_with("??")))
+}
 
 fn create_worktree(
     repo_root: &std::path::Path,
@@ -1266,6 +1585,7 @@ mod tests {
             event_tx,
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
+            merge_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -1885,5 +2205,200 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn sub_worktree_path_follows_canonical_schema() {
+        let path = sub_worktree_path(
+            std::path::Path::new("/repo"),
+            "20260101-120000-abc",
+            "impl-1",
+            1,
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.maestro/runs/20260101-120000-abc/nodes/impl-1/iter-1")
+        );
+    }
+
+    #[test]
+    fn sub_worktree_branch_name() {
+        let branch = sub_worktree_branch("20260101-120000-abc", "impl-1", 1);
+        assert_eq!(branch, "maestro/sub-20260101-120000-abc-impl-1-iter-1");
+    }
+
+    fn init_test_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap()
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
+        run(&["add", "README.md"]);
+        run(&["commit", "-m", "initial"]);
+    }
+
+    #[test]
+    fn cm_sub_worktree_creates_and_merges() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-cm-run";
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        let sub_wt_dir = sub_worktree_path(repo, run_id, "impl-1", 1);
+        let sub_branch = sub_worktree_branch(run_id, "impl-1", 1);
+        create_sub_worktree(repo, &sub_wt_dir, &sub_branch, &pipeline_branch).unwrap();
+
+        assert!(sub_wt_dir.exists());
+
+        // Make a code change in the sub-worktree
+        std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
+
+        let result =
+            commit_and_merge_sub_worktree(repo, &sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1)
+                .unwrap();
+        assert!(matches!(result, MergeResult::Success));
+
+        // Verify the file is present in the pipeline worktree
+        assert!(wt_dir.join("foo.rs").exists());
+    }
+
+    #[test]
+    fn cm_merge_conflict_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-conflict";
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        // Create two sub-worktrees that will conflict
+        let sub_wt_1 = sub_worktree_path(repo, run_id, "impl-1", 1);
+        let sub_branch_1 = sub_worktree_branch(run_id, "impl-1", 1);
+        create_sub_worktree(repo, &sub_wt_1, &sub_branch_1, &pipeline_branch).unwrap();
+
+        let sub_wt_2 = sub_worktree_path(repo, run_id, "impl-2", 1);
+        let sub_branch_2 = sub_worktree_branch(run_id, "impl-2", 1);
+        create_sub_worktree(repo, &sub_wt_2, &sub_branch_2, &pipeline_branch).unwrap();
+
+        // Both modify the same file with different content
+        std::fs::write(sub_wt_1.join("shared.txt"), "from impl-1\n").unwrap();
+        std::fs::write(sub_wt_2.join("shared.txt"), "from impl-2\n").unwrap();
+
+        // Merge first succeeds
+        let r1 =
+            commit_and_merge_sub_worktree(repo, &sub_wt_1, &wt_dir, &sub_branch_1, "impl-1", 1)
+                .unwrap();
+        assert!(matches!(r1, MergeResult::Success));
+
+        // Merge second → conflict
+        let r2 =
+            commit_and_merge_sub_worktree(repo, &sub_wt_2, &wt_dir, &sub_branch_2, "impl-2", 1)
+                .unwrap();
+        assert!(matches!(r2, MergeResult::Conflict(_)));
+    }
+
+    #[test]
+    fn doc_only_clean_worktree_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-do-clean";
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        assert!(!worktree_has_tracked_changes(&wt_dir).unwrap());
+    }
+
+    #[test]
+    fn doc_only_dirty_worktree_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-do-dirty";
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        // Modify a tracked file
+        std::fs::write(wt_dir.join("README.md"), "# modified\n").unwrap();
+
+        assert!(worktree_has_tracked_changes(&wt_dir).unwrap());
+    }
+
+    #[test]
+    fn doc_only_untracked_files_not_flagged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-do-untracked";
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        // Add an untracked file (like artifacts)
+        let artifacts_dir = wt_dir.join(".maestro/artifacts/planner/iter-1");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+        std::fs::write(artifacts_dir.join("plan.md"), "# plan\n").unwrap();
+
+        assert!(!worktree_has_tracked_changes(&wt_dir).unwrap());
+    }
+
+    #[tokio::test]
+    async fn node_done_with_cm_node_def_in_events() {
+        let state = test_state().await;
+        let run_id = "test-cm-node-done";
+
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": "cm-test",
+                "input": "test",
+                "node_defs": [
+                    { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                ],
+                "edges": []
+            })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        let node_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("impl-1".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "node_type": "code-mutating" })),
+        };
+        append_event(&state, &node_started).await.unwrap();
+
+        // Verify that find_node_type works
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            find_node_type(&run_state, "impl-1"),
+            Some("code-mutating".into())
+        );
     }
 }

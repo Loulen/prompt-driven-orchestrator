@@ -184,6 +184,7 @@ mod tests {
                     repeated: false,
                 }],
                 interactive: false,
+                view: None,
             }],
             edges: vec![],
         }
@@ -294,6 +295,7 @@ mod tests {
                 repeated: false,
             }],
             interactive: false,
+            view: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeTarget {
@@ -331,5 +333,110 @@ mod tests {
         assert!(full.contains("# Maestro Runtime Preamble"));
         assert!(full.contains("You are a planner. Plan well."));
         assert!(full.contains("---"));
+    }
+
+    #[test]
+    fn multi_input_resolution_from_two_upstream_nodes() {
+        let pipeline = PipelineDef {
+            name: "multi-input".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    id: "planner".into(),
+                    node_type: NodeType::DocOnly,
+                    prompt_file: None,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "plan".into(),
+                        repeated: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                },
+                NodeDef {
+                    id: "researcher".into(),
+                    node_type: NodeType::DocOnly,
+                    prompt_file: None,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "context".into(),
+                        repeated: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                },
+                NodeDef {
+                    id: "implementer".into(),
+                    node_type: NodeType::CodeMutating,
+                    prompt_file: None,
+                    inputs: vec![
+                        Port {
+                            name: "plan".into(),
+                            repeated: false,
+                        },
+                        Port {
+                            name: "context".into(),
+                            repeated: false,
+                        },
+                    ],
+                    outputs: vec![Port {
+                        name: "summary".into(),
+                        repeated: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                },
+            ],
+            edges: vec![
+                EdgeDef {
+                    source: EdgeTarget {
+                        node: "planner".into(),
+                        port: "plan".into(),
+                    },
+                    target: EdgeTarget {
+                        node: "implementer".into(),
+                        port: "plan".into(),
+                    },
+                    when: None,
+                },
+                EdgeDef {
+                    source: EdgeTarget {
+                        node: "researcher".into(),
+                        port: "context".into(),
+                    },
+                    target: EdgeTarget {
+                        node: "implementer".into(),
+                        port: "context".into(),
+                    },
+                    when: None,
+                },
+            ],
+        };
+
+        let node = &pipeline.nodes[2]; // implementer
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let inputs = resolve_input_paths(&ctx);
+        assert_eq!(inputs.len(), 2);
+
+        let plan_input = inputs.iter().find(|i| i.port_name == "plan").unwrap();
+        assert_eq!(
+            plan_input.path,
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan.md")
+        );
+
+        let ctx_input = inputs.iter().find(|i| i.port_name == "context").unwrap();
+        assert_eq!(
+            ctx_input.path,
+            PathBuf::from("/repo/.maestro/artifacts/researcher/iter-1/context.md")
+        );
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("`plan`"));
+        assert!(preamble.contains("`context`"));
+        assert!(preamble.contains("planner/iter-1/plan.md"));
+        assert!(preamble.contains("researcher/iter-1/context.md"));
     }
 }

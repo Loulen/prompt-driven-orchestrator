@@ -1,6 +1,8 @@
+mod blackboard;
 mod event_log;
 mod pipeline;
 mod prompt_augmenter;
+mod scheduler;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -242,6 +244,68 @@ impl EventRow {
 
 // --- API handlers ---
 
+struct SpawnContext<'a> {
+    pipeline: &'a pipeline::PipelineDef,
+    run_id: &'a str,
+    pipeline_path: &'a std::path::Path,
+    worktree_dir: &'a std::path::Path,
+    artifacts_dir: &'a std::path::Path,
+    resolved_vars: &'a HashMap<String, serde_yaml::Value>,
+}
+
+async fn spawn_node(state: &AppState, spawn_ctx: &SpawnContext<'_>, node: &pipeline::NodeDef) {
+    let run_id = spawn_ctx.run_id;
+    let prompt_dir = spawn_ctx
+        .pipeline_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let role_prompt = node
+        .prompt_file
+        .as_ref()
+        .and_then(|pf| pipeline::load_prompt_file(prompt_dir, pf).ok())
+        .unwrap_or_default();
+
+    let aug_ctx = prompt_augmenter::AugmentContext {
+        pipeline: spawn_ctx.pipeline,
+        node,
+        run_id,
+        iter: 1,
+        artifacts_dir: spawn_ctx.artifacts_dir,
+        variables: spawn_ctx.resolved_vars,
+        daemon_url: &format!("http://localhost:{}", state.port),
+    };
+
+    let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
+
+    let node_started = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeStarted,
+        node_id: Some(node.id.clone()),
+        iter: Some(1),
+        payload: Some(serde_json::json!({
+            "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
+        })),
+    };
+    if let Err(e) = append_event(state, &node_started).await {
+        error!("failed to append node_started: {e}");
+    }
+
+    let session_name = format!("maestro-{run_id}-{}-iter-1", node.id);
+    if let Err(e) = spawn_tmux_session(
+        &session_name,
+        &full_prompt,
+        spawn_ctx.worktree_dir,
+        run_id,
+        &node.id,
+        1,
+        state.port,
+    ) {
+        error!("failed to spawn tmux session: {e}");
+    }
+}
+
 async fn create_run(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateRunRequest>,
@@ -276,6 +340,33 @@ async fn create_run(
     let pipeline = parse_result.pipeline;
     let run_id = event_log::generate_run_id();
 
+    let edge_infos: Vec<event_log::EdgeInfo> = pipeline
+        .edges
+        .iter()
+        .map(|e| event_log::EdgeInfo {
+            source_node: e.source.node.clone(),
+            source_port: e.source.port.clone(),
+            target_node: e.target.node.clone(),
+            target_port: e.target.port.clone(),
+        })
+        .collect();
+
+    let node_def_infos: Vec<event_log::NodeDefInfo> = pipeline
+        .nodes
+        .iter()
+        .map(|n| event_log::NodeDefInfo {
+            id: n.id.clone(),
+            node_type: match n.node_type {
+                pipeline::NodeType::DocOnly => "doc-only".into(),
+                pipeline::NodeType::CodeMutating => "code-mutating".into(),
+            },
+            view_x: n.view.as_ref().map(|v| v.x),
+            view_y: n.view.as_ref().map(|v| v.y),
+            inputs: n.inputs.iter().map(|p| p.name.clone()).collect(),
+            outputs: n.outputs.iter().map(|p| p.name.clone()).collect(),
+        })
+        .collect();
+
     let run_started = event_log::Event {
         id: None,
         run_id: run_id.clone(),
@@ -286,6 +377,8 @@ async fn create_run(
         payload: Some(serde_json::json!({
             "pipeline_name": pipeline.name,
             "input": req.input,
+            "edges": edge_infos,
+            "node_defs": node_def_infos,
         })),
     };
 
@@ -328,56 +421,26 @@ async fn create_run(
         resolved_vars.insert(k.clone(), v.clone());
     }
 
-    // Spawn nodes that are ready (for single-node pipeline, that's the first node)
-    for node in &pipeline.nodes {
-        let prompt_dir = pipeline_path.parent().unwrap_or(std::path::Path::new("."));
-        let role_prompt = node
-            .prompt_file
-            .as_ref()
-            .and_then(|pf| pipeline::load_prompt_file(prompt_dir, pf).ok())
-            .unwrap_or_default();
+    // Use scheduler to determine initially ready nodes
+    let run_state = event_log::RunState::new(run_id.clone(), pipeline.name.clone());
+    let ready = scheduler::ready_nodes(&pipeline, &run_state);
 
-        let ctx = prompt_augmenter::AugmentContext {
-            pipeline: &pipeline,
-            node,
-            run_id: &run_id,
-            iter: 1,
-            artifacts_dir: &artifacts_dir,
-            variables: &resolved_vars,
-            daemon_url: &format!("http://localhost:{}", state.port),
+    let spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id: &run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &resolved_vars,
+    };
+
+    for node_id in &ready {
+        let node = match pipeline.nodes.iter().find(|n| &n.id == node_id) {
+            Some(n) => n,
+            None => continue,
         };
 
-        let full_prompt = prompt_augmenter::build_full_prompt(&ctx, &role_prompt);
-
-        // Append node_started event
-        let node_started = event_log::Event {
-            id: None,
-            run_id: run_id.clone(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeStarted,
-            node_id: Some(node.id.clone()),
-            iter: Some(1),
-            payload: Some(serde_json::json!({
-                "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
-            })),
-        };
-        if let Err(e) = append_event(&state, &node_started).await {
-            error!("failed to append node_started: {e}");
-        }
-
-        // Spawn tmux session
-        let session_name = format!("maestro-{run_id}-{}-iter-1", node.id);
-        if let Err(e) = spawn_tmux_session(
-            &session_name,
-            &full_prompt,
-            &worktree_dir,
-            &run_id,
-            &node.id,
-            1,
-            state.port,
-        ) {
-            error!("failed to spawn tmux session: {e}");
-        }
+        spawn_node(&state, &spawn_ctx, node).await;
     }
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
@@ -464,11 +527,9 @@ async fn node_done(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Kill the tmux session
     let session_name = format!("maestro-{run_id}-{node_id}-iter-{iter}");
     kill_tmux_session(&session_name);
 
-    // Check if all nodes are completed → emit run_completed
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -477,11 +538,69 @@ async fn node_done(
     };
 
     if let Some(run_state) = event_log::project(&events) {
-        let all_done = !run_state.nodes.is_empty()
-            && run_state
-                .nodes
-                .values()
-                .all(|n| n.status == event_log::NodeStatus::Completed);
+        // Try to re-parse pipeline and use scheduler for next-node spawning
+        let pipeline_path = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
+        if let Ok(yaml) = std::fs::read_to_string(&pipeline_path) {
+            if let Ok(parse_result) = pipeline::parse_pipeline(&yaml) {
+                let pipeline = parse_result.pipeline;
+                let ready = scheduler::ready_nodes(&pipeline, &run_state);
+
+                if !ready.is_empty() {
+                    let worktree_dir = state
+                        .repo_root
+                        .join(".maestro")
+                        .join("runs")
+                        .join(&run_id)
+                        .join("worktree");
+                    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+
+                    let mut resolved_vars = pipeline.variables.clone();
+                    if let Some(payload) = events.first().and_then(|e| e.payload.as_ref()) {
+                        if let Some(vars) = payload.get("variables") {
+                            if let Ok(overrides) = serde_json::from_value::<
+                                HashMap<String, serde_yaml::Value>,
+                            >(vars.clone())
+                            {
+                                for (k, v) in overrides {
+                                    resolved_vars.insert(k, v);
+                                }
+                            }
+                        }
+                    }
+
+                    let spawn_ctx = SpawnContext {
+                        pipeline: &pipeline,
+                        run_id: &run_id,
+                        pipeline_path: &pipeline_path,
+                        worktree_dir: &worktree_dir,
+                        artifacts_dir: &artifacts_dir,
+                        resolved_vars: &resolved_vars,
+                    };
+
+                    for next_node_id in &ready {
+                        if let Some(node) = pipeline.nodes.iter().find(|n| &n.id == next_node_id) {
+                            spawn_node(&state, &spawn_ctx, node).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check completion: use node_defs from event payload if available,
+        // otherwise fall back to checking all known nodes
+        let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
+            run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
+        } else {
+            run_state.nodes.keys().cloned().collect()
+        };
+
+        let all_done = !expected_node_ids.is_empty()
+            && expected_node_ids.iter().all(|nid| {
+                run_state
+                    .nodes
+                    .get(nid)
+                    .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
+            });
 
         if all_done && run_state.status == event_log::RunStatus::Running {
             let run_completed = event_log::Event {

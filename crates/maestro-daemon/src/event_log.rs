@@ -2,6 +2,24 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeInfo {
+    pub source_node: String,
+    pub source_port: String,
+    pub target_node: String,
+    pub target_port: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDefInfo {
+    pub id: String,
+    pub node_type: String,
+    pub view_x: Option<f64>,
+    pub view_y: Option<f64>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -60,6 +78,10 @@ pub struct RunState {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub nodes: HashMap<String, NodeState>,
+    #[serde(default)]
+    pub edges: Vec<EdgeInfo>,
+    #[serde(default)]
+    pub node_defs: Vec<NodeDefInfo>,
 }
 
 impl RunState {
@@ -72,6 +94,8 @@ impl RunState {
             started_at: None,
             completed_at: None,
             nodes: HashMap::new(),
+            edges: Vec::new(),
+            node_defs: Vec::new(),
         }
     }
 }
@@ -95,6 +119,18 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                     }
                     if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
                         state.input = Some(input.to_string());
+                    }
+                    if let Some(edges) = payload.get("edges") {
+                        if let Ok(parsed) = serde_json::from_value::<Vec<EdgeInfo>>(edges.clone()) {
+                            state.edges = parsed;
+                        }
+                    }
+                    if let Some(node_defs) = payload.get("node_defs") {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<Vec<NodeDefInfo>>(node_defs.clone())
+                        {
+                            state.node_defs = parsed;
+                        }
                     }
                 }
             }

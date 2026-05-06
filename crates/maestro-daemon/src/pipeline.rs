@@ -32,6 +32,12 @@ pub struct Port {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeDef {
     pub id: String,
     #[serde(rename = "type")]
@@ -43,6 +49,7 @@ pub struct NodeDef {
     pub outputs: Vec<Port>,
     #[serde(default)]
     pub interactive: bool,
+    pub view: Option<ViewPosition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +126,61 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                 severity: Severity::Warning,
                 message: format!("node '{}': missing prompt_file", node.id),
             });
+        }
+    }
+
+    let node_ids: std::collections::HashSet<&str> =
+        pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
+
+    for edge in &pipeline.edges {
+        if !node_ids.contains(edge.source.node.as_str()) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "edge source references non-existent node '{}'",
+                    edge.source.node
+                ),
+            });
+        } else {
+            let src_node = pipeline
+                .nodes
+                .iter()
+                .find(|n| n.id == edge.source.node)
+                .unwrap();
+            if !src_node.outputs.iter().any(|p| p.name == edge.source.port) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "edge source port '{}' not found on node '{}'",
+                        edge.source.port, edge.source.node
+                    ),
+                });
+            }
+        }
+
+        if !node_ids.contains(edge.target.node.as_str()) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "edge target references non-existent node '{}'",
+                    edge.target.node
+                ),
+            });
+        } else {
+            let tgt_node = pipeline
+                .nodes
+                .iter()
+                .find(|n| n.id == edge.target.node)
+                .unwrap();
+            if !tgt_node.inputs.iter().any(|p| p.name == edge.target.port) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "edge target port '{}' not found on node '{}'",
+                        edge.target.port, edge.target.node
+                    ),
+                });
+            }
         }
     }
 
@@ -272,6 +334,169 @@ edges:
         assert_eq!(result.pipeline.nodes.len(), 2);
         assert_eq!(result.pipeline.edges.len(), 1);
         assert_eq!(result.pipeline.variables.len(), 2);
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn warns_on_edge_to_nonexistent_node() {
+        let yaml = r#"
+name: bad-edge
+nodes:
+  - id: planner
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: plan
+edges:
+  - source: { node: planner, port: plan }
+    target: { node: ghost, port: plan }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let warnings: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("non-existent node 'ghost'")));
+        assert!(result
+            .diagnostics
+            .iter()
+            .all(|d| d.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn warns_on_port_name_typo() {
+        let yaml = r#"
+name: bad-port
+nodes:
+  - id: planner
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: plan
+  - id: implementer
+    type: doc-only
+    prompt_file: p.md
+    inputs:
+      - name: plan
+edges:
+  - source: { node: planner, port: plaan }
+    target: { node: implementer, port: plaan }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let warnings: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("source port 'plaan' not found")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("target port 'plaan' not found")));
+    }
+
+    #[test]
+    fn no_warning_on_cycle_in_topology() {
+        let yaml = r#"
+name: cycle
+nodes:
+  - id: implementer
+    type: doc-only
+    prompt_file: p.md
+    inputs:
+      - name: review
+    outputs:
+      - name: code
+  - id: reviewer
+    type: doc-only
+    prompt_file: p.md
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+edges:
+  - source: { node: implementer, port: code }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: review }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let non_prompt_warnings: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .filter(|d| !d.message.contains("prompt_file"))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            non_prompt_warnings.is_empty(),
+            "cycle should not produce warnings, got: {non_prompt_warnings:?}"
+        );
+    }
+
+    #[test]
+    fn parses_nodes_with_view_positions() {
+        let yaml = r#"
+name: with-view
+nodes:
+  - id: planner
+    type: doc-only
+    prompt_file: p.md
+    view: { x: 100, y: 200 }
+    outputs:
+      - name: plan
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let node = &result.pipeline.nodes[0];
+        let view = node.view.as_ref().unwrap();
+        assert_eq!(view.x, 100.0);
+        assert_eq!(view.y, 200.0);
+    }
+
+    #[test]
+    fn parses_multiple_nodes_with_multiple_ports() {
+        let yaml = r#"
+name: multi-port
+nodes:
+  - id: planner
+    type: doc-only
+    prompt_file: p.md
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+      - name: task_list
+  - id: implementer
+    type: code-mutating
+    prompt_file: p.md
+    inputs:
+      - name: plan
+      - name: task_list
+    outputs:
+      - name: summary
+  - id: reviewer
+    type: doc-only
+    prompt_file: p.md
+    inputs:
+      - name: summary
+    outputs:
+      - name: review
+edges:
+  - source: { node: planner, port: plan }
+    target: { node: implementer, port: plan }
+  - source: { node: planner, port: task_list }
+    target: { node: implementer, port: task_list }
+  - source: { node: implementer, port: summary }
+    target: { node: reviewer, port: summary }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.nodes.len(), 3);
+        assert_eq!(result.pipeline.edges.len(), 3);
+        assert_eq!(result.pipeline.nodes[0].outputs.len(), 2);
+        assert_eq!(result.pipeline.nodes[1].inputs.len(), 2);
         assert!(result.diagnostics.is_empty());
     }
 }

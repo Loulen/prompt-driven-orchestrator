@@ -1,5 +1,6 @@
 export type RunStatus = "running" | "completed" | "failed";
 export type NodeStatus = "pending" | "running" | "completed" | "failed";
+export type NodeType = "doc-only" | "code-mutating";
 
 export interface RunListEntry {
   run_id: string;
@@ -17,6 +18,22 @@ export interface NodeState {
   failure_reason: string | null;
 }
 
+export interface EdgeInfo {
+  source_node: string;
+  source_port: string;
+  target_node: string;
+  target_port: string;
+}
+
+export interface NodeDefInfo {
+  id: string;
+  node_type: NodeType;
+  view_x: number | null;
+  view_y: number | null;
+  inputs: string[];
+  outputs: string[];
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -25,6 +42,8 @@ export interface RunState {
   started_at: string | null;
   completed_at: string | null;
   nodes: Record<string, NodeState>;
+  edges: EdgeInfo[];
+  node_defs: NodeDefInfo[];
 }
 
 export interface DaemonEvent {

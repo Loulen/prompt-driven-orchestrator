@@ -57,20 +57,14 @@ function TopBar() {
   );
 }
 
-function StatusBar({ status }: { status: ConnectionStatus }) {
-  const dotClass =
-    status === "connected"
-      ? "bg-st-done"
-      : status === "reconnecting"
-        ? "bg-st-await"
-        : "bg-st-failed";
+const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = {
+  connected: { dot: "bg-st-done", label: "Daemon: connected" },
+  reconnecting: { dot: "bg-st-await", label: "Daemon: reconnecting…" },
+  disconnected: { dot: "bg-st-failed", label: "Daemon: disconnected" },
+};
 
-  const label =
-    status === "connected"
-      ? "Daemon: connected"
-      : status === "reconnecting"
-        ? "Daemon: reconnecting…"
-        : "Daemon: disconnected";
+function StatusBar({ status }: { status: ConnectionStatus }) {
+  const { dot: dotClass, label } = STATUS_CONFIG[status];
 
   return (
     <footer

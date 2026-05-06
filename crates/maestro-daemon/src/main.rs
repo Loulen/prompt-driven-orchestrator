@@ -75,7 +75,7 @@ async fn handle_ws(mut socket: WebSocket) {
         interval.tick().await;
         let heartbeat = serde_json::json!({
             "type": "heartbeat",
-            "ts": chrono_now_iso(),
+            "ts": unix_timestamp_secs(),
         });
         if socket
             .send(Message::Text(heartbeat.to_string().into()))
@@ -89,7 +89,7 @@ async fn handle_ws(mut socket: WebSocket) {
     info!("WebSocket client disconnected");
 }
 
-fn chrono_now_iso() -> String {
+fn unix_timestamp_secs() -> String {
     use std::time::SystemTime;
     let d = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

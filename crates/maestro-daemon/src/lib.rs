@@ -1459,14 +1459,13 @@ async fn node_pane(
 
     let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
     let is_latest_iter = node_state.iter == iter;
-    let stale = !is_latest_iter;
 
     if let Some(content) = tmux_session_manager::capture(&session_name) {
         return Json(PaneResponse {
             content,
             session_name,
             resumed: false,
-            stale,
+            stale: !is_latest_iter,
         })
         .into_response();
     }
@@ -1521,7 +1520,7 @@ async fn node_pane(
         content: "Session no longer available".to_string(),
         session_name,
         resumed: false,
-        stale,
+        stale: !is_latest_iter,
     })
     .into_response()
 }

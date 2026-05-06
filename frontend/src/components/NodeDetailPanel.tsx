@@ -7,7 +7,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import Convert from "ansi-to-html";
-import type { NodeState, NodeStatus } from "../types";
+import type { IterationInfo, NodeState, NodeStatus } from "../types";
 import {
   markNodeDone,
   attachSession,
@@ -403,7 +403,7 @@ function IterSelector({
   selectedIter,
   onSelect,
 }: {
-  iterations: { iter: number; status: NodeStatus; started_at: string | null; completed_at: string | null }[];
+  iterations: IterationInfo[];
   selectedIter: number;
   onSelect: (iter: number) => void;
 }) {

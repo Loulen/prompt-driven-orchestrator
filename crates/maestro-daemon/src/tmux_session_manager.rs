@@ -48,26 +48,16 @@ fn sh_single_quote(s: &str) -> String {
 // Script builder (pub for assertion in layer-3a tests)
 // ---------------------------------------------------------------------------
 
-/// Construct the script tmux launches for a node run.
+/// Wrap a tail command with Maestro env exports and an `exec bash -c` trampoline.
 ///
-/// Shape: `exec bash -c '<exports> && <tail_cmd>'`
-///
-/// Both `exec`s collapse the shell trampoline so claude becomes the session
-/// leader. The default tail can be overridden via `TMUX_CMD_OVERRIDE_ENV`.
-pub fn build_tmux_script(
+/// Both `exec`s collapse the shell so claude becomes the session leader.
+fn wrap_with_env(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
-    prompt_path: &Path,
+    tail_cmd: &str,
 ) -> String {
-    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV).unwrap_or_else(|_| {
-        format!(
-            "exec claude --dangerously-skip-permissions \"$(cat {})\"",
-            sh_single_quote(&prompt_path.to_string_lossy())
-        )
-    });
-
     let inner = format!(
         "export MAESTRO_RUN_ID={run_id_q} && \
          export MAESTRO_NODE_ID={node_id_q} && \
@@ -83,24 +73,32 @@ pub fn build_tmux_script(
     format!("exec bash -c {}", sh_single_quote(&inner))
 }
 
+/// Construct the script tmux launches for a node run.
+///
+/// The default tail can be overridden via `TMUX_CMD_OVERRIDE_ENV`.
+pub fn build_tmux_script(
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    daemon_port: u16,
+    prompt_path: &Path,
+) -> String {
+    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV).unwrap_or_else(|_| {
+        format!(
+            "exec claude --dangerously-skip-permissions \"$(cat {})\"",
+            sh_single_quote(&prompt_path.to_string_lossy())
+        )
+    });
+
+    wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
+}
+
 /// Build a resume script that uses `claude --continue` in the same working_dir.
 fn build_resume_script(run_id: &str, node_id: &str, iter: i64, daemon_port: u16) -> String {
     let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV)
         .unwrap_or_else(|_| "exec claude --dangerously-skip-permissions --continue".to_string());
 
-    let inner = format!(
-        "export MAESTRO_RUN_ID={run_id_q} && \
-         export MAESTRO_NODE_ID={node_id_q} && \
-         export MAESTRO_NODE_ITER={iter_q} && \
-         export MAESTRO_DAEMON_URL={daemon_url_q} && \
-         {tail_cmd}",
-        run_id_q = sh_single_quote(run_id),
-        node_id_q = sh_single_quote(node_id),
-        iter_q = sh_single_quote(&iter.to_string()),
-        daemon_url_q = sh_single_quote(&format!("http://localhost:{daemon_port}")),
-    );
-
-    format!("exec bash -c {}", sh_single_quote(&inner))
+    wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
 }
 
 // ---------------------------------------------------------------------------
@@ -257,43 +255,27 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
         return None;
     }
 
-    // Format: <run_id>-<node_id>-iter-<N>
-    // run_id itself contains dashes (e.g. 20260506-143000-a3f1b2c)
-    // so we search for the last "-iter-" separator.
+    // run_id contains dashes (e.g. 20260506-143000-a3f1b2c), so we split on
+    // the last "-iter-" to isolate the iter suffix first.
     let iter_sep = rest.rfind("-iter-")?;
     let before_iter = &rest[..iter_sep];
-    let iter_str = &rest[iter_sep + 6..]; // skip "-iter-"
+    let iter_str = &rest[iter_sep + 6..];
     let iter: i64 = iter_str.parse().ok()?;
 
-    // Now split before_iter into run_id and node_id.
-    // run_id format: YYYYMMDD-HHMMSS-<7chars> (fixed 22+ chars)
-    // We look for the pattern: exactly 8 digits, dash, 6 digits, dash, 7+ hex chars.
-    // Then the rest after that prefix is -<node_id>.
-    // Simpler heuristic: run_id has the form `\d{8}-\d{6}-[a-f0-9]{7}`.
-    // Total min length = 8+1+6+1+7 = 23 chars.
-    // After the run_id there's a `-` then the node_id.
-    if before_iter.len() < 24 {
-        return None; // too short to hold run_id + "-" + node_id
-    }
-
-    // Try to find the split point by matching the run_id pattern.
-    // The run_id part: first 8 chars should be digits, then dash, 6 digits, dash, 7 hex.
-    let chars: Vec<char> = before_iter.chars().collect();
-    if chars.len() < 24 || chars[8] != '-' || chars[15] != '-' {
+    // run_id format: YYYYMMDD-HHMMSS-<7hex> = 23 chars.
+    // After that comes "-" then node_id.
+    let bytes = before_iter.as_bytes();
+    const RUN_ID_LEN: usize = 23; // 8 + 1 + 6 + 1 + 7
+    if bytes.len() <= RUN_ID_LEN
+        || bytes[8] != b'-'
+        || bytes[15] != b'-'
+        || bytes[RUN_ID_LEN] != b'-'
+    {
         return None;
     }
 
-    // Verify the run_id candidate: 8 digits, 6 digits, 7+ hex chars
-    let run_id_end = 23; // 8 + 1 + 6 + 1 + 7
-    if before_iter.len() <= run_id_end {
-        return None;
-    }
-    if before_iter.as_bytes()[run_id_end] != b'-' {
-        return None;
-    }
-
-    let run_id = &before_iter[..run_id_end];
-    let node_id = &before_iter[run_id_end + 1..];
+    let run_id = &before_iter[..RUN_ID_LEN];
+    let node_id = &before_iter[RUN_ID_LEN + 1..];
 
     if node_id.is_empty() {
         return None;
@@ -408,16 +390,6 @@ where
             }
         }
     }
-}
-
-/// Reap sessions for NodeRuns completed longer than `ttl` ago.
-/// Called periodically by the background reaper task.
-pub fn reap_stale<F>(lookup: F, ttl: Duration)
-where
-    F: Fn(&str, &str, i64) -> Option<NodeRunInfo>,
-{
-    // Same logic — sweep_orphans already handles the stale-TTL check
-    sweep_orphans(lookup, ttl);
 }
 
 /// Resolve the working_dir for a NodeRun given run context.

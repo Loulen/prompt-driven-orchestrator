@@ -274,14 +274,8 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         recent_writes,
     });
 
-    // Orphan sweep at boot
-    {
-        let db_clone = state.db.clone();
-        let ttl = tmux_session_manager::reaper_ttl();
-        let sweep_result = run_orphan_sweep(&db_clone, ttl).await;
-        if let Err(e) = sweep_result {
-            warn!("Orphan sweep at boot failed: {e}");
-        }
+    if let Err(e) = run_orphan_sweep(&state.db, tmux_session_manager::reaper_ttl()).await {
+        warn!("Orphan sweep at boot failed: {e}");
     }
 
     let app = build_router(state.clone());
@@ -1287,13 +1281,7 @@ async fn node_pane(
         .into_response();
     }
 
-    // Session is dead. If this is the latest iter, try to resume.
-    if is_latest_iter
-        && (node_state.status == event_log::NodeStatus::Completed
-            || node_state.status == event_log::NodeStatus::Running
-            || node_state.status == event_log::NodeStatus::AwaitingUser
-            || node_state.status == event_log::NodeStatus::Failed)
-    {
+    if is_latest_iter && node_state.status != event_log::NodeStatus::Pending {
         let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
         let working_dir = tmux_session_manager::working_dir_for_node(
             &state.repo_root,

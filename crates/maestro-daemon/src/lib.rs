@@ -148,7 +148,7 @@ struct RunCommandRequest {
 }
 
 #[derive(Deserialize)]
-struct PaneQuery {
+struct IterQuery {
     #[serde(default = "default_iter")]
     iter: i64,
 }
@@ -1245,7 +1245,7 @@ struct PaneResponse {
 async fn node_pane(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
-    Query(query): Query<PaneQuery>,
+    Query(query): Query<IterQuery>,
 ) -> Response {
     let iter = query.iter;
 
@@ -1345,7 +1345,7 @@ fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Opti
 async fn node_prompt(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
-    Query(query): Query<PaneQuery>,
+    Query(query): Query<IterQuery>,
 ) -> Response {
     let iter = query.iter;
 

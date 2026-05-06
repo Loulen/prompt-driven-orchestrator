@@ -6,6 +6,7 @@ mod pipeline;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod scheduler;
+pub mod tmux_session_manager;
 mod variable_resolver;
 
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Json, Path as AxumPath, State, WebSocketUpgrade};
+use axum::extract::{Json, Path as AxumPath, Query, State, WebSocketUpgrade};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -146,6 +147,16 @@ struct RunCommandRequest {
     iter: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct PaneQuery {
+    #[serde(default = "default_iter")]
+    iter: i64,
+}
+
+fn default_iter() -> i64 {
+    1
+}
+
 fn cli_daemon_url() -> String {
     std::env::var("MAESTRO_DAEMON_URL").unwrap_or_else(|_| DEFAULT_DAEMON_URL.to_string())
 }
@@ -263,12 +274,37 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         recent_writes,
     });
 
-    let app = build_router(state);
+    // Orphan sweep at boot
+    {
+        let db_clone = state.db.clone();
+        let ttl = tmux_session_manager::reaper_ttl();
+        let sweep_result = run_orphan_sweep(&db_clone, ttl).await;
+        if let Err(e) = sweep_result {
+            warn!("Orphan sweep at boot failed: {e}");
+        }
+    }
+
+    let app = build_router(state.clone());
 
     info!("Maestro daemon listening on http://{bound_addr}");
 
+    // Spawn reaper background task
+    let reaper_state = state.clone();
+    let _reaper_handle = tokio::spawn(async move {
+        let interval = tmux_session_manager::reaper_interval();
+        let ttl = tmux_session_manager::reaper_ttl();
+        let mut tick = time::interval(interval);
+        loop {
+            tick.tick().await;
+            if let Err(e) = run_orphan_sweep(&reaper_state.db, ttl).await {
+                warn!("Reaper sweep failed: {e}");
+            }
+        }
+    });
+
     let task = tokio::spawn(async move {
         let _watcher = watcher; // keep the file watcher alive for the server's lifetime
+        let _reaper = _reaper_handle; // keep the reaper alive
         axum::serve(listener, app).await.context("server error")?;
         Ok(())
     });
@@ -302,6 +338,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
+        .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
         .route("/runs/{run_id}/commands", post(run_command))
         .route("/sessions/{session_id}/attach", post(session_attach))
         .fallback(static_handler)
@@ -750,8 +787,8 @@ async fn spawn_node(
         error!("failed to append node_started: {e}");
     }
 
-    let session_name = format!("maestro-{run_id}-{}-iter-{iter}", node.id);
-    if let Err(e) = spawn_tmux_session(
+    let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
+    if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
         &working_dir,
@@ -1154,6 +1191,160 @@ async fn get_run_events(
     Json(events).into_response()
 }
 
+// --- Orphan sweep / reaper ---
+
+async fn run_orphan_sweep(db: &sqlx::SqlitePool, ttl: Duration) -> Result<()> {
+    let run_ids = load_all_run_ids(db).await?;
+    let mut run_states: HashMap<String, event_log::RunState> = HashMap::new();
+
+    for run_id in &run_ids {
+        let events = load_events(db, run_id).await?;
+        if let Some(state) = event_log::project(&events) {
+            run_states.insert(run_id.clone(), state);
+        }
+    }
+
+    tmux_session_manager::sweep_orphans(
+        |run_id, node_id, _iter| {
+            let run_state = run_states.get(run_id)?;
+            let is_archived = run_state.status == event_log::RunStatus::Archived;
+
+            if node_id == "__manager__" {
+                return Some(tmux_session_manager::NodeRunInfo {
+                    completed_at: run_state
+                        .completed_at
+                        .as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc)),
+                    is_archived,
+                });
+            }
+
+            let node = run_state.nodes.get(node_id)?;
+            let completed_at = node
+                .completed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+
+            Some(tmux_session_manager::NodeRunInfo {
+                completed_at,
+                is_archived,
+            })
+        },
+        ttl,
+    );
+
+    Ok(())
+}
+
+// --- Pane endpoint ---
+
+#[derive(Serialize)]
+struct PaneResponse {
+    content: String,
+    session_name: String,
+    resumed: bool,
+}
+
+async fn node_pane(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Query(query): Query<PaneQuery>,
+) -> Response {
+    let iter = query.iter;
+
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        }
+    };
+
+    let node_state = match run_state.nodes.get(&node_id) {
+        Some(n) => n,
+        None => {
+            return (StatusCode::NOT_FOUND, "node not found in run").into_response();
+        }
+    };
+
+    let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+    let is_latest_iter = node_state.iter == iter;
+
+    if let Some(content) = tmux_session_manager::capture(&session_name) {
+        return Json(PaneResponse {
+            content,
+            session_name,
+            resumed: false,
+        })
+        .into_response();
+    }
+
+    // Session is dead. If this is the latest iter, try to resume.
+    if is_latest_iter
+        && (node_state.status == event_log::NodeStatus::Completed
+            || node_state.status == event_log::NodeStatus::Running
+            || node_state.status == event_log::NodeStatus::AwaitingUser
+            || node_state.status == event_log::NodeStatus::Failed)
+    {
+        let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
+        let working_dir = tmux_session_manager::working_dir_for_node(
+            &state.repo_root,
+            &run_id,
+            &node_id,
+            iter,
+            node_type,
+        );
+
+        if working_dir.exists() {
+            if let Err(e) = tmux_session_manager::resume(
+                &session_name,
+                &working_dir,
+                &run_id,
+                &node_id,
+                iter,
+                state.port,
+            ) {
+                warn!("Failed to resume session {session_name}: {e}");
+                return Json(PaneResponse {
+                    content: "Session no longer available".to_string(),
+                    session_name,
+                    resumed: false,
+                })
+                .into_response();
+            }
+
+            // Give the resumed session a moment to initialize
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            let content = tmux_session_manager::capture(&session_name)
+                .unwrap_or_else(|| "Connecting...".to_string());
+
+            return Json(PaneResponse {
+                content,
+                session_name,
+                resumed: true,
+            })
+            .into_response();
+        }
+    }
+
+    // Not latest iter or working_dir gone — return placeholder
+    Json(PaneResponse {
+        content: "Session no longer available".to_string(),
+        session_name,
+        resumed: false,
+    })
+    .into_response()
+}
+
 fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Option<&'a str> {
     run_state
         .node_defs
@@ -1169,8 +1360,8 @@ async fn node_done(
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
 
-    let session_name = format!("maestro-{run_id}-{node_id}-iter-{iter}");
-    kill_tmux_session(&session_name);
+    // Per #23: session stays alive for terminal preview. The reaper kills it
+    // after the TTL (default 1h), or cleanup_run kills it immediately.
 
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
@@ -1387,9 +1578,7 @@ async fn node_fail(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Kill the tmux session
-    let session_name = format!("maestro-{run_id}-{node_id}-iter-{iter}");
-    kill_tmux_session(&session_name);
+    // Per #23: session stays alive for terminal preview post-failure.
 
     // Mark the run as failed
     let run_failed = event_log::Event {
@@ -1662,11 +1851,12 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     }
 
     for node in run_state.nodes.values() {
-        let session_name = format!("maestro-{run_id}-{}-iter-{}", node.node_id, node.iter);
-        kill_tmux_session(&session_name);
+        let session_name =
+            tmux_session_manager::node_session_name(run_id, &node.node_id, node.iter);
+        tmux_session_manager::kill(&session_name);
     }
-    let mgr_session = format!("maestro-mgr-{run_id}");
-    kill_tmux_session(&mgr_session);
+    let mgr_session = tmux_session_manager::manager_session_name(run_id);
+    tmux_session_manager::kill(&mgr_session);
 
     let run_dir = state.repo_root.join(".maestro").join("runs").join(run_id);
 
@@ -2022,126 +2212,8 @@ fn create_worktree(
     Ok(())
 }
 
-// --- tmux ---
-
-/// Env var that, when set, replaces the `claude --dangerously-skip-permissions ...`
-/// tail of the tmux script. Used by integration tests to spawn `sleep 60` instead
-/// of actually launching Claude Code.
-pub const TMUX_CMD_OVERRIDE_ENV: &str = "MAESTRO_TMUX_CMD_OVERRIDE";
-
-/// Quote a value so it survives expansion inside a single-quoted bash string.
-/// Wraps in `'…'` and escapes any embedded single quote as `'\''`.
-fn sh_single_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
-    for ch in s.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
-    out
-}
-
-/// Construct the script tmux launches for a node run.
-///
-/// Shape:
-/// ```text
-/// exec bash -c '<exports> && <tail_cmd>'
-/// ```
-/// where `tail_cmd` defaults to `exec claude --dangerously-skip-permissions "$(cat <prompt>)"`.
-/// Both `exec`s are deliberate so the tmux session leader becomes claude (signals
-/// propagate, the session lives exactly as long as claude). The default can be
-/// overridden via `TMUX_CMD_OVERRIDE_ENV` for tests that don't have claude on PATH.
-///
-/// Verified empirically (2026-05-06): `claude "<prompt>"` is accepted as the
-/// initial message in interactive mode — the prompt-as-arg form works, no
-/// `tmux send-keys` fallback needed. First launch in a fresh worktree path
-/// also triggers claude's one-time "trust this folder" dialog; the user must
-/// confirm before the prompt lands. That gate is orthogonal to this primitive.
-///
-/// Public so integration tests can assert the produced shape without invoking tmux.
-pub fn build_tmux_script(
-    run_id: &str,
-    node_id: &str,
-    iter: i64,
-    daemon_port: u16,
-    prompt_path: &std::path::Path,
-) -> String {
-    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV).unwrap_or_else(|_| {
-        format!(
-            "exec claude --dangerously-skip-permissions \"$(cat {})\"",
-            sh_single_quote(&prompt_path.to_string_lossy())
-        )
-    });
-
-    let inner = format!(
-        "export MAESTRO_RUN_ID={run_id_q} && \
-         export MAESTRO_NODE_ID={node_id_q} && \
-         export MAESTRO_NODE_ITER={iter_q} && \
-         export MAESTRO_DAEMON_URL={daemon_url_q} && \
-         {tail_cmd}",
-        run_id_q = sh_single_quote(run_id),
-        node_id_q = sh_single_quote(node_id),
-        iter_q = sh_single_quote(&iter.to_string()),
-        daemon_url_q = sh_single_quote(&format!("http://localhost:{daemon_port}")),
-    );
-
-    format!("exec bash -c {}", sh_single_quote(&inner))
-}
-
-fn spawn_tmux_session(
-    session_name: &str,
-    prompt: &str,
-    working_dir: &std::path::Path,
-    run_id: &str,
-    node_id: &str,
-    iter: i64,
-    daemon_port: u16,
-) -> Result<()> {
-    let prompt_dir = working_dir.join(".maestro").join("prompts");
-    std::fs::create_dir_all(&prompt_dir)?;
-    let prompt_path = prompt_dir.join(format!("{node_id}-iter-{iter}.md"));
-    std::fs::write(&prompt_path, prompt)?;
-
-    let script = build_tmux_script(run_id, node_id, iter, daemon_port, &prompt_path);
-
-    let output = std::process::Command::new("tmux")
-        .args(["new-session", "-d", "-s", session_name, "-c"])
-        .arg(working_dir)
-        .arg(&script)
-        .output()
-        .context("failed to run tmux new-session")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("tmux new-session failed: {stderr}");
-    }
-
-    info!("Spawned tmux session: {session_name}");
-    Ok(())
-}
-
-fn kill_tmux_session(session_name: &str) {
-    let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
-}
-
-pub fn capture_tmux_pane(session_name: &str) -> Option<String> {
-    let output = std::process::Command::new("tmux")
-        .args(["capture-pane", "-pe", "-S", "-100", "-t", session_name])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        None
-    }
-}
+// Re-export tmux_session_manager public items that existing tests reference.
+pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
 // --- Static file serving ---
 
@@ -3436,5 +3508,170 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+
+    // --- Layer 2: pane endpoint contract tests ---
+
+    async fn seed_running_run(state: &Arc<AppState>, run_id: &str, node_id: &str) {
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test-pipe" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some(node_id.into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ];
+        for ev in &events {
+            append_event(state, ev).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_returns_404_for_nonexistent_run() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/nonexistent/nodes/worker/pane?iter=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn pane_returns_404_for_nonexistent_node() {
+        let state = test_state().await;
+        seed_running_run(&state, "pane-404-node", "worker").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/pane-404-node/nodes/bogus/pane?iter=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn pane_returns_200_with_placeholder_when_no_tmux() {
+        let state = test_state().await;
+        seed_running_run(&state, "pane-no-tmux", "worker").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/pane-no-tmux/nodes/worker/pane?iter=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["content"].is_string());
+        assert!(json["session_name"].is_string());
+        assert!(json["resumed"].is_boolean());
+    }
+
+    #[tokio::test]
+    async fn pane_defaults_iter_to_1() {
+        let state = test_state().await;
+        seed_running_run(&state, "pane-default-iter", "worker").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/pane-default-iter/nodes/worker/pane")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["session_name"].as_str().unwrap().contains("iter-1"));
+    }
+
+    #[tokio::test]
+    async fn pane_non_latest_iter_returns_placeholder() {
+        let state = test_state().await;
+        let run_id = "pane-old-iter";
+        // Node at iter 3 (simulating cyclic node)
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("reviewer".into()),
+                iter: Some(3),
+                payload: None,
+            },
+        ];
+        for ev in &events {
+            append_event(&state, ev).await.unwrap();
+        }
+
+        // Request iter=1 (not latest, which is 3)
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/nodes/reviewer/pane?iter=1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["content"], "Session no longer available");
+        assert_eq!(json["resumed"], false);
     }
 }

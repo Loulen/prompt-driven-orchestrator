@@ -44,6 +44,24 @@ export async function attachSession(sessionId: string): Promise<void> {
   if (!resp.ok) throw new Error(`attach failed: ${resp.status}`);
 }
 
+export interface PaneResponse {
+  content: string;
+  session_name: string;
+  resumed: boolean;
+}
+
+export async function fetchPane(
+  runId: string,
+  nodeId: string,
+  iter: number,
+): Promise<PaneResponse> {
+  const resp = await fetch(
+    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane?iter=${iter}`,
+  );
+  if (!resp.ok) throw new Error(`GET pane failed: ${resp.status}`);
+  return resp.json();
+}
+
 export async function fetchPipelines(): Promise<PipelineListEntry[]> {
   const resp = await fetch(`${BASE}/pipelines`);
   if (!resp.ok) throw new Error(`GET /pipelines failed: ${resp.status}`);

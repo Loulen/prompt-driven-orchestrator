@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, ExternalLink, CheckCircle, AlertCircle } from "lucide-react";
+import Convert from "ansi-to-html";
 import type { NodeState, NodeStatus } from "../types";
-import { markNodeDone, attachSession } from "../api";
+import { markNodeDone, attachSession, fetchPane } from "../api";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
@@ -11,6 +12,29 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
   failed: "Failed",
 };
 
+const ansiConverter = new Convert({
+  fg: "#e6e8eb",
+  bg: "#0f1115",
+  newline: true,
+  escapeXML: true,
+});
+
+const POLL_FAST = 1000;
+const POLL_SLOW = 5000;
+
+function pollInterval(status: NodeStatus): number | null {
+  switch (status) {
+    case "running":
+    case "awaiting_user":
+      return POLL_FAST;
+    case "completed":
+    case "failed":
+      return POLL_SLOW;
+    case "pending":
+      return null;
+  }
+}
+
 interface Props {
   node: NodeState;
   runId: string;
@@ -18,28 +42,41 @@ interface Props {
 }
 
 export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
-  const [terminalContent, setTerminalContent] = useState<string>("");
+  const [terminalHtml, setTerminalHtml] = useState<string>("");
   const terminalRef = useRef<HTMLPreElement>(null);
   const sessionName = `maestro-${runId}-${node.node_id}-iter-${node.iter}`;
+  const interval = pollInterval(node.status);
 
-  // Poll tmux capture-pane for terminal preview
   useEffect(() => {
-    if (node.status !== "running" && node.status !== "awaiting_user") return;
+    if (interval === null) return;
+
+    let cancelled = false;
 
     async function poll() {
       try {
-        setTerminalContent(
-          `[tmux session: ${sessionName}]\n\nTerminal preview will appear here when the session is active.`,
-        );
+        const resp = await fetchPane(runId, node.node_id, node.iter);
+        if (!cancelled) {
+          setTerminalHtml(ansiConverter.toHtml(resp.content));
+        }
       } catch {
-        // ignore fetch errors
+        // ignore fetch errors during polling
       }
     }
 
     poll();
-    const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [node.status, sessionName]);
+    const timer = setInterval(poll, interval);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [interval, node.node_id, node.iter, runId]);
+
+  // Auto-scroll terminal to bottom on content change
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [terminalHtml]);
 
   const handleOpenTerminal = useCallback(async () => {
     try {
@@ -102,10 +139,13 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
         </div>
         <pre
           ref={terminalRef}
-          className="h-[200px] overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+          className="terminal-pane h-[200px] overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
           style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+          dangerouslySetInnerHTML={
+            terminalHtml ? { __html: terminalHtml } : undefined
+          }
         >
-          {terminalContent || (
+          {!terminalHtml && (
             <span className="text-fg-4">
               {terminalPlaceholder(node)}
             </span>

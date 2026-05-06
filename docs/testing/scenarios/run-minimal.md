@@ -52,7 +52,14 @@
    tmux ls | grep "maestro-<run_id>-only-iter-1"
    ```
 
-5. `tmux capture-pane -p -t maestro-<run_id>-only-iter-1`. The pane content
+5. Verify the **terminal preview** in the UI right panel is non-empty and
+   contains live content (not the placeholder "Connecting..." string). The
+   frontend polls `GET /runs/<run_id>/nodes/only/pane?iter=1` at 1 s cadence
+   for running nodes and renders `tmux capture-pane -pe` output with ANSI
+   colors via `ansi-to-html`.
+
+   Also verify from the shell:
+   `tmux capture-pane -p -t maestro-<run_id>-only-iter-1`. The pane content
    must show the **claude TUI**, not just an `echo`/`cat` shell. Acceptable
    first-launch states:
    - The "Quick safety check: Is this a project you created or one you trust?"

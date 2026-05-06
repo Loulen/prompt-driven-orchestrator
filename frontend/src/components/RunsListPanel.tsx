@@ -55,7 +55,9 @@ export default function RunsListPanel({
         {runs.map((run) => {
           const isSelected = run.run_id === selectedRunId;
           const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
-          const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "halted";
+          const isTerminal = run.status === "completed"
+            || run.status === "failed"
+            || run.status === "halted";
 
           return (
             <button

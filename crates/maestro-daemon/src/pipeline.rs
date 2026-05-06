@@ -91,12 +91,9 @@ impl<'de> Deserialize<'de> for EdgeTarget {
             .as_mapping()
             .ok_or_else(|| serde::de::Error::custom("edge target must be a mapping"))?;
 
-        if mapping.contains_key(serde_yaml::Value::String("halt".into())) {
-            let halt_val = mapping
-                .get(serde_yaml::Value::String("halt".into()))
-                .unwrap();
-            let message = halt_val
-                .as_mapping()
+        let halt_key = serde_yaml::Value::String("halt".into());
+        if let Some(halt_val) = mapping.get(&halt_key) {
+            let message = halt_val.as_mapping()
                 .and_then(|m| m.get(serde_yaml::Value::String("message".into())))
                 .and_then(|v| v.as_str())
                 .map(String::from);

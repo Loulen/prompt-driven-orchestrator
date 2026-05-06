@@ -145,25 +145,18 @@ fn evaluate_any_with_iter(clauses: &serde_yaml::Value, ctx: &EvalContext) -> boo
     let Some(seq) = clauses.as_sequence() else {
         return false;
     };
+    seq.iter().any(|clause| evaluate_with_iter(clause, ctx))
+}
 
-    for clause in seq {
-        if evaluate_with_iter(clause, ctx) {
-            return true;
-        }
-    }
-
-    false
+pub struct HaltContext {
+    pub iter: i64,
+    pub node_id: String,
 }
 
 pub fn render_halt_message(template: &str, ctx: &HaltContext) -> String {
     template
         .replace("{iter}", &ctx.iter.to_string())
         .replace("{node-id}", &ctx.node_id)
-}
-
-pub struct HaltContext {
-    pub iter: i64,
-    pub node_id: String,
 }
 
 #[cfg(test)]

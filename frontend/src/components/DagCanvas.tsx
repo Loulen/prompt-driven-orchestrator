@@ -153,17 +153,18 @@ function HaltNode(_props: NodeProps<Node<HaltNodeData>>) {
 
 const nodeTypes = { pipeline: PipelineNode, halt: HaltNode };
 
+const OP_SYMBOLS: Record<string, string> = {
+  eq: "=", neq: "!=", lt: "<", lte: "<=", gt: ">", gte: ">=",
+  in: "in", not_in: "not in",
+};
+
 function formatWhenClause(when: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [field, predicate] of Object.entries(when)) {
     if (field === "any") continue;
     if (typeof predicate === "object" && predicate !== null) {
       for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
-        const opSymbol: Record<string, string> = {
-          eq: "=", neq: "!=", lt: "<", lte: "<=", gt: ">", gte: ">=",
-          in: "in", not_in: "not in",
-        };
-        const symbol = opSymbol[op] ?? op;
+        const symbol = OP_SYMBOLS[op] ?? op;
         const valStr = Array.isArray(val) ? `[${val.join(", ")}]` : String(val);
         parts.push(`${field} ${symbol} ${valStr}`);
       }
@@ -264,9 +265,10 @@ export default function DagCanvas({
   const edges: Edge[] = edgeInfos.map((ei, i) => {
     const isHalt = ei.target_node === "__halt__";
     const isConditional = ei.when_clause != null;
+    const isDashed = isHalt || isConditional;
     const targetId = isHalt ? `__halt__${haltEdges.indexOf(ei)}` : ei.target_node;
 
-    const condLabel = isConditional && ei.when_clause
+    const condLabel = ei.when_clause
       ? formatWhenClause(ei.when_clause)
       : undefined;
 
@@ -275,11 +277,9 @@ export default function DagCanvas({
         ? `${ei.source_port} → ${ei.target_port}`
         : undefined);
 
-    const strokeColor = isHalt
+    const strokeColor = isDashed
       ? "var(--color-st-blocked, #f97316)"
-      : isConditional
-        ? "var(--color-st-blocked, #f97316)"
-        : "var(--color-fg-4)";
+      : "var(--color-fg-4)";
 
     return {
       id: `e-${i}`,
@@ -292,7 +292,7 @@ export default function DagCanvas({
       style: {
         stroke: strokeColor,
         strokeWidth: 1.5,
-        strokeDasharray: isConditional || isHalt ? "6 3" : undefined,
+        strokeDasharray: isDashed ? "6 3" : undefined,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
@@ -302,13 +302,13 @@ export default function DagCanvas({
       },
       label,
       labelStyle: {
-        fill: isConditional || isHalt
+        fill: isDashed
           ? "var(--color-st-blocked, #fdba74)"
           : "var(--color-fg-4)",
         fontSize: 10,
       },
       labelBgStyle: {
-        fill: isConditional || isHalt
+        fill: isDashed
           ? "rgba(249,115,22,0.10)"
           : "var(--color-bg-2)",
         fillOpacity: 0.9,
@@ -317,7 +317,8 @@ export default function DagCanvas({
     };
   });
 
-  const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "halted";
+  const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
+  const isTerminal = TERMINAL_STATUSES.includes(run.status);
 
   async function handleCleanup() {
     try {

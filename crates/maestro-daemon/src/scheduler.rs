@@ -735,8 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn conditional_node_not_initially_ready() {
-        // implementer has only conditional incoming edges → should not appear in ready_nodes
+    fn entry_node_with_conditional_back_edge_is_initially_ready() {
         let pipeline = PipelineDef {
             name: "cycle".into(),
             version: None,
@@ -757,13 +756,8 @@ mod tests {
             ],
         };
 
-        // At startup, implementer has no unconditional incoming edges.
-        // It's an entry node for the forward edge, but also has a conditional back-edge.
-        // The entry node detection should still work: implementer has no unconditional
-        // incoming edges targeting it... wait, it does have a conditional one.
-        // Let me think: implementer has one incoming edge (from reviewer, conditional).
-        // It has no unconditional incoming edges. So it IS an entry node initially.
-        // That's correct — the first iteration of implementer starts unconditionally.
+        // Conditional back-edges don't count as upstream dependencies,
+        // so implementer is an entry node despite having an incoming conditional edge.
         let state = empty_run_state();
         let ready = ready_nodes(&pipeline, &state);
         assert_eq!(ready, vec!["implementer"]);

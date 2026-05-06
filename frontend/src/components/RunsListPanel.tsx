@@ -38,7 +38,7 @@ export default function RunsListPanel({
   }
 
   return (
-    <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-bg-2">
+    <aside className="flex h-full flex-col bg-bg-2">
       <div
         className="flex h-[36px] items-center border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}

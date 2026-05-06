@@ -3,6 +3,11 @@ import { Terminal, ExternalLink, CheckCircle, AlertCircle } from "lucide-react";
 import Convert from "ansi-to-html";
 import type { NodeState, NodeStatus } from "../types";
 import { markNodeDone, attachSession, fetchPane } from "../api";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "./ui/resizable";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
@@ -97,7 +102,7 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
   const showOpenTerminal = node.status !== "pending";
 
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col border-l border-line bg-bg-2">
+    <aside className="flex h-full flex-col bg-bg-2">
       {/* Header */}
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
@@ -128,76 +133,85 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
         </div>
       )}
 
-      {/* Terminal preview */}
-      <div className="flex-1 overflow-hidden">
-        <div
-          className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
-          style={{ fontSize: "11px" }}
-        >
-          <Terminal size={12} />
-          Terminal Preview
-        </div>
-        <pre
-          ref={terminalRef}
-          className="terminal-pane h-[200px] overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
-          style={{ fontSize: "10.5px", lineHeight: "1.5" }}
-          dangerouslySetInnerHTML={
-            terminalHtml ? { __html: terminalHtml } : undefined
-          }
-        >
-          {!terminalHtml && (
-            <span className="text-fg-4">
-              {terminalPlaceholder(node)}
-            </span>
-          )}
-        </pre>
-      </div>
+      <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+        {/* Terminal preview */}
+        <ResizablePanel defaultSize={60} minSize="100px" id="terminal">
+          <div className="flex h-full flex-col overflow-hidden">
+            <div
+              className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
+              style={{ fontSize: "11px" }}
+            >
+              <Terminal size={12} />
+              Terminal Preview
+            </div>
+            <pre
+              ref={terminalRef}
+              className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+              style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+              dangerouslySetInnerHTML={
+                terminalHtml ? { __html: terminalHtml } : undefined
+              }
+            >
+              {!terminalHtml && (
+                <span className="text-fg-4">
+                  {terminalPlaceholder(node)}
+                </span>
+              )}
+            </pre>
+          </div>
+        </ResizablePanel>
 
-      {/* Actions */}
-      <div className="flex flex-col gap-1.5 border-t border-line px-3 py-2">
-        {showOpenTerminal && (
-          <button
-            onClick={handleOpenTerminal}
-            className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
-              isArchived
-                ? "cursor-not-allowed text-fg-4"
-                : "text-fg-2 hover:bg-bg-4 hover:text-fg"
-            }`}
-            style={{ fontSize: "11.5px" }}
-            disabled={isArchived}
-          >
-            <ExternalLink size={12} />
-            Open terminal
-          </button>
-        )}
+        <ResizableHandle />
 
-        {node.status === "awaiting_user" && !isArchived && (
-          <button
-            onClick={handleMarkComplete}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            <CheckCircle size={12} />
-            Mark complete
-          </button>
-        )}
-      </div>
+        {/* Actions + Initial prompt */}
+        <ResizablePanel defaultSize={40} minSize="100px" id="details">
+          <div className="flex h-full flex-col overflow-auto">
+            <div className="flex flex-col gap-1.5 px-3 py-2">
+              {showOpenTerminal && (
+                <button
+                  onClick={handleOpenTerminal}
+                  className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
+                    isArchived
+                      ? "cursor-not-allowed text-fg-4"
+                      : "text-fg-2 hover:bg-bg-4 hover:text-fg"
+                  }`}
+                  style={{ fontSize: "11.5px" }}
+                  disabled={isArchived}
+                >
+                  <ExternalLink size={12} />
+                  Open terminal
+                </button>
+              )}
 
-      {/* Initial prompt section */}
-      <div className="border-t border-line">
-        <div
-          className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
-          style={{ fontSize: "11px" }}
-        >
-          Initial Prompt
-        </div>
-        <pre
-          className="max-h-[200px] overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
-          style={{ fontSize: "10px", lineHeight: "1.5" }}
-        >
-          Prompt preview available in run events.
-        </pre>
-      </div>
+              {node.status === "awaiting_user" && !isArchived && (
+                <button
+                  onClick={handleMarkComplete}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
+                  style={{ fontSize: "11.5px", fontWeight: 500 }}
+                >
+                  <CheckCircle size={12} />
+                  Mark complete
+                </button>
+              )}
+            </div>
+
+            <div className="border-t border-line">
+              <div
+                className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
+                style={{ fontSize: "11px" }}
+              >
+                Initial Prompt
+              </div>
+              <pre
+                className="overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
+                style={{ fontSize: "10px", lineHeight: "1.5" }}
+              >
+                Prompt preview available in run events.
+              </pre>
+            </div>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </aside>
   );
 }

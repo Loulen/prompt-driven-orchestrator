@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
+import { useResizableLayout } from "./hooks/useResizableLayout";
 import { fetchRuns, fetchRun } from "./api";
 import type { RunListEntry, RunState } from "./types";
 import RunsListPanel from "./components/RunsListPanel";
@@ -15,6 +16,14 @@ import NodeInspector from "./components/NodeInspector";
 import EdgeInspector from "./components/EdgeInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import { useEditStore } from "./stores/editStore";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "./components/ui/resizable";
+
+const PANEL_IDS = ["left", "center", "right"];
+const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
 
 function useRuns() {
   const [runs, setRuns] = useState<RunListEntry[]>([]);
@@ -121,51 +130,81 @@ export default function App() {
 
   const isArchived = selectedRun?.status === "archived";
 
+  const runLayout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
+  const editLayout = useResizableLayout("edit", PANEL_IDS, DEFAULT_SIZES);
+  const layout = editMode ? editLayout : runLayout;
+  const minSizePx = `${layout.minSizePx}px`;
+
   return (
     <div className="flex h-full flex-col bg-bg-1 text-fg">
       <TopBar editMode={editMode} onToggleEditMode={() => setEditMode(!editMode)} />
-      <main className="flex min-h-0 flex-1">
-        {editMode ? (
-          <>
-            <PipelinesListPanel />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <TabBar />
-              <EditCanvas />
-            </div>
-            {selection.kind === "node" && <NodeInspector />}
-            {selection.kind === "edge" && <EdgeInspector />}
-            {selection.kind === "none" && <PipelineInspector />}
-          </>
-        ) : (
-          <>
-            <RunsListPanel
-              runs={runs}
-              selectedRunId={selectedRunId}
-              onSelectRun={handleSelectRun}
-              onNewRun={() => setNewRunModalOpen(true)}
-            />
-            <DagCanvas
-              run={selectedRun}
-              onSelectNode={setSelectedNodeId}
-              selectedNodeId={selectedNodeId}
-            />
-            {selectedNode && selectedRun && (
-              <NodeDetailPanel
-                node={selectedNode}
-                runId={selectedRun.run_id}
-                isArchived={isArchived}
+      <main className="min-h-0 flex-1">
+        <ResizablePanelGroup
+          orientation="horizontal"
+          defaultLayout={layout.defaultLayout}
+          onLayoutChanged={layout.onLayoutChanged}
+          key={editMode ? "edit" : "run"}
+        >
+          <ResizablePanel defaultSize={layout.defaultLayout.left} minSize={minSizePx} id="left">
+            {editMode ? (
+              <PipelinesListPanel />
+            ) : (
+              <RunsListPanel
+                runs={runs}
+                selectedRunId={selectedRunId}
+                onSelectRun={handleSelectRun}
+                onNewRun={() => setNewRunModalOpen(true)}
               />
             )}
-            {!selectedNode && isArchived && selectedRun && (
-              <aside className="flex w-[340px] shrink-0 flex-col items-center justify-center border-l border-line bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
-                <div className="text-center px-6">
-                  <div className="font-medium text-fg-3">Run archived</div>
-                  <div className="mt-1">No live state available. Select a node to view its final status.</div>
-                </div>
-              </aside>
+          </ResizablePanel>
+
+          <ResizableHandle />
+
+          <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
+            {editMode ? (
+              <div className="flex h-full min-w-0 flex-col">
+                <TabBar />
+                <EditCanvas />
+              </div>
+            ) : (
+              <DagCanvas
+                run={selectedRun}
+                onSelectNode={setSelectedNodeId}
+                selectedNodeId={selectedNodeId}
+              />
             )}
-          </>
-        )}
+          </ResizablePanel>
+
+          <ResizableHandle />
+
+          <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right">
+            {editMode ? (
+              <>
+                {selection.kind === "node" && <NodeInspector />}
+                {selection.kind === "edge" && <EdgeInspector />}
+                {selection.kind === "none" && <PipelineInspector />}
+              </>
+            ) : (
+              <>
+                {selectedNode && selectedRun && (
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    runId={selectedRun.run_id}
+                    isArchived={isArchived}
+                  />
+                )}
+                {!selectedNode && isArchived && selectedRun && (
+                  <aside className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
+                    <div className="text-center px-6">
+                      <div className="font-medium text-fg-3">Run archived</div>
+                      <div className="mt-1">No live state available. Select a node to view its final status.</div>
+                    </div>
+                  </aside>
+                )}
+              </>
+            )}
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </main>
       <StatusBar status={status} />
       <NewRunModal

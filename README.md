@@ -2,7 +2,29 @@
 
 Visual orchestrator for deterministic Claude Code pipelines.
 
-## Prerequisites
+## Install
+
+```bash
+curl -fsSL https://github.com/Loulen/Maestro/releases/latest/download/install.sh | bash
+```
+
+This downloads the latest release binary for your platform (Linux/macOS, x86_64/ARM64), verifies the SHA256 checksum, and installs to `~/.local/bin/maestro`.
+
+To install a specific version:
+
+```bash
+MAESTRO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/Maestro/releases/latest/download/install.sh | bash
+```
+
+Then start the daemon:
+
+```bash
+maestro daemon
+```
+
+Open `http://localhost:5172` in your browser.
+
+## Prerequisites (development)
 
 - [Rust](https://rustup.rs/) (stable)
 - [Node.js](https://nodejs.org/) >= 22
@@ -22,9 +44,9 @@ The Vite dev server starts on `http://localhost:5173` and proxies `/ws` to the d
 ### Daemon
 
 ```bash
-cargo run -p maestro-daemon
+cargo run -p maestro-daemon -- daemon
 # or with a custom port:
-MAESTRO_PORT=5172 cargo run -p maestro-daemon -- --port 5172
+cargo run -p maestro-daemon -- daemon --port 9999
 ```
 
 The daemon binds to `127.0.0.1:5172` by default. In dev mode it shows a placeholder page — use the Vite dev server for frontend work.
@@ -41,7 +63,7 @@ The release binary embeds the frontend `dist/` via `rust-embed` and serves it at
 ### CLI
 
 ```bash
-cargo run -p maestro-cli -- --help
+cargo run -p maestro-daemon -- --help
 ```
 
 ## Build & test commands

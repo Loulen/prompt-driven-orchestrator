@@ -5,7 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "maestro-daemon"
+name = "maestro"
 path = "src/main.rs"
 
 [dependencies]
@@ -27,9 +27,9 @@ uuid.workspace = true
 chrono.workspace = true
 notify.workspace = true
 notify-debouncer-mini.workspace = true
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json"] }
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }

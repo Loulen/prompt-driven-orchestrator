@@ -29,20 +29,38 @@ use tokio::time;
 use tracing::{error, info, warn};
 
 const DEFAULT_PORT: u16 = 5172;
+const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Embed)]
 #[folder = "../../frontend/dist"]
 struct FrontendAssets;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(
-    name = "maestro-daemon",
-    about = "Maestro daemon — pipeline orchestrator"
+    name = "maestro",
+    about = "Maestro — deterministic Claude Code pipeline orchestrator",
+    version
 )]
 struct Cli {
-    #[arg(short, long, env = "MAESTRO_PORT", default_value_t = DEFAULT_PORT)]
-    port: u16,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Start the Maestro daemon
+    Daemon {
+        #[arg(short, long, env = "MAESTRO_PORT", default_value_t = DEFAULT_PORT)]
+        port: u16,
+    },
+    /// Signal that the current NodeRun has completed successfully
+    Complete,
+    /// Signal that the current NodeRun has failed
+    Fail {
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 struct AppState {
@@ -103,17 +121,79 @@ struct RunCommandRequest {
     iter: Option<i64>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "maestro_daemon=info".into()),
-        )
-        .init();
+fn cli_daemon_url() -> String {
+    std::env::var("MAESTRO_DAEMON_URL").unwrap_or_else(|_| DEFAULT_DAEMON_URL.to_string())
+}
 
-    let cli = Cli::parse();
-    let addr = SocketAddr::from(([127, 0, 0, 1], cli.port));
+fn cli_run_id() -> Result<String> {
+    std::env::var("MAESTRO_RUN_ID").context(
+        "MAESTRO_RUN_ID not set — this command must be run inside a Maestro NodeRun session",
+    )
+}
+
+fn cli_node_id() -> Result<String> {
+    std::env::var("MAESTRO_NODE_ID").context(
+        "MAESTRO_NODE_ID not set — this command must be run inside a Maestro NodeRun session",
+    )
+}
+
+fn cli_node_iter() -> i64 {
+    std::env::var("MAESTRO_NODE_ITER")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+}
+
+fn run_complete() -> Result<()> {
+    let url = cli_daemon_url();
+    let rid = cli_run_id()?;
+    let nid = cli_node_id()?;
+    let iter = cli_node_iter();
+
+    let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/done");
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&endpoint)
+        .json(&serde_json::json!({ "iter": iter }))
+        .send()
+        .context("failed to reach daemon")?;
+
+    if resp.status().is_success() {
+        eprintln!("Node {nid} marked complete.");
+    } else {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        anyhow::bail!("daemon returned {status}: {body}");
+    }
+    Ok(())
+}
+
+fn run_fail(reason: String) -> Result<()> {
+    let url = cli_daemon_url();
+    let rid = cli_run_id()?;
+    let nid = cli_node_id()?;
+    let iter = cli_node_iter();
+
+    let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/fail");
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&endpoint)
+        .json(&serde_json::json!({ "reason": reason, "iter": iter }))
+        .send()
+        .context("failed to reach daemon")?;
+
+    if resp.status().is_success() {
+        eprintln!("Node {nid} marked failed.");
+    } else {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        anyhow::bail!("daemon returned {status}: {body}");
+    }
+    Ok(())
+}
+
+async fn run_daemon(port: u16) -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     let repo_root = std::env::current_dir().context("failed to determine current directory")?;
 
@@ -139,7 +219,7 @@ async fn main() -> Result<()> {
         event_tx,
         pipeline_tx,
         repo_root,
-        port: cli.port,
+        port,
         merge_lock: tokio::sync::Mutex::new(()),
     });
 
@@ -152,6 +232,24 @@ async fn main() -> Result<()> {
     info!("Maestro daemon listening on http://{addr}");
     axum::serve(listener, app).await.context("server error")?;
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Daemon { port } => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "maestro_daemon=info".into()),
+                )
+                .init();
+            run_daemon(port).await
+        }
+        Commands::Complete => run_complete(),
+        Commands::Fail { reason } => run_fail(reason),
+    }
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
@@ -3201,5 +3299,51 @@ mod tests {
         let entries = scan_pipeline_dir(&dir, "repo");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "real-pipe");
+    }
+
+    #[test]
+    fn cli_parses_daemon_subcommand() {
+        let cli = Cli::try_parse_from(["maestro", "daemon"]).unwrap();
+        match cli.command {
+            Commands::Daemon { port } => assert_eq!(port, DEFAULT_PORT),
+            _ => panic!("expected Daemon subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_daemon_with_port() {
+        let cli = Cli::try_parse_from(["maestro", "daemon", "--port", "9999"]).unwrap();
+        match cli.command {
+            Commands::Daemon { port } => assert_eq!(port, 9999),
+            _ => panic!("expected Daemon subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_complete_subcommand() {
+        let cli = Cli::try_parse_from(["maestro", "complete"]).unwrap();
+        assert!(matches!(cli.command, Commands::Complete));
+    }
+
+    #[test]
+    fn cli_parses_fail_subcommand() {
+        let cli = Cli::try_parse_from(["maestro", "fail", "--reason", "timeout"]).unwrap();
+        match cli.command {
+            Commands::Fail { reason } => assert_eq!(reason, "timeout"),
+            _ => panic!("expected Fail subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_fail_requires_reason() {
+        assert!(Cli::try_parse_from(["maestro", "fail"]).is_err());
+    }
+
+    #[test]
+    fn cli_version_flag() {
+        let result = Cli::try_parse_from(["maestro", "--version"]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
 }

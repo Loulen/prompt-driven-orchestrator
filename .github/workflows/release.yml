@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            platform: linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            platform: linux-aarch64
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            platform: macos-x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            platform: macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: cd frontend && npm ci && npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} -p maestro-daemon
+
+      - name: Package
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="maestro-${TAG}-${{ matrix.platform }}.tar.gz"
+          cp "target/${{ matrix.target }}/release/maestro" maestro
+          tar -czf "${ARCHIVE}" maestro
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-${{ matrix.platform }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cd artifacts
+          sha256sum maestro-*.tar.gz > "maestro-${TAG}-SHA256SUMS.txt"
+          cat "maestro-${TAG}-SHA256SUMS.txt"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "${TAG}" \
+            --title "Maestro ${TAG}" \
+            --generate-notes \
+            artifacts/maestro-*.tar.gz \
+            artifacts/maestro-*-SHA256SUMS.txt \
+            install.sh

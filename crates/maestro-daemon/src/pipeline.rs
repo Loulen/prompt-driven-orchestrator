@@ -132,55 +132,42 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let node_ids: std::collections::HashSet<&str> =
         pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
-    for edge in &pipeline.edges {
-        if !node_ids.contains(edge.source.node.as_str()) {
-            diagnostics.push(Diagnostic {
+    let check_endpoint = |endpoint: &EdgeTarget,
+                          role: &str,
+                          get_ports: fn(&NodeDef) -> &[Port]|
+     -> Option<Diagnostic> {
+        if !node_ids.contains(endpoint.node.as_str()) {
+            return Some(Diagnostic {
                 severity: Severity::Warning,
                 message: format!(
-                    "edge source references non-existent node '{}'",
-                    edge.source.node
+                    "edge {role} references non-existent node '{}'",
+                    endpoint.node
                 ),
             });
-        } else {
-            let src_node = pipeline
-                .nodes
-                .iter()
-                .find(|n| n.id == edge.source.node)
-                .unwrap();
-            if !src_node.outputs.iter().any(|p| p.name == edge.source.port) {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    message: format!(
-                        "edge source port '{}' not found on node '{}'",
-                        edge.source.port, edge.source.node
-                    ),
-                });
-            }
         }
-
-        if !node_ids.contains(edge.target.node.as_str()) {
-            diagnostics.push(Diagnostic {
+        let node = pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == endpoint.node)
+            .unwrap();
+        if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
+            return Some(Diagnostic {
                 severity: Severity::Warning,
                 message: format!(
-                    "edge target references non-existent node '{}'",
-                    edge.target.node
+                    "edge {role} port '{}' not found on node '{}'",
+                    endpoint.port, endpoint.node
                 ),
             });
-        } else {
-            let tgt_node = pipeline
-                .nodes
-                .iter()
-                .find(|n| n.id == edge.target.node)
-                .unwrap();
-            if !tgt_node.inputs.iter().any(|p| p.name == edge.target.port) {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    message: format!(
-                        "edge target port '{}' not found on node '{}'",
-                        edge.target.port, edge.target.node
-                    ),
-                });
-            }
+        }
+        None
+    };
+
+    for edge in &pipeline.edges {
+        if let Some(d) = check_endpoint(&edge.source, "source", |n| &n.outputs) {
+            diagnostics.push(d);
+        }
+        if let Some(d) = check_endpoint(&edge.target, "target", |n| &n.inputs) {
+            diagnostics.push(d);
         }
     }
 

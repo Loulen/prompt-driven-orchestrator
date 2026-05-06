@@ -151,7 +151,7 @@ export default function DagCanvas({
           data: {
             label: def.id,
             status,
-            nodeType: def.node_type as NodeType,
+            nodeType: def.node_type,
             inputCount: def.inputs.length,
             outputCount: def.outputs.length,
           },

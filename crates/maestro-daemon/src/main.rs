@@ -306,6 +306,63 @@ async fn spawn_node(state: &AppState, spawn_ctx: &SpawnContext<'_>, node: &pipel
     }
 }
 
+async fn try_spawn_ready_nodes(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    run_id: &str,
+    events: &[event_log::Event],
+) {
+    let pipeline_path = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+
+    let pipeline = parse_result.pipeline;
+    let ready = scheduler::ready_nodes(&pipeline, run_state);
+    if ready.is_empty() {
+        return;
+    }
+
+    let worktree_dir = state
+        .repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("worktree");
+    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+
+    let mut resolved_vars = pipeline.variables.clone();
+    if let Some(payload) = events.first().and_then(|e| e.payload.as_ref()) {
+        if let Some(vars) = payload.get("variables") {
+            if let Ok(overrides) =
+                serde_json::from_value::<HashMap<String, serde_yaml::Value>>(vars.clone())
+            {
+                for (k, v) in overrides {
+                    resolved_vars.insert(k, v);
+                }
+            }
+        }
+    }
+
+    let spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &resolved_vars,
+    };
+
+    for next_node_id in &ready {
+        if let Some(node) = pipeline.nodes.iter().find(|n| &n.id == next_node_id) {
+            spawn_node(state, &spawn_ctx, node).await;
+        }
+    }
+}
+
 async fn create_run(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateRunRequest>,
@@ -421,7 +478,6 @@ async fn create_run(
         resolved_vars.insert(k.clone(), v.clone());
     }
 
-    // Use scheduler to determine initially ready nodes
     let run_state = event_log::RunState::new(run_id.clone(), pipeline.name.clone());
     let ready = scheduler::ready_nodes(&pipeline, &run_state);
 
@@ -538,56 +594,9 @@ async fn node_done(
     };
 
     if let Some(run_state) = event_log::project(&events) {
-        // Try to re-parse pipeline and use scheduler for next-node spawning
-        let pipeline_path = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
-        if let Ok(yaml) = std::fs::read_to_string(&pipeline_path) {
-            if let Ok(parse_result) = pipeline::parse_pipeline(&yaml) {
-                let pipeline = parse_result.pipeline;
-                let ready = scheduler::ready_nodes(&pipeline, &run_state);
+        try_spawn_ready_nodes(&state, &run_state, &run_id, &events).await;
 
-                if !ready.is_empty() {
-                    let worktree_dir = state
-                        .repo_root
-                        .join(".maestro")
-                        .join("runs")
-                        .join(&run_id)
-                        .join("worktree");
-                    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
-
-                    let mut resolved_vars = pipeline.variables.clone();
-                    if let Some(payload) = events.first().and_then(|e| e.payload.as_ref()) {
-                        if let Some(vars) = payload.get("variables") {
-                            if let Ok(overrides) = serde_json::from_value::<
-                                HashMap<String, serde_yaml::Value>,
-                            >(vars.clone())
-                            {
-                                for (k, v) in overrides {
-                                    resolved_vars.insert(k, v);
-                                }
-                            }
-                        }
-                    }
-
-                    let spawn_ctx = SpawnContext {
-                        pipeline: &pipeline,
-                        run_id: &run_id,
-                        pipeline_path: &pipeline_path,
-                        worktree_dir: &worktree_dir,
-                        artifacts_dir: &artifacts_dir,
-                        resolved_vars: &resolved_vars,
-                    };
-
-                    for next_node_id in &ready {
-                        if let Some(node) = pipeline.nodes.iter().find(|n| &n.id == next_node_id) {
-                            spawn_node(&state, &spawn_ctx, node).await;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check completion: use node_defs from event payload if available,
-        // otherwise fall back to checking all known nodes
+        // Use node_defs from event payload if available, fall back to known nodes
         let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
             run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
         } else {

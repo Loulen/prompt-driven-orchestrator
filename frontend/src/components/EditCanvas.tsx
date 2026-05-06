@@ -1,7 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
+  useNodesState,
+  useEdgesState,
   type Node,
   type Edge,
   type NodeProps,
@@ -13,7 +15,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Plus } from "lucide-react";
-import type { NodeDef, NodeType } from "../types";
+import type { NodeDef, NodeType, PipelineDef } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { PREDICATE_LABELS } from "../predicates";
 
@@ -102,92 +104,8 @@ function formatWhenClause(when: Record<string, unknown>): string {
   return parts.join(" & ");
 }
 
-function EditCanvasInner() {
-  const openTabs = useEditStore((s) => s.openTabs);
-  const activeTabId = useEditStore((s) => s.activeTabId);
-  const setSelection = useEditStore((s) => s.setSelection);
-  const updateNode = useEditStore((s) => s.updateNode);
-  const addEdge = useEditStore((s) => s.addEdge);
-  const deleteNode = useEditStore((s) => s.deleteNode);
-  const duplicateNode = useEditStore((s) => s.duplicateNode);
-  const deleteEdge = useEditStore((s) => s.deleteEdge);
-  const addNodeToStore = useEditStore((s) => s.addNode);
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    type: "node" | "edge";
-    id: string;
-    edgeIndex?: number;
-  } | null>(null);
-  const reactFlowRef = useRef<HTMLDivElement>(null);
-
-  const tab = openTabs.find((t) => t.id === activeTabId);
-
-  const onConnect = useCallback(
-    (connection: Connection) => {
-      if (!connection.source || !connection.target) return;
-      if (!tab) return;
-      const sourceNode = tab.pipeline.nodes.find((n) => n.id === connection.source);
-      const targetNode = tab.pipeline.nodes.find((n) => n.id === connection.target);
-      const sourcePort = sourceNode?.outputs[0]?.name ?? "out";
-      const targetPort = targetNode?.inputs[0]?.name ?? "in";
-
-      addEdge({
-        source: { node: connection.source, port: sourcePort },
-        target: { node: connection.target, port: targetPort },
-      });
-    },
-    [addEdge, tab],
-  );
-
-  const onNodeDragStop = useCallback(
-    (_: unknown, node: Node) => {
-      updateNode(node.id, {
-        view: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
-      });
-    },
-    [updateNode],
-  );
-
-  const handleNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      event.preventDefault();
-      setContextMenu({
-        x: event.clientX,
-        y: event.clientY,
-        type: "node",
-        id: node.id,
-      });
-    },
-    [],
-  );
-
-  const handleEdgeContextMenu = useCallback(
-    (event: React.MouseEvent, edge: Edge) => {
-      event.preventDefault();
-      const idx = parseInt(edge.id.replace("e-", ""), 10);
-      setContextMenu({
-        x: event.clientX,
-        y: event.clientY,
-        type: "edge",
-        id: edge.id,
-        edgeIndex: idx,
-      });
-    },
-    [],
-  );
-
-  if (!tab) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-fg-4">
-        Select a pipeline to edit
-      </div>
-    );
-  }
-
-  const pipeline = tab.pipeline;
-
-  const nodes: Node[] = pipeline.nodes.map((n, i) => ({
+function deriveEditNodes(pipeline: PipelineDef): Node[] {
+  return pipeline.nodes.map((n, i) => ({
     id: n.id,
     type: "edit",
     position: {
@@ -202,8 +120,10 @@ function EditCanvasInner() {
       interactive: n.interactive,
     },
   }));
+}
 
-  const edges: Edge[] = pipeline.edges.map((e, i) => {
+function deriveEditEdges(pipeline: PipelineDef): Edge[] {
+  return pipeline.edges.map((e, i) => {
     const isHalt = "halt" in e.target;
     const isConditional = e.when != null;
     const isDashed = isHalt || isConditional;
@@ -249,8 +169,113 @@ function EditCanvasInner() {
       labelBgPadding: [4, 2] as [number, number],
     };
   });
+}
 
-  function handleAddNode(type: NodeType) {
+function EditCanvasInner() {
+  const openTabs = useEditStore((s) => s.openTabs);
+  const activeTabId = useEditStore((s) => s.activeTabId);
+  const setSelection = useEditStore((s) => s.setSelection);
+  const updateNode = useEditStore((s) => s.updateNode);
+  const addEdgeToStore = useEditStore((s) => s.addEdge);
+  const deleteNode = useEditStore((s) => s.deleteNode);
+  const duplicateNode = useEditStore((s) => s.duplicateNode);
+  const deleteEdge = useEditStore((s) => s.deleteEdge);
+  const addNodeToStore = useEditStore((s) => s.addNode);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    type: "node" | "edge";
+    id: string;
+    edgeIndex?: number;
+  } | null>(null);
+  const reactFlowRef = useRef<HTMLDivElement>(null);
+
+  const tab = openTabs.find((t) => t.id === activeTabId);
+  const pipeline = tab?.pipeline;
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  const derivedNodes = useMemo(
+    () => (pipeline ? deriveEditNodes(pipeline) : []),
+    [pipeline],
+  );
+  const derivedEdges = useMemo(
+    () => (pipeline ? deriveEditEdges(pipeline) : []),
+    [pipeline],
+  );
+
+  useEffect(() => {
+    setNodes(derivedNodes);
+  }, [derivedNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(derivedEdges);
+  }, [derivedEdges, setEdges]);
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) return;
+      if (!pipeline) return;
+      const sourceNode = pipeline.nodes.find((n) => n.id === connection.source);
+      const targetNode = pipeline.nodes.find((n) => n.id === connection.target);
+      const sourcePort = sourceNode?.outputs[0]?.name ?? "out";
+      const targetPort = targetNode?.inputs[0]?.name ?? "in";
+
+      addEdgeToStore({
+        source: { node: connection.source, port: sourcePort },
+        target: { node: connection.target, port: targetPort },
+      });
+    },
+    [addEdgeToStore, pipeline],
+  );
+
+  const onNodeDragStop = useCallback(
+    (_: unknown, node: Node) => {
+      updateNode(node.id, {
+        view: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
+      });
+    },
+    [updateNode],
+  );
+
+  const handleNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      event.preventDefault();
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        type: "node",
+        id: node.id,
+      });
+    },
+    [],
+  );
+
+  const handleEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.preventDefault();
+      const idx = parseInt(edge.id.replace("e-", ""), 10);
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        type: "edge",
+        id: edge.id,
+        edgeIndex: idx,
+      });
+    },
+    [],
+  );
+
+  if (!tab || !pipeline) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-fg-4">
+        Select a pipeline to edit
+      </div>
+    );
+  }
+
+  const handleAddNode = (type: NodeType) => {
     const existingIds = pipeline.nodes.map((n) => n.id);
     let id = type === "code-mutating" ? "implementer" : "node";
     let counter = 1;
@@ -268,7 +293,7 @@ function EditCanvasInner() {
       view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
     };
     addNodeToStore(newNode);
-  }
+  };
 
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
@@ -295,6 +320,8 @@ function EditCanvasInner() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         onNodeClick={(_event, node) =>
           setSelection({ kind: "node", id: node.id })

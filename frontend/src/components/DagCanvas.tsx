@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
+  useNodesState,
+  useEdgesState,
   type Node,
   type Edge,
   type NodeProps,
@@ -173,39 +176,18 @@ function formatWhenClause(when: Record<string, unknown>): string {
   return parts.join(" & ");
 }
 
+const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
+
 interface Props {
   run: RunState | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedNodeId: string | null;
 }
 
-export default function DagCanvas({
-  run,
-  onSelectNode,
-  selectedNodeId,
-}: Props) {
-  const [confirmCleanup, setConfirmCleanup] = useState(false);
-
-  if (!run) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-fg-4">
-        Select a run to view its pipeline
-      </div>
-    );
-  }
-
+function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
   const nodeDefs = run.node_defs ?? [];
   const nodeEntries = Object.values(run.nodes);
 
-  if (nodeEntries.length === 0 && nodeDefs.length === 0) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-fg-4">
-        No nodes in this run
-      </div>
-    );
-  }
-
-  // Build node list from node_defs (has position + type info) with status from run.nodes
   const nodes: Node[] = nodeDefs.length > 0
     ? nodeDefs.map((def, i) => {
         const nodeState = run.nodes[def.id];
@@ -244,7 +226,6 @@ export default function DagCanvas({
         selected: ns.node_id === selectedNodeId,
       }));
 
-  // Add halt pseudo-nodes for halt-target edges
   const edgeInfos = run.edges ?? [];
   const haltEdges = edgeInfos.filter((ei) => ei.target_node === "__halt__");
   const haltNodes: Node[] = haltEdges.map((ei, i) => {
@@ -260,9 +241,14 @@ export default function DagCanvas({
     };
   });
 
-  const allNodes = [...nodes, ...haltNodes];
+  return [...nodes, ...haltNodes];
+}
 
-  const edges: Edge[] = edgeInfos.map((ei, i) => {
+function deriveEdges(run: RunState): Edge[] {
+  const edgeInfos = run.edges ?? [];
+  const haltEdges = edgeInfos.filter((ei) => ei.target_node === "__halt__");
+
+  return edgeInfos.map((ei, i) => {
     const isHalt = ei.target_node === "__halt__";
     const isConditional = ei.when_clause != null;
     const isDashed = isHalt || isConditional;
@@ -316,8 +302,53 @@ export default function DagCanvas({
       labelBgPadding: [4, 2] as [number, number],
     };
   });
+}
 
-  const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
+function DagCanvasInner({
+  run,
+  onSelectNode,
+  selectedNodeId,
+}: Props) {
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  const derivedNodes = useMemo(
+    () => (run ? deriveNodes(run, selectedNodeId) : []),
+    [run, selectedNodeId],
+  );
+  const derivedEdges = useMemo(
+    () => (run ? deriveEdges(run) : []),
+    [run],
+  );
+
+  useEffect(() => {
+    setNodes(derivedNodes);
+  }, [derivedNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(derivedEdges);
+  }, [derivedEdges, setEdges]);
+
+  if (!run) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-fg-4">
+        Select a run to view its pipeline
+      </div>
+    );
+  }
+
+  const nodeDefs = run.node_defs ?? [];
+  const nodeEntries = Object.values(run.nodes);
+
+  if (nodeEntries.length === 0 && nodeDefs.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-fg-4">
+        No nodes in this run
+      </div>
+    );
+  }
+
   const isTerminal = TERMINAL_STATUSES.includes(run.status);
 
   async function handleCleanup() {
@@ -362,8 +393,10 @@ export default function DagCanvas({
       </div>
 
       <ReactFlow
-        nodes={allNodes}
+        nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         onNodeClick={(_event, node) => onSelectNode(node.id)}
         onPaneClick={() => onSelectNode(null)}
@@ -381,5 +414,13 @@ export default function DagCanvas({
         />
       )}
     </div>
+  );
+}
+
+export default function DagCanvas(props: Props) {
+  return (
+    <ReactFlowProvider>
+      <DagCanvasInner {...props} />
+    </ReactFlowProvider>
   );
 }

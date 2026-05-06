@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DaemonEvent, WsMessage } from "../types";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -8,6 +9,14 @@ export function useDaemonSocket() {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const listenersRef = useRef<Set<(event: DaemonEvent) => void>>(new Set());
+
+  const subscribe = useCallback((listener: (event: DaemonEvent) => void) => {
+    listenersRef.current.add(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
 
   useEffect(() => {
     function connect() {
@@ -19,6 +28,19 @@ export function useDaemonSocket() {
 
       ws.addEventListener("open", () => {
         setStatus("connected");
+      });
+
+      ws.addEventListener("message", (e) => {
+        try {
+          const msg: WsMessage = JSON.parse(e.data);
+          if (msg.type === "event" && msg.event) {
+            for (const listener of listenersRef.current) {
+              listener(msg.event);
+            }
+          }
+        } catch {
+          // ignore malformed messages
+        }
       });
 
       ws.addEventListener("close", () => {
@@ -39,5 +61,5 @@ export function useDaemonSocket() {
     };
   }, []);
 
-  return { status };
+  return { status, subscribe };
 }

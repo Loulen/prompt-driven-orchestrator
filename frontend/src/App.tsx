@@ -1,17 +1,116 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Pencil } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
-import { Pencil } from "lucide-react";
+import { fetchRuns, fetchRun } from "./api";
+import type { RunListEntry, RunState } from "./types";
+import RunsListPanel from "./components/RunsListPanel";
+import DagCanvas from "./components/DagCanvas";
+import NodeDetailPanel from "./components/NodeDetailPanel";
+
+function useRuns() {
+  const [runs, setRuns] = useState<RunListEntry[]>([]);
+
+  const refresh = useCallback(async () => {
+    try {
+      setRuns(await fetchRuns());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { runs, refresh };
+}
+
+function useSelectedRun() {
+  const [run, setRun] = useState<RunState | null>(null);
+  const currentIdRef = useRef<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const id = currentIdRef.current;
+    if (!id) return;
+    try {
+      const data = await fetchRun(id);
+      if (currentIdRef.current === id) setRun(data);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const select = useCallback(
+    (newId: string | null) => {
+      currentIdRef.current = newId;
+      if (!newId) {
+        setRun(null);
+        return;
+      }
+      fetchRun(newId)
+        .then((data) => {
+          if (currentIdRef.current === newId) setRun(data);
+        })
+        .catch(() => {});
+    },
+    [],
+  );
+
+  return { run, select, refresh };
+}
 
 export default function App() {
-  const { status } = useDaemonSocket();
+  const { status, subscribe } = useDaemonSocket();
+  const { runs, refresh: refreshRuns } = useRuns();
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+
+  // Load runs on mount
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      refreshRuns();
+    }
+  }, [refreshRuns]);
+
+  const handleSelectRun = useCallback(
+    (runId: string) => {
+      setSelectedRunId(runId);
+      selectRun(runId);
+      setSelectedNodeId(null);
+    },
+    [selectRun],
+  );
+
+  // Subscribe to events — refresh runs list and selected run
+  useEffect(() => {
+    return subscribe(() => {
+      refreshRuns();
+      refreshRun();
+    });
+  }, [subscribe, refreshRuns, refreshRun]);
+
+  const selectedNode =
+    selectedNodeId && selectedRun
+      ? selectedRun.nodes[selectedNodeId] ?? null
+      : null;
 
   return (
     <div className="flex h-full flex-col bg-bg-1 text-fg">
       <TopBar />
       <main className="flex min-h-0 flex-1">
-        <div className="flex flex-1 items-center justify-center text-fg-3">
-          {/* Panels will be added in subsequent slices */}
-        </div>
+        <RunsListPanel
+          runs={runs}
+          selectedRunId={selectedRunId}
+          onSelectRun={handleSelectRun}
+        />
+        <DagCanvas
+          run={selectedRun}
+          onSelectNode={setSelectedNodeId}
+          selectedNodeId={selectedNodeId}
+        />
+        {selectedNode && selectedRun && (
+          <NodeDetailPanel node={selectedNode} runId={selectedRun.run_id} />
+        )}
       </main>
       <StatusBar status={status} />
     </div>

@@ -36,6 +36,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all --check
 
+      # Layer 4 smoke (ADR 0004). Reuses the binary built by `cargo test`.
+      - run: bash tests/smoke.sh
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -52,3 +55,30 @@ jobs:
       - run: cd frontend && npm run typecheck
       - run: cd frontend && npm run lint
       - run: cd frontend && npm run build
+
+  e2e:
+    name: Frontend E2E (layer 3b)
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: cd frontend && npm ci
+      - run: cd frontend && npx playwright install --with-deps chromium
+
+      # build.rs handles the frontend bundle while building the daemon.
+      - run: cargo build -p maestro-daemon
+
+      - run: cd frontend && npm run e2e
+        env:
+          MAESTRO_SKIP_FRONTEND_BUILD: "1"

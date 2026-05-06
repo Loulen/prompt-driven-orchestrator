@@ -24,6 +24,11 @@ Cargo.lock.*
 .maestro/maestro.db-wal
 .maestro/maestro.db-shm
 
+# Playwright artefacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright/.cache/
+
 # Env files at any path
 .env
 .env.local

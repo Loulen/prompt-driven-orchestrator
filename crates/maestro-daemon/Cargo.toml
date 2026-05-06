@@ -4,6 +4,10 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[lib]
+name = "maestro_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "maestro"
 path = "src/main.rs"

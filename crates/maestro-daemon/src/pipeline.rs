@@ -93,7 +93,8 @@ impl<'de> Deserialize<'de> for EdgeTarget {
 
         let halt_key = serde_yaml::Value::String("halt".into());
         if let Some(halt_val) = mapping.get(&halt_key) {
-            let message = halt_val.as_mapping()
+            let message = halt_val
+                .as_mapping()
                 .and_then(|m| m.get(serde_yaml::Value::String("message".into())))
                 .and_then(|v| v.as_str())
                 .map(String::from);

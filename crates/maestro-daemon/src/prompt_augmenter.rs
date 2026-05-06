@@ -30,8 +30,11 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     let mut inputs = Vec::new();
 
     for edge in &ctx.pipeline.edges {
-        if edge.target.node == ctx.node.id {
-            let target_port = ctx.node.inputs.iter().find(|p| p.name == edge.target.port);
+        let crate::pipeline::EdgeTarget::Node(ref ep) = edge.target else {
+            continue;
+        };
+        if ep.node == ctx.node.id {
+            let target_port = ctx.node.inputs.iter().find(|p| p.name == ep.port);
             let repeated = target_port.is_some_and(|p| p.repeated);
 
             let path = if repeated {
@@ -47,7 +50,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             };
 
             inputs.push(InputResolution {
-                port_name: edge.target.port.clone(),
+                port_name: ep.port.clone(),
                 path,
                 repeated,
             });
@@ -177,7 +180,7 @@ pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{EdgeDef, EdgeTarget, NodeType, Port};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeTarget, NodeType, Port};
 
     fn sample_pipeline() -> PipelineDef {
         PipelineDef {
@@ -311,14 +314,14 @@ mod tests {
             view: None,
         });
         pipeline.edges.push(EdgeDef {
-            source: EdgeTarget {
+            source: EdgeEndpoint {
                 node: "planner".into(),
                 port: "plan".into(),
             },
-            target: EdgeTarget {
+            target: EdgeTarget::Node(EdgeEndpoint {
                 node: "implementer".into(),
                 port: "plan".into(),
-            },
+            }),
             when: None,
         });
 
@@ -433,25 +436,25 @@ mod tests {
             ],
             edges: vec![
                 EdgeDef {
-                    source: EdgeTarget {
+                    source: EdgeEndpoint {
                         node: "planner".into(),
                         port: "plan".into(),
                     },
-                    target: EdgeTarget {
+                    target: EdgeTarget::Node(EdgeEndpoint {
                         node: "implementer".into(),
                         port: "plan".into(),
-                    },
+                    }),
                     when: None,
                 },
                 EdgeDef {
-                    source: EdgeTarget {
+                    source: EdgeEndpoint {
                         node: "researcher".into(),
                         port: "context".into(),
                     },
-                    target: EdgeTarget {
+                    target: EdgeTarget::Node(EdgeEndpoint {
                         node: "implementer".into(),
                         port: "context".into(),
-                    },
+                    }),
                     when: None,
                 },
             ],

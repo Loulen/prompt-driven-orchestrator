@@ -9,6 +9,7 @@ const STATUS_STYLES: Record<RunStatus, { dot: string; bg: string }> = {
   awaiting_user: { dot: "bg-st-await", bg: "bg-st-await-bg" },
   completed: { dot: "bg-st-done", bg: "bg-st-done-bg" },
   failed: { dot: "bg-st-failed", bg: "bg-st-failed-bg" },
+  halted: { dot: "bg-st-blocked", bg: "bg-st-blocked-bg" },
   archived: { dot: "bg-st-archived", bg: "bg-st-archived-bg" },
 };
 
@@ -54,7 +55,7 @@ export default function RunsListPanel({
         {runs.map((run) => {
           const isSelected = run.run_id === selectedRunId;
           const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
-          const isTerminal = run.status === "completed" || run.status === "failed";
+          const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "halted";
 
           return (
             <button

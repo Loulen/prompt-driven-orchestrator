@@ -53,14 +53,73 @@ pub struct NodeDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EdgeTarget {
+pub struct EdgeEndpoint {
     pub node: String,
     pub port: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HaltTarget {
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EdgeTarget {
+    Node(EdgeEndpoint),
+    Halt(HaltTarget),
+}
+
+impl Serialize for EdgeTarget {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            EdgeTarget::Node(ep) => ep.serialize(serializer),
+            EdgeTarget::Halt(h) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("halt", h)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EdgeTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        let mapping = value
+            .as_mapping()
+            .ok_or_else(|| serde::de::Error::custom("edge target must be a mapping"))?;
+
+        if mapping.contains_key(serde_yaml::Value::String("halt".into())) {
+            let halt_val = mapping
+                .get(serde_yaml::Value::String("halt".into()))
+                .unwrap();
+            let message = halt_val
+                .as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::String("message".into())))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            Ok(EdgeTarget::Halt(HaltTarget { message }))
+        } else {
+            let node = mapping
+                .get(serde_yaml::Value::String("node".into()))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| serde::de::Error::custom("edge target missing 'node' field"))?
+                .to_string();
+            let port = mapping
+                .get(serde_yaml::Value::String("port".into()))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(EdgeTarget::Node(EdgeEndpoint { node, port }))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeDef {
-    pub source: EdgeTarget,
+    pub source: EdgeEndpoint,
     pub target: EdgeTarget,
     #[serde(default)]
     pub when: Option<serde_yaml::Value>,
@@ -132,7 +191,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let node_ids: std::collections::HashSet<&str> =
         pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
-    let check_endpoint = |endpoint: &EdgeTarget,
+    let check_endpoint = |endpoint: &EdgeEndpoint,
                           role: &str,
                           get_ports: fn(&NodeDef) -> &[Port]|
      -> Option<Diagnostic> {
@@ -166,8 +225,10 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         if let Some(d) = check_endpoint(&edge.source, "source", |n| &n.outputs) {
             diagnostics.push(d);
         }
-        if let Some(d) = check_endpoint(&edge.target, "target", |n| &n.inputs) {
-            diagnostics.push(d);
+        if let EdgeTarget::Node(ref ep) = edge.target {
+            if let Some(d) = check_endpoint(ep, "target", |n| &n.inputs) {
+                diagnostics.push(d);
+            }
         }
     }
 
@@ -473,6 +534,108 @@ nodes:
         let view = node.view.as_ref().unwrap();
         assert_eq!(view.x, 100.0);
         assert_eq!(view.y, 200.0);
+    }
+
+    #[test]
+    fn parses_edge_with_when_clause() {
+        let yaml = r#"
+name: conditional
+nodes:
+  - id: reviewer
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: review
+  - id: implementer
+    type: code-mutating
+    prompt_file: p.md
+    inputs:
+      - name: review
+    outputs:
+      - name: code
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: review }
+    when:
+      iter: { lt: 5 }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.edges.len(), 1);
+        let edge = &result.pipeline.edges[0];
+        assert!(edge.when.is_some());
+        let when = edge.when.as_ref().unwrap();
+        assert!(when.as_mapping().unwrap().contains_key("iter"));
+    }
+
+    #[test]
+    fn parses_halt_target_edge() {
+        let yaml = r#"
+name: with-halt
+nodes:
+  - id: reviewer
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: review
+edges:
+  - source: { node: reviewer, port: review }
+    target: { halt: { message: "Blocked after {iter} iterations" } }
+    when:
+      iter: { gte: 5 }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.edges.len(), 1);
+        let edge = &result.pipeline.edges[0];
+        assert!(
+            matches!(&edge.target, EdgeTarget::Halt(h) if h.message.as_deref() == Some("Blocked after {iter} iterations"))
+        );
+        assert!(edge.when.is_some());
+    }
+
+    #[test]
+    fn parses_halt_target_without_message() {
+        let yaml = r#"
+name: halt-no-msg
+nodes:
+  - id: worker
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: out
+edges:
+  - source: { node: worker, port: out }
+    target: { halt: {} }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert!(matches!(&edge.target, EdgeTarget::Halt(h) if h.message.is_none()));
+    }
+
+    #[test]
+    fn halt_target_not_validated_as_node() {
+        let yaml = r#"
+name: halt-no-warning
+nodes:
+  - id: reviewer
+    type: doc-only
+    prompt_file: p.md
+    outputs:
+      - name: review
+edges:
+  - source: { node: reviewer, port: review }
+    target: { halt: { message: "stopped" } }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let non_prompt_warnings: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .filter(|d| !d.message.contains("prompt_file"))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            non_prompt_warnings.is_empty(),
+            "halt target should not produce validation warnings, got: {non_prompt_warnings:?}"
+        );
     }
 
     #[test]

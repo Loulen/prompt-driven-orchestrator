@@ -1,0 +1,38 @@
+name: review-loop
+version: "1.0"
+
+nodes:
+  - id: implementer
+    type: code-mutating
+    prompt_file: .maestro/prompts/implementer.md
+    inputs:
+      - name: review
+    outputs:
+      - name: code
+    view: { x: 100, y: 160 }
+
+  - id: reviewer
+    type: doc-only
+    prompt_file: .maestro/prompts/reviewer.md
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+    view: { x: 500, y: 160 }
+
+edges:
+  # Forward: implementer → reviewer (unconditional)
+  - source: { node: implementer, port: code }
+    target: { node: reviewer, port: code }
+
+  # Back-edge: reviewer → implementer while iter < 3
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: review }
+    when:
+      iter: { lt: 3 }
+
+  # Halt when the cycle has run 3 iterations
+  - source: { node: reviewer, port: review }
+    target: { halt: { message: "Review loop completed after {iter} iterations on {node-id}" } }
+    when:
+      iter: { gte: 3 }

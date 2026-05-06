@@ -1,4 +1,4 @@
-export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "archived";
+export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "halted" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed";
 export type NodeType = "doc-only" | "code-mutating";
 
@@ -23,6 +23,8 @@ export interface EdgeInfo {
   source_port: string;
   target_node: string;
   target_port: string;
+  halt_message?: string | null;
+  when_clause?: Record<string, unknown> | null;
 }
 
 export interface NodeDefInfo {

@@ -44,6 +44,7 @@ const RUN_STATUS_DOTS: Record<RunStatus, string> = {
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
   failed: "bg-st-failed",
+  halted: "bg-st-blocked",
   archived: "bg-st-archived",
 };
 
@@ -63,6 +64,7 @@ interface PipelineNodeData {
   nodeType: NodeType;
   inputCount: number;
   outputCount: number;
+  iter: number;
   [key: string]: unknown;
 }
 
@@ -92,6 +94,14 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
           }`}
         />
         <span className="font-medium text-fg">{data.label}</span>
+        {data.iter > 1 && (
+          <span
+            className="rounded bg-bg-4 px-1 font-mono text-fg-4"
+            style={{ fontSize: "9px" }}
+          >
+            iter {data.iter}
+          </span>
+        )}
         <span
           className={`ml-auto rounded border ${typeColor} px-1 py-px`}
           style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
@@ -113,7 +123,54 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
   );
 }
 
-const nodeTypes = { pipeline: PipelineNode };
+interface HaltNodeData {
+  [key: string]: unknown;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function HaltNode(_props: NodeProps<Node<HaltNodeData>>) {
+  return (
+    <div
+      className="grid place-items-center rounded-full border font-mono font-bold"
+      style={{
+        width: 28,
+        height: 28,
+        borderColor: "var(--color-st-blocked, #f97316)",
+        color: "var(--color-st-blocked, #f97316)",
+        background: "var(--color-bg-3, #1e1f23)",
+        fontSize: "11px",
+      }}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!bg-fg-4 !border-line !w-2 !h-2"
+      />
+      &#x25CC;
+    </div>
+  );
+}
+
+const nodeTypes = { pipeline: PipelineNode, halt: HaltNode };
+
+function formatWhenClause(when: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [field, predicate] of Object.entries(when)) {
+    if (field === "any") continue;
+    if (typeof predicate === "object" && predicate !== null) {
+      for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
+        const opSymbol: Record<string, string> = {
+          eq: "=", neq: "!=", lt: "<", lte: "<=", gt: ">", gte: ">=",
+          in: "in", not_in: "not in",
+        };
+        const symbol = opSymbol[op] ?? op;
+        const valStr = Array.isArray(val) ? `[${val.join(", ")}]` : String(val);
+        parts.push(`${field} ${symbol} ${valStr}`);
+      }
+    }
+  }
+  return parts.join(" & ");
+}
 
 interface Props {
   run: RunState | null;
@@ -148,10 +205,11 @@ export default function DagCanvas({
   }
 
   // Build node list from node_defs (has position + type info) with status from run.nodes
-  const nodes: Node<PipelineNodeData>[] = nodeDefs.length > 0
+  const nodes: Node[] = nodeDefs.length > 0
     ? nodeDefs.map((def, i) => {
         const nodeState = run.nodes[def.id];
         const status: NodeStatus = nodeState?.status ?? "pending";
+        const iter = nodeState?.iter ?? 1;
         return {
           id: def.id,
           type: "pipeline",
@@ -165,6 +223,7 @@ export default function DagCanvas({
             nodeType: def.node_type,
             inputCount: def.inputs.length,
             outputCount: def.outputs.length,
+            iter,
           },
           selected: def.id === selectedNodeId,
         };
@@ -179,35 +238,86 @@ export default function DagCanvas({
           nodeType: "doc-only" as NodeType,
           inputCount: 1,
           outputCount: 1,
+          iter: ns.iter,
         },
         selected: ns.node_id === selectedNodeId,
       }));
 
+  // Add halt pseudo-nodes for halt-target edges
   const edgeInfos = run.edges ?? [];
-  const edges: Edge[] = edgeInfos.map((ei, i) => ({
-    id: `e-${i}`,
-    source: ei.source_node,
-    target: ei.target_node,
-    sourceHandle: null,
-    targetHandle: null,
-    type: "default",
-    animated: run.nodes[ei.source_node]?.status === "running",
-    style: { stroke: "var(--color-fg-4)", strokeWidth: 1.5 },
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: "var(--color-fg-4)",
-      width: 16,
-      height: 16,
-    },
-    label: ei.source_port !== ei.target_port
-      ? `${ei.source_port} → ${ei.target_port}`
-      : undefined,
-    labelStyle: { fill: "var(--color-fg-4)", fontSize: 10 },
-    labelBgStyle: { fill: "var(--color-bg-2)", fillOpacity: 0.9 },
-    labelBgPadding: [4, 2] as [number, number],
-  }));
+  const haltEdges = edgeInfos.filter((ei) => ei.target_node === "__halt__");
+  const haltNodes: Node[] = haltEdges.map((ei, i) => {
+    const sourceNode = nodes.find((n) => n.id === ei.source_node);
+    const sx = sourceNode?.position?.x ?? 200;
+    const sy = sourceNode?.position?.y ?? 80;
+    return {
+      id: `__halt__${i}`,
+      type: "halt",
+      position: { x: sx + 280, y: sy + 50 + i * 60 },
+      data: {},
+      selectable: false,
+    };
+  });
 
-  const isTerminal = run.status === "completed" || run.status === "failed";
+  const allNodes = [...nodes, ...haltNodes];
+
+  const edges: Edge[] = edgeInfos.map((ei, i) => {
+    const isHalt = ei.target_node === "__halt__";
+    const isConditional = ei.when_clause != null;
+    const targetId = isHalt ? `__halt__${haltEdges.indexOf(ei)}` : ei.target_node;
+
+    const condLabel = isConditional && ei.when_clause
+      ? formatWhenClause(ei.when_clause)
+      : undefined;
+
+    const label = condLabel
+      ?? (ei.source_port !== ei.target_port && !isHalt
+        ? `${ei.source_port} → ${ei.target_port}`
+        : undefined);
+
+    const strokeColor = isHalt
+      ? "var(--color-st-blocked, #f97316)"
+      : isConditional
+        ? "var(--color-st-blocked, #f97316)"
+        : "var(--color-fg-4)";
+
+    return {
+      id: `e-${i}`,
+      source: ei.source_node,
+      target: targetId,
+      sourceHandle: null,
+      targetHandle: null,
+      type: "default",
+      animated: !isHalt && run.nodes[ei.source_node]?.status === "running",
+      style: {
+        stroke: strokeColor,
+        strokeWidth: 1.5,
+        strokeDasharray: isConditional || isHalt ? "6 3" : undefined,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: strokeColor,
+        width: 16,
+        height: 16,
+      },
+      label,
+      labelStyle: {
+        fill: isConditional || isHalt
+          ? "var(--color-st-blocked, #fdba74)"
+          : "var(--color-fg-4)",
+        fontSize: 10,
+      },
+      labelBgStyle: {
+        fill: isConditional || isHalt
+          ? "rgba(249,115,22,0.10)"
+          : "var(--color-bg-2)",
+        fillOpacity: 0.9,
+      },
+      labelBgPadding: [4, 2] as [number, number],
+    };
+  });
+
+  const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "halted";
 
   async function handleCleanup() {
     try {
@@ -251,7 +361,7 @@ export default function DagCanvas({
       </div>
 
       <ReactFlow
-        nodes={nodes}
+        nodes={allNodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodeClick={(_event, node) => onSelectNode(node.id)}

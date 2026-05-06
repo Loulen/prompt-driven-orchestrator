@@ -8,6 +8,10 @@ pub struct EdgeInfo {
     pub source_port: String,
     pub target_node: String,
     pub target_port: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halt_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_clause: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +34,7 @@ pub enum EventKind {
     NodeFailed,
     RunCompleted,
     RunFailed,
+    RunHalted,
     RunArchived,
 }
 
@@ -51,6 +56,7 @@ pub enum RunStatus {
     AwaitingUser,
     Completed,
     Failed,
+    Halted,
     Archived,
 }
 
@@ -189,6 +195,10 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             }
             EventKind::RunFailed => {
                 state.status = RunStatus::Failed;
+                state.completed_at = Some(event.ts.clone());
+            }
+            EventKind::RunHalted => {
+                state.status = RunStatus::Halted;
                 state.completed_at = Some(event.ts.clone());
             }
             EventKind::RunArchived => {
@@ -375,6 +385,28 @@ mod tests {
         assert_eq!(state.pipeline_name, "archival-test");
         assert_eq!(state.nodes.len(), 1);
         assert_eq!(state.nodes["worker"].status, NodeStatus::Completed);
+    }
+
+    #[test]
+    fn projects_halted_run() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "halt-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("reviewer"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("reviewer"), Some(1)),
+            make_event_with_payload(
+                EventKind::RunHalted,
+                None,
+                serde_json::json!({ "message": "Blocked after 3 iterations" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Halted);
+        assert!(state.completed_at.is_some());
     }
 
     #[test]

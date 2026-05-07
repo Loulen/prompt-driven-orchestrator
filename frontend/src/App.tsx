@@ -205,12 +205,7 @@ export default function App() {
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
-            {editMode ? (
-              <div className="flex h-full min-w-0 flex-col">
-                <TabBar />
-                <EditCanvas />
-              </div>
-            ) : editScope === "run" ? (
+            {editMode || editScope === "run" ? (
               <div className="flex h-full min-w-0 flex-col">
                 <TabBar />
                 <EditCanvas />

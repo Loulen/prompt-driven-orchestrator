@@ -64,11 +64,11 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     [],
   );
 
+  const flushPendingSaves = useEditStore((s) => s.flushPendingSaves);
+
   const handleOverrideChange = useCallback((key: string, value: string) => {
     setOverrides((prev) => ({ ...prev, [key]: value }));
   }, []);
-
-  const flushPendingSaves = useEditStore((s) => s.flushPendingSaves);
 
   const handleLaunch = useCallback(async () => {
     if (!currentPipeline || !input.trim()) return;

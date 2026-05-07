@@ -40,6 +40,7 @@ pub enum EventKind {
     RunFailed,
     RunHalted,
     RunArchived,
+    CommandIssued,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,6 +300,17 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 state.status = RunStatus::Archived;
                 state.start_node = None;
             }
+            EventKind::CommandIssued => {
+                if let Some(ref payload) = event.payload {
+                    let cmd = payload.get("command").and_then(|v| v.as_str());
+                    if cmd == Some("resume_run")
+                        && (state.status == RunStatus::Halted || state.status == RunStatus::Failed)
+                    {
+                        state.status = RunStatus::Running;
+                        state.completed_at = None;
+                    }
+                }
+            }
         }
     }
 
@@ -333,6 +345,27 @@ pub fn generate_run_id() -> String {
     let ts = now.format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
     format!("{ts}-{short}")
+}
+
+pub fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
+    let mut extensions: HashMap<String, i64> = HashMap::new();
+    for event in events {
+        if event.kind != EventKind::CommandIssued {
+            continue;
+        }
+        if let Some(ref payload) = event.payload {
+            let cmd = payload.get("command").and_then(|v| v.as_str());
+            if cmd == Some("extend_cycle") {
+                if let (Some(node_id), Some(additional)) = (
+                    payload.get("node_id").and_then(|v| v.as_str()),
+                    payload.get("additional_iter").and_then(|v| v.as_i64()),
+                ) {
+                    *extensions.entry(node_id.to_string()).or_insert(0) += additional;
+                }
+            }
+        }
+    }
+    extensions
 }
 
 #[cfg(test)]
@@ -917,5 +950,115 @@ mod tests {
         let node = &state.nodes["worker"];
         // Even single-iter nodes have exactly 1 iteration entry
         assert_eq!(node.iterations.len(), 1);
+    }
+
+    #[test]
+    fn resume_run_transitions_halted_to_running() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event(EventKind::RunHalted, None, None),
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({ "command": "resume_run" })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn resume_run_transitions_failed_to_running() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event(EventKind::RunFailed, None, None),
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({ "command": "resume_run" })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn resume_run_noop_on_already_running() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({ "command": "resume_run" })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn collect_cycle_extensions_accumulates() {
+        let events = vec![
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({
+                    "command": "extend_cycle",
+                    "node_id": "review",
+                    "additional_iter": 2
+                })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({
+                    "command": "extend_cycle",
+                    "node_id": "review",
+                    "additional_iter": 3
+                })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({
+                    "command": "extend_cycle",
+                    "node_id": "other",
+                    "additional_iter": 1
+                })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        ];
+        let ext = collect_cycle_extensions(&events);
+        assert_eq!(ext["review"], 5);
+        assert_eq!(ext["other"], 1);
+    }
+
+    #[test]
+    fn command_issued_unknown_command_is_noop() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({ "command": "something_unknown" })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
     }
 }

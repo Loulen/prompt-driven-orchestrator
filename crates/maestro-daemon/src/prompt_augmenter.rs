@@ -203,6 +203,104 @@ pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String 
     format!("{preamble}---\n\n{role_prompt}")
 }
 
+pub fn build_manager_preamble(run_id: &str, daemon_url: &str) -> String {
+    format!(
+        r#"# Pipeline Manager Runtime Preamble
+
+You manage **run `{run_id}`**.
+
+- Daemon base URL: `{daemon_url}`
+- Run state: `curl {daemon_url}/runs/{run_id}`
+- Event log: `curl {daemon_url}/runs/{run_id}/events`
+- Node pane: `curl {daemon_url}/runs/{run_id}/nodes/<node-id>/pane?iter=<N>`
+- Node IO: `curl {daemon_url}/runs/{run_id}/nodes/<node-id>/io?iter=<N>`
+- Artifact: `curl '{daemon_url}/runs/{run_id}/artifact?path=<relative-path>'`
+
+## Available commands
+
+All commands are issued via `POST {daemon_url}/runs/{run_id}/commands` with a JSON body.
+
+### 1. extend_cycle
+
+Increment the iteration ceiling for a cycle and re-evaluate outgoing conditions.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"extend_cycle","node_id":"<node-id>","additional_iter":<N>}}'
+```
+
+### 2. resume_run
+
+Re-run the scheduler from the current state. Use after a manual conflict resolution or after extending a cycle on a halted run.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"resume_run"}}'
+```
+
+### 3. kill_node
+
+Kill a running NodeRun's tmux session and emit `node_failed`.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"kill_node","node_id":"<node-id>","iter":<N>}}'
+```
+
+### 4. restart_node
+
+Kill a NodeRun and re-spawn it fresh (same iter, new session).
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"restart_node","node_id":"<node-id>","iter":<N>}}'
+```
+
+### 5. mark_node_done
+
+Force-complete a NodeRun (typically an interactive node the user has finished with).
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"mark_node_done","node_id":"<node-id>","iter":<N>}}'
+```
+
+### 6. inject_artifact
+
+Write an artifact directly into the Blackboard.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>.md","content":"<markdown content>"}}'
+```
+
+### 7. cleanup_run
+
+Archive the run: remove worktrees, branches, and artifacts from disk. Events are preserved.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"cleanup_run"}}'
+```
+
+---
+
+"#
+    )
+}
+
+pub fn build_manager_prompt(run_id: &str, daemon_url: &str, role_prompt: &str) -> String {
+    let preamble = build_manager_preamble(run_id, daemon_url);
+    format!("{preamble}{role_prompt}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +709,51 @@ mod tests {
         assert!(preamble.contains("10"));
         assert!(preamble.contains("$mode"));
         assert!(preamble.contains("strict"));
+    }
+
+    // --- Manager preamble tests (issue #10) ---
+
+    #[test]
+    fn manager_preamble_contains_run_id_and_daemon_url() {
+        let preamble = build_manager_preamble("20260507-120000-abc1234", "http://localhost:5172");
+        assert!(preamble.contains("20260507-120000-abc1234"));
+        assert!(preamble.contains("http://localhost:5172"));
+    }
+
+    #[test]
+    fn manager_preamble_contains_all_seven_commands() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
+        for cmd in [
+            "extend_cycle",
+            "resume_run",
+            "kill_node",
+            "restart_node",
+            "mark_node_done",
+            "inject_artifact",
+            "cleanup_run",
+        ] {
+            assert!(
+                preamble.contains(cmd),
+                "preamble should contain command: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn manager_preamble_contains_curl_examples() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
+        assert!(preamble.contains("curl -X POST"));
+        assert!(preamble.contains("Content-Type: application/json"));
+    }
+
+    #[test]
+    fn manager_prompt_combines_preamble_and_role() {
+        let prompt = build_manager_prompt(
+            "run-1",
+            "http://localhost:5172",
+            "You are the Pipeline Manager.",
+        );
+        assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
+        assert!(prompt.contains("You are the Pipeline Manager."));
     }
 }

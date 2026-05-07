@@ -59,6 +59,14 @@ export async function attachSession(sessionId: string): Promise<void> {
   if (!resp.ok) throw new Error(`attach failed: ${resp.status}`);
 }
 
+export async function attachManager(runId: string): Promise<void> {
+  const resp = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(runId)}/manager/attach`,
+    { method: "POST" },
+  );
+  if (!resp.ok) throw new Error(`manager attach failed: ${resp.status}`);
+}
+
 export interface PaneResponse {
   content: string;
   session_name: string;

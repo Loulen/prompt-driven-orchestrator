@@ -2342,6 +2342,19 @@ async fn run_command(
                     .into_response();
             };
 
+            let requested = std::path::Path::new(&path);
+            if requested.is_absolute()
+                || requested
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "path traversal not allowed" })),
+                )
+                    .into_response();
+            }
+
             let worktree_dir = state
                 .repo_root
                 .join(".maestro")
@@ -2349,7 +2362,7 @@ async fn run_command(
                 .join(&run_id)
                 .join("worktree");
             let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
-            let full_path = artifacts_dir.join(&path);
+            let full_path = artifacts_dir.join(requested);
 
             if let Some(parent) = full_path.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
@@ -5364,6 +5377,38 @@ edges:
             .await
             .unwrap();
         assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn inject_artifact_rejects_path_traversal() {
+        let state = test_state().await;
+
+        for bad_path in ["../../etc/passwd", "/absolute/path.md", "ok/../../../escape"] {
+            let app = build_router(state.clone());
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/runs/test-run/commands")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "kind": "inject_artifact",
+                                "path": bad_path,
+                                "content": "malicious"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::BAD_REQUEST,
+                "path {bad_path:?} should be rejected"
+            );
+        }
     }
 
     #[tokio::test]

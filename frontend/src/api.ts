@@ -20,11 +20,21 @@ export async function fetchRunEvents(runId: string): Promise<unknown[]> {
   return resp.json();
 }
 
+export interface MissingOutputsError {
+  kind: "missing_outputs";
+  missing: string[];
+}
+
+export interface MarkNodeDoneResult {
+  ok: boolean;
+  missingOutputs?: MissingOutputsError;
+}
+
 export async function markNodeDone(
   runId: string,
   nodeId: string,
   iter: number,
-): Promise<void> {
+): Promise<MarkNodeDoneResult> {
   const resp = await fetch(
     `${BASE}/runs/${encodeURIComponent(runId)}/commands`,
     {
@@ -33,7 +43,12 @@ export async function markNodeDone(
       body: JSON.stringify({ kind: "mark_node_done", node_id: nodeId, iter }),
     },
   );
+  if (resp.status === 409) {
+    const body = await resp.json();
+    return { ok: false, missingOutputs: { kind: "missing_outputs", missing: body.missing ?? [] } };
+  }
   if (!resp.ok) throw new Error(`mark_node_done failed: ${resp.status}`);
+  return { ok: true };
 }
 
 export async function attachSession(sessionId: string): Promise<void> {

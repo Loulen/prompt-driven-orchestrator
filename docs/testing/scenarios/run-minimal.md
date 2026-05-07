@@ -94,6 +94,30 @@ After selecting a Run in step 2, assert:
      ("Reply with exactly the line …") visible as the **first user message**.
 
    Take a screenshot of the pane after the trust dialog clears.
+### Step 5e — Output validation 409 on Mark complete (refs #36, refs #1)
+
+Before the node completes on its own, test the output validation guard:
+
+1. If the node is still `running`, it will have no output file yet. Click
+   **"Mark complete"** in the right panel.
+2. The daemon returns **HTTP 409** with
+   `{"error":"missing_outputs","missing":["out"]}`.
+3. Assert: an inline **sub-banner** appears below the Mark complete button
+   reading **"Missing outputs: out"** in red/mono styling.
+4. Write the output file manually:
+
+   ```bash
+   mkdir -p .maestro/runs/<run_id>/worktree/.maestro/artifacts/only/iter-1
+   echo '# Out' > .maestro/runs/<run_id>/worktree/.maestro/artifacts/only/iter-1/out.md
+   ```
+
+5. Click **"Mark complete"** again. This time the daemon accepts it (200 OK).
+6. Assert: the sub-banner disappears and the node transitions to **Completed**.
+
+If the node has already completed by the time the agent reaches this step,
+skip it — the validation path is already covered by the Layer 3b e2e test
+`failed-node.spec.ts`.
+
 6. Wait up to ~30 s for claude to reply with `MAESTRO_RUN_MINIMAL_OK` and call
    `maestro complete`. Re-capture the pane and assert the literal string
    `MAESTRO_RUN_MINIMAL_OK` is present.

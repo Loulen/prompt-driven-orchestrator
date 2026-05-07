@@ -260,6 +260,15 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
     })
     .await;
 
+    // Create the required output file so output validation passes (refs #36).
+    let artifacts_dir = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("worktree/.maestro/artifacts/planner/iter-1");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(artifacts_dir.join("plan.md"), "# Plan\nDo the thing.").unwrap();
+
     // Complete the planner node so the new downstream node's inputs are satisfied
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{}/commands", daemon.url(), run_id))

@@ -120,6 +120,19 @@ async fn multi_iter_projection_via_daemon() {
     assert_eq!(iterations[0]["iter"], 1);
     assert_eq!(iterations[0]["status"], "running");
 
+    // Create the required output file so output validation passes (refs #36).
+    let artifacts_dir = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("worktree/.maestro/artifacts/reviewer/iter-1");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(
+        artifacts_dir.join("review.md"),
+        "---\nverdict: PASS\n---\nLGTM",
+    )
+    .unwrap();
+
     // Mark the node complete for iter 1
     let resp = reqwest::Client::new()
         .post(format!(

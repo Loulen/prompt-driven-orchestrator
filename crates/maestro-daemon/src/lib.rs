@@ -3,11 +3,13 @@ mod condition;
 mod event_log;
 mod frontmatter_parser;
 mod node_io_resolver;
+mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod scheduler;
+mod scheduler_dispatcher;
 pub mod tmux_session_manager;
 mod variable_resolver;
 
@@ -905,6 +907,69 @@ async fn handle_node_completion(
     }
 }
 
+async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("spawn_ready_after_event: failed to load events for {run_id}: {e}");
+            return;
+        }
+    };
+    let Some(run_state) = event_log::project(&events) else {
+        return;
+    };
+
+    if run_state.status != event_log::RunStatus::Running
+        && run_state.status != event_log::RunStatus::AwaitingUser
+    {
+        return;
+    }
+
+    let pipeline_path =
+        resolve_run_pipeline_path(&state.repo_root, run_id, &run_state.pipeline_name);
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+    let pipeline = parse_result.pipeline;
+
+    let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+    if ready.is_empty() {
+        return;
+    }
+
+    let worktree_dir = state
+        .repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("worktree");
+    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+    let resolved_vars = resolve_run_variables(&pipeline, &events);
+
+    let spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &resolved_vars,
+    };
+
+    for rs in &ready {
+        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == rs.node_id) {
+            spawn_node(state, &spawn_ctx, node, rs.iter).await;
+        }
+    }
+
+    info!(
+        "spawn_ready_after_event: spawned {} node(s) for run {run_id}",
+        ready.len()
+    );
+}
+
 fn resolve_run_variables(
     pipeline: &pipeline::PipelineDef,
     events: &[event_log::Event],
@@ -1054,32 +1119,7 @@ async fn create_run(
         error!("failed to write _input.md: {e}");
     }
 
-    // Resolve variables (pipeline defaults + overrides)
-    let mut resolved_vars = pipeline.variable_defaults();
-    for (k, v) in &req.variables {
-        resolved_vars.insert(k.clone(), v.clone());
-    }
-
-    let run_state = event_log::RunState::new(run_id.clone(), pipeline.name.clone());
-    let ready = scheduler::ready_nodes(&pipeline, &run_state);
-
-    let spawn_ctx = SpawnContext {
-        pipeline: &pipeline,
-        run_id: &run_id,
-        pipeline_path: &pipeline_path,
-        worktree_dir: &worktree_dir,
-        artifacts_dir: &artifacts_dir,
-        resolved_vars: &resolved_vars,
-    };
-
-    for node_id in &ready {
-        let node = match pipeline.nodes.iter().find(|n| &n.id == node_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        spawn_node(&state, &spawn_ctx, node, 1).await;
-    }
+    spawn_ready_after_event(&state, &run_id).await;
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
@@ -1200,65 +1240,7 @@ async fn handle_run_pipeline_modifications(
             continue;
         }
 
-        // Re-evaluate scheduler for this run
-        let events = match load_events(&state.db, &modified.run_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let Some(mut run_state) = event_log::project(&events) else {
-            continue;
-        };
-        augment_run_state_from_disk(&mut run_state, &state.repo_root);
-
-        if run_state.status != event_log::RunStatus::Running
-            && run_state.status != event_log::RunStatus::AwaitingUser
-        {
-            continue;
-        }
-
-        let pipeline_path = run_scoped_pipeline_path(&state.repo_root, &modified.run_id);
-        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-            continue;
-        };
-        let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-            continue;
-        };
-        let pipeline = parse_result.pipeline;
-
-        let ready = scheduler::ready_nodes(&pipeline, &run_state);
-        if ready.is_empty() {
-            continue;
-        }
-
-        let worktree_dir = state
-            .repo_root
-            .join(".maestro")
-            .join("runs")
-            .join(&modified.run_id)
-            .join("worktree");
-        let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
-        let resolved_vars = resolve_run_variables(&pipeline, &events);
-
-        let spawn_ctx = SpawnContext {
-            pipeline: &pipeline,
-            run_id: &modified.run_id,
-            pipeline_path: &pipeline_path,
-            worktree_dir: &worktree_dir,
-            artifacts_dir: &artifacts_dir,
-            resolved_vars: &resolved_vars,
-        };
-
-        for node_id in &ready {
-            if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                spawn_node(&state, &spawn_ctx, node, 1).await;
-            }
-        }
-
-        info!(
-            "Re-evaluated scheduler for run {} after pipeline_modified, spawned {} node(s)",
-            modified.run_id,
-            ready.len()
-        );
+        spawn_ready_after_event(&state, &modified.run_id).await;
     }
 }
 
@@ -1819,6 +1801,13 @@ async fn node_done(
         _ => {}
     }
 
+    let pipeline_path =
+        resolve_run_pipeline_path(&state.repo_root, &run_id, &pre_run_state.pipeline_name);
+    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+    if let Some(resp) = check_output_validation(&pipeline_path, &node_id, iter, &artifacts_dir) {
+        return resp;
+    }
+
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
@@ -1842,50 +1831,51 @@ async fn node_done(
 
     if let Some(run_state) = event_log::project(&events) {
         handle_node_completion(&state, &run_state, &run_id, &node_id, &events).await;
+    }
 
-        // Re-load events after handle_node_completion may have appended halt/spawn events
-        let events = match load_events(&state.db, &run_id).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("failed to reload events: {e}");
-                return (StatusCode::OK, "ok").into_response();
-            }
+    spawn_ready_after_event(&state, &run_id).await;
+
+    // Check run completion
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("failed to reload events: {e}");
+            return (StatusCode::OK, "ok").into_response();
+        }
+    };
+
+    if let Some(run_state) = event_log::project(&events) {
+        if run_state.status == event_log::RunStatus::Halted {
+            info!("Run {run_id} halted");
+            return (StatusCode::OK, "ok").into_response();
+        }
+
+        let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
+            run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
+        } else {
+            run_state.nodes.keys().cloned().collect()
         };
 
-        if let Some(run_state) = event_log::project(&events) {
-            // Don't try to complete a halted run
-            if run_state.status == event_log::RunStatus::Halted {
-                info!("Run {run_id} halted");
-                return (StatusCode::OK, "ok").into_response();
-            }
+        let all_done = !expected_node_ids.is_empty()
+            && expected_node_ids.iter().all(|nid| {
+                run_state
+                    .nodes
+                    .get(nid)
+                    .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
+            });
 
-            let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
-                run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
-            } else {
-                run_state.nodes.keys().cloned().collect()
+        if all_done && run_state.status == event_log::RunStatus::Running {
+            let run_completed = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunCompleted,
+                node_id: None,
+                iter: None,
+                payload: None,
             };
-
-            let all_done = !expected_node_ids.is_empty()
-                && expected_node_ids.iter().all(|nid| {
-                    run_state
-                        .nodes
-                        .get(nid)
-                        .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-                });
-
-            if all_done && run_state.status == event_log::RunStatus::Running {
-                let run_completed = event_log::Event {
-                    id: None,
-                    run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
-                    kind: event_log::EventKind::RunCompleted,
-                    node_id: None,
-                    iter: None,
-                    payload: None,
-                };
-                if let Err(e) = append_event(&state, &run_completed).await {
-                    error!("failed to append run_completed: {e}");
-                }
+            if let Err(e) = append_event(&state, &run_completed).await {
+                error!("failed to append run_completed: {e}");
             }
         }
     }
@@ -1958,10 +1948,12 @@ async fn run_command(
                         .into_response();
                 }
             };
-            if let Some(run_state) = event_log::project(&events) {
-                if let Some(node) = run_state.nodes.get(&node_id) {
+            let run_state = event_log::project(&events);
+            if let Some(ref rs) = run_state {
+                if let Some(node) = rs.nodes.get(&node_id) {
                     if node.status != event_log::NodeStatus::AwaitingUser
                         && node.status != event_log::NodeStatus::Running
+                        && node.status != event_log::NodeStatus::Failed
                     {
                         return (
                             StatusCode::CONFLICT,
@@ -1972,6 +1964,24 @@ async fn run_command(
                             .into_response();
                     }
                 }
+            }
+
+            let pipeline_name = run_state
+                .as_ref()
+                .map(|rs| rs.pipeline_name.as_str())
+                .unwrap_or("");
+            let pipeline_path =
+                resolve_run_pipeline_path(&state.repo_root, &run_id, pipeline_name);
+            let artifacts_dir = state
+                .repo_root
+                .join(".maestro")
+                .join("runs")
+                .join(&run_id)
+                .join("worktree/.maestro/artifacts");
+            if let Some(resp) =
+                check_output_validation(&pipeline_path, &node_id, iter, &artifacts_dir)
+            {
+                return resp;
             }
 
             let event = event_log::Event {
@@ -1988,6 +1998,10 @@ async fn run_command(
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
 
+            // Dispatch downstream nodes
+            spawn_ready_after_event(&state, &run_id).await;
+
+            // Check run completion
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -1997,27 +2011,48 @@ async fn run_command(
             };
 
             if let Some(run_state) = event_log::project(&events) {
-                let all_done = !run_state.nodes.is_empty()
-                    && run_state
-                        .nodes
-                        .values()
-                        .all(|n| n.status == event_log::NodeStatus::Completed);
+                handle_node_completion(&state, &run_state, &run_id, &node_id, &events).await;
 
-                if all_done
-                    && (run_state.status == event_log::RunStatus::Running
-                        || run_state.status == event_log::RunStatus::AwaitingUser)
-                {
-                    let run_completed = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::RunCompleted,
-                        node_id: None,
-                        iter: None,
-                        payload: None,
-                    };
-                    if let Err(e) = append_event(&state, &run_completed).await {
-                        error!("failed to append run_completed: {e}");
+                let events = match load_events(&state.db, &run_id).await {
+                    Ok(e) => e,
+                    Err(_) => {
+                        return (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
+                            .into_response();
+                    }
+                };
+                if let Some(run_state) = event_log::project(&events) {
+                    if run_state.status != event_log::RunStatus::Halted {
+                        let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
+                            run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
+                        } else {
+                            run_state.nodes.keys().cloned().collect()
+                        };
+
+                        let all_done = !expected_node_ids.is_empty()
+                            && expected_node_ids.iter().all(|nid| {
+                                run_state
+                                    .nodes
+                                    .get(nid)
+                                    .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
+                            });
+
+                        if all_done
+                            && (run_state.status == event_log::RunStatus::Running
+                                || run_state.status == event_log::RunStatus::AwaitingUser)
+                        {
+                            let run_completed = event_log::Event {
+                                id: None,
+                                run_id: run_id.clone(),
+                                ts: event_log::now_iso(),
+                                kind: event_log::EventKind::RunCompleted,
+                                node_id: None,
+                                iter: None,
+                                payload: None,
+                            };
+                            if let Err(e) = append_event(&state, &run_completed).await {
+                                error!("failed to append run_completed: {e}");
+                            }
+                        }
                     }
                 }
             }
@@ -2488,6 +2523,43 @@ fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> Pa
     }
 
     repo_path
+}
+
+fn resolve_run_pipeline_path(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    pipeline_name: &str,
+) -> PathBuf {
+    let run_scoped = run_scoped_pipeline_path(repo_root, run_id);
+    if run_scoped.exists() {
+        run_scoped
+    } else {
+        resolve_pipeline_path(repo_root, pipeline_name)
+    }
+}
+
+fn check_output_validation(
+    pipeline_path: &std::path::Path,
+    node_id: &str,
+    iter: i64,
+    artifacts_dir: &std::path::Path,
+) -> Option<Response> {
+    let yaml = std::fs::read_to_string(pipeline_path).ok()?;
+    let parse_result = pipeline::parse_pipeline(&yaml).ok()?;
+    let Err(missing) = outputs_validator::validate(&parse_result.pipeline, node_id, iter, artifacts_dir)
+    else {
+        return None;
+    };
+    Some(
+        (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "missing_outputs",
+                "missing": missing,
+            })),
+        )
+            .into_response(),
+    )
 }
 
 fn dirs_next_home() -> Option<PathBuf> {
@@ -4682,5 +4754,234 @@ edges:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- Layer-2: output validation via mark_node_done (refs #36) ---
+
+    fn write_pipeline_with_outputs(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n  - id: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: summary\n      - name: report\n    view: {{ x: 100, y: 100 }}\nedges: []\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    async fn seed_awaiting_run(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipeline_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeAwaitingUser,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(state, &event).await.unwrap();
+        }
+    }
+
+    async fn seed_failed_run(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipeline_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeFailed,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({ "reason": "tool call exited 1" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "reason": "tool call exited 1" })),
+            },
+        ] {
+            append_event(state, &event).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_returns_409_when_outputs_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "validate-test";
+        write_pipeline_with_outputs(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "validate-409";
+        seed_awaiting_run(&state, run_id, pipe_name).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "missing_outputs");
+        let missing = body["missing"].as_array().unwrap();
+        assert!(missing.iter().any(|v| v == "summary"));
+        assert!(missing.iter().any(|v| v == "report"));
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_accepts_failed_node_with_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "failed-rescue";
+        write_pipeline_with_outputs(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "failed-rescue-1";
+        seed_failed_run(&state, run_id, pipe_name).await;
+
+        // Create the required output files
+        let artifacts_dir = tmp
+            .path()
+            .join(".maestro/runs")
+            .join(run_id)
+            .join("worktree/.maestro/artifacts/worker/iter-1");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+        std::fs::write(artifacts_dir.join("summary.md"), "# Summary\nDone.").unwrap();
+        std::fs::write(artifacts_dir.join("report.md"), "# Report\nAll good.").unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn node_done_returns_409_when_outputs_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "node-done-validate";
+        write_pipeline_with_outputs(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "node-done-409";
+
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "missing_outputs");
+        let missing = body["missing"].as_array().unwrap();
+        assert!(missing.iter().any(|v| v == "summary"));
+        assert!(missing.iter().any(|v| v == "report"));
     }
 }

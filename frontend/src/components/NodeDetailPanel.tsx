@@ -278,18 +278,22 @@ export default function NodeDetailPanel({ node, runId, isArchived }: Props) {
               <Terminal size={12} />
               Terminal Preview
             </div>
-            <pre
-              ref={terminalRef}
-              className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
-              style={{ fontSize: "10.5px", lineHeight: "1.5" }}
-              dangerouslySetInnerHTML={
-                terminalHtml ? { __html: terminalHtml } : undefined
-              }
-            >
-              {!terminalHtml && (
+            {terminalHtml ? (
+              <pre
+                ref={terminalRef}
+                className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+                style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+                dangerouslySetInnerHTML={{ __html: terminalHtml }}
+              />
+            ) : (
+              <pre
+                ref={terminalRef}
+                className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+                style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+              >
                 <span className="text-fg-4">{terminalPlaceholder(node)}</span>
-              )}
-            </pre>
+              </pre>
+            )}
           </div>
         </ResizablePanel>
 

@@ -200,12 +200,14 @@ export default function App() {
                 <EditCanvas />
               </div>
             ) : (
-              <DagCanvas
-                run={selectedRun}
-                onSelectNode={setSelectedNodeId}
-                selectedNodeId={selectedNodeId}
-                onToggleEdit={handleToggleRunEdit}
-              />
+              <div className="flex h-full min-w-0 flex-col">
+                <DagCanvas
+                  run={selectedRun}
+                  onSelectNode={setSelectedNodeId}
+                  selectedNodeId={selectedNodeId}
+                  onToggleEdit={handleToggleRunEdit}
+                />
+              </div>
             )}
           </ResizablePanel>
 

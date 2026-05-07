@@ -13,9 +13,9 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Terminal } from "lucide-react";
 import type { NodeStatus, NodeType, RunState, RunStatus, StartNodeInfo } from "../types";
-import { cleanupRun } from "../api";
+import { cleanupRun, attachManager } from "../api";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
@@ -463,7 +463,19 @@ function DagCanvasInner({
           />
           <span className="text-fg-3">{run.status}</span>
         </div>
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <button
+            onClick={() => attachManager(run.run_id).catch(() => {})}
+            className={`flex items-center gap-1 rounded border px-2 py-1 transition-colors ${
+              run.status === "halted"
+                ? "border-st-blocked bg-st-blocked/20 text-st-blocked hover:bg-st-blocked/30"
+                : "border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
+            }`}
+            style={{ fontSize: "10px" }}
+          >
+            <Terminal size={10} />
+            Open Manager
+          </button>
           {onToggleEdit && (
             <button
               onClick={() => onToggleEdit(run.run_id)}

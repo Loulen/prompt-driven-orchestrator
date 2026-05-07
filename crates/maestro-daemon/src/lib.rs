@@ -146,6 +146,12 @@ struct RunCommandRequest {
     node_id: Option<String>,
     #[serde(default)]
     iter: Option<i64>,
+    #[serde(default)]
+    additional_iter: Option<i64>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -355,6 +361,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/runs/{run_id}/commands", post(run_command))
         .route("/sessions/{session_id}/attach", post(session_attach))
+        .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -1091,9 +1098,41 @@ async fn create_run(
         spawn_node(&state, &spawn_ctx, node, 1).await;
     }
 
+    spawn_manager_session(&state, &run_id, &worktree_dir);
+
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
     (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
+}
+
+fn spawn_manager_session(state: &AppState, run_id: &str, worktree_dir: &std::path::Path) {
+    let daemon_url = format!("http://localhost:{}", state.port);
+
+    let static_prompt = std::fs::read_to_string(
+        state
+            .repo_root
+            .join("prompts")
+            .join("builtin")
+            .join("manager.md"),
+    )
+    .unwrap_or_default();
+
+    let full_prompt = prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt);
+
+    let session_name = tmux_session_manager::manager_session_name(run_id);
+    if let Err(e) = tmux_session_manager::spawn(
+        &session_name,
+        &full_prompt,
+        worktree_dir,
+        run_id,
+        "__manager__",
+        0,
+        state.port,
+    ) {
+        error!("failed to spawn manager tmux session: {e}");
+    } else {
+        info!("Spawned manager session: {session_name}");
+    }
 }
 
 fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
@@ -2035,12 +2074,471 @@ async fn run_command(
             info!("mark_node_done: node {node_id} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
+        "extend_cycle" => {
+            let Some(node_id) = req.node_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "node_id required for extend_cycle" })),
+                )
+                    .into_response();
+            };
+            let Some(additional_iter) = req.additional_iter else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({ "error": "additional_iter required for extend_cycle" }),
+                    ),
+                )
+                    .into_response();
+            };
+            if additional_iter <= 0 {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "additional_iter must be positive" })),
+                )
+                    .into_response();
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "extend_cycle",
+                    "node_id": node_id,
+                    "additional_iter": additional_iter,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = match event_log::project(&events) {
+                Some(s) => s,
+                None => {
+                    return (StatusCode::NOT_FOUND, "run not found").into_response();
+                }
+            };
+
+            if run_state.status == event_log::RunStatus::Halted
+                || run_state.status == event_log::RunStatus::Failed
+            {
+                let resume_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::CommandIssued,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "command": "resume_run" })),
+                };
+                if let Err(e) = append_event(&state, &resume_event).await {
+                    error!("failed to append resume_run: {e}");
+                }
+            }
+
+            // Re-evaluate outgoing edges with the extended cycle
+            re_evaluate_after_command(&state, &run_id).await;
+
+            info!("extend_cycle: node {node_id} +{additional_iter} in run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "resume_run" => {
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "command": "resume_run" })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            re_evaluate_after_command(&state, &run_id).await;
+
+            info!("resume_run: run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "kill_node" => {
+            let Some(node_id) = req.node_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "node_id required for kill_node" })),
+                )
+                    .into_response();
+            };
+            let iter = req.iter.unwrap_or(1);
+
+            let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+            tmux_session_manager::kill(&session_name);
+
+            let fail_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeFailed,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "reason": "killed via kill_node command",
+                    "source": "kill_node",
+                })),
+            };
+            if let Err(e) = append_event(&state, &fail_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "command": "kill_node",
+                    "node_id": node_id,
+                    "iter": iter,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                error!("failed to append kill_node command event: {e}");
+            }
+
+            info!("kill_node: node {node_id} iter {iter} in run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "restart_node" => {
+            let Some(node_id) = req.node_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "node_id required for restart_node" })),
+                )
+                    .into_response();
+            };
+            let iter = req.iter.unwrap_or(1);
+
+            // Kill existing session
+            let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+            tmux_session_manager::kill(&session_name);
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "command": "restart_node",
+                    "node_id": node_id,
+                    "iter": iter,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                error!("failed to append restart_node command event: {e}");
+            }
+
+            // Re-spawn the node
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = match event_log::project(&events) {
+                Some(s) => s,
+                None => {
+                    return (StatusCode::NOT_FOUND, "run not found").into_response();
+                }
+            };
+
+            let pipeline_path = {
+                let run_scoped = run_scoped_pipeline_path(&state.repo_root, &run_id);
+                if run_scoped.exists() {
+                    run_scoped
+                } else {
+                    resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name)
+                }
+            };
+            let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+            };
+            let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline")
+                    .into_response();
+            };
+
+            let pipeline = parse_result.pipeline;
+            if let Some(node) = pipeline.nodes.iter().find(|n| n.id == node_id) {
+                let worktree_dir = state
+                    .repo_root
+                    .join(".maestro")
+                    .join("runs")
+                    .join(&run_id)
+                    .join("worktree");
+                let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+                let resolved_vars = resolve_run_variables(&pipeline, &events);
+
+                let spawn_ctx = SpawnContext {
+                    pipeline: &pipeline,
+                    run_id: &run_id,
+                    pipeline_path: &pipeline_path,
+                    worktree_dir: &worktree_dir,
+                    artifacts_dir: &artifacts_dir,
+                    resolved_vars: &resolved_vars,
+                };
+
+                spawn_node(&state, &spawn_ctx, node, iter).await;
+            }
+
+            info!("restart_node: node {node_id} iter {iter} in run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "inject_artifact" => {
+            let Some(path) = req.path else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "path required for inject_artifact" })),
+                )
+                    .into_response();
+            };
+            let Some(content) = req.content else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "content required for inject_artifact" })),
+                )
+                    .into_response();
+            };
+
+            let worktree_dir = state
+                .repo_root
+                .join(".maestro")
+                .join("runs")
+                .join(&run_id)
+                .join("worktree");
+            let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+            let full_path = artifacts_dir.join(&path);
+
+            if let Some(parent) = full_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": format!("failed to create dir: {e}") })),
+                    )
+                        .into_response();
+                }
+            }
+            if let Err(e) = std::fs::write(&full_path, &content) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("failed to write artifact: {e}") })),
+                )
+                    .into_response();
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "inject_artifact",
+                    "path": path,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            info!("inject_artifact: {path} in run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
         "cleanup_run" => cleanup_run(&state, &run_id).await,
         other => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": format!("unknown command: {other}") })),
         )
             .into_response(),
+    }
+}
+
+/// Re-evaluate the scheduler after a command (resume_run, extend_cycle).
+/// Loads the pipeline and run state, resolves variables (including cycle extensions),
+/// then re-evaluates outgoing edges of all completed nodes to find newly ready spawns.
+async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("re_evaluate_after_command: failed to load events: {e}");
+            return;
+        }
+    };
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let pipeline_path = {
+        let run_scoped = run_scoped_pipeline_path(&state.repo_root, run_id);
+        if run_scoped.exists() {
+            run_scoped
+        } else {
+            resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name)
+        }
+    };
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+
+    let pipeline = parse_result.pipeline;
+    let worktree_dir = state
+        .repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("worktree");
+    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+    let mut resolved_vars = resolve_run_variables(&pipeline, &events);
+
+    // Apply cycle extensions to variables: for each extend_cycle command,
+    // find variable references in outgoing edges of the target node and bump them.
+    let extensions = event_log::collect_cycle_extensions(&events);
+    for (ext_node_id, additional) in &extensions {
+        let var_refs = extract_variable_refs_from_outgoing_edges(&pipeline, ext_node_id);
+        for var_name in var_refs {
+            if let Some(val) = resolved_vars.get_mut(&var_name) {
+                if let Some(n) = val.as_i64() {
+                    *val = serde_yaml::Value::Number(serde_yaml::Number::from(n + additional));
+                }
+            }
+        }
+    }
+
+    // Find completed nodes whose outgoing edges might now fire with updated vars
+    let completed_node_ids: Vec<String> = run_state
+        .nodes
+        .values()
+        .filter(|n| n.status == event_log::NodeStatus::Completed)
+        .map(|n| n.node_id.clone())
+        .collect();
+
+    let spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &resolved_vars,
+    };
+
+    for completed_node_id in &completed_node_ids {
+        let source_iter = run_state
+            .nodes
+            .get(completed_node_id)
+            .map(|n| n.iter)
+            .unwrap_or(1);
+
+        let frontmatter_fields =
+            resolve_source_frontmatter(&pipeline, completed_node_id, source_iter, &artifacts_dir);
+
+        let actions = scheduler::evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &run_state,
+            completed_node_id,
+            &resolved_vars,
+            &frontmatter_fields,
+        );
+
+        for action in &actions {
+            match action {
+                scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                    // Only spawn if not already running/completed at this iter
+                    let already_active = run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
+                        n.iter >= *iter
+                            && (n.status == event_log::NodeStatus::Running
+                                || n.status == event_log::NodeStatus::Completed)
+                    });
+                    if !already_active {
+                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                            spawn_node(state, &spawn_ctx, node, *iter).await;
+                        }
+                    }
+                }
+                scheduler::SchedulerAction::Halt { message } => {
+                    let halt_event = event_log::Event {
+                        id: None,
+                        run_id: run_id.to_string(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::RunHalted,
+                        node_id: None,
+                        iter: None,
+                        payload: Some(serde_json::json!({ "message": message })),
+                    };
+                    if let Err(e) = append_event(state, &halt_event).await {
+                        error!("failed to append run_halted: {e}");
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Extract variable references ($name) from when clauses on outgoing edges of a node.
+fn extract_variable_refs_from_outgoing_edges(
+    pipeline: &pipeline::PipelineDef,
+    node_id: &str,
+) -> Vec<String> {
+    let mut refs = Vec::new();
+    for edge in &pipeline.edges {
+        if edge.source.node != node_id {
+            continue;
+        }
+        if let Some(ref when) = edge.when {
+            collect_yaml_var_refs(when, &mut refs);
+        }
+    }
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn collect_yaml_var_refs(val: &serde_yaml::Value, refs: &mut Vec<String>) {
+    match val {
+        serde_yaml::Value::String(s) if s.starts_with('$') => {
+            refs.push(s[1..].to_string());
+        }
+        serde_yaml::Value::Mapping(map) => {
+            for (_, v) in map {
+                collect_yaml_var_refs(v, refs);
+            }
+        }
+        serde_yaml::Value::Sequence(seq) => {
+            for v in seq {
+                collect_yaml_var_refs(v, refs);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2064,6 +2562,41 @@ async fn session_attach(AxumPath(session_id): AxumPath<String>) -> Response {
                 Json(AttachResponse {
                     ok: true,
                     session: session_id,
+                    terminal,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("failed to attach: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn manager_attach(AxumPath(run_id): AxumPath<String>) -> Response {
+    let session_name = tmux_session_manager::manager_session_name(&run_id);
+
+    if !tmux_session_manager::session_exists(&session_name) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({ "error": format!("manager session {session_name} not found") }),
+            ),
+        )
+            .into_response();
+    }
+
+    let terminal = detect_terminal();
+    match spawn_terminal_attach(&terminal, &session_name) {
+        Ok(()) => {
+            info!("Attached terminal {terminal} to manager session {session_name}");
+            (
+                StatusCode::OK,
+                Json(AttachResponse {
+                    ok: true,
+                    session: session_name,
                     terminal,
                 }),
             )
@@ -4622,5 +5155,303 @@ edges:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- Layer 2 contract tests: command endpoints (issue #10) ----
+
+    #[tokio::test]
+    async fn extend_cycle_requires_node_id() {
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "extend_cycle", "additional_iter": 3 })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn extend_cycle_requires_positive_additional_iter() {
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "extend_cycle",
+                            "node_id": "reviewer",
+                            "additional_iter": 0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn kill_node_requires_node_id() {
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "kill_node" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn restart_node_requires_node_id() {
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "restart_node" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn inject_artifact_requires_path_and_content() {
+        let state = test_state().await;
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "inject_artifact" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let app2 = build_router(state);
+        let resp2 = app2
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "inject_artifact",
+                            "path": "some/path.md"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn inject_artifact_writes_file_and_appends_event() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "inject-test";
+        // Create run dir structure
+        let artifacts_dir = tmp
+            .path()
+            .join(".maestro")
+            .join("runs")
+            .join(run_id)
+            .join("worktree")
+            .join(".maestro")
+            .join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+
+        // Seed a run_started event
+        let run_event = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "inject-pipe" })),
+        };
+        append_event(&state, &run_event).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "inject_artifact",
+                            "path": "manual/iter-1/notes.md",
+                            "content": "# Injected\n\nHello from the manager."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Verify file was written
+        let file_path = artifacts_dir.join("manual/iter-1/notes.md");
+        assert!(file_path.exists());
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains("Injected"));
+
+        // Verify event was appended
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let cmd_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::CommandIssued)
+            .collect();
+        assert_eq!(cmd_events.len(), 1);
+        let payload = cmd_events[0].payload.as_ref().unwrap();
+        assert_eq!(payload["command"], "inject_artifact");
+        assert_eq!(payload["path"], "manual/iter-1/notes.md");
+    }
+
+    #[tokio::test]
+    async fn resume_run_appends_command_issued_event() {
+        let state = test_state().await;
+
+        let run_event = event_log::Event {
+            id: None,
+            run_id: "resume-test".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "resume-pipe" })),
+        };
+        append_event(&state, &run_event).await.unwrap();
+
+        let halt_event = event_log::Event {
+            id: None,
+            run_id: "resume-test".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunHalted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "message": "halted" })),
+        };
+        append_event(&state, &halt_event).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/resume-test/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "resume_run" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Verify event was appended and run status changed
+        let events = load_events(&state.db, "resume-test").await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Running);
+    }
+
+    // --- extract_variable_refs_from_outgoing_edges unit test ---
+
+    #[test]
+    fn extract_var_refs_finds_dollar_variables() {
+        use crate::pipeline::*;
+
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![EdgeDef {
+                source: EdgeEndpoint {
+                    node: "reviewer".into(),
+                    port: "review".into(),
+                },
+                target: EdgeTarget::Node(EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "review".into(),
+                }),
+                when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
+            }],
+        };
+
+        let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
+        assert_eq!(refs, vec!["max_iter_review"]);
+    }
+
+    #[test]
+    fn extract_var_refs_empty_for_no_vars() {
+        use crate::pipeline::*;
+
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![EdgeDef {
+                source: EdgeEndpoint {
+                    node: "a".into(),
+                    port: "out".into(),
+                },
+                target: EdgeTarget::Node(EdgeEndpoint {
+                    node: "b".into(),
+                    port: "in".into(),
+                }),
+                when: Some(serde_yaml::from_str("iter: { lt: 3 }").unwrap()),
+            }],
+        };
+
+        let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");
+        assert!(refs.is_empty());
     }
 }

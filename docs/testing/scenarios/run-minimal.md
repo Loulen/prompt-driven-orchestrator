@@ -165,16 +165,19 @@ preview.  Assert:
   appears.
 - Each port row displays a truncated artifact path.
 
-### Step 5d — Click output → modal contains MAESTRO_RUN_MINIMAL_OK (refs #27)
+### Step 5d — Click output port card → modal contains MAESTRO_RUN_MINIMAL_OK (refs #27 #33)
 
 Once step 6 confirms the node completed and the artifact exists:
 
-1. Click the **"open ↗"** link on the `out` output port row.
+1. Click **anywhere on the `out` output port row** (`button.port-row`) — not
+   just the "↗" icon. The entire card is the click target when files exist.
 2. Assert the **MarkdownArtifactModal** opens (`.artifact-markdown` visible).
 3. The modal body must contain the string **`MAESTRO_RUN_MINIMAL_OK`**.
 4. If the output file has YAML frontmatter, a frontmatter card is displayed
    above the markdown body.
 5. Close the modal via the **X** button, **Escape** key, or backdrop click.
+6. Verify that the `in` input port row (no files exist) renders as a
+   non-interactive `<div>` — no pointer cursor, no hover effect.
 
 ### Step 1c — Edit-this-run toggle + save indicator (refs #28 #35)
 

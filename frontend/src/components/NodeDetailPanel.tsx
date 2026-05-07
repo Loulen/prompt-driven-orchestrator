@@ -598,19 +598,18 @@ function PortRow({
       ? firstFile.frontmatter
       : null;
 
-  return (
-    <div
-      className="port-row grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2"
-      style={{
-        gridTemplateColumns: "8px 1fr auto",
-        fontSize: "11.5px",
-      }}
-    >
+  const gridStyle = {
+    gridTemplateColumns: "8px 1fr auto",
+    fontSize: "11.5px",
+  };
+
+  const children = (
+    <>
       {/* Status dot */}
       <div className={`h-2 w-2 rounded-full ${dotClass}`} />
 
       {/* Name + path */}
-      <div className="min-w-0">
+      <div className="min-w-0 text-left">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
             {port.port}
@@ -632,7 +631,7 @@ function PortRow({
         </div>
       </div>
 
-      {/* Meta + open link */}
+      {/* Meta + arrow icon */}
       <div className="flex items-center gap-2">
         {anyExists && totalSize > 0 && (
           <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
@@ -640,13 +639,13 @@ function PortRow({
           </span>
         )}
         {anyExists && (
-          <button
-            onClick={onOpen}
-            className="open-link font-mono text-fg-3 transition-colors hover:text-acc"
+          <span
+            className="font-mono text-fg-3"
             style={{ fontSize: "10.5px" }}
+            aria-hidden="true"
           >
-            open ↗
-          </button>
+            ↗
+          </span>
         )}
       </div>
 
@@ -665,6 +664,28 @@ function PortRow({
           ))}
         </div>
       )}
+    </>
+  );
+
+  if (anyExists) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className="port-row grid w-full cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
+        style={gridStyle}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className="port-row grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 opacity-60"
+      style={gridStyle}
+    >
+      {children}
     </div>
   );
 }

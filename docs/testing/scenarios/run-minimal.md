@@ -132,7 +132,7 @@ Once step 6 confirms the node completed and the artifact exists:
    above the markdown body.
 5. Close the modal via the **X** button, **Escape** key, or backdrop click.
 
-### Step 1c — Edit-this-run toggle (refs #28)
+### Step 1c — Edit-this-run toggle + save indicator (refs #28 #35)
 
 9. With the Run still visible (any status), click the **"Edit this run"**
    button on the run overlay. Assert:
@@ -142,6 +142,13 @@ Once step 6 confirms the node completed and the artifact exists:
      instead of terminal preview).
    - A footnote reading **"Editing run-scoped copy · template unchanged"**
      is visible beneath the run overlay.
+   - The **TabBar** is visible above the canvas with the run-scoped tab.
+9b. Make any edit (e.g. change the node prompt). Assert:
+   - The tab title is prefixed with **`•`** (dirty indicator).
+   - The **Save** button in the TabBar is enabled.
+   Click **Save**. Assert:
+   - The **`•`** prefix disappears from the tab title.
+   - **"Saved Xs ago"** text appears near the Save button.
 10. Click **"Stop editing"** (or the same toggle again). Assert:
     - The **AddPalette** disappears.
     - The right panel returns to the **NodeDetailPanel** (terminal preview).

@@ -90,6 +90,8 @@ export default function App() {
   const openRunPipeline = useEditStore((s) => s.openRunPipeline);
   const closeRunPipeline = useEditStore((s) => s.closeRunPipeline);
   const selection = useEditStore((s) => s.selection);
+  const editSave = useEditStore((s) => s.save);
+  const editActiveTabId = useEditStore((s) => s.activeTabId);
 
   useEffect(() => {
     if (!mountedRef.current) {
@@ -136,6 +138,19 @@ export default function App() {
     },
     [editScope, editingRunId, openRunPipeline, exitRunEdit],
   );
+
+  useEffect(() => {
+    const inEditMode = editMode || editScope === "run";
+    if (!inEditMode) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (editActiveTabId) editSave(editActiveTabId);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editMode, editScope, editActiveTabId, editSave]);
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -197,6 +212,7 @@ export default function App() {
               </div>
             ) : editScope === "run" ? (
               <div className="flex h-full min-w-0 flex-col">
+                <TabBar />
                 <EditCanvas />
               </div>
             ) : (

@@ -60,24 +60,24 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
   await expect(promptArea).toBeVisible();
 
-  // First edit: triggers a save 1500 ms later (editStore debounce).
+  // First edit + explicit save (auto-save removed in #35).
   await promptArea.fill("MARKER_A");
+  await page.getByTestId("save-button").click();
 
-  // Wait past the save flush. With the bug present, the watcher would now fire
-  // ~1 s later, the frontend would reloadPipeline, and our second fill would
-  // race the SET state and lose.
+  // Wait for the watcher broadcast cycle to settle.
   await page.waitForTimeout(1900);
 
   // Second edit, performed in the danger window between the daemon's write
   // and the (would-be) broadcast.
   await promptArea.fill("MARKER_A_then_MARKER_B");
 
-  // Cover the entire potential broadcast/reload window.
+  // Explicit save again, then cover the broadcast/reload window.
+  await page.getByTestId("save-button").click();
   await page.waitForTimeout(3000);
 
   await expect(promptArea).toHaveValue("MARKER_A_then_MARKER_B");
 
-  // Persistence: the followup save flushed MARKER_B to disk.
+  // Persistence: the explicit save flushed MARKER_B to disk.
   await page.reload();
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.locator('[title="Toggle edit mode"]').click();

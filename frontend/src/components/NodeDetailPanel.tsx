@@ -573,7 +573,7 @@ function PortRow({
         )}
         {anyExists && (
           <span
-            className="open-link font-mono text-fg-3"
+            className="font-mono text-fg-3"
             style={{ fontSize: "10.5px" }}
             aria-hidden="true"
           >

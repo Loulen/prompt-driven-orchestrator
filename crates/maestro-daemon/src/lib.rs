@@ -944,6 +944,10 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
 
     let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
     if ready.is_empty() {
+        // Pipeline was modified but no new nodes need spawning. If all current
+        // pipeline nodes are completed, re-complete the run so it doesn't stay
+        // dangling in Running state after a trivial YAML edit.
+        maybe_complete_run(state, run_id, &pipeline, &run_state).await;
         return;
     }
 
@@ -975,6 +979,38 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
         "spawn_ready_after_event: spawned {} node(s) for run {run_id}",
         ready.len()
     );
+}
+
+async fn maybe_complete_run(
+    state: &AppState,
+    run_id: &str,
+    pipeline: &pipeline::PipelineDef,
+    run_state: &event_log::RunState,
+) {
+    if run_state.status != event_log::RunStatus::Running {
+        return;
+    }
+    let all_done = !pipeline.nodes.is_empty()
+        && pipeline.nodes.iter().all(|n| {
+            run_state
+                .nodes
+                .get(&n.id)
+                .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
+        });
+    if all_done {
+        let run_completed = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunCompleted,
+            node_id: None,
+            iter: None,
+            payload: None,
+        };
+        if let Err(e) = append_event(state, &run_completed).await {
+            error!("failed to append run_completed: {e}");
+        }
+    }
 }
 
 fn resolve_run_variables(
@@ -2008,8 +2044,7 @@ async fn run_command(
                 .as_ref()
                 .map(|rs| rs.pipeline_name.as_str())
                 .unwrap_or("");
-            let pipeline_path =
-                resolve_run_pipeline_path(&state.repo_root, &run_id, pipeline_name);
+            let pipeline_path = resolve_run_pipeline_path(&state.repo_root, &run_id, pipeline_name);
             let artifacts_dir = state
                 .repo_root
                 .join(".maestro")
@@ -3108,7 +3143,8 @@ fn check_output_validation(
 ) -> Option<Response> {
     let yaml = std::fs::read_to_string(pipeline_path).ok()?;
     let parse_result = pipeline::parse_pipeline(&yaml).ok()?;
-    let Err(missing) = outputs_validator::validate(&parse_result.pipeline, node_id, iter, artifacts_dir)
+    let Err(missing) =
+        outputs_validator::validate(&parse_result.pipeline, node_id, iter, artifacts_dir)
     else {
         return None;
     };
@@ -5585,7 +5621,7 @@ edges:
         let pipelines_dir = dir.join(".maestro").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n  - id: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: summary\n      - name: report\n    view: {{ x: 100, y: 100 }}\nedges: []\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: summary\n      - name: report\n    view: {{ x: 100, y: 100 }}\nedges: []\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -5940,7 +5976,11 @@ edges:
     async fn inject_artifact_rejects_path_traversal() {
         let state = test_state().await;
 
-        for bad_path in ["../../etc/passwd", "/absolute/path.md", "ok/../../../escape"] {
+        for bad_path in [
+            "../../etc/passwd",
+            "/absolute/path.md",
+            "ok/../../../escape",
+        ] {
             let app = build_router(state.clone());
             let resp = app
                 .oneshot(

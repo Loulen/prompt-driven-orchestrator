@@ -404,3 +404,160 @@ edges:
     let edges = run_state["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 1, "should reflect augmented edges");
 }
+
+// --- Symmetric test: removing a node from the YAML should not spawn it ---
+
+const TWO_NODE_PIPELINE_NAME: &str = "two-node-test";
+const TWO_NODE_PIPELINE_YAML: &str = r#"name: two-node-test
+version: "1.0"
+nodes:
+  - id: planner
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+    view: { x: 100, y: 100 }
+  - id: implementer
+    name: implementer
+    type: doc-only
+    inputs:
+      - name: plan
+    outputs:
+      - name: summary
+    view: { x: 300, y: 100 }
+edges:
+  - source: { node: planner, port: plan }
+    target: { node: implementer, port: plan }
+"#;
+
+fn seed_two_node(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".maestro").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{TWO_NODE_PIPELINE_NAME}.yaml")),
+        TWO_NODE_PIPELINE_YAML,
+    )?;
+    let prompts_dir = pipelines_dir.join(format!("{TWO_NODE_PIPELINE_NAME}.prompts"));
+    std::fs::create_dir_all(&prompts_dir)?;
+    std::fs::write(prompts_dir.join("planner.md"), "You are a planner.\n")?;
+    std::fs::write(
+        prompts_dir.join("implementer.md"),
+        "You are an implementer.\n",
+    )?;
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+async fn create_two_node_run(daemon_url: &str) -> String {
+    let body = serde_json::json!({
+        "pipeline": TWO_NODE_PIPELINE_NAME,
+        "input": "test input",
+        "variables": {}
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{daemon_url}/runs"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /runs should succeed");
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["run_id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn removing_node_from_run_pipeline_prevents_spawn() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
+
+    let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
+    let run_id = create_two_node_run(&daemon.url()).await;
+
+    let mut ws = daemon.connect_ws().await.unwrap();
+    // Drain initial messages (ready + node_started for planner)
+    let _ = timeout(Duration::from_secs(2), async {
+        loop {
+            if ws.next().await.is_none() {
+                break;
+            }
+        }
+    })
+    .await;
+
+    // Remove the implementer node from the run-scoped pipeline before planner completes
+    let yaml_path = daemon
+        .repo_root()
+        .join(".maestro")
+        .join("runs")
+        .join(&run_id)
+        .join("pipeline.yaml");
+
+    let reduced_yaml = r#"name: two-node-test
+version: "1.0"
+nodes:
+  - id: planner
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+    view: { x: 100, y: 100 }
+edges: []
+"#;
+    std::fs::write(&yaml_path, reduced_yaml).unwrap();
+
+    // Wait for the pipeline_modified event to propagate
+    let _ = timeout(Duration::from_secs(2), async {
+        loop {
+            if ws.next().await.is_none() {
+                break;
+            }
+        }
+    })
+    .await;
+
+    // Create required output file and complete the planner node
+    let artifacts_dir = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("worktree/.maestro/artifacts/planner/iter-1");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(artifacts_dir.join("plan.md"), "# Plan\nDo the thing.").unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
+        .json(&serde_json::json!({
+            "kind": "mark_node_done",
+            "node_id": "planner",
+            "iter": 1
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "mark_node_done should succeed");
+
+    // Wait and confirm: implementer should NOT receive a node_started event
+    let evt = next_event_for_node(
+        &mut ws,
+        "node_started",
+        "implementer",
+        Duration::from_secs(4),
+    )
+    .await;
+
+    let _ = Command::new("tmux").args(["kill-server"]).output();
+    std::env::remove_var("MAESTRO_TMUX_CMD_OVERRIDE");
+
+    assert!(
+        evt.is_none(),
+        "removed node 'implementer' should NOT be spawned after pipeline_modified"
+    );
+}

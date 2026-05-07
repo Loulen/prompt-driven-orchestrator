@@ -15,8 +15,8 @@ const PIPELINE_YAML: &str = r#"name: cm-survive-test
 version: "1.0"
 nodes:
   - id: impl-1
+    name: impl-1
     type: code-mutating
-    prompt_file: cm-survive-test.prompts/impl-1.md
     inputs:
       - name: task
     outputs:
@@ -112,6 +112,17 @@ async fn sub_worktree_survives_node_completion() {
     // Write a code change in the sub-worktree so merge has something to commit
     std::fs::write(sub_wt_dir.join("implementation.rs"), "fn main() {}\n").unwrap();
 
+    // Create required output artifact so output validation passes (refs #36)
+    let artifacts_dir = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("worktree/.maestro/artifacts")
+        .join(NODE_ID)
+        .join("iter-1");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(artifacts_dir.join("summary.md"), "# Summary\nDone.\n").unwrap();
+
     // Mark node done — triggers commit_and_merge_sub_worktree
     let resp = reqwest::Client::new()
         .post(format!(
@@ -180,6 +191,17 @@ async fn cleanup_run_removes_surviving_sub_worktrees() {
 
     // Write a code change and mark done
     std::fs::write(sub_wt_dir.join("implementation.rs"), "fn main() {}\n").unwrap();
+
+    // Create required output artifact so output validation passes (refs #36)
+    let artifacts_dir = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("worktree/.maestro/artifacts")
+        .join(NODE_ID)
+        .join("iter-1");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(artifacts_dir.join("summary.md"), "# Summary\nDone.\n").unwrap();
 
     let resp = reqwest::Client::new()
         .post(format!(

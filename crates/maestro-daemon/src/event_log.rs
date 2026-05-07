@@ -280,9 +280,14 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 // Informational event — the run is halted via a subsequent RunFailed
             }
             EventKind::PipelineModified => {
-                // Informational — the run-scoped pipeline changed on disk.
-                // RunState.node_defs/edges are re-parsed from the file at
-                // augmentation time (see augment_run_state_from_disk), not here.
+                // The run-scoped pipeline changed on disk. Node_defs/edges are
+                // re-parsed from the file at augmentation time. However, if the
+                // run was already Completed, reopen it so the scheduler can
+                // evaluate whether newly-added nodes need spawning.
+                if state.status == RunStatus::Completed {
+                    state.status = RunStatus::Running;
+                    state.completed_at = None;
+                }
             }
             EventKind::RunCompleted => {
                 state.status = RunStatus::Completed;
@@ -572,6 +577,62 @@ mod tests {
 
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Failed);
+    }
+
+    #[test]
+    fn pipeline_modified_after_completed_reopens_run() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test-pipe", "input": "do the thing" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("planner"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("planner"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+            make_event(EventKind::PipelineModified, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.status,
+            RunStatus::Running,
+            "PipelineModified after RunCompleted should reopen the run"
+        );
+    }
+
+    #[test]
+    fn pipeline_modified_during_running_stays_running() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test-pipe" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("planner"), Some(1)),
+            make_event(EventKind::PipelineModified, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn pipeline_modified_after_failed_stays_failed() {
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeFailed, None, None),
+            make_event(EventKind::RunFailed, None, None),
+            make_event(EventKind::PipelineModified, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.status,
+            RunStatus::Failed,
+            "PipelineModified should not reopen a Failed run"
+        );
     }
 
     #[test]

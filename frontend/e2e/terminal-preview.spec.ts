@@ -28,8 +28,9 @@ edges: []
 `;
 
 test.beforeAll(async () => {
-  // Set MAESTRO_TMUX_CMD_OVERRIDE so the test doesn't need claude
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = "exec sleep 300";
+  // Produce real ANSI output so the dangerouslySetInnerHTML branch is exercised
+  process.env.MAESTRO_TMUX_CMD_OVERRIDE =
+    "exec sh -c \"printf '\\033[32mhello ansi\\033[0m\\n'; sleep 300\"";
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
@@ -71,10 +72,10 @@ test("selecting a running node shows terminal preview within 2s", async ({
   const terminalPane = page.locator(".terminal-pane");
   await expect(terminalPane).toBeVisible({ timeout: 3_000 });
 
-  // Wait for pane content to be non-empty (polling fetches it within 1s)
+  // Wait for ANSI-rendered content (dangerouslySetInnerHTML branch exercised)
   await expect(async () => {
     const html = await terminalPane.innerHTML();
-    expect(html.length).toBeGreaterThan(0);
+    expect(html).toContain("hello ansi");
   }).toPass({ timeout: 5_000 });
 
   // Cleanup: kill the tmux session

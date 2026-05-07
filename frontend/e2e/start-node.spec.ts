@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectNonZeroBBox } from "./assertions";
 
 // Layer 3b — Start pseudo-node + StartInspector (#30).
 // Verifies: selecting the Run start node shows the StartInspector with header,
@@ -84,10 +85,15 @@ test("clicking start node shows StartInspector with header and input text", asyn
   // Wait for the run to appear in the list and click it
   await page.getByText(rid.slice(0, 8)).first().click({ timeout: 5_000 });
 
+  const reactFlow = page.locator(".react-flow");
+  await expect(reactFlow).toBeVisible({ timeout: 5_000 });
+  await expectNonZeroBBox(reactFlow);
+
   // Wait for the start node to appear and click it
   await page.waitForTimeout(500);
   const startNode = page.locator(".start-node").first();
   await expect(startNode).toBeVisible({ timeout: 3_000 });
+  await expectNonZeroBBox(startNode);
   await startNode.click();
 
   // StartInspector should appear

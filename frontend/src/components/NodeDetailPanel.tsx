@@ -285,14 +285,14 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             {terminalHtml ? (
               <pre
                 ref={terminalRef}
-                className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+                className="terminal-pane flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
                 style={{ fontSize: "10.5px", lineHeight: "1.5" }}
                 dangerouslySetInnerHTML={{ __html: terminalHtml }}
               />
             ) : (
               <pre
                 ref={terminalRef}
-                className="flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
+                className="terminal-pane flex-1 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
                 style={{ fontSize: "10.5px", lineHeight: "1.5" }}
               >
                 <span className="text-fg-4">{terminalPlaceholder(node)}</span>

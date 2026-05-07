@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectNonZeroBBox } from "./assertions";
 
 // Layer 3b — Initial prompt section (#26).
 // Verifies: selecting a running node shows the initial prompt containing
@@ -65,10 +66,15 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
   // Wait for the run to appear in the list and click it
   await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
 
+  const reactFlow = page.locator(".react-flow");
+  await expect(reactFlow).toBeVisible({ timeout: 5_000 });
+  await expectNonZeroBBox(reactFlow);
+
   // Wait for the DAG to render then click the worker node
   await page.waitForTimeout(500);
   const workerNode = page.getByText("worker", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });
+  await expectNonZeroBBox(workerNode);
   await workerNode.click();
 
   // The prompt block should contain ## Inputs text

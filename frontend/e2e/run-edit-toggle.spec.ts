@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectNonZeroBBox } from "./assertions";
 
 // Layer 3b — proves issue #28 run-mode authoring toggle. Boots the daemon,
 // creates a run, opens the "Edit this run" overlay, asserts that the editor
@@ -52,8 +53,14 @@ test("edit-this-run toggle swaps to editor and back", async ({ page, request }) 
   await expect(runEntry).toBeVisible({ timeout: 5_000 });
   await runEntry.click();
 
+  const reactFlow = page.locator(".react-flow");
+  await expect(reactFlow).toBeVisible({ timeout: 5_000 });
+  await expectNonZeroBBox(reactFlow);
+
   // The run overlay should show the pipeline name
-  await expect(page.getByText(PIPELINE_NAME).first()).toBeVisible();
+  const pipelineLabel = page.getByText(PIPELINE_NAME).first();
+  await expect(pipelineLabel).toBeVisible();
+  await expectNonZeroBBox(pipelineLabel);
 
   // Click "Edit this run"
   const editButton = page.getByRole("button", { name: "Edit this run" });

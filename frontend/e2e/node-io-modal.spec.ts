@@ -95,7 +95,7 @@ async function createRunAndSeedArtifacts(baseURL: string) {
   return runId;
 }
 
-test("clicking open on output port opens modal with markdown + frontmatter", async ({
+test("clicking anywhere on port card opens modal with markdown + frontmatter", async ({
   page,
   baseURL,
 }) => {
@@ -121,10 +121,10 @@ test("clicking open on output port opens modal with markdown + frontmatter", asy
     timeout: 3_000,
   });
 
-  // Click "open ↗" on the output port
-  const openLink = page.locator(".open-link").first();
-  await expect(openLink).toBeVisible({ timeout: 5_000 });
-  await openLink.click();
+  // Click anywhere on the port card (not a specific sub-element)
+  const portCard = page.locator("button.port-row").first();
+  await expect(portCard).toBeVisible({ timeout: 5_000 });
+  await portCard.click();
 
   // The modal should appear
   const modal = page.locator(".artifact-markdown");
@@ -159,9 +159,9 @@ test("modal closes on Escape key", async ({ page, baseURL }) => {
   await page.getByText("reviewer", { exact: true }).first().click();
 
   await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  const openLink = page.locator(".open-link").first();
-  await expect(openLink).toBeVisible({ timeout: 5_000 });
-  await openLink.click();
+  const portCard = page.locator("button.port-row").first();
+  await expect(portCard).toBeVisible({ timeout: 5_000 });
+  await portCard.click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
@@ -186,14 +186,73 @@ test("modal closes on backdrop click", async ({ page, baseURL }) => {
   await page.getByText("reviewer", { exact: true }).first().click();
 
   await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  const openLink = page.locator(".open-link").first();
-  await expect(openLink).toBeVisible({ timeout: 5_000 });
-  await openLink.click();
+  const portCard = page.locator("button.port-row").first();
+  await expect(portCard).toBeVisible({ timeout: 5_000 });
+  await portCard.click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
 
   // Click the backdrop (the fixed overlay behind the modal)
   await page.mouse.click(10, 10);
+  await expect(modal).not.toBeVisible({ timeout: 2_000 });
+});
+
+test("port card with no files renders as non-interactive div", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  if (!runId) {
+    await createRunAndSeedArtifacts(baseURL!);
+  }
+
+  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await page.getByText("reviewer", { exact: true }).first().click();
+
+  // The input port "reviews" has no seeded files, so it should be a div, not a button
+  await expect(page.getByText("Inputs")).toBeVisible({ timeout: 5_000 });
+  const inputPortRow = page.locator(".port-row").filter({ hasText: "reviews" });
+  await expect(inputPortRow).toBeVisible({ timeout: 3_000 });
+
+  // Non-interactive port rows render as <div>, not <button>
+  const tag = await inputPortRow.evaluate((el) => el.tagName.toLowerCase());
+  expect(tag).toBe("div");
+});
+
+test("port card opens modal via keyboard (Enter key)", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  if (!runId) {
+    await createRunAndSeedArtifacts(baseURL!);
+  }
+
+  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await page.getByText("reviewer", { exact: true }).first().click();
+
+  await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
+  const portCard = page.locator("button.port-row").first();
+  await expect(portCard).toBeVisible({ timeout: 5_000 });
+
+  // Focus the card and press Enter
+  await portCard.focus();
+  await page.keyboard.press("Enter");
+
+  const modal = page.locator(".artifact-markdown");
+  await expect(modal).toBeVisible({ timeout: 3_000 });
+
+  await page.keyboard.press("Escape");
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });

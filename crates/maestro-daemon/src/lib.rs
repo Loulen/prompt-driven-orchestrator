@@ -3148,32 +3148,8 @@ mod tests {
         let run_id = "cleanup-sub-wt";
         let state = test_state_with_dir(repo).await;
 
-        // Seed a completed run with a code-mutating node
-        let events = vec![
-            event_log::Event {
-                id: None,
-                run_id: run_id.into(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::RunStarted,
-                node_id: None,
-                iter: None,
-                payload: Some(serde_json::json!({
-                    "pipeline_name": "test-pipe",
-                    "node_defs": [
-                        { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
-                    ],
-                    "edges": []
-                })),
-            },
-            event_log::Event {
-                id: None,
-                run_id: run_id.into(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::NodeStarted,
-                node_id: Some("impl-1".into()),
-                iter: Some(1),
-                payload: Some(serde_json::json!({ "node_type": "code-mutating" })),
-            },
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        for ev in [
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
@@ -3192,9 +3168,8 @@ mod tests {
                 iter: None,
                 payload: None,
             },
-        ];
-        for ev in &events {
-            append_event(&state, ev).await.unwrap();
+        ] {
+            append_event(&state, &ev).await.unwrap();
         }
 
         // Create real worktrees on disk (simulating what the daemon would do)

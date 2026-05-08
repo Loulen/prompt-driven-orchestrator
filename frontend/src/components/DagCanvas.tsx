@@ -18,6 +18,7 @@ import type { NodeStatus, NodeType, RunState, RunStatus, PortBrief } from "../ty
 import { cleanupRun, attachManager } from "../api";
 import { formatWhenClause } from "../predicates";
 import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { computeBodySubgraph } from "../loopBodySubgraph";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchRunNode } from "./SwitchNode";
@@ -209,6 +210,42 @@ function MergeResolverNode({ data }: NodeProps<Node<MergeResolverNodeData>>) {
   );
 }
 
+interface LoopBodyOutlineData {
+  width: number;
+  height: number;
+  loopLabel: string;
+  [key: string]: unknown;
+}
+
+function LoopBodyOutlineNode({ data }: NodeProps<Node<LoopBodyOutlineData>>) {
+  return (
+    <div
+      data-testid="loop-body-outline"
+      className="pointer-events-none"
+      style={{
+        width: data.width,
+        height: data.height,
+        border: "1.5px dashed var(--color-loop-tint, #60a5fa)",
+        borderRadius: 8,
+        opacity: 0.35,
+        background: "rgba(96, 165, 250, 0.03)",
+      }}
+    >
+      <span
+        className="absolute font-mono text-[var(--color-loop-tint,#60a5fa)]"
+        style={{
+          fontSize: "9px",
+          opacity: 0.7,
+          top: -14,
+          left: 4,
+        }}
+      >
+        {data.loopLabel} body
+      </span>
+    </div>
+  );
+}
+
 const nodeTypes = {
   pipeline: PipelineNode,
   end: EndNode,
@@ -216,6 +253,7 @@ const nodeTypes = {
   mergeResolver: MergeResolverNode,
   switchRun: SwitchRunNode,
   loopRun: LoopRunNode,
+  loopBodyOutline: LoopBodyOutlineNode,
 };
 
 const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
@@ -420,6 +458,43 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
         conflictingNodeId: mr.conflicting_node_id,
       },
       selected: "__merge_resolver__" === selectedNodeId,
+    });
+  }
+
+  const loopDefs = nodeDefs.filter((d) => d.node_type === "loop");
+  const edgeInfos = run.edges ?? [];
+  for (const loopDef of loopDefs) {
+    const loopState = run.loop_states?.[loopDef.id];
+    if (loopState?.done) continue;
+    if (!loopState || loopState.current_iter < 1) continue;
+
+    const bodyNodeIds = computeBodySubgraph(edgeInfos, nodeDefs, loopDef.id);
+    if (bodyNodeIds.size === 0) continue;
+
+    const bodyNodes = allNodes.filter((n) => bodyNodeIds.has(n.id));
+    if (bodyNodes.length === 0) continue;
+
+    const NODE_W = 180;
+    const NODE_H = 70;
+    const PAD = 20;
+
+    const minX = Math.min(...bodyNodes.map((n) => n.position.x)) - PAD;
+    const minY = Math.min(...bodyNodes.map((n) => n.position.y)) - PAD;
+    const maxX = Math.max(...bodyNodes.map((n) => n.position.x)) + NODE_W + PAD;
+    const maxY = Math.max(...bodyNodes.map((n) => n.position.y)) + NODE_H + PAD;
+
+    allNodes.push({
+      id: `__loop_body_${loopDef.id}__`,
+      type: "loopBodyOutline",
+      position: { x: minX, y: minY },
+      data: {
+        width: maxX - minX,
+        height: maxY - minY,
+        loopLabel: loopDef.name ?? loopDef.id,
+      },
+      selectable: false,
+      draggable: false,
+      zIndex: -1,
     });
   }
 

@@ -429,6 +429,76 @@ edges:
     assert_eq!(edges.len(), 2, "should reflect augmented edges");
 }
 
+// --- Issue #43: unrelated files under run worktree must not emit events ---
+
+/// Wait for ANY pipeline-related event on the WebSocket: either a run-scoped
+/// `pipeline_modified` event or a generic `pipeline_changed` broadcast.
+async fn next_any_pipeline_event(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    deadline: Duration,
+) -> Option<serde_json::Value> {
+    let result = timeout(deadline, async {
+        loop {
+            let next = ws.next().await?;
+            let msg = next.ok()?;
+            let Some(text) = ws_text(&msg) else {
+                continue;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
+            // Run-scoped pipeline_modified event
+            if parsed["type"] == "event" {
+                if let Some(event) = parsed.get("event") {
+                    if event["kind"] == "pipeline_modified" {
+                        return Some(parsed.clone());
+                    }
+                }
+            }
+            // Generic pipeline_changed broadcast
+            if parsed["type"] == "pipeline_changed" {
+                return Some(parsed.clone());
+            }
+        }
+    })
+    .await;
+    result.ok().flatten()
+}
+
+#[tokio::test]
+async fn unrelated_md_in_run_worktree_does_not_emit_pipeline_event() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon.url()).await;
+
+    let mut ws = daemon.connect_ws().await.unwrap();
+    // Drain initial ready + run events
+    let _ = timeout(Duration::from_millis(1500), async {
+        loop {
+            if ws.next().await.is_none() {
+                break;
+            }
+        }
+    })
+    .await;
+
+    // Write an unrelated .md directly inside the run directory (which already
+    // exists and is watched via inotify). This reproduces the issue #43 bug:
+    // the watcher falls through to the generic pipeline_changed broadcast.
+    let run_dir = daemon.repo_root().join(".maestro/runs").join(&run_id);
+    std::fs::write(run_dir.join("README.md"), "# Unrelated doc\n").unwrap();
+
+    // Also write a .yaml that isn't pipeline.yaml
+    std::fs::write(run_dir.join("config.yaml"), "key: value\n").unwrap();
+
+    // None of those writes should produce any pipeline event within 3 seconds
+    // (watcher debounce is 1s, so 3s gives ample margin).
+    let evt = next_any_pipeline_event(&mut ws, Duration::from_secs(3)).await;
+    assert!(
+        evt.is_none(),
+        "unrelated .md files under run worktree must not emit pipeline events, got: {evt:?}"
+    );
+}
+
 // --- Symmetric test: removing a node from the YAML should not spawn it ---
 
 const TWO_NODE_PIPELINE_NAME: &str = "two-node-test";

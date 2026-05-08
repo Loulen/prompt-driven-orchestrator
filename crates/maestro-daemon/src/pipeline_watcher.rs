@@ -65,14 +65,16 @@ pub fn spawn_watcher(
                 }
 
                 // Detect run-scoped pipeline changes
-                if let Some(modified) = detect_run_scoped_change(path, &runs_dir_for_closure) {
-                    info!(
-                        "Run-scoped pipeline modified: run={} kind={} path={}",
-                        modified.run_id,
-                        modified.kind,
-                        modified.path.display()
-                    );
-                    let _ = run_modified_tx.send(modified);
+                if path.starts_with(&runs_dir_for_closure) {
+                    if let Some(modified) = detect_run_scoped_change(path, &runs_dir_for_closure) {
+                        info!(
+                            "Run-scoped pipeline modified: run={} kind={} path={}",
+                            modified.run_id,
+                            modified.kind,
+                            modified.path.display()
+                        );
+                        let _ = run_modified_tx.send(modified);
+                    }
                     continue;
                 }
 
@@ -298,5 +300,71 @@ fn content_actually_changed(
             guard.remove(path);
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn detects_run_scoped_pipeline_yaml() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/pipeline.yaml");
+        let result = detect_run_scoped_change(&path, runs).unwrap();
+        assert_eq!(result.run_id, "run-123");
+        assert_eq!(result.kind, "yaml");
+    }
+
+    #[test]
+    fn detects_run_scoped_prompt_md() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/pipeline.prompts/planner.md");
+        let result = detect_run_scoped_change(&path, runs).unwrap();
+        assert_eq!(result.run_id, "run-123");
+        assert_eq!(result.kind, "prompt");
+    }
+
+    #[test]
+    fn ignores_unrelated_md_in_run_dir() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/README.md");
+        assert!(detect_run_scoped_change(&path, runs).is_none());
+    }
+
+    #[test]
+    fn ignores_md_in_run_worktree() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/worktree/docs/design-brief.md");
+        assert!(detect_run_scoped_change(&path, runs).is_none());
+    }
+
+    #[test]
+    fn ignores_artifact_md_in_run_worktree() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/worktree/.maestro/artifacts/planner/iter-1/plan.md");
+        assert!(detect_run_scoped_change(&path, runs).is_none());
+    }
+
+    #[test]
+    fn ignores_sandcastle_md_in_run_worktree() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/worktree/.sandcastle/implement-prompt.md");
+        assert!(detect_run_scoped_change(&path, runs).is_none());
+    }
+
+    #[test]
+    fn ignores_yaml_not_named_pipeline() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = runs.join("run-123/config.yaml");
+        assert!(detect_run_scoped_change(&path, runs).is_none());
+    }
+
+    #[test]
+    fn ignores_path_outside_runs_dir() {
+        let runs = Path::new("/repo/.maestro/runs");
+        let path = Path::new("/repo/.maestro/pipelines/my-pipeline.yaml");
+        assert!(detect_run_scoped_change(path, runs).is_none());
     }
 }

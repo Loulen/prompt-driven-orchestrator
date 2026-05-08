@@ -162,4 +162,97 @@ describe("SwitchInspector", () => {
     const nameInput = screen.getByPlaceholderText("sw1") as HTMLInputElement;
     expect(nameInput.defaultValue).toBe("my-switch");
   });
+
+  it("moves a branch up via reorder", () => {
+    const node = makeSwitchNode({
+      outputs: [
+        { name: "first", repeated: false, side: "right", when: { a: { eq: 1 } } },
+        { name: "second", repeated: false, side: "right", when: { b: { eq: 2 } } },
+        { name: "default", repeated: false, side: "right" },
+      ],
+    });
+    setStoreState(node);
+    render(<SwitchInspector />);
+
+    const moveUpButtons = screen.getAllByTitle("Move up");
+    fireEvent.click(moveUpButtons[0]);
+
+    const state = useEditStore.getState();
+    const updatedNode = state.openTabs[0].pipeline.nodes.find((n) => n.id === "sw1")!;
+    expect(updatedNode.outputs[0].name).toBe("second");
+    expect(updatedNode.outputs[1].name).toBe("first");
+    expect(updatedNode.outputs[2].name).toBe("default");
+  });
+
+  it("moves a branch down via reorder", () => {
+    const node = makeSwitchNode({
+      outputs: [
+        { name: "first", repeated: false, side: "right", when: { a: { eq: 1 } } },
+        { name: "second", repeated: false, side: "right", when: { b: { eq: 2 } } },
+        { name: "default", repeated: false, side: "right" },
+      ],
+    });
+    setStoreState(node);
+    render(<SwitchInspector />);
+
+    const moveDownButtons = screen.getAllByTitle("Move down");
+    fireEvent.click(moveDownButtons[0]);
+
+    const state = useEditStore.getState();
+    const updatedNode = state.openTabs[0].pipeline.nodes.find((n) => n.id === "sw1")!;
+    expect(updatedNode.outputs[0].name).toBe("second");
+    expect(updatedNode.outputs[1].name).toBe("first");
+    expect(updatedNode.outputs[2].name).toBe("default");
+  });
+
+  it("prevents reorder of default branch", () => {
+    const node = makeSwitchNode();
+    setStoreState(node);
+    render(<SwitchInspector />);
+
+    const defaultEditor = screen.getByTestId("branch-editor-default");
+    expect(defaultEditor.querySelector('[title="Move up"]')).toBeNull();
+    expect(defaultEditor.querySelector('[title="Move down"]')).toBeNull();
+  });
+});
+
+describe("Layer 5: Switch node add, configure, and save roundtrip", () => {
+  it("a switch node can be added, configured with one branch, and its state is correct", () => {
+    const switchNode: NodeDef = {
+      id: "sw-new",
+      name: "my-router",
+      type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "default", repeated: false, side: "right" }],
+      interactive: false,
+    };
+    const pipeline: PipelineDef = {
+      name: "layer5-test",
+      variables: {},
+      nodes: [switchNode],
+      edges: [],
+    };
+    useEditStore.setState({
+      openTabs: [
+        { id: "tab-l5", scope: "repo", pipeline, prompts: {}, dirty: false, externalDirty: false },
+      ],
+      activeTabId: "tab-l5",
+      selection: { kind: "node", id: "sw-new" },
+    });
+
+    render(<SwitchInspector />);
+
+    expect(screen.getByText("Switch Inspector")).toBeInTheDocument();
+    expect(screen.getByTestId("branch-editor-default")).toBeInTheDocument();
+
+    const addButtons = screen.getAllByText("+ Add");
+    fireEvent.click(addButtons[0]);
+
+    const state = useEditStore.getState();
+    const updated = state.openTabs[0].pipeline.nodes.find((n) => n.id === "sw-new")!;
+    expect(updated.outputs).toHaveLength(2);
+    expect(updated.outputs[0].name).toBe("branch");
+    expect(updated.outputs[1].name).toBe("default");
+    expect(updated.type).toBe("switch");
+  });
 });

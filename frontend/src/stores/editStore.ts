@@ -101,6 +101,7 @@ function serializePipeline(p: PipelineDef): string {
         if (port.repeated) p.repeated = true;
         if (port.side) p.side = port.side;
         if (port.frontmatter) p.frontmatter = port.frontmatter;
+        if (port.when) p.when = port.when;
         return p;
       });
     if (n.view) node.view = n.view;

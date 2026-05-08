@@ -16,6 +16,8 @@ import "@xyflow/react/dist/style.css";
 import { Pencil, Trash2, Terminal } from "lucide-react";
 import type { NodeStatus, NodeType, RunState, RunStatus, PortBrief } from "../types";
 import { cleanupRun, attachManager } from "../api";
+import { formatWhenClause } from "../predicates";
+import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 
@@ -50,20 +52,6 @@ const RUN_STATUS_DOTS: Record<RunStatus, string> = {
   failed: "bg-st-failed",
   halted: "bg-st-blocked",
   archived: "bg-st-archived",
-};
-
-const TYPE_LABELS: Record<NodeType, string> = {
-  "doc-only": "doc",
-  "code-mutating": "code",
-  "start": "start",
-  "end": "end",
-};
-
-const TYPE_COLORS: Record<NodeType, string> = {
-  "doc-only": "border-st-pending text-fg-3",
-  "code-mutating": "border-acc text-acc",
-  "start": "border-acc text-acc",
-  "end": "border-st-blocked text-st-blocked",
 };
 
 interface PipelineNodeData {
@@ -196,26 +184,6 @@ function StartNode(_props: NodeProps<Node<StartNodeData>>) {
 }
 
 const nodeTypes = { pipeline: PipelineNode, end: EndNode, start: StartNode };
-
-const OP_SYMBOLS: Record<string, string> = {
-  eq: "=", neq: "!=", lt: "<", lte: "<=", gt: ">", gte: ">=",
-  in: "in", not_in: "not in",
-};
-
-function formatWhenClause(when: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const [field, predicate] of Object.entries(when)) {
-    if (field === "any") continue;
-    if (typeof predicate === "object" && predicate !== null) {
-      for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
-        const symbol = OP_SYMBOLS[op] ?? op;
-        const valStr = Array.isArray(val) ? `[${val.join(", ")}]` : String(val);
-        parts.push(`${field} ${symbol} ${valStr}`);
-      }
-    }
-  }
-  return parts.join(" & ");
-}
 
 const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
 

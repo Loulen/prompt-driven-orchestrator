@@ -98,13 +98,11 @@ export default function EdgeInspector() {
     updateEdge(edgeIndex, { when: buildWhen(newClauses) });
   }
 
-  const targetNodePorts = (() => {
-    return tab?.pipeline.nodes.find((n) => n.id === edge.target.node)?.inputs ?? [];
-  })();
+  const targetNodePorts =
+    tab?.pipeline.nodes.find((n) => n.id === edge.target.node)?.inputs ?? [];
 
-  const sourceNodePorts = (() => {
-    return tab?.pipeline.nodes.find((n) => n.id === edge.source.node)?.outputs ?? [];
-  })();
+  const sourceNodePorts =
+    tab?.pipeline.nodes.find((n) => n.id === edge.source.node)?.outputs ?? [];
 
   return (
     <aside className="flex h-full flex-col bg-bg-2 overflow-y-auto">
@@ -116,7 +114,6 @@ export default function EdgeInspector() {
       </div>
 
       <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        {/* Source */}
         <SectionHead title="Source" />
         <div className="flex gap-2">
           <div className="flex-1">
@@ -141,7 +138,6 @@ export default function EdgeInspector() {
           </div>
         </div>
 
-        {/* Target */}
         <SectionHead title="Target" />
         <div className="flex gap-2">
           <div className="flex-1">
@@ -180,7 +176,6 @@ export default function EdgeInspector() {
           </>
         )}
 
-        {/* Condition */}
         <SectionHead title="Condition (when:)" />
         {clauses.map((clause, i) => (
           <div key={i} className="flex items-center gap-1">

@@ -16,7 +16,8 @@ import { Plus } from "lucide-react";
 import type { NodeDef, NodeType, PipelineDef, PortBrief } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import { PREDICATE_LABELS } from "../predicates";
+import { formatWhenClause } from "../predicates";
+import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
 
 interface EditNodeData {
@@ -28,20 +29,6 @@ interface EditNodeData {
   interactive: boolean;
   [key: string]: unknown;
 }
-
-const TYPE_LABELS: Record<NodeType, string> = {
-  "doc-only": "doc",
-  "code-mutating": "code",
-  "start": "start",
-  "end": "end",
-};
-
-const TYPE_COLORS: Record<NodeType, string> = {
-  "doc-only": "border-st-pending text-fg-3",
-  "code-mutating": "border-acc text-acc",
-  "start": "border-acc text-acc",
-  "end": "border-st-blocked text-st-blocked",
-};
 
 function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   const typeLabel = TYPE_LABELS[data.nodeType] ?? data.nodeType;
@@ -102,21 +89,6 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
 }
 
 const nodeTypes = { edit: EditNode };
-
-function formatWhenClause(when: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const [field, predicate] of Object.entries(when)) {
-    if (field === "any") continue;
-    if (typeof predicate === "object" && predicate !== null) {
-      for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
-        const symbol = PREDICATE_LABELS[op] ?? op;
-        const valStr = Array.isArray(val) ? `[${val.join(", ")}]` : String(val);
-        parts.push(`${field} ${symbol} ${valStr}`);
-      }
-    }
-  }
-  return parts.join(" & ");
-}
 
 function deriveEditNodes(pipeline: PipelineDef): Node[] {
   return pipeline.nodes.map((n, i) => ({

@@ -16,6 +16,7 @@ import "@xyflow/react/dist/style.css";
 import { Pencil, Trash2, Terminal } from "lucide-react";
 import type { NodeStatus, NodeType, RunState, RunStatus, PortBrief } from "../types";
 import { cleanupRun, attachManager } from "../api";
+import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
 import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import { computeBodySubgraph } from "../loopBodySubgraph";
@@ -666,37 +667,43 @@ function DagCanvasInner({
           <span className="text-fg-3">{run.status}</span>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <button
-            onClick={() => attachManager(run.run_id).catch(() => {})}
-            className={`flex cursor-pointer items-center gap-1 rounded border px-2 py-1 transition-colors ${
-              run.status === "halted"
-                ? "border-st-blocked bg-st-blocked/20 text-st-blocked hover:bg-st-blocked/30"
-                : "border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
-            }`}
-            style={{ fontSize: "10px" }}
-          >
-            <Terminal size={10} />
-            Open Manager
-          </button>
-          {onToggleEdit && (
+          <Tooltip content="Attach a terminal to the Pipeline Manager agent for this run">
             <button
-              onClick={() => onToggleEdit(run.run_id)}
-              className="flex cursor-pointer items-center gap-1 rounded border border-edit-tint bg-edit-tint/10 px-2 py-1 text-edit-tint transition-colors hover:bg-edit-tint/20"
+              onClick={() => attachManager(run.run_id).catch(() => {})}
+              className={`flex cursor-pointer items-center gap-1 rounded border px-2 py-1 transition-colors ${
+                run.status === "halted"
+                  ? "border-st-blocked bg-st-blocked/20 text-st-blocked hover:bg-st-blocked/30"
+                  : "border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
+              }`}
               style={{ fontSize: "10px" }}
             >
-              <Pencil size={10} />
-              Edit this run
+              <Terminal size={10} />
+              Open Manager
             </button>
+          </Tooltip>
+          {onToggleEdit && (
+            <Tooltip content="Edit the run-scoped pipeline copy without modifying the template">
+              <button
+                onClick={() => onToggleEdit(run.run_id)}
+                className="flex cursor-pointer items-center gap-1 rounded border border-edit-tint bg-edit-tint/10 px-2 py-1 text-edit-tint transition-colors hover:bg-edit-tint/20"
+                style={{ fontSize: "10px" }}
+              >
+                <Pencil size={10} />
+                Edit this run
+              </button>
+            </Tooltip>
           )}
           {isTerminal && (
-            <button
-              onClick={() => setConfirmCleanup(true)}
-              className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
-              style={{ fontSize: "10px" }}
-            >
-              <Trash2 size={10} />
-              Cleanup
-            </button>
+            <Tooltip content="Remove branches, worktrees, and artifacts for this run. Event log is preserved.">
+              <button
+                onClick={() => setConfirmCleanup(true)}
+                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+                style={{ fontSize: "10px" }}
+              >
+                <Trash2 size={10} />
+                Cleanup
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>

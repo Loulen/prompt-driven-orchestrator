@@ -122,6 +122,25 @@ node and scrolls the Node Inspector to the matching output port row.
 20. Click the canvas pane (empty area). Assert selection clears — no panel
     shows, or PipelineInspector shows.
 
+## EditToolbar icons + tooltips (refs #53)
+
+21. With the `edit-and-save-scenario` pipeline open in Edit mode, assert
+    the **EditToolbar** overlay is visible in the top-left corner of the
+    canvas (`data-testid="edit-toolbar"`).
+22. Assert the toolbar contains exactly four icon buttons:
+    - Add node (`data-testid="toolbar-add"`)
+    - Library (`data-testid="toolbar-library"`)
+    - Loop (`data-testid="toolbar-loop"`)
+    - Switch (`data-testid="toolbar-switch"`)
+23. Hover the Add node button. Assert a tooltip appears with text
+    containing **"New node"**.
+24. Hover the Library button. Assert a tooltip appears with text
+    containing **"Library"**.
+25. Hover the Loop button. Assert a tooltip appears with text
+    containing **"Loop node"**.
+26. Hover the Switch button. Assert a tooltip appears with text
+    containing **"Switch node"**.
+
 ## Cleanup
 
 - Delete `.maestro/pipelines/edit-and-save-scenario.yaml`.
@@ -143,7 +162,9 @@ node and scrolls the Node Inspector to the matching output port row.
     "step 15: tab title still shows dirty indicator '•' (no silent auto-save)",
     "step 16: alpha.md on disk unchanged (no auto-save)",
     "step 19: edge click opens Node Inspector for source node alpha, out port highlighted with data-port attribute",
-    "step 20: pane click clears selection"
+    "step 20: pane click clears selection",
+    "step 22: EditToolbar renders 4 icon buttons with correct data-testids",
+    "step 23-26: tooltips fire on hover for each toolbar icon"
   ],
   "anomalies": [
     "<optional — surprising-but-non-fatal observations>"

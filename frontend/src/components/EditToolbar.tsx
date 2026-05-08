@@ -1,0 +1,58 @@
+import { Plus, Repeat, GitBranch } from "lucide-react";
+import type { NodeType } from "../types";
+import type { LibraryEntry } from "../api";
+import { Tooltip } from "./ui/tooltip";
+import LibraryDropdown from "./LibraryDropdown";
+
+interface Props {
+  onAddNode: (type: NodeType) => void;
+  libraryEntries: LibraryEntry[];
+  onLibraryDelete: (name: string) => void;
+}
+
+export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete }: Props) {
+  return (
+    <div
+      className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-bg-2/90 p-1 backdrop-blur-sm shadow-lg"
+      data-testid="edit-toolbar"
+    >
+      <Tooltip content="New node · N">
+        <button
+          data-testid="toolbar-add"
+          onClick={() => onAddNode("code-mutating")}
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+        >
+          <Plus size={14} />
+        </button>
+      </Tooltip>
+
+      <span className="mx-0.5 h-4 w-px bg-line" />
+
+      <Tooltip content="Library · L">
+        <span data-testid="toolbar-library">
+          <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} />
+        </span>
+      </Tooltip>
+
+      <Tooltip content="Loop node">
+        <button
+          data-testid="toolbar-loop"
+          onClick={() => onAddNode("loop")}
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+        >
+          <Repeat size={14} />
+        </button>
+      </Tooltip>
+
+      <Tooltip content="Switch node">
+        <button
+          data-testid="toolbar-switch"
+          onClick={() => onAddNode("switch")}
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+        >
+          <GitBranch size={14} />
+        </button>
+      </Tooltip>
+    </div>
+  );
+}

@@ -4,10 +4,16 @@ import { useEditStore } from "../stores/editStore";
 import type { NodeDef, NodeType, PortDef, PortSide } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import SidePicker from "./SidePicker";
+import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
+
+const TYPE_TOOLTIPS: Record<string, string> = {
+  "code-mutating": "Receives a forked sub-worktree. Can edit, commit, and merge code.",
+  "doc-only": "Reads code in read-only. Only writes Markdown artifacts to the Blackboard.",
+};
 
 export default function NodeInspector({
   libraryEntries,
@@ -120,40 +126,43 @@ export default function NodeInspector({
         <SectionHead title="Type" />
         <div className="flex gap-1">
           {(["code-mutating", "doc-only"] as NodeType[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => handleField("type", t)}
-              className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
-                node.type === t
-                  ? t === "code-mutating"
-                    ? "border-acc bg-acc-bg text-acc"
-                    : "border-fg-4 bg-bg-3 text-fg"
-                  : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-              }`}
-              style={{ fontSize: "10px" }}
-            >
-              {t}
-            </button>
+            <Tooltip key={t} content={TYPE_TOOLTIPS[t] ?? t}>
+              <button
+                onClick={() => handleField("type", t)}
+                className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
+                  node.type === t
+                    ? t === "code-mutating"
+                      ? "border-acc bg-acc-bg text-acc"
+                      : "border-fg-4 bg-bg-3 text-fg"
+                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                }`}
+                style={{ fontSize: "10px" }}
+              >
+                {t}
+              </button>
+            </Tooltip>
           ))}
         </div>
 
         {/* Behavior */}
         <SectionHead title="Behavior" />
-        <div className="flex items-center justify-between">
-          <span className="text-fg-3">Interactive</span>
-          <button
-            onClick={() => handleField("interactive", !node.interactive)}
-            className={`relative h-5 w-9 cursor-pointer rounded-full transition-colors ${
-              node.interactive ? "bg-acc" : "bg-bg-5"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
-                node.interactive ? "translate-x-[16px]" : "translate-x-0"
+        <Tooltip content="Pauses for human interaction. The node never auto-completes — mark complete from the run-mode UI." side="left">
+          <div className="flex items-center justify-between">
+            <span className="text-fg-3">Interactive</span>
+            <button
+              onClick={() => handleField("interactive", !node.interactive)}
+              className={`relative h-5 w-9 cursor-pointer rounded-full transition-colors ${
+                node.interactive ? "bg-acc" : "bg-bg-5"
               }`}
-            />
-          </button>
-        </div>
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                  node.interactive ? "translate-x-[16px]" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+        </Tooltip>
 
         {/* Prompt */}
         <SectionHead title="Prompt" />
@@ -263,18 +272,19 @@ function PortRow({
         value={port.side ?? "left"}
         onChange={(s) => onUpdate({ side: s })}
       />
-      <button
-        onClick={() => onUpdate({ repeated: !port.repeated })}
-        className={`cursor-pointer rounded px-1 py-px transition-colors ${
-          port.repeated
-            ? "bg-st-await-bg text-st-await"
-            : "text-fg-4 hover:text-fg-3"
-        }`}
-        style={{ fontSize: "9px" }}
-        title="Toggle repeated"
-      >
-        repeated
-      </button>
+      <Tooltip content="When checked, this port reads all iter-N/<port>.md files (glob), used for accumulating histories across loop iterations.">
+        <button
+          onClick={() => onUpdate({ repeated: !port.repeated })}
+          className={`cursor-pointer rounded px-1 py-px transition-colors ${
+            port.repeated
+              ? "bg-st-await-bg text-st-await"
+              : "text-fg-4 hover:text-fg-3"
+          }`}
+          style={{ fontSize: "9px" }}
+        >
+          repeated
+        </button>
+      </Tooltip>
       <button
         onClick={onRemove}
         className="cursor-pointer text-fg-4 hover:text-st-failed"

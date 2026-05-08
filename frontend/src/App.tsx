@@ -19,7 +19,7 @@ import LoopInspector from "./components/LoopInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
-import LibraryDropdown from "./components/LibraryDropdown";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { useEditStore } from "./stores/editStore";
 import {
   ResizablePanelGroup,
@@ -192,18 +192,13 @@ export default function App() {
   const minSizePx = `${layout.minSizePx}px`;
 
   return (
+    <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
       <TopBar
         editMode={editMode}
         onToggleEditMode={() => {
           if (editScope === "run") exitRunEdit();
           setEditMode(!editMode);
-        }}
-        libraryEntries={libraryEntries}
-        onLibraryDelete={async (name) => {
-          const { deleteFromLibrary: delLib } = await import("./api");
-          await delLib(name);
-          refreshLibrary();
         }}
       />
       <main className="min-h-0 flex-1">
@@ -232,7 +227,14 @@ export default function App() {
             {editMode || editScope === "run" ? (
               <div className="flex h-full min-w-0 flex-col">
                 <TabBar />
-                <EditCanvas />
+                <EditCanvas
+                  libraryEntries={libraryEntries}
+                  onLibraryDelete={async (name) => {
+                    const { deleteFromLibrary: delLib } = await import("./api");
+                    await delLib(name);
+                    refreshLibrary();
+                  }}
+                />
               </div>
             ) : (
               <div className="flex h-full min-w-0 flex-col">
@@ -313,19 +315,16 @@ export default function App() {
         onCreated={handleRunCreated}
       />
     </div>
+    </TooltipProvider>
   );
 }
 
 function TopBar({
   editMode,
   onToggleEditMode,
-  libraryEntries,
-  onLibraryDelete,
 }: {
   editMode: boolean;
   onToggleEditMode: () => void;
-  libraryEntries: import("./api").LibraryEntry[];
-  onLibraryDelete: (name: string) => void;
 }) {
   return (
     <header
@@ -363,12 +362,6 @@ function TopBar({
       </nav>
 
       <div className="ml-auto flex items-center gap-1">
-        {editMode && (
-          <LibraryDropdown
-            entries={libraryEntries}
-            onDelete={onLibraryDelete}
-          />
-        )}
         <button
           onClick={onToggleEditMode}
           className={`grid h-7 w-7 cursor-pointer place-items-center rounded-md border transition-colors ${

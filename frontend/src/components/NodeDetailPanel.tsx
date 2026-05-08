@@ -18,6 +18,7 @@ import {
   fetchNodeIO,
 } from "../api";
 import type { PortIO, FileInfo, MarkNodeDoneResult } from "../api";
+import { Tooltip } from "./ui/tooltip";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -367,19 +368,21 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             {/* Actions */}
             <div className="flex flex-col gap-1.5 px-3 py-2">
               {showOpenTerminal && (
-                <button
-                  onClick={handleOpenTerminal}
-                  className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
-                    isArchived
-                      ? "cursor-not-allowed text-fg-4"
-                      : "cursor-pointer text-fg-2 hover:bg-bg-4 hover:text-fg"
-                  }`}
-                  style={{ fontSize: "11.5px" }}
-                  disabled={isArchived}
-                >
-                  <ExternalLink size={12} />
-                  Open terminal
-                </button>
+                <Tooltip content="Attach a native OS terminal to this node's tmux session">
+                  <button
+                    onClick={handleOpenTerminal}
+                    className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
+                      isArchived
+                        ? "cursor-not-allowed text-fg-4"
+                        : "cursor-pointer text-fg-2 hover:bg-bg-4 hover:text-fg"
+                    }`}
+                    style={{ fontSize: "11.5px" }}
+                    disabled={isArchived}
+                  >
+                    <ExternalLink size={12} />
+                    Open terminal
+                  </button>
+                </Tooltip>
               )}
 
               {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed") && !isArchived && (

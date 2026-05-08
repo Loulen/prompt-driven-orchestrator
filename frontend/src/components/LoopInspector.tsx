@@ -2,6 +2,7 @@ import { useEditStore } from "../stores/editStore";
 import type { PortSide } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import SidePicker from "./SidePicker";
+import { Tooltip } from "./ui/tooltip";
 
 const LOOP_PORTS = [
   { name: "in", dir: "input" as const },
@@ -104,13 +105,14 @@ export default function LoopInspector() {
               className="w-[120px] rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
               style={{ fontSize: "11px" }}
             />
-            <span
-              className="cursor-help text-fg-4"
-              title="Maximum iterations of the loop body before firing `done`. Can also reference a pipeline variable like $max_iter_review."
-              style={{ fontSize: "12px" }}
-            >
-              &#9432;
-            </span>
+            <Tooltip content="Maximum iterations of the loop body before firing done. Can also reference a pipeline variable like $max_iter_review.">
+              <span
+                className="cursor-help text-fg-4"
+                style={{ fontSize: "12px" }}
+              >
+                &#9432;
+              </span>
+            </Tooltip>
           </div>
         </Field>
 

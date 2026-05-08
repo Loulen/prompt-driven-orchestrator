@@ -12,14 +12,15 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Plus } from "lucide-react";
 import type { NodeDef, NodeType, PipelineDef, PortBrief } from "../types";
+import type { LibraryEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
+import EditToolbar from "./EditToolbar";
 
 interface EditNodeData {
   label: string;
@@ -193,7 +194,12 @@ function deriveEditEdges(pipeline: PipelineDef): Edge[] {
   });
 }
 
-function EditCanvasInner() {
+interface EditCanvasProps {
+  libraryEntries: LibraryEntry[];
+  onLibraryDelete: (name: string) => void;
+}
+
+function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -337,37 +343,11 @@ function EditCanvasInner() {
 
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
-      {/* AddPalette */}
-      <div
-        className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-md border border-line bg-bg-2/90 px-2 py-1.5 backdrop-blur-sm"
-        style={{ fontSize: "11px" }}
-      >
-        <Plus size={12} className="text-fg-3" />
-        <button
-          onClick={() => handleAddNode("code-mutating")}
-          className="cursor-pointer rounded border border-acc bg-acc-bg px-1.5 py-0.5 font-medium text-acc transition-colors hover:bg-acc/20"
-        >
-          code
-        </button>
-        <button
-          onClick={() => handleAddNode("doc-only")}
-          className="cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-medium text-fg-3 transition-colors hover:text-fg"
-        >
-          doc
-        </button>
-        <button
-          onClick={() => handleAddNode("switch")}
-          className="cursor-pointer rounded border border-[var(--color-switch-tint,#a78bfa)] bg-[var(--color-switch-tint,#a78bfa)]/10 px-1.5 py-0.5 font-medium text-[var(--color-switch-tint,#a78bfa)] transition-colors hover:bg-[var(--color-switch-tint,#a78bfa)]/20"
-        >
-          switch
-        </button>
-        <button
-          onClick={() => handleAddNode("loop")}
-          className="cursor-pointer rounded border border-[var(--color-loop-tint,#60a5fa)] bg-[var(--color-loop-tint,#60a5fa)]/10 px-1.5 py-0.5 font-medium text-[var(--color-loop-tint,#60a5fa)] transition-colors hover:bg-[var(--color-loop-tint,#60a5fa)]/20"
-        >
-          loop
-        </button>
-      </div>
+      <EditToolbar
+        onAddNode={handleAddNode}
+        libraryEntries={libraryEntries}
+        onLibraryDelete={onLibraryDelete}
+      />
 
       <ReactFlow
         nodes={nodes}
@@ -472,10 +452,10 @@ function ContextMenu({
   );
 }
 
-export default function EditCanvas() {
+export default function EditCanvas(props: EditCanvasProps) {
   return (
     <ReactFlowProvider>
-      <EditCanvasInner />
+      <EditCanvasInner {...props} />
     </ReactFlowProvider>
   );
 }

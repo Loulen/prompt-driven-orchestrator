@@ -46,7 +46,7 @@ export default function RunsListPanel({
         Runs
         <button
           onClick={onNewRun}
-          className="ml-auto flex items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+          className="ml-auto flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
           style={{ fontSize: "10.5px" }}
         >
           <Plus size={10} />
@@ -73,7 +73,7 @@ export default function RunsListPanel({
             <button
               key={run.run_id}
               onClick={() => onSelectRun(run.run_id)}
-              className={`group flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
+              className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
                 isSelected
                   ? "bg-bg-3 text-fg"
                   : "text-fg-2 hover:bg-bg-3/50"
@@ -98,7 +98,7 @@ export default function RunsListPanel({
                 <span
                   role="button"
                   title="Cleanup run"
-                  className="hidden shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+                  className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirmCleanup(run.run_id);

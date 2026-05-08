@@ -5,6 +5,7 @@ import {
   CheckCircle,
   AlertCircle,
   ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { usePinToBottom } from "../hooks/usePinToBottom";
 import Convert from "ansi-to-html";
@@ -328,16 +329,16 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
               {terminalHtml ? (
                 <pre
                   ref={terminalRef}
-                  className="terminal-pane absolute inset-0 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
-                  style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+                  className="terminal-pane absolute inset-0 overflow-y-auto overflow-x-hidden bg-bg-0 p-2 font-mono text-fg-2"
+                  style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
                   onScroll={handleScroll}
                   dangerouslySetInnerHTML={{ __html: terminalHtml }}
                 />
               ) : (
                 <pre
                   ref={terminalRef}
-                  className="terminal-pane absolute inset-0 overflow-auto bg-bg-0 p-2 font-mono text-fg-2"
-                  style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+                  className="terminal-pane absolute inset-0 overflow-y-auto overflow-x-hidden bg-bg-0 p-2 font-mono text-fg-2"
+                  style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
                   onScroll={handleScroll}
                 >
                   <span className="text-fg-4">
@@ -348,7 +349,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
               {!pinnedToBottom && (
                 <button
                   onClick={scrollToBottom}
-                  className="pin-bottom-chevron absolute bottom-2 right-2 flex h-6 w-6 items-center justify-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg"
+                  className="pin-bottom-chevron absolute bottom-2 right-2 flex h-6 w-6 cursor-pointer items-center justify-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg"
                   aria-label="Scroll to bottom"
                 >
                   <ChevronDown size={14} />
@@ -371,7 +372,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
                   className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
                     isArchived
                       ? "cursor-not-allowed text-fg-4"
-                      : "text-fg-2 hover:bg-bg-4 hover:text-fg"
+                      : "cursor-pointer text-fg-2 hover:bg-bg-4 hover:text-fg"
                   }`}
                   style={{ fontSize: "11.5px" }}
                   disabled={isArchived}
@@ -385,7 +386,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
                 <>
                   <button
                     onClick={handleMarkComplete}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
+                    className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
                     style={{ fontSize: "11.5px", fontWeight: 500 }}
                   >
                     <CheckCircle size={12} />
@@ -431,26 +432,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             )}
 
             {/* Initial Prompt */}
-            <div className="border-t border-line">
-              <div
-                className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
-                style={{ fontSize: "11px" }}
-              >
-                Initial Prompt
-              </div>
-              <pre
-                className="prompt-block overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
-                style={{ fontSize: "10px", lineHeight: "1.5" }}
-              >
-                {promptText ?? (
-                  <span className="text-fg-4">
-                    {node.status === "pending"
-                      ? "Prompt available after node starts."
-                      : "Loading prompt..."}
-                  </span>
-                )}
-              </pre>
-            </div>
+            <PromptSection promptText={promptText} status={node.status} />
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -464,6 +446,47 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
         />
       )}
     </aside>
+  );
+}
+
+// --- Prompt Section (collapsible) ---
+
+function PromptSection({
+  promptText,
+  status,
+}: {
+  promptText: string | null;
+  status: NodeStatus;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="border-t border-line">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
+        style={{ fontSize: "11px" }}
+        data-testid="prompt-toggle"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Initial Prompt
+      </button>
+      {expanded && (
+        <pre
+          className="prompt-block overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
+          style={{ fontSize: "10px", lineHeight: "1.5" }}
+        >
+          {promptText ?? (
+            <span className="text-fg-4">
+              {status === "pending"
+                ? "Prompt available after node starts."
+                : "Loading prompt..."}
+            </span>
+          )}
+        </pre>
+      )}
+    </div>
   );
 }
 

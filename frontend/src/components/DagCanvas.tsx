@@ -128,11 +128,12 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
 }
 
 interface EndNodeData {
+  inputs: PortBrief[];
   [key: string]: unknown;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function EndNode(_props: NodeProps<Node<EndNodeData>>) {
+function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
+  const inputs = data.inputs ?? [];
   return (
     <div
       className="grid place-items-center rounded-full border font-mono font-bold"
@@ -145,22 +146,28 @@ function EndNode(_props: NodeProps<Node<EndNodeData>>) {
         fontSize: "11px",
       }}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!bg-fg-4 !border-line !w-2 !h-2"
-      />
+      {inputs.map((port, i) => (
+        <TriangleHandle
+          key={`in-${port.name}`}
+          id={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={inputs.length}
+        />
+      ))}
       &#x25CC;
     </div>
   );
 }
 
 interface StartNodeData {
+  outputs: PortBrief[];
   [key: string]: unknown;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function StartNode(_props: NodeProps<Node<StartNodeData>>) {
+function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
+  const outputs = data.outputs ?? [];
   return (
     <div
       className="start-node grid place-items-center rounded-full border-2 font-mono font-semibold"
@@ -174,11 +181,16 @@ function StartNode(_props: NodeProps<Node<StartNodeData>>) {
       }}
     >
       &#x25B6;
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!bg-fg-4 !border-line !w-2 !h-2"
-      />
+      {outputs.map((port, i) => (
+        <TriangleHandle
+          key={`out-${port.name}`}
+          id={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={outputs.length}
+        />
+      ))}
     </div>
   );
 }
@@ -294,7 +306,7 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
           x: startDef.view_x ?? minX - START_NODE_OFFSET_X,
           y: startDef.view_y ?? avgY,
         },
-        data: {},
+        data: { outputs: startDef.outputs },
         selected: startDef.id === selectedNodeId,
       });
     }
@@ -325,7 +337,7 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
           x: endDef.view_x ?? maxX + 280,
           y: endDef.view_y ?? avgY + 50,
         },
-        data: {},
+        data: { inputs: endDef.inputs },
         selected: endDef.id === selectedNodeId,
       });
     }
@@ -400,7 +412,7 @@ function deriveEdges(run: RunState): Edge[] {
       source: ei.source_node,
       target: ei.target_node,
       sourceHandle: ei.source_port || null,
-      targetHandle: isEndEdge ? null : (ei.target_port || null),
+      targetHandle: ei.target_port || null,
       type: "default",
       animated: !isEndEdge && run.nodes[ei.source_node]?.status === "running",
       style: {
@@ -537,7 +549,7 @@ function DagCanvasInner({
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <button
             onClick={() => attachManager(run.run_id).catch(() => {})}
-            className={`flex items-center gap-1 rounded border px-2 py-1 transition-colors ${
+            className={`flex cursor-pointer items-center gap-1 rounded border px-2 py-1 transition-colors ${
               run.status === "halted"
                 ? "border-st-blocked bg-st-blocked/20 text-st-blocked hover:bg-st-blocked/30"
                 : "border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
@@ -550,7 +562,7 @@ function DagCanvasInner({
           {onToggleEdit && (
             <button
               onClick={() => onToggleEdit(run.run_id)}
-              className="flex items-center gap-1 rounded border border-edit-tint bg-edit-tint/10 px-2 py-1 text-edit-tint transition-colors hover:bg-edit-tint/20"
+              className="flex cursor-pointer items-center gap-1 rounded border border-edit-tint bg-edit-tint/10 px-2 py-1 text-edit-tint transition-colors hover:bg-edit-tint/20"
               style={{ fontSize: "10px" }}
             >
               <Pencil size={10} />
@@ -560,7 +572,7 @@ function DagCanvasInner({
           {isTerminal && (
             <button
               onClick={() => setConfirmCleanup(true)}
-              className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+              className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
               style={{ fontSize: "10px" }}
             >
               <Trash2 size={10} />

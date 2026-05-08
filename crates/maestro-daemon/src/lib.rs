@@ -427,6 +427,26 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
     Ok(())
 }
 
+async fn emit_run_event(
+    state: &AppState,
+    run_id: &str,
+    kind: event_log::EventKind,
+    payload: Option<serde_json::Value>,
+) {
+    let event = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind,
+        node_id: None,
+        iter: None,
+        payload,
+    };
+    if let Err(e) = append_event(state, &event).await {
+        error!("failed to append {:?}: {e}", event.kind);
+    }
+}
+
 async fn load_events(db: &sqlx::SqlitePool, run_id: &str) -> Result<Vec<event_log::Event>> {
     let rows = sqlx::query_as::<_, EventRow>(
         "SELECT id, run_id, ts, kind, node_id, iter, payload FROM events WHERE run_id = ? ORDER BY id",
@@ -1053,18 +1073,18 @@ async fn handle_node_completion(
                 }
             }
             scheduler::SchedulerAction::Halt { message } => {
-                let halt_event = event_log::Event {
-                    id: None,
-                    run_id: run_id.to_string(),
-                    ts: event_log::now_iso(),
-                    kind: event_log::EventKind::RunHalted,
-                    node_id: None,
-                    iter: None,
-                    payload: Some(serde_json::json!({ "message": message })),
-                };
-                if let Err(e) = append_event(state, &halt_event).await {
-                    error!("failed to append run_halted: {e}");
-                }
+                emit_run_event(
+                    state,
+                    run_id,
+                    event_log::EventKind::RunHalted,
+                    Some(serde_json::json!({ "message": message })),
+                )
+                .await;
+                return;
+            }
+            scheduler::SchedulerAction::Complete => {
+                emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None)
+                    .await;
                 return;
             }
         }
@@ -2979,18 +2999,18 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                     }
                 }
                 scheduler::SchedulerAction::Halt { message } => {
-                    let halt_event = event_log::Event {
-                        id: None,
-                        run_id: run_id.to_string(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::RunHalted,
-                        node_id: None,
-                        iter: None,
-                        payload: Some(serde_json::json!({ "message": message })),
-                    };
-                    if let Err(e) = append_event(state, &halt_event).await {
-                        error!("failed to append run_halted: {e}");
-                    }
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::RunHalted,
+                        Some(serde_json::json!({ "message": message })),
+                    )
+                    .await;
+                    return;
+                }
+                scheduler::SchedulerAction::Complete => {
+                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None)
+                        .await;
                     return;
                 }
             }

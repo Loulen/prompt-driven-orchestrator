@@ -16,14 +16,14 @@ export default function CleanupConfirmModal({ onConfirm, onCancel }: Props) {
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
             style={{ fontSize: "11.5px" }}
           >
             Cleanup

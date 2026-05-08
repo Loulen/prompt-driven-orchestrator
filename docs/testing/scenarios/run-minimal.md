@@ -83,6 +83,35 @@ After selecting a Run in step 2, assert:
   - "Termination reasons" section lists the `result` port with status
     **"pending"** (no edge has fired yet).
 
+### Step 0c — Start handle connected to first node (refs #49)
+
+After selecting a Run (step 2), assert:
+
+- The edge from Start (`sourceHandle: "user_prompt"`) to `only`
+  (`targetHandle: "in"`) is visually rendered — no missing-edge gap between
+  the Start circle and the `only` node.
+- The Start node uses **TriangleHandle** for its output port (not a plain
+  `<Handle>` without an `id`).
+
+### Step 0d — Initial prompt collapsed by default (refs #49)
+
+After selecting the `only` node (step 5):
+
+- The **"Initial Prompt"** section in the right panel is **collapsed** by
+  default — only the header row with a **▸** chevron is visible.
+- Clicking the header row expands the section (chevron changes to **▾**) and
+  reveals the prompt content.
+- Clicking again collapses it.
+
+### Step 0e — Terminal preview has no horizontal scroll on overflow (refs #49)
+
+While the node is running or completed:
+
+- Long agent output lines in the terminal preview **wrap** to the panel
+  width — no horizontal scrollbar appears.
+- ANSI coloring is preserved on wrapped lines.
+- Vertical scroll behavior is unchanged (pinned-to-bottom still works).
+
 1. Open the UI; confirm the **`Daemon: connected`** label is visible.
 2. Open the **New Run** modal. Pick `run-minimal-scenario`. Provide any input
    string (e.g. `hello`). Click **Launch**. Capture the resulting `run_id`
@@ -287,6 +316,9 @@ Once step 6 confirms the node completed and the artifact exists:
 {
   "verdict": "PASS" | "FAIL",
   "evidence": [
+    "step 0c: Start→only edge visually rendered with TriangleHandle",
+    "step 0d: Initial Prompt section collapsed by default, toggles on click",
+    "step 0e: terminal preview wraps long lines without horizontal scroll",
     "step 4: tmux session 'maestro-<run_id>-only-iter-1' present",
     "step 5: pane shows claude TUI (trust dialog → chat view)",
     "step 6: pane contains 'MAESTRO_RUN_MINIMAL_OK'",

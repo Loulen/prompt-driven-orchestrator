@@ -18,7 +18,7 @@ export function SectionHead({
       {onAdd && (
         <button
           onClick={onAdd}
-          className="text-fg-4 hover:text-acc"
+          className="cursor-pointer text-fg-4 hover:text-acc"
           style={{ fontSize: "10px" }}
         >
           + Add

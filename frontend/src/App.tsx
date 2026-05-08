@@ -359,7 +359,7 @@ function TopBar({
         )}
         <button
           onClick={onToggleEditMode}
-          className={`grid h-7 w-7 place-items-center rounded-md border transition-colors ${
+          className={`grid h-7 w-7 cursor-pointer place-items-center rounded-md border transition-colors ${
             editMode
               ? "border-edit-tint bg-edit-tint/10 text-edit-tint hover:bg-edit-tint/20"
               : "border-transparent bg-transparent text-fg-3 hover:bg-bg-3 hover:text-fg"
@@ -392,7 +392,7 @@ function RunEditSidebar({
         </div>
         <button
           onClick={onStopEditing}
-          className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          className="mt-2 cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
           style={{ fontSize: "10.5px" }}
         >
           Stop editing

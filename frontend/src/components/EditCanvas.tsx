@@ -127,7 +127,7 @@ function deriveEditEdges(pipeline: PipelineDef): Edge[] {
       source: e.source.node,
       target: e.target.node,
       sourceHandle: sourcePort || null,
-      targetHandle: isEndEdge ? null : (targetPort || null),
+      targetHandle: targetPort || null,
       type: "default",
       style: {
         stroke: strokeColor,
@@ -276,13 +276,13 @@ function EditCanvasInner() {
         <Plus size={12} className="text-fg-3" />
         <button
           onClick={() => handleAddNode("code-mutating")}
-          className="rounded border border-acc bg-acc-bg px-1.5 py-0.5 font-medium text-acc transition-colors hover:bg-acc/20"
+          className="cursor-pointer rounded border border-acc bg-acc-bg px-1.5 py-0.5 font-medium text-acc transition-colors hover:bg-acc/20"
         >
           code
         </button>
         <button
           onClick={() => handleAddNode("doc-only")}
-          className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-medium text-fg-3 transition-colors hover:text-fg"
+          className="cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-medium text-fg-3 transition-colors hover:text-fg"
         >
           doc
         </button>
@@ -367,13 +367,13 @@ function ContextMenu({
           <>
             <button
               onClick={onDuplicateNode}
-              className="flex w-full items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
+              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
             >
               Duplicate
             </button>
             <button
               onClick={onDeleteNode}
-              className="flex w-full items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
+              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
             >
               Delete
             </button>
@@ -381,7 +381,7 @@ function ContextMenu({
         ) : (
           <button
             onClick={onDeleteEdge}
-            className="flex w-full items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
+            className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
           >
             Delete edge
           </button>

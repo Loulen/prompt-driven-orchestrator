@@ -103,7 +103,7 @@ export default function NodeInspector({
             <button
               key={t}
               onClick={() => handleField("type", t)}
-              className={`flex-1 rounded border px-2 py-1 font-medium transition-colors ${
+              className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
                 node.type === t
                   ? t === "code-mutating"
                     ? "border-acc bg-acc-bg text-acc"
@@ -123,13 +123,13 @@ export default function NodeInspector({
           <span className="text-fg-3">Interactive</span>
           <button
             onClick={() => handleField("interactive", !node.interactive)}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
+            className={`relative h-5 w-9 cursor-pointer rounded-full transition-colors ${
               node.interactive ? "bg-acc" : "bg-bg-5"
             }`}
           >
             <span
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
-                node.interactive ? "translate-x-4" : "translate-x-0.5"
+              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                node.interactive ? "translate-x-[16px]" : "translate-x-0"
               }`}
             />
           </button>
@@ -245,7 +245,7 @@ function PortRow({
       </select>
       <button
         onClick={() => onUpdate({ repeated: !port.repeated })}
-        className={`rounded px-1 py-px transition-colors ${
+        className={`cursor-pointer rounded px-1 py-px transition-colors ${
           port.repeated
             ? "bg-st-await-bg text-st-await"
             : "text-fg-4 hover:text-fg-3"
@@ -257,7 +257,7 @@ function PortRow({
       </button>
       <button
         onClick={onRemove}
-        className="text-fg-4 hover:text-st-failed"
+        className="cursor-pointer text-fg-4 hover:text-st-failed"
         style={{ fontSize: "10px" }}
       >
         ×

@@ -44,7 +44,7 @@ export default function TabBar() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`group flex items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 transition-colors ${
+            className={`group flex cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 transition-colors ${
               isActive
                 ? "border-line bg-bg-1 text-fg"
                 : "border-transparent bg-bg-2 text-fg-3 hover:text-fg-2"
@@ -61,7 +61,7 @@ export default function TabBar() {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              className="ml-auto hidden shrink-0 rounded p-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg group-hover:inline-flex"
+              className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg group-hover:inline-flex"
             >
               <X size={10} />
             </span>
@@ -82,7 +82,7 @@ export default function TabBar() {
         <button
           onClick={() => { if (activeTabId) save(activeTabId); }}
           disabled={!anyDirty}
-          className="flex items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
           style={{ fontSize: "11px" }}
           data-testid="save-button"
         >

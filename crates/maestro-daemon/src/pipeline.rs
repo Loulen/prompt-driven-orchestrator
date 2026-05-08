@@ -299,7 +299,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    // Validate Switch and Loop node constraints
     for node in &mut pipeline.nodes {
         match node.node_type {
             NodeType::Switch => {

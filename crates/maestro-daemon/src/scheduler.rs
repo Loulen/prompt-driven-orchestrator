@@ -21,7 +21,7 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             continue;
         }
 
-        let unconditional_upstream: HashSet<&str> = pipeline
+        let upstream: HashSet<&str> = pipeline
             .edges
             .iter()
             .filter(|e| e.target.node == node.id)
@@ -34,10 +34,10 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             })
             .collect();
 
-        if unconditional_upstream.is_empty() {
+        if upstream.is_empty() {
             ready.push(node.id.clone());
         } else {
-            let all_completed = unconditional_upstream.iter().all(|src| {
+            let all_completed = upstream.iter().all(|src| {
                 run_state
                     .nodes
                     .get(*src)
@@ -108,15 +108,10 @@ pub fn evaluate_outgoing_edges_with_context(
             );
             actions.push(SchedulerAction::Halt { message: rendered });
         } else {
-            let target_all_unconditional_upstream_completed =
-                check_all_unconditional_upstream_completed(
-                    pipeline,
-                    run_state,
-                    target_id,
-                    completed_node_id,
-                );
+            let all_upstream_done =
+                check_all_upstream_completed(pipeline, run_state, target_id, completed_node_id);
 
-            if target_all_unconditional_upstream_completed {
+            if all_upstream_done {
                 let next_iter = run_state
                     .nodes
                     .get(target_id.as_str())
@@ -134,20 +129,20 @@ pub fn evaluate_outgoing_edges_with_context(
     actions
 }
 
-fn check_all_unconditional_upstream_completed(
+fn check_all_upstream_completed(
     pipeline: &PipelineDef,
     run_state: &RunState,
     target_node_id: &str,
     just_completed_node_id: &str,
 ) -> bool {
-    let unconditional_upstream: HashSet<&str> = pipeline
+    let upstream: HashSet<&str> = pipeline
         .edges
         .iter()
         .filter(|e| e.target.node == target_node_id)
         .map(|e| e.source.node.as_str())
         .collect();
 
-    unconditional_upstream.iter().all(|src| {
+    upstream.iter().all(|src| {
         if *src == just_completed_node_id {
             return true;
         }

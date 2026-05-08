@@ -4962,7 +4962,9 @@ mod tests {
 
         let switch_node = nodes.iter().find(|n| n["type"] == "switch").unwrap();
         let switch_outputs = switch_node["outputs"].as_array().unwrap();
-        assert!(switch_outputs.iter().any(|o| o["name"] == "pass" && o["when"].is_object()));
+        assert!(switch_outputs
+            .iter()
+            .any(|o| o["name"] == "pass" && o["when"].is_object()));
         assert!(switch_outputs.iter().any(|o| o["name"] == "default"));
     }
 

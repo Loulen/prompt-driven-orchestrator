@@ -2,7 +2,6 @@ import { useEditStore } from "../stores/editStore";
 import type { EdgeEndpoint } from "../types";
 import { SectionHead } from "./InspectorPrimitives";
 
-
 export default function EdgeInspector() {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);

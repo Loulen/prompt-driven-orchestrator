@@ -140,20 +140,6 @@ function deriveEditEdges(pipeline: PipelineDef): Edge[] {
         width: 16,
         height: 16,
       },
-      label: undefined,
-      labelStyle: {
-        fill: isDashed
-          ? "var(--color-st-blocked, #fdba74)"
-          : "var(--color-fg-4)",
-        fontSize: 10,
-      },
-      labelBgStyle: {
-        fill: isDashed
-          ? "rgba(249,115,22,0.10)"
-          : "var(--color-bg-2)",
-        fillOpacity: 0.9,
-      },
-      labelBgPadding: [4, 2] as [number, number],
     };
   });
 }

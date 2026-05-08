@@ -29,9 +29,7 @@ export default function NodeInspector({
   useEffect(() => {
     if (!scrollToPort) return;
     const escaped = CSS.escape(scrollToPort);
-    const el = asideRef.current?.querySelector(
-      `[data-branch="${escaped}"], [data-port="${escaped}"]`,
-    );
+    const el = asideRef.current?.querySelector(`[data-port="${escaped}"]`);
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "nearest" });
       setHighlightedPort(scrollToPort);

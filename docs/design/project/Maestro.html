@@ -31,6 +31,10 @@
 <script type="text/babel" src="inspector.jsx"></script>
 <script type="text/babel" src="modal.jsx"></script>
 <script type="text/babel" src="md-modal.jsx"></script>
+<script type="text/babel" src="confirm-modal.jsx"></script>
+<script type="text/babel" src="library-dropdown.jsx"></script>
+<script type="text/babel" src="switch-node.jsx"></script>
+<script type="text/babel" src="loop-node.jsx"></script>
 <script type="text/babel" src="screens.jsx"></script>
 
 <script type="text/babel" data-presets="env,react">
@@ -84,11 +88,17 @@ function MaestroApp() {
           <DCArtboard id="edit-node" label="04 · Edit · node selected" width={ART_W} height={ART_H}>
             <Screen4/>
           </DCArtboard>
-          <DCArtboard id="edit-edge" label="05 · Edit · edge with when:" width={ART_W} height={ART_H}>
-            <Screen5/>
-          </DCArtboard>
-          <DCArtboard id="edit-pipeline" label="06 · Edit · pipeline-level inspector" width={ART_W} height={ART_H}>
+          <DCArtboard id="edit-pipeline" label="05 · Edit · pipeline-level inspector" width={ART_W} height={ART_H}>
             <Screen6/>
+          </DCArtboard>
+          <DCArtboard id="edit-switch" label="13 · Switch · branch editor" width={ART_W} height={ART_H}>
+            <Screen13/>
+          </DCArtboard>
+          <DCArtboard id="edit-loop" label="14 · Loop · config" width={ART_W} height={ART_H}>
+            <Screen14/>
+          </DCArtboard>
+          <DCArtboard id="edit-library" label="15 · Library dropdown open" width={ART_W} height={ART_H}>
+            <Screen15/>
           </DCArtboard>
         </DCSection>
 
@@ -107,6 +117,12 @@ function MaestroApp() {
           </DCArtboard>
           <DCArtboard id="failed-state" label="12 · Failed node · validation error" width={ART_W} height={ART_H}>
             <Screen12/>
+          </DCArtboard>
+          <DCArtboard id="run-loop-switch" label="16 · Run · Loop + Switch executing" width={ART_W} height={ART_H}>
+            <Screen16/>
+          </DCArtboard>
+          <DCArtboard id="star-states" label="17 · Star · favorite states" width={ART_W} height={ART_H}>
+            <Screen17/>
           </DCArtboard>
         </DCSection>
       </DesignCanvas>

@@ -1,0 +1,47 @@
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 24, y: 37 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 364, y: 408 }
+  - id: GCbrjfF1
+    name: implementer
+    type: code-mutating
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - { name: out, side: right }
+    view: { x: 306, y: 90 }
+  - id: Cq5R3r5x
+    name: Review
+    type: code-mutating
+    inputs:
+      - { name: in, side: right }
+    outputs:
+      - { name: hello, side: left }
+    view: { x: 286, y: 214 }
+auto_merge_resolver: true
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: GCbrjfF1, port: in }
+  - source: { node: GCbrjfF1, port: out }
+    target: { node: Cq5R3r5x, port: in }
+  - source: { node: Cq5R3r5x, port: out }
+    target: { node: GCbrjfF1, port: in }
+    when:
+      iter: { lt: 5 }
+  - source: { node: Cq5R3r5x, port: out }
+    target: { node: end, port: result }
+  - source: { node: Cq5R3r5x, port: out-2 }
+    target: { node: end, port: result }
+  - source: { node: Cq5R3r5x, port: hello }
+    target: { node: end, port: result }

@@ -1,0 +1,26 @@
+name: plan-implement-loop
+version: "1.0"
+variables: { new_var: 3 }
+nodes:
+  - id: implementer
+    type: code-mutating
+    prompt_file: plan-implement-loop.prompts/implementer.md
+    inputs:
+      - { name: in }
+    outputs:
+      - { name: out }
+    view: { x: 521, y: 12 }
+  - id: Plan
+    type: doc-only
+    prompt_file: plan-implement-loop.prompts/node.md
+    interactive: true
+    inputs:
+      - { name: in }
+    outputs:
+      - { name: out }
+    view: { x: 209, y: 83 }
+edges:
+  - source: { node: Plan, port: out }
+    target: { node: implementer, port: in }
+    when:
+      iter: { lt: $new_var }

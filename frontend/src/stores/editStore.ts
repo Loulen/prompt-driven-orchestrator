@@ -8,7 +8,7 @@ import type {
 import { fetchPipeline, fetchPipelines, savePipeline, fetchRunPipeline, saveRunPipeline, deletePipeline as apiDeletePipeline } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 
-export type SelectionKind = "node" | "edge" | "none";
+export type SelectionKind = "node" | "none";
 
 export interface Selection {
   kind: SelectionKind;
@@ -30,6 +30,7 @@ interface EditState {
   openTabs: OpenPipeline[];
   activeTabId: string | null;
   selection: Selection;
+  scrollToPort: string | null;
   lastSavedAt: Record<string, number>;
 
   loadPipelines: () => Promise<void>;
@@ -39,6 +40,7 @@ interface EditState {
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   setSelection: (sel: Selection) => void;
+  setScrollToPort: (port: string | null) => void;
 
   // Node mutations
   addNode: (node: NodeDef) => void;
@@ -215,6 +217,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   openTabs: [],
   activeTabId: null,
   selection: { kind: "none", id: null },
+  scrollToPort: null,
   lastSavedAt: {},
 
   loadPipelines: async () => {
@@ -301,6 +304,10 @@ export const useEditStore = create<EditState>((set, get) => ({
 
   setSelection: (sel: Selection) => {
     set({ selection: sel });
+  },
+
+  setScrollToPort: (port: string | null) => {
+    set({ scrollToPort: port });
   },
 
   addNode: (node: NodeDef) => {

@@ -1,6 +1,22 @@
 // inspector.jsx — right panel for both Run and Edit modes
 
-function NodeDetail({ node, awaiting, failed }) {
+function SidePicker({ value, onChange }) {
+  const [v, setV] = React.useState(value || 'left');
+  const set = (s) => { setV(s); onChange && onChange(s); };
+  const arrow = (dir) => ({left:'←', right:'→', top:'↑', bottom:'↓'})[dir];
+  return (
+    <div className="side-picker" title="Port side">
+      {['top','left','right','bottom'].map(s => (
+        <button key={s} className={"sp-btn sp-" + s + (v === s ? ' on' : '')}
+          onClick={() => set(s)} title={s}>{arrow(s)}</button>
+      ))}
+    </div>
+  );
+}
+
+function NodeDetail({ node, awaiting, failed, libState = 'outline', onLibAction, promptCollapsed = true }) {
+  const [collapsed, setCollapsed] = React.useState(promptCollapsed);
+  const [popOpen, setPopOpen] = React.useState(false);
   if (!node) return null;
   return (
     <div className="p-body">
@@ -14,6 +30,31 @@ function NodeDetail({ node, awaiting, failed }) {
           </div>
           <span className={"badge " + (node.type === 'code' ? 'code' : 'doc')}>{node.type === 'code' ? 'code' : 'doc'}</span>
           {node.iter && <span className="badge">iter {node.iter}</span>}
+          <button className={"ih-star " + (libState === 'synced' ? 'synced' : libState === 'diverged' ? 'diverged' : 'outline')}
+            onClick={() => { setPopOpen(!popOpen); }}
+            title={libState === 'outline' ? 'Save to library' : libState === 'synced' ? 'In your library — synced' : 'In your library — out of sync'}
+            style={{position:'relative'}}>
+            {libState === 'outline' ? <Ic.Star/> : <Ic.StarFill/>}
+            {libState === 'diverged' && <span className="ih-star-notch" aria-hidden="true"/>}
+            {popOpen && libState !== 'outline' && (
+              <div className="ih-star-pop" onClick={(e)=>e.stopPropagation()}>
+                <div className="ihp-title">{libState === 'synced' ? 'In your library' : 'Out of sync with library'}</div>
+                {libState === 'diverged' && (
+                  <>
+                    <div className="ihp-action" onClick={() => { setPopOpen(false); onLibAction && onLibAction('update'); }}>
+                      <Ic.Spark/> <span><b>Update library entry</b><span className="ihp-sub">Push this node's content to the library.</span></span>
+                    </div>
+                    <div className="ihp-action" onClick={() => { setPopOpen(false); onLibAction && onLibAction('reset'); }}>
+                      <Ic.Branch/> <span><b>Reset from library</b><span className="ihp-sub">Discard local changes; sync from library.</span></span>
+                    </div>
+                  </>
+                )}
+                <div className="ihp-action danger" onClick={() => { setPopOpen(false); onLibAction && onLibAction('remove'); }}>
+                  <Ic.Trash/> <span><b>Remove from library</b><span className="ihp-sub">Keep this node; delete the library entry.</span></span>
+                </div>
+              </div>
+            )}
+          </button>
         </div>
       </div>
 
@@ -66,7 +107,7 @@ function NodeDetail({ node, awaiting, failed }) {
             <div className="term-line term-dim">  ↳ 12 files matched · 2 modified</div>
             <div className="term-line"><span className="term-blue">tool_use</span> <span className="term-dim">edit_file</span> src/filters/archived.ts</div>
             <div className="term-line term-ok">  ✓ patch applied (+47, -12)</div>
-            <div className="term-line"><span className="term-blue">tool_use</span> <span className="term-dim">bash</span> npm test -- archived.test.ts</div>
+            <div className="term-line"><span className="term-blue">tool_use</span> <span className="term-dim">bash</span> npm test -- archived.test.ts --watch --runInBand --testPathPattern=src/filters/archived/spec</div>
             <div className="term-line term-dim">  PASS  src/filters/archived.test.ts</div>
             <div className="term-line term-dim">    ✓ filters by deletedAt (12 ms)</div>
             <div className="term-line term-dim">    ✓ excludes parent of archived (8 ms)</div>
@@ -95,7 +136,7 @@ function NodeDetail({ node, awaiting, failed }) {
         <div className="port-row">
           <span className="pdot accumulating"/>
           <div style={{minWidth: 0}}>
-            <div className="pname">review_feedback <span className="badge" style={{marginLeft: 4, height: 14, padding: '0 4px', fontSize: 9}}>repeated</span></div>
+            <div className="pname">review_feedback <span className="badge" style={{marginLeft: 4, height: 14, padding: '0 4px', fontSize: 9}}>repeated <span className="info-mark" data-tip="A repeated port collects all values from upstream over time, exposing them as iter-N folders. Use for review/feedback loops.">ⓘ</span></span></div>
             <div className="ppath">artifacts/review/iter-*/feedback.md</div>
           </div>
           <span className="pmeta">2 files</span>
@@ -120,8 +161,8 @@ function NodeDetail({ node, awaiting, failed }) {
       </div>
 
       <div className="p-sect">
-        <SectionHead title="Initial prompt"/>
-        <div className="prompt-block">
+        <SectionHead title="Initial prompt" collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)}/>
+        {!collapsed && (<div className="prompt-block">
 {`# Implementer · iter 2
 
 ## Inputs
@@ -142,7 +183,7 @@ function NodeDetail({ node, awaiting, failed }) {
 
 You are an Implementer agent. Read the plan and any prior review
 feedback. Make the smallest coherent change that addresses the …`}
-        </div>
+        </div>)}
       </div>
     </div>
   );
@@ -167,8 +208,8 @@ function NodeInspectorEdit({ node }) {
       <div className="p-sect">
         <SectionHead title="Type"/>
         <div className="seg" style={{width: '100%'}}>
-          <button className={node.type === 'code' ? 'on' : ''} style={{flex: 1}}><Ic.Code/> code-mutating</button>
-          <button className={node.type === 'doc' ? 'on' : ''} style={{flex: 1}}><Ic.Doc/> doc-only</button>
+          <button className={node.type === 'code' ? 'on' : ''} style={{flex: 1}}><Ic.Code/> code-mutating <span className="info-mark" data-tip="Code-mutating nodes get their own git worktree, can run shell commands, and can commit. Use for any node that writes code.">ⓘ</span></button>
+          <button className={node.type === 'doc' ? 'on' : ''} style={{flex: 1}}><Ic.Doc/> doc-only <span className="info-mark" data-tip="Doc-only nodes read the pipeline branch read-only and write only Blackboard artifacts (plans, reviews, verdicts). Faster to spawn.">ⓘ</span></button>
         </div>
         <div className="help" style={{marginTop: 6}}>
           code-mutating gets its own git worktree and can commit; doc-only reads the pipeline branch and only writes Blackboard artifacts.
@@ -178,7 +219,7 @@ function NodeInspectorEdit({ node }) {
       <div className="p-sect">
         <SectionHead title="Behavior"/>
         <div className="row-h" style={{marginBottom: 6}}>
-          <label style={{fontSize: 12, color: 'var(--fg)'}}>Interactive</label>
+          <label style={{fontSize: 12, color: 'var(--fg)'}}>Interactive <span className="info-mark" data-tip="When on, this node pauses after spawning and waits for the user. The run shows 'awaiting user' and a Mark complete button until you act.">ⓘ</span></label>
           <span className="toggle"/>
         </div>
         <div className="help">When true, this node pauses after spawning and waits for the user to interact via terminal and click "Mark complete" in run mode.</div>
@@ -209,26 +250,16 @@ Write a diff summary to $diff with frontmatter:
             <div className="pname">plan</div>
             <div className="help" style={{marginTop: 2}}>repeated: off</div>
           </div>
-          <select className="select mono" defaultValue="left" style={{height:22, padding:'0 6px', fontSize:10.5}}>
-            <option value="left">← left</option>
-            <option value="right">right →</option>
-            <option value="top">↑ top</option>
-            <option value="bottom">↓ bot</option>
-          </select>
+          <SidePicker value="left"/>
           <button className="icon-btn" style={{width: 22, height: 22}}><Ic.Kebab/></button>
         </div>
         <div className="port-row" style={{gridTemplateColumns: '12px 1fr 80px auto'}}>
           <span className="pdot"/>
           <div>
             <div className="pname">review_feedback</div>
-            <div className="help" style={{marginTop: 2}}>repeated: on (reads iter-*/)</div>
+            <div className="help" style={{marginTop: 2}}>repeated: on <span className="info-mark" data-tip="repeated:on means this port reads all upstream values (e.g. all iter-N/feedback.md) instead of just the latest one. Use for review loops.">ⓘ</span> (reads iter-*/)</div>
           </div>
-          <select className="select mono" defaultValue="top" style={{height:22, padding:'0 6px', fontSize:10.5}}>
-            <option value="left">← left</option>
-            <option value="right">right →</option>
-            <option value="top">↑ top</option>
-            <option value="bottom">↓ bot</option>
-          </select>
+          <SidePicker value="bottom"/>
           <button className="icon-btn" style={{width: 22, height: 22}}><Ic.Kebab/></button>
         </div>
         <button className="btn ghost sm" style={{marginTop: 6}}><Ic.PlusSm/> Add input port</button>
@@ -246,91 +277,10 @@ Write a diff summary to $diff with frontmatter:
               <span className="k">tests_added</span><span className="v">int</span>
             </div>
           </div>
-          <select className="select mono" defaultValue="right" style={{height:22, padding:'0 6px', fontSize:10.5, marginTop:2}}>
-            <option value="left">← left</option>
-            <option value="right">right →</option>
-            <option value="top">↑ top</option>
-            <option value="bottom">↓ bot</option>
-          </select>
+          <SidePicker value="right"/>
           <button className="icon-btn" style={{width: 22, height: 22, marginTop:2}}><Ic.Kebab/></button>
         </div>
         <button className="btn ghost sm" style={{marginTop: 6}}><Ic.PlusSm/> Add output port</button>
-      </div>
-    </div>
-  );
-}
-
-function EdgeInspector({ edge }) {
-  return (
-    <div className="p-body">
-      <div className="p-sect">
-        <SectionHead title="Source"/>
-        <div className="field">
-          <label>node</label>
-          <select className="select mono" defaultValue="review">
-            <option value="review">review</option>
-            <option value="impl">impl</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>port</label>
-          <select className="select mono" defaultValue="review_feedback">
-            <option value="review_feedback">review_feedback</option>
-            <option value="verdict">verdict</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="p-sect">
-        <SectionHead title="Target"/>
-        <div className="seg" style={{width: '100%', marginBottom: 8}}>
-          <button className="on" style={{flex: 1}}>Node</button>
-          <button style={{flex: 1}}>Halt</button>
-        </div>
-        <div className="field">
-          <label>node</label>
-          <select className="select mono" defaultValue="impl">
-            <option value="impl">impl</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>port</label>
-          <select className="select mono" defaultValue="review_feedback">
-            <option value="review_feedback">review_feedback</option>
-            <option value="plan">plan</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="p-sect">
-        <SectionHead title="Condition (when:)"/>
-        <div className="row-h" style={{marginBottom: 8}}>
-          <span className="help">Combine clauses</span>
-          <span className="seg">
-            <button className="on">AND</button>
-            <button>OR</button>
-          </span>
-        </div>
-        <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 70px 1fr 22px', gap: 4, alignItems: 'center'}}>
-            <select className="select mono" defaultValue="iter"><option>iter</option><option>$max_iter</option></select>
-            <select className="select mono" defaultValue="lt"><option>lt</option><option>lte</option><option>eq</option></select>
-            <input className="input mono" defaultValue="5"/>
-            <button className="icon-btn" style={{width: 22, height: 22}}><Ic.X/></button>
-          </div>
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 70px 1fr 22px', gap: 4, alignItems: 'center'}}>
-            <select className="select mono" defaultValue="verdict"><option>verdict</option><option>iter</option></select>
-            <select className="select mono" defaultValue="neq"><option>neq</option><option>eq</option></select>
-            <input className="input mono" defaultValue="PASS"/>
-            <button className="icon-btn" style={{width: 22, height: 22}}><Ic.X/></button>
-          </div>
-        </div>
-        <button className="btn ghost sm" style={{marginTop: 8}}><Ic.PlusSm/> Add clause</button>
-
-        <div style={{marginTop: 14, padding: '8px 10px', background: 'var(--bg-1)', border: '1px solid var(--line)', borderRadius: 6, fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--fg-2)'}}>
-          <span style={{color: 'var(--fg-4)'}}>// preview</span><br/>
-          when: <span style={{color: '#fcd34d'}}>iter &lt; 5 AND verdict ≠ PASS</span>
-        </div>
       </div>
     </div>
   );
@@ -396,5 +346,4 @@ function PipelineInspector() {
 
 window.NodeDetail = NodeDetail;
 window.NodeInspectorEdit = NodeInspectorEdit;
-window.EdgeInspector = EdgeInspector;
 window.PipelineInspector = PipelineInspector;

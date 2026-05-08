@@ -149,6 +149,41 @@ Ic.Logo = (props) => (
   </svg>
 );
 
+Ic.Library = make(<>
+  <path d="M2.5 2.5h2.5v9h-2.5z"/>
+  <path d="M5 2.5h2.5v9h-2.5z"/>
+  <path d="M9.4 3.4l2.3.7-2.3 7.4-2.3-.7z"/>
+</>);
+
+Ic.Loop = make(<>
+  <path d="M11 5.5a4.5 4.5 0 1 0-1.3 3.2"/>
+  <path d="M11 2.5v3h-3"/>
+</>);
+
+Ic.Switch = make(<>
+  <path d="M2 6.5h3l2-3h4M9 3.5l2-1M9 3.5l1.5 2M2 6.5l3 3h4M9 9.5l2 1M9 9.5l1.5-2"/>
+</>);
+
+Ic.Star = make(<>
+  <path d="M7 1.6l1.7 3.6 3.9.5-2.9 2.7.8 3.9L7 10.4 3.5 12.3l.8-3.9L1.4 5.7l3.9-.5z"/>
+</>);
+
+Ic.StarFill = (props) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"
+       stroke="currentColor" strokeWidth="0.5" strokeLinejoin="round" {...props}>
+    <path d="M7 1.6l1.7 3.6 3.9.5-2.9 2.7.8 3.9L7 10.4 3.5 12.3l.8-3.9L1.4 5.7l3.9-.5z"/>
+  </svg>
+);
+
+Ic.Trash = make(<>
+  <path d="M2.5 3.5h9M5 3.5V2.5h4v1M3.5 3.5l.5 8a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9l.5-8M6 6v4M8 6v4"/>
+</>);
+
+Ic.Info = make(<>
+  <circle cx="7" cy="7" r="5.5"/>
+  <path d="M7 6.5v3.5M7 4.5v.1"/>
+</>);
+
 Ic.Floppy = make(<>
   <path d="M2.5 2.5h7.5l2 2v7a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z"/>
   <path d="M4.5 2.5v3h5v-3"/>

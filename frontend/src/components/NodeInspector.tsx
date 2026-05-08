@@ -21,6 +21,25 @@ export default function NodeInspector({
   const selection = useEditStore((s) => s.selection);
   const updateNode = useEditStore((s) => s.updateNode);
   const updatePrompt = useEditStore((s) => s.updatePrompt);
+  const scrollToPort = useEditStore((s) => s.scrollToPort);
+  const setScrollToPort = useEditStore((s) => s.setScrollToPort);
+
+  const asideRef = useRef<HTMLElement>(null);
+  const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scrollToPort) return;
+    const escaped = CSS.escape(scrollToPort);
+    const el = asideRef.current?.querySelector(`[data-port="${escaped}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      setHighlightedPort(scrollToPort);
+      const timer = setTimeout(() => setHighlightedPort(null), 1500);
+      setScrollToPort(null);
+      return () => clearTimeout(timer);
+    }
+    setScrollToPort(null);
+  }, [scrollToPort, setScrollToPort]);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   const node = tab && selection.kind === "node" && selection.id
@@ -58,7 +77,7 @@ export default function NodeInspector({
   }
 
   return (
-    <aside className="flex h-full flex-col bg-bg-2 overflow-y-auto">
+    <aside ref={asideRef} className="flex h-full flex-col bg-bg-2 overflow-y-auto">
       <div
         className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
@@ -152,6 +171,7 @@ export default function NodeInspector({
           <PortRow
             key={i}
             port={port}
+            highlighted={highlightedPort === port.name}
             onUpdate={(updates) => handleUpdatePort("inputs", i, updates)}
             onRemove={() => handleRemovePort("inputs", i)}
           />
@@ -163,6 +183,7 @@ export default function NodeInspector({
           <PortRow
             key={i}
             port={port}
+            highlighted={highlightedPort === port.name}
             onUpdate={(updates) => handleUpdatePort("outputs", i, updates)}
             onRemove={() => handleRemovePort("outputs", i)}
           />
@@ -215,15 +236,22 @@ function NameInput({
 
 function PortRow({
   port,
+  highlighted,
   onUpdate,
   onRemove,
 }: {
   port: PortDef;
+  highlighted?: boolean;
   onUpdate: (updates: Partial<PortDef>) => void;
   onRemove: () => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5 rounded border border-line-soft bg-bg-3 px-2 py-1">
+    <div
+      data-port={port.name}
+      className={`flex items-center gap-1.5 rounded border px-2 py-1 transition-colors ${
+        highlighted ? "border-acc bg-acc-bg" : "border-line-soft bg-bg-3"
+      }`}
+    >
       <span className="h-2 w-2 shrink-0 rounded-full bg-fg-4" />
       <input
         value={port.name}

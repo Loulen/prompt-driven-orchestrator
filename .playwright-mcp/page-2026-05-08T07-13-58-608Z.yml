@@ -1,0 +1,158 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Run
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - complementary [ref=e21]:
+        - generic [ref=e22]:
+          - text: Runs
+          - button "New Run" [ref=e23]:
+            - img [ref=e24]
+            - text: New Run
+        - generic [ref=e25]:
+          - button "run-minimal-scenario 20260508-071051-33db" [ref=e307]:
+            - generic [ref=e309]:
+              - generic [ref=e310]: run-minimal-scenario
+              - generic [ref=e311]: 20260508-071051-33db
+          - button "run-minimal-scenario 20260508-065035-b443" [ref=e100]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: run-minimal-scenario
+              - generic [ref=e104]: 20260508-065035-b443
+          - button "plan-implement-loop 20260507-083415-716a" [ref=e26]:
+            - generic [ref=e28]:
+              - generic [ref=e29]: plan-implement-loop
+              - generic [ref=e30]: 20260507-083415-716a
+          - button "review-loop 20260507-075446-6dc9" [ref=e31]:
+            - generic [ref=e33]:
+              - generic [ref=e34]: review-loop
+              - generic [ref=e35]: 20260507-075446-6dc9
+          - button "run-minimal-scenario 20260507-074349-c79a" [ref=e36]:
+            - generic [ref=e38]:
+              - generic [ref=e39]: run-minimal-scenario
+              - generic [ref=e40]: 20260507-074349-c79a
+          - button "review-loop 20260507-072811-e320" [ref=e41]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: review-loop
+              - generic [ref=e45]: 20260507-072811-e320
+          - button "review-loop 20260506-184042-4f45" [ref=e46]:
+            - generic [ref=e48]:
+              - generic [ref=e49]: review-loop
+              - generic [ref=e50]: 20260506-184042-4f45
+          - button "run-minimal-scenario 20260506-182924-a956" [ref=e51]:
+            - generic [ref=e53]:
+              - generic [ref=e54]: run-minimal-scenario
+              - generic [ref=e55]: 20260506-182924-a956
+          - button "run-minimal-scenario 20260506-182403-ad75" [ref=e56]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: run-minimal-scenario
+              - generic [ref=e60]: 20260506-182403-ad75
+          - button "review-loop 20260506-131005-b1b6" [ref=e61]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: review-loop
+              - generic [ref=e65]: 20260506-131005-b1b6
+      - separator [ref=e66]
+      - generic [ref=e69]:
+        - generic [ref=e1137]:
+          - button "__run__20260508-071051-33db72b.yaml" [ref=e1236]:
+            - generic [ref=e1139]: __run__20260508-071051-33db72b.yaml
+          - generic [ref=e1140]:
+            - generic [ref=e1237]: Saved just now
+            - button "Save" [disabled] [ref=e1141]:
+              - img [ref=e1142]
+              - text: Save
+        - generic [ref=e1146]:
+          - generic [ref=e1147]:
+            - img [ref=e1148]
+            - button "code" [ref=e1149]
+            - button "doc" [ref=e1150]
+          - application [ref=e1151]:
+            - generic [ref=e1153]:
+              - generic:
+                - generic:
+                  - img
+                  - img:
+                    - group "Edge from start to xCsiuWj7"
+                  - img:
+                    - group "Edge from xCsiuWj7 to end" [ref=e1233] [cursor=pointer]
+                - generic:
+                  - group [ref=e1157]:
+                    - generic [ref=e1158]:
+                      - generic [ref=e1159]:
+                        - generic [ref=e1161]: Start
+                        - generic [ref=e1162]: start
+                      - generic [ref=e1163]: start
+                      - generic [ref=e1164]:
+                        - img
+                  - group [ref=e1165]:
+                    - generic [ref=e1166]:
+                      - generic [ref=e1167]:
+                        - img
+                      - generic [ref=e1168]:
+                        - generic [ref=e1170]: only
+                        - generic [ref=e1171]: doc
+                      - generic [ref=e1172]: xCsiuWj7
+                      - generic [ref=e1173]:
+                        - img
+                  - group [ref=e1174]:
+                    - generic [ref=e1175]:
+                      - generic [ref=e1176]:
+                        - img
+                      - generic [ref=e1177]:
+                        - generic [ref=e1179]: End
+                        - generic [ref=e1180]: end
+                      - generic [ref=e1181]: end
+            - img
+      - separator [ref=e71]
+      - complementary [ref=e1189]:
+        - generic [ref=e1190]: Node Inspector
+        - generic [ref=e1191]:
+          - generic [ref=e1193]: Identity
+          - generic [ref=e1194]:
+            - generic [ref=e1195]: ID
+            - generic "Click to copy" [ref=e1196] [cursor=pointer]: xCsiuWj7
+          - generic [ref=e1197]:
+            - generic [ref=e1198]: Name
+            - textbox "xCsiuWj7" [ref=e1199]: only
+          - generic [ref=e1201]: Type
+          - generic [ref=e1202]:
+            - button "code-mutating" [ref=e1203]
+            - button "doc-only" [ref=e1204]
+          - generic [ref=e1206]: Behavior
+          - generic [ref=e1207]:
+            - generic [ref=e1208]: Interactive
+            - button [ref=e1209]
+          - generic [ref=e1212]: Prompt
+          - textbox "Enter the node's role prompt..." [ref=e1213]: "Reply with exactly the line `MAESTRO_RUN_MINIMAL_OK` and then call the `maestro complete` command. Do nothing else. # DIRTY-MARKER"
+          - generic [ref=e1214]:
+            - generic [ref=e1215]: Inputs1
+            - button "+ Add" [ref=e1216]
+          - generic [ref=e1217]:
+            - textbox [ref=e1219]: in
+            - combobox "Handle side" [ref=e1220]:
+              - option "left" [selected]
+              - option "right"
+              - option "top"
+              - option "bottom"
+            - button "repeated" [ref=e1221]
+            - button "×" [ref=e1222]
+          - generic [ref=e1223]:
+            - generic [ref=e1224]: Outputs1
+            - button "+ Add" [ref=e1225]
+          - generic [ref=e1226]:
+            - textbox [ref=e1228]: out
+            - combobox "Handle side" [ref=e1229]:
+              - option "left"
+              - option "right"
+              - option "top" [selected]
+              - option "bottom"
+            - button "repeated" [ref=e1230]
+            - button "×" [ref=e1231]
+  - contentinfo [ref=e74]:
+    - generic [ref=e75]: "Daemon: connected"
+    - generic [ref=e77]: v0.1.0

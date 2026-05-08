@@ -102,6 +102,26 @@ under the explicit Save model.
     disk. Its content **must still equal** `MARKER_<timestamp>_SAVE_TEST`
     (from the earlier explicit save in step 7) — proves no auto-save occurred.
 
+## Edge click → source Inspector scroll (refs #51)
+
+This section tests that clicking an edge in EditCanvas selects the source
+node and scrolls the Node Inspector to the matching output port row.
+
+17. With the `edit-and-save-scenario` pipeline still open in Edit mode,
+    draw an edge from `alpha`'s `out` port to `beta`'s `in` port (if one
+    doesn't already exist). Click **Save** to persist.
+18. Click the **edge** between `alpha` and `beta` on the canvas.
+19. Assert:
+    - The **Node Inspector** opens on the right (not EdgeInspector — that
+      component no longer exists).
+    - The inspector shows **`alpha`**'s properties (node ID, name, type,
+      prompt, ports).
+    - The output port row with name `out` is scrolled into view and
+      briefly highlighted (border + background accent color, ~1.5 s).
+    - The port row element has `data-port="out"` attribute in the DOM.
+20. Click the canvas pane (empty area). Assert selection clears — no panel
+    shows, or PipelineInspector shows.
+
 ## Cleanup
 
 - Delete `.maestro/pipelines/edit-and-save-scenario.yaml`.
@@ -121,7 +141,9 @@ under the explicit Save model.
     "step 11: alpha.md on disk equals MARKER_…_SAVE_TEST",
     "step 14: textarea still reads full value after 3 s wait (no broadcast wipe)",
     "step 15: tab title still shows dirty indicator '•' (no silent auto-save)",
-    "step 16: alpha.md on disk unchanged (no auto-save)"
+    "step 16: alpha.md on disk unchanged (no auto-save)",
+    "step 19: edge click opens Node Inspector for source node alpha, out port highlighted with data-port attribute",
+    "step 20: pane click clears selection"
   ],
   "anomalies": [
     "<optional — surprising-but-non-fatal observations>"

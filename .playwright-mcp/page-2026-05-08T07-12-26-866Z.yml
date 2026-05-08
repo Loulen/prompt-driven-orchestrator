@@ -1,0 +1,277 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Run
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - complementary [ref=e21]:
+        - generic [ref=e22]:
+          - text: Runs
+          - button "New Run" [ref=e23]:
+            - img [ref=e24]
+            - text: New Run
+        - generic [ref=e25]:
+          - button "run-minimal-scenario 20260508-071051-33db" [ref=e307]:
+            - generic [ref=e309]:
+              - generic [ref=e310]: run-minimal-scenario
+              - generic [ref=e311]: 20260508-071051-33db
+          - button "run-minimal-scenario 20260508-065035-b443" [ref=e100]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: run-minimal-scenario
+              - generic [ref=e104]: 20260508-065035-b443
+          - button "plan-implement-loop 20260507-083415-716a" [ref=e26]:
+            - generic [ref=e28]:
+              - generic [ref=e29]: plan-implement-loop
+              - generic [ref=e30]: 20260507-083415-716a
+          - button "review-loop 20260507-075446-6dc9" [ref=e31]:
+            - generic [ref=e33]:
+              - generic [ref=e34]: review-loop
+              - generic [ref=e35]: 20260507-075446-6dc9
+          - button "run-minimal-scenario 20260507-074349-c79a" [ref=e36]:
+            - generic [ref=e38]:
+              - generic [ref=e39]: run-minimal-scenario
+              - generic [ref=e40]: 20260507-074349-c79a
+          - button "review-loop 20260507-072811-e320" [ref=e41]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: review-loop
+              - generic [ref=e45]: 20260507-072811-e320
+          - button "review-loop 20260506-184042-4f45" [ref=e46]:
+            - generic [ref=e48]:
+              - generic [ref=e49]: review-loop
+              - generic [ref=e50]: 20260506-184042-4f45
+          - button "run-minimal-scenario 20260506-182924-a956" [ref=e51]:
+            - generic [ref=e53]:
+              - generic [ref=e54]: run-minimal-scenario
+              - generic [ref=e55]: 20260506-182924-a956
+          - button "run-minimal-scenario 20260506-182403-ad75" [ref=e56]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: run-minimal-scenario
+              - generic [ref=e60]: 20260506-182403-ad75
+          - button "review-loop 20260506-131005-b1b6" [ref=e61]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: review-loop
+              - generic [ref=e65]: 20260506-131005-b1b6
+      - separator [ref=e66]
+      - generic [ref=e70]:
+        - generic [ref=e105]:
+          - generic [ref=e106]: run-minimal-scenario
+          - generic [ref=e107]: 20260508-071051-33db72b
+          - generic [ref=e110]: halted
+          - generic [ref=e111]:
+            - button "Open Manager" [ref=e112]:
+              - img [ref=e113]
+              - text: Open Manager
+            - button "Edit this run" [ref=e115]:
+              - img [ref=e116]
+              - text: Edit this run
+            - button "Cleanup" [ref=e315]:
+              - img [ref=e316]
+              - text: Cleanup
+        - application [ref=e119]:
+          - generic [ref=e121]:
+            - generic:
+              - generic:
+                - img
+                - img:
+                  - group "Edge from xCsiuWj7 to end" [ref=e540] [cursor=pointer]
+              - generic:
+                - group [ref=e125]:
+                  - generic [ref=e126]: ▶
+                - group [active] [ref=e128]:
+                  - generic [ref=e129]:
+                    - generic [ref=e130]:
+                      - img
+                    - generic [ref=e131]:
+                      - generic [ref=e133]: only
+                      - generic [ref=e134]: doc
+                    - generic [ref=e135]:
+                      - generic [ref=e136]: completed
+                      - generic [ref=e137]: xCsiuWj7
+                    - generic [ref=e138]:
+                      - img
+                - group [ref=e139]:
+                  - generic [ref=e140]: ◌
+          - img
+      - separator [ref=e71]
+      - complementary [ref=e543]:
+        - generic [ref=e544]:
+          - generic [ref=e545]:
+            - generic [ref=e546]: only
+            - generic [ref=e547]: Completed
+          - generic [ref=e548]: xCsiuWj7
+          - generic [ref=e549]:
+            - generic [ref=e550]: iter 1
+            - generic [ref=e551]: · started 09:10:51 AM
+            - generic [ref=e552]: · ended 09:11:03 AM
+        - generic [ref=e553]:
+          - generic [ref=e556]:
+            - generic [ref=e557]:
+              - img [ref=e558]
+              - text: Terminal Preview
+            - generic [ref=e561]:
+              - generic [ref=e562]:
+                - text: ▐
+                - generic [ref=e563]:
+                  - text: ▛███▜
+                  - generic [ref=e564]:
+                    - text: ▌
+                    - generic [ref=e565]: Claude Code
+              - generic [ref=e566]:
+                - text: v2.1.133
+                - generic [ref=e568]:
+                  - text: ▝▜
+                  - generic [ref=e569]:
+                    - text: █████
+                    - generic [ref=e570]:
+                      - text: ▛▘
+                      - generic [ref=e572]:
+                        - text: Opus 4.7 (1M context) · Claude Max
+                        - generic [ref=e574]:
+                          - text: ▘▘ ▝▝
+                          - generic [ref=e576]:
+                            - text: ~/…/perso/Maestro/.maestro/runs/20260508-071051-33db72b/worktree
+                            - generic [ref=e579]:
+                              - text: ❯
+                              - generic [ref=e580]:
+                                - text: "# Maestro Runtime Preamble"
+                                - generic [ref=e582]:
+                                  - text: "You are node `xCsiuWj7` in pipeline `run-minimal-scenario`, iteration 1."
+                                  - generic [ref=e584]:
+                                    - text: "## Inputs"
+                                    - generic [ref=e586]:
+                                      - text: "- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-07"
+                                      - generic [ref=e588]:
+                                        - text: "1051-33db72b/worktree/.maestro/artifacts/_input.md`"
+                                        - generic [ref=e590]:
+                                          - text: "## Outputs"
+                                          - generic [ref=e592]:
+                                            - text: "- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/202605"
+                                            - generic [ref=e594]:
+                                              - text: "08-071051-33db72b/worktree/.maestro/artifacts/xCsiuWj7/iter-1/out.md`"
+                                              - generic [ref=e596]:
+                                                - text: "## Completion"
+                                                - generic [ref=e598]:
+                                                  - text: "When you are done, signal completion by running:"
+                                                  - generic [ref=e600]:
+                                                    - text: "```"
+                                                    - generic [ref=e602]:
+                                                      - text: maestro complete
+                                                      - generic [ref=e604]:
+                                                        - text: "```"
+                                                        - generic [ref=e606]:
+                                                          - text: "If you cannot complete the task, signal failure:"
+                                                          - generic [ref=e608]:
+                                                            - text: "```"
+                                                            - generic [ref=e610]:
+                                                              - text: maestro fail --reason "<description of the problem>"
+                                                              - generic [ref=e612]:
+                                                                - text: "```"
+                                                                - generic [ref=e614]:
+                                                                  - text: "---"
+                                                                  - generic [ref=e616]:
+                                                                    - text: "Reply with exactly the line `MAESTRO_RUN_MINIMAL_OK` and then call the"
+                                                                    - generic [ref=e618]:
+                                                                      - text: "`maestro complete` command. Do nothing else."
+                                                                      - generic [ref=e620]:
+                                                                        - text: /remote-control is active
+                                                                        - generic [ref=e621]:
+                                                                          - text: · Code in CLI or at
+                                                                          - generic [ref=e623]:
+                                                                            - text: "]8;id=14mqeq1;https://claude.ai/code/session_01MKiui7L4wKMNq2MW4tFPzS\\https://claude.ai/code/session_01MKiui7L4wKMNq2MW4tFPzS"
+                                                                            - generic [ref=e624]:
+                                                                              - text: "]8;;\\"
+                                                                              - generic [ref=e625]:
+                                                                                - text: ●
+                                                                                - generic [ref=e626]:
+                                                                                  - text: MAESTRO_RUN_MINIMAL_OK
+                                                                                  - generic [ref=e627]:
+                                                                                    - text: ●
+                                                                                    - generic [ref=e628]: Bash
+              - text: (maestro complete)
+              - generic [ref=e629]:
+                - text: ⎿
+                - generic [ref=e630]:
+                  - text: "Error: Exit code 1"
+                  - generic [ref=e632]:
+                    - text: "Error: daemon returned 409 Conflict:"
+                    - generic [ref=e634]:
+                      - text: "{\"error\":\"missing_outputs\",\"missing\":[\"out\"]}"
+                      - generic [ref=e636]:
+                        - text: ●
+                        - generic [ref=e637]: Write
+              - text: (]8;id=1je5w9r;file:///home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-071051-33db72b/worktree/.maestro/artifacts/xCsiuWj7/iter-1/out.md\.maestro/artifacts/xCsiuWj7/iter-1/out.md]8;;\)
+              - generic [ref=e638]:
+                - text: ⎿
+                - generic [ref=e639]: Wrote 1
+              - text: lines to .maestro/artifacts/xCsiuWj7/iter-1/out.md
+              - text: "1"
+              - generic [ref=e640]:
+                - text: MAESTRO_RUN_MINIMAL_OK
+                - generic [ref=e642]:
+                  - text: ●
+                  - generic [ref=e643]: Bash
+              - text: (maestro complete)
+              - generic [ref=e644]:
+                - text: ⎿
+                - generic [ref=e645]:
+                  - text: Node xCsiuWj7 marked complete.
+                  - generic [ref=e646]:
+                    - text: ●
+                    - generic [ref=e647]:
+                      - text: MAESTRO_RUN_MINIMAL_OK
+                      - generic [ref=e648]:
+                        - text: ✻
+                        - generic [ref=e650]:
+                          - text: Cogitated for 14s
+                          - generic [ref=e652]:
+                            - text: ────────────────────────────────────────────────────────────────────────────────
+                            - text: ❯
+              - generic [ref=e653]:
+                - text: ────────────────────────────────────────────────────────────────────────────────
+                - generic [ref=e655]:
+                  - text: ⏵⏵
+                  - generic [ref=e657]:
+                    - text: bypass
+                    - generic [ref=e659]:
+                      - text: permissions
+                      - generic [ref=e661]:
+                        - text: "on"
+                        - generic [ref=e662]:
+                          - text: (shift+tab
+                          - generic [ref=e664]:
+                            - text: to
+                            - generic [ref=e666]: cycle)
+          - separator [ref=e667]
+          - generic [ref=e670]:
+            - button "Open terminal" [ref=e672]:
+              - img [ref=e673]
+              - text: Open terminal
+            - generic [ref=e677]:
+              - generic [ref=e678]:
+                - text: Inputs
+                - generic [ref=e679]: "1"
+              - generic [ref=e683]:
+                - generic [ref=e685]: in
+                - generic [ref=e686]: start/iter-1/user_prompt.md
+            - generic [ref=e687]:
+              - generic [ref=e688]:
+                - text: Outputs
+                - generic [ref=e689]: "1"
+              - button "out xCsiuWj7/iter-1/out.md 23 B" [ref=e691] [cursor=pointer]:
+                - generic [ref=e693]:
+                  - generic [ref=e695]: out
+                  - generic [ref=e696]: xCsiuWj7/iter-1/out.md
+                - generic [ref=e697]:
+                  - generic [ref=e698]: 23 B
+                  - generic [ref=e699]: ↗
+            - generic [ref=e700]:
+              - generic [ref=e701]: Initial Prompt
+              - generic [ref=e702]: "# Maestro Runtime Preamble You are node `xCsiuWj7` in pipeline `run-minimal-scenario`, iteration 1. ## Inputs - `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-071051-33db72b/worktree/.maestro/artifacts/_input.md` ## Outputs - `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-071051-33db72b/worktree/.maestro/artifacts/xCsiuWj7/iter-1/out.md` ## Completion When you are done, signal completion by running: ``` maestro complete ``` If you cannot complete the task, signal failure: ``` maestro fail --reason \"<description of the problem>\" ``` --- Reply with exactly the line `MAESTRO_RUN_MINIMAL_OK` and then call the `maestro complete` command. Do nothing else."
+  - contentinfo [ref=e74]:
+    - generic [ref=e75]: "Daemon: connected"
+    - generic [ref=e77]: v0.1.0

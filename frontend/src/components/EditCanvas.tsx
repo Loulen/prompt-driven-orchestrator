@@ -176,6 +176,7 @@ function EditCanvasInner() {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
+  const setScrollToPort = useEditStore((s) => s.setScrollToPort);
   const updateNode = useEditStore((s) => s.updateNode);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
@@ -334,8 +335,8 @@ function EditCanvasInner() {
           setSelection({ kind: "node", id: node.id })
         }
         onEdgeClick={(_event, edge) => {
-          const idx = parseInt(edge.id.replace("e-", ""), 10);
-          setSelection({ kind: "edge", id: String(idx) });
+          setSelection({ kind: "node", id: edge.source });
+          setScrollToPort(edge.sourceHandle ?? null);
         }}
         onPaneClick={() => setSelection({ kind: "none", id: null })}
         onConnect={onConnect}

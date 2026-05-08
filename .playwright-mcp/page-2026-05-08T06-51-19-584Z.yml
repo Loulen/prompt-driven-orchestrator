@@ -1,0 +1,106 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Run
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - complementary [ref=e21]:
+        - generic [ref=e22]:
+          - text: Runs
+          - button "New Run" [ref=e23]:
+            - img [ref=e24]
+            - text: New Run
+        - generic [ref=e25]:
+          - button "run-minimal-scenario 20260508-065035-b443" [ref=e100]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: run-minimal-scenario
+              - generic [ref=e104]: 20260508-065035-b443
+          - button "plan-implement-loop 20260507-083415-716a" [ref=e26]:
+            - generic [ref=e28]:
+              - generic [ref=e29]: plan-implement-loop
+              - generic [ref=e30]: 20260507-083415-716a
+          - button "review-loop 20260507-075446-6dc9" [ref=e31]:
+            - generic [ref=e33]:
+              - generic [ref=e34]: review-loop
+              - generic [ref=e35]: 20260507-075446-6dc9
+          - button "run-minimal-scenario 20260507-074349-c79a" [ref=e36]:
+            - generic [ref=e38]:
+              - generic [ref=e39]: run-minimal-scenario
+              - generic [ref=e40]: 20260507-074349-c79a
+          - button "review-loop 20260507-072811-e320" [ref=e41]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: review-loop
+              - generic [ref=e45]: 20260507-072811-e320
+          - button "review-loop 20260506-184042-4f45" [ref=e46]:
+            - generic [ref=e48]:
+              - generic [ref=e49]: review-loop
+              - generic [ref=e50]: 20260506-184042-4f45
+          - button "run-minimal-scenario 20260506-182924-a956" [ref=e51]:
+            - generic [ref=e53]:
+              - generic [ref=e54]: run-minimal-scenario
+              - generic [ref=e55]: 20260506-182924-a956
+          - button "run-minimal-scenario 20260506-182403-ad75" [ref=e56]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: run-minimal-scenario
+              - generic [ref=e60]: 20260506-182403-ad75
+          - button "review-loop 20260506-131005-b1b6" [ref=e61]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: review-loop
+              - generic [ref=e65]: 20260506-131005-b1b6
+      - separator [ref=e66]
+      - generic [ref=e70]:
+        - generic [ref=e105]:
+          - generic [ref=e106]: run-minimal-scenario
+          - generic [ref=e107]: 20260508-065035-b443f78
+          - generic [ref=e110]: running
+          - generic [ref=e111]:
+            - button "Open Manager" [ref=e112]:
+              - img [ref=e113]
+              - text: Open Manager
+            - button "Edit this run" [ref=e115]:
+              - img [ref=e116]
+              - text: Edit this run
+        - application [ref=e119]:
+          - generic [ref=e121]:
+            - generic:
+              - generic:
+                - img
+                - img:
+                  - group "Edge from xCsiuWj7 to end" [ref=e143] [cursor=pointer]
+              - generic:
+                - group [active] [ref=e125]:
+                  - generic [ref=e126]: ▶
+                - group [ref=e128]:
+                  - generic [ref=e129]:
+                    - generic [ref=e130]:
+                      - img
+                    - generic [ref=e131]:
+                      - generic [ref=e133]: only
+                      - generic [ref=e134]: doc
+                    - generic [ref=e135]:
+                      - generic [ref=e136]: running
+                      - generic [ref=e137]: xCsiuWj7
+                    - generic [ref=e138]:
+                      - img
+                - group [ref=e139]:
+                  - generic [ref=e140]: ◌
+          - img
+      - separator [ref=e71]
+      - complementary [ref=e146]:
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - generic [ref=e149]: Run start
+            - generic [ref=e150]: runtime
+          - generic [ref=e151]: start
+        - generic [ref=e152]:
+          - generic [ref=e153]: Input
+          - generic [ref=e154]: hello
+        - button "View as markdown ↗" [ref=e156]
+  - contentinfo [ref=e74]:
+    - generic [ref=e75]: "Daemon: connected"
+    - generic [ref=e77]: v0.1.0

@@ -19,7 +19,7 @@ function Frame({ mode = 'run', children, daemon = 'connected', activeRuns = 3, a
 
 // ─────────── Run-mode canvas with nodes / overlay ───────────
 
-function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelectNode, selectedNodeId = 'impl', editingRun = false, onToggleEditRun, showAddPalette = false, startWhen = '4 m ago' }) {
+function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelectNode, selectedNodeId = 'impl', editingRun = false, onToggleEditRun, startWhen = '4 m ago' }) {
   // shift all nodes right to make room for the start pseudo-node
   const NODE_OFFSET = 200;
   const baseNodes = FWR_NODES.map(n => ({ ...n, x: n.x + NODE_OFFSET }));
@@ -60,7 +60,6 @@ function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelect
         ))}
         <EdgeLabels nodes={nodes} edges={FWR_EDGES}/>
       </div>
-      {showAddPalette && <AddPalette/>}
       <RunOverlay run={runOverride} blocked={blockedRun}
         editingRun={editingRun} onToggleEditRun={onToggleEditRun}/>
       <MiniMap nodes={nodes}/>
@@ -75,12 +74,15 @@ function EditCanvas({ selectedNodeId = 'impl', selectedEdgeId = null, onSelectNo
   const NODE_OFFSET = 200;
   const nodes = FWR_NODES.map(n => ({ ...n, x: n.x + NODE_OFFSET, status: 'pending', iter: undefined }));
   const runningSet = new Set();
+  // Start + End on the same (left) side, vertically stacked
   const startX = 30, startY = 215;
-  const endX = 1100, endY = 215;
+  const endX = 30, endY = 410;
   const fakeStart = { id: '__start', x: startX - 56, y: startY - 35, status: 'pending' };
-  const fakeEnd = { id: '__end', x: endX, y: endY - 35, status: 'pending' };
+  // fakeEnd box positioned so its bottom-center lands at the bottom of the visual EndNode (endY+56)
+  const fakeEnd = { id: '__end', x: endX + 28 - 100, y: endY + 56 - 70, status: 'pending' };
   const startEdges = [{ id: 'se-plan', from: '__start', to: 'plan' }];
-  const endEdges = [{ id: 'ee-merge', from: 'merge', to: '__end' }];
+  // Edge wraps around: leaves merge from the bottom and arrives at End from below.
+  const endEdges = [{ id: 'ee-merge', from: 'merge', to: '__end', fromSide: 'bottom', toSide: 'bottom' }];
   return (
     <div className="dag-canvas">
       <div className="dag-inner" style={{ transform: 'translate(20px, 0)' }}>
@@ -110,7 +112,6 @@ function EditCanvas({ selectedNodeId = 'impl', selectedEdgeId = null, onSelectNo
           );
         })()}
       </div>
-      <AddPalette/>
       <MiniMap nodes={nodes}/>
       <CanvasControls/>
     </div>
@@ -221,30 +222,6 @@ function Screen4({ onToggleMode }) {
   );
 }
 
-// ─────────── 5. Edit mode — edge selected, condition builder ───────────
-
-function Screen5({ onToggleMode }) {
-  return (
-    <div className="artboard-host">
-      <Frame mode="edit" breadcrumb="feature-with-review.yaml" onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <PipelinesListPanel pipelines={PIPELINES} selectedId="feature-with-review" onSelect={()=>{}}/>
-        </div>
-        <div className="panel panel-c">
-          <TabBar tabs={[{id:'feature-with-review', dirty:false}]} activeId="feature-with-review" onSelect={()=>{}}/>
-          <div style={{position: 'relative', flex: 1}}>
-            <EditCanvas selectedNodeId={null} selectedEdgeId="e3"/>
-          </div>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Edge"/>
-          <EdgeInspector/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
 // ─────────── 6. Edit mode — pipeline-level inspector (nothing selected) ───────────
 
 function Screen6({ onToggleMode }) {
@@ -337,7 +314,6 @@ window.Screen1 = Screen1;
 window.Screen2 = Screen2;
 window.Screen3 = Screen3;
 window.Screen4 = Screen4;
-window.Screen5 = Screen5;
 window.Screen6 = Screen6;
 window.Screen7 = Screen7;
 window.Screen8 = Screen8;
@@ -396,7 +372,7 @@ function Screen10() {
           <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}}/>
         </div>
         <div className="panel panel-c">
-          <RunCanvas runOverride={run} selectedNodeId="impl" editingRun showAddPalette/>
+          <RunCanvas runOverride={run} selectedNodeId="impl" editingRun/>
         </div>
         <div className="panel panel-r">
           <PanelHead title="Inspector"/>
@@ -432,9 +408,188 @@ function Screen12() {
   );
 }
 
+// ─────────── 13. Switch node selected — branch editor ───────────
+function Screen13() {
+  const sw = { id: 'route', nid: 'sw3a9c', name: 'Switch', x: 540, y: 200,
+    branches: [
+      { name: 'fast_path', summary: 'verdict == "PASS"', conditions: [{field:'verdict', op:'eq', value:'"PASS"'}] },
+      { name: 'needs_review', summary: 'verdict in [FAIL, NEEDS_WORK]', conditions: [{field:'verdict', op:'in', value:'[FAIL, NEEDS_WORK]'}] },
+      { name: 'else', isDefault: true },
+    ]};
+  return (
+    <div className="artboard-host">
+      <Frame mode="edit" breadcrumb="release-flow.yaml">
+        <div className="panel panel-l"><PipelinesListPanel pipelines={PIPELINES} selectedId="release-notes" onSelect={()=>{}}/></div>
+        <div className="panel panel-c">
+          <TabBar tabs={[{id:'release-flow', dirty:true}]} activeId="release-flow"/>
+          <div style={{position:'relative', flex:1}}>
+            <div className="dag-canvas">
+              <div className="dag-inner" style={{transform:'translate(20px,0)'}}>
+                <SwitchNode node={sw} selected/>
+              </div>
+              <EditToolbar/>
+              <CanvasControls/>
+            </div>
+          </div>
+        </div>
+        <div className="panel panel-r"><PanelHead title="Switch"/><SwitchInspector node={sw} focusedRow={{branch:1, cond:0}}/></div>
+      </Frame>
+    </div>
+  );
+}
+
+// ─────────── 14. Loop node selected — config ───────────
+function Screen14() {
+  const lp = { id: 'review-loop', nid: 'lp7k2x', name: 'Loop', x: 540, y: 200, maxIter: 5 };
+  return (
+    <div className="artboard-host">
+      <Frame mode="edit" breadcrumb="iteration-flow.yaml">
+        <div className="panel panel-l"><PipelinesListPanel pipelines={PIPELINES} selectedId="release-notes" onSelect={()=>{}}/></div>
+        <div className="panel panel-c">
+          <TabBar tabs={[{id:'iteration-flow', dirty:false}]} activeId="iteration-flow" savedAt="2 m ago"/>
+          <div style={{position:'relative', flex:1}}>
+            <div className="dag-canvas">
+              <div className="dag-inner" style={{transform:'translate(20px,0)'}}>
+                <LoopNode node={lp} selected/>
+              </div>
+              <EditToolbar/>
+              <CanvasControls/>
+            </div>
+          </div>
+        </div>
+        <div className="panel panel-r"><PanelHead title="Loop"/><LoopInspector node={lp}/></div>
+      </Frame>
+    </div>
+  );
+}
+
+// ─────────── 15. Library dropdown open ───────────
+function Screen15() {
+  return (
+    <div className="artboard-host">
+      <Frame mode="edit" breadcrumb="feature-with-review.yaml">
+        <div className="panel panel-l"><PipelinesListPanel pipelines={PIPELINES} selectedId="feature-with-review" onSelect={()=>{}}/></div>
+        <div className="panel panel-c">
+          <TabBar tabs={[{id:'feature-with-review', dirty:false}]} activeId="feature-with-review"/>
+          <div style={{position:'relative', flex:1}}>
+            <EditCanvas selectedNodeId={null}/>
+            <LibraryDropdown open hoverIndex={1}/>
+          </div>
+        </div>
+        <div className="panel panel-r"><PanelHead title="Inspector"/><div className="p-body"><div className="empty"><div className="emp-sub" style={{maxWidth:240}}>Select a node to inspect.</div></div></div></div>
+      </Frame>
+    </div>
+  );
+}
+
+// ─────────── 16. Run with Loop + Switch executing ───────────
+function Screen16() {
+  const run = { ...RUNS[0], pipeline: 'iteration-flow' };
+  const lp = { id: 'lp', nid: 'lp7k2x', name: 'Loop', x: 320, y: 180, maxIter: 5 };
+  const sw = { id: 'sw', nid: 'sw3a9c', name: 'Switch', x: 620, y: 180,
+    branches: [
+      { name: 'pass', summary: 'verdict == "PASS"', conditions:[{field:'verdict', op:'eq', value:'"PASS"'}] },
+      { name: 'fail', summary: 'verdict in [FAIL, NEEDS_WORK]', conditions:[{field:'verdict', op:'in', value:'[FAIL, NEEDS_WORK]'}] },
+      { name: 'else', isDefault: true },
+    ]};
+  return (
+    <div className="artboard-host">
+      <Frame mode="run" breadcrumb="iteration-flow" runId={run.id.slice(-8)}>
+        <div className="panel panel-l"><RunsListPanel runs={RUNS} selectedId={run.id} onSelect={()=>{}}/></div>
+        <div className="panel panel-c">
+          <div className="dag-canvas">
+            <div className="dag-inner" style={{transform:'translate(20px,0)'}}>
+              <StartNode x={30} y={215} when="4 m ago" runIdSlug={run.id.slice(-8)} downstreamRunning/>
+              <LoopNode node={lp} runMode currentIter={3}/>
+              <SwitchNode node={sw} activeBranch="fail"/>
+            </div>
+            <RunOverlay run={run}/>
+            <CanvasControls/>
+          </div>
+        </div>
+        <div className="panel panel-r"><PanelHead title="Loop"/><LoopInspector node={lp}/></div>
+      </Frame>
+    </div>
+  );
+}
+
+// ─────────── 17. Star · library save state — 3-up strip ───────────
+
+function StarSampleCard({ state, label, sub, withPopover = false }) {
+  const Icon = state === 'outline' ? Ic.Star : Ic.StarFill;
+  return (
+    <div style={{
+      width: 280, background: 'var(--bg-2)', border: '1px solid var(--line)',
+      borderRadius: 8, padding: '14px 14px 16px', display: 'flex', flexDirection: 'column', gap: 12
+    }}>
+      <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+        <div style={{width: 22, height: 22, borderRadius: 5, background: 'var(--bg-3)',
+          display: 'grid', placeItems: 'center', color: 'var(--acc)'}}>
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><rect x="2" y="2.5" width="9" height="8" rx="1.5"/><path d="M2 6h9"/></svg>
+        </div>
+        <div style={{flex: 1}}>
+          <div style={{fontSize: 12.5, fontWeight: 600, color: 'var(--fg)'}}>Implementer</div>
+          <div className="mono" style={{fontSize: 10, color: 'var(--fg-4)', marginTop: 1}}>impl</div>
+        </div>
+        <span className="badge code">code</span>
+        <button className={"ih-star " + state} style={{position:'relative'}}>
+          <Icon/>
+          {state === 'diverged' && <span className="ih-star-notch"/>}
+          {withPopover && state === 'diverged' && (
+            <div className="ih-star-pop" style={{position: 'absolute', top: 'calc(100% + 4px)', right: 0}}>
+              <div className="ihp-title">Out of sync with library</div>
+              <div className="ihp-action">
+                <Ic.Spark/> <span><b>Update library entry</b><span className="ihp-sub">Push this node's content to the library.</span></span>
+              </div>
+              <div className="ihp-action">
+                <Ic.Branch/> <span><b>Reset from library</b><span className="ihp-sub">Discard local changes; sync from library.</span></span>
+              </div>
+              <div className="ihp-action danger">
+                <Ic.Trash/> <span><b>Remove from library</b><span className="ihp-sub">Keep this node; delete the library entry.</span></span>
+              </div>
+            </div>
+          )}
+        </button>
+      </div>
+      <div style={{borderTop: '1px solid var(--line)', paddingTop: 10}}>
+        <div className="mono" style={{fontSize: 11, color: 'var(--fg-2)', marginBottom: 4}}>{label}</div>
+        <div style={{fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5}}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function Screen17() {
+  return (
+    <div className="artboard-host" style={{background:'var(--bg-1)', padding:'40px 24px', display:'flex', flexDirection: 'column', gap: 16}}>
+      <div style={{textAlign: 'center', marginBottom: 8}}>
+        <div style={{fontSize: 14, fontWeight: 600, color: 'var(--fg)'}}>Library save state</div>
+        <div style={{fontSize: 11.5, color: 'var(--fg-4)', marginTop: 4}}>Star at the top-right of the Node Inspector. Indicates whether this node is saved to your library, and if so, whether it's in sync.</div>
+      </div>
+      <div style={{display: 'flex', gap: 24, justifyContent: 'center', alignItems: 'flex-start', flexWrap: 'wrap', paddingBottom: 200}}>
+        <StarSampleCard state="outline"
+          label="outline"
+          sub={<>No library entry exists for <span className="mono">impl</span>. Click the star to <b style={{color:'var(--fg-2)'}}>save to library</b>.</>}/>
+        <StarSampleCard state="synced"
+          label="synced"
+          sub={<>This node matches a library entry. Tooltip: <i>"In your library — synced"</i>. Click opens a popover with <b style={{color:'var(--fg-2)'}}>Remove from library</b>.</>}/>
+        <StarSampleCard state="diverged"
+          withPopover
+          label="diverged"
+          sub={<>Library entry exists but content has drifted. Notch in <span style={{color:'var(--st-blocked)'}}>red</span> at the bottom-right. Popover offers Update / Reset / Remove.</>}/>
+      </div>
+    </div>
+  );
+}
+
 window.Screen9 = Screen9;
 window.Screen9b = Screen9b;
 window.Screen10 = Screen10;
 window.Screen12 = Screen12;
+window.Screen13 = Screen13;
+window.Screen14 = Screen14;
+window.Screen15 = Screen15;
+window.Screen16 = Screen16;
+window.Screen17 = Screen17;
 window.ART_W = ART_W;
 window.ART_H = ART_H;

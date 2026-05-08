@@ -1,0 +1,154 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Run
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - complementary [ref=e21]:
+        - generic [ref=e22]:
+          - text: Runs
+          - button "New Run" [active] [ref=e23]:
+            - img [ref=e24]
+            - text: New Run
+        - generic [ref=e25]:
+          - button "run-minimal-scenario 20260508-065035-b443" [ref=e100]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: run-minimal-scenario
+              - generic [ref=e104]: 20260508-065035-b443
+          - button "plan-implement-loop 20260507-083415-716a" [ref=e26]:
+            - generic [ref=e28]:
+              - generic [ref=e29]: plan-implement-loop
+              - generic [ref=e30]: 20260507-083415-716a
+          - button "review-loop 20260507-075446-6dc9" [ref=e31]:
+            - generic [ref=e33]:
+              - generic [ref=e34]: review-loop
+              - generic [ref=e35]: 20260507-075446-6dc9
+          - button "run-minimal-scenario 20260507-074349-c79a" [ref=e36]:
+            - generic [ref=e38]:
+              - generic [ref=e39]: run-minimal-scenario
+              - generic [ref=e40]: 20260507-074349-c79a
+          - button "review-loop 20260507-072811-e320" [ref=e41]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: review-loop
+              - generic [ref=e45]: 20260507-072811-e320
+          - button "review-loop 20260506-184042-4f45" [ref=e46]:
+            - generic [ref=e48]:
+              - generic [ref=e49]: review-loop
+              - generic [ref=e50]: 20260506-184042-4f45
+          - button "run-minimal-scenario 20260506-182924-a956" [ref=e51]:
+            - generic [ref=e53]:
+              - generic [ref=e54]: run-minimal-scenario
+              - generic [ref=e55]: 20260506-182924-a956
+          - button "run-minimal-scenario 20260506-182403-ad75" [ref=e56]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: run-minimal-scenario
+              - generic [ref=e60]: 20260506-182403-ad75
+          - button "review-loop 20260506-131005-b1b6" [ref=e61]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: review-loop
+              - generic [ref=e65]: 20260506-131005-b1b6
+      - separator [ref=e66]
+      - generic [ref=e70]:
+        - generic [ref=e105]:
+          - generic [ref=e106]: run-minimal-scenario
+          - generic [ref=e107]: 20260508-065035-b443f78
+          - generic [ref=e110]: archived
+          - generic [ref=e111]:
+            - button "Open Manager" [ref=e112]:
+              - img [ref=e113]
+              - text: Open Manager
+            - button "Edit this run" [ref=e115]:
+              - img [ref=e116]
+              - text: Edit this run
+        - application [ref=e119]:
+          - generic [ref=e121]:
+            - generic:
+              - generic:
+                - img
+                - img:
+                  - group "Edge from xCsiuWj7 to end" [ref=e282] [cursor=pointer]
+              - generic:
+                - group [ref=e125]:
+                  - generic [ref=e126]: ▶
+                - group [ref=e128]:
+                  - generic [ref=e129]:
+                    - generic [ref=e130]:
+                      - img
+                    - generic [ref=e131]:
+                      - generic [ref=e133]: only
+                      - generic [ref=e134]: doc
+                    - generic [ref=e135]:
+                      - generic [ref=e136]: running
+                      - generic [ref=e137]: xCsiuWj7
+                    - generic [ref=e138]:
+                      - img
+                - group [ref=e139]:
+                  - generic [ref=e140]: ◌
+          - img
+      - separator [ref=e71]
+      - complementary [ref=e177]:
+        - generic [ref=e178]:
+          - generic [ref=e179]:
+            - generic [ref=e180]: only
+            - generic [ref=e181]: Running
+          - generic [ref=e182]: xCsiuWj7
+          - generic [ref=e183]:
+            - generic [ref=e184]: iter 1
+            - generic [ref=e185]: · started 08:50:35 AM
+        - generic [ref=e186]:
+          - generic [ref=e189]:
+            - generic [ref=e190]:
+              - img [ref=e191]
+              - text: Terminal Preview
+            - generic [ref=e194]: Session no longer available
+          - separator [ref=e220]
+          - generic [ref=e223]:
+            - button "Open terminal" [disabled] [ref=e225]:
+              - img [ref=e226]
+              - text: Open terminal
+            - generic [ref=e234]:
+              - generic [ref=e235]:
+                - text: Inputs
+                - generic [ref=e236]: "1"
+              - generic [ref=e240]:
+                - generic [ref=e242]: in
+                - generic [ref=e243]: start/iter-1/user_prompt.md
+            - generic [ref=e244]:
+              - generic [ref=e245]:
+                - text: Outputs
+                - generic [ref=e246]: "1"
+              - generic [ref=e250]:
+                - generic [ref=e252]: out
+                - generic [ref=e253]: xCsiuWj7/iter-1/out.md
+            - generic [ref=e254]:
+              - generic [ref=e255]: Initial Prompt
+              - generic [ref=e256]: "# Maestro Runtime Preamble You are node `xCsiuWj7` in pipeline `run-minimal-scenario`, iteration 1. ## Inputs - `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-065035-b443f78/worktree/.maestro/artifacts/_input.md` ## Outputs - `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260508-065035-b443f78/worktree/.maestro/artifacts/xCsiuWj7/iter-1/out.md` ## Completion When you are done, signal completion by running: ``` maestro complete ``` If you cannot complete the task, signal failure: ``` maestro fail --reason \"<description of the problem>\" ``` --- Reply with exactly the line `MAESTRO_RUN_MINIMAL_OK` and then call the `maestro complete` command. Do nothing else."
+  - contentinfo [ref=e74]:
+    - generic [ref=e75]: "Daemon: connected"
+    - generic [ref=e77]: v0.1.0
+  - generic [ref=e286]:
+    - generic [ref=e287]:
+      - heading "Launch new run" [level=2] [ref=e288]
+      - button [ref=e289]:
+        - img [ref=e290]
+    - generic [ref=e293]:
+      - generic [ref=e294]:
+        - generic [ref=e295]: Pipeline
+        - combobox [ref=e296]:
+          - option "run-minimal-scenario" [selected]
+          - option "review-loop"
+          - option "plan-implement-loop"
+      - generic [ref=e297]:
+        - generic [ref=e298]: Input
+        - textbox "Free-text prompt, a GitHub issue link, or a mix." [ref=e299]
+        - generic [ref=e300]: Free-text prompt, an issue link, or a mix.
+    - generic [ref=e301]:
+      - button "Cancel" [ref=e302]
+      - button "Launch" [disabled] [ref=e303]:
+        - img [ref=e304]
+        - text: Launch

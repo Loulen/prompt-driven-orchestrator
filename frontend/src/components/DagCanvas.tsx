@@ -607,6 +607,7 @@ function DagCanvasInner({
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         onNodeClick={(_event, node) => onSelectNode(node.id)}
+        onEdgeClick={(_event, edge) => onSelectNode(edge.source)}
         onPaneClick={() => onSelectNode(null)}
         fitView
         proOptions={{ hideAttribution: true }}

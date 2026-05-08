@@ -92,12 +92,26 @@ function TabBar({ tabs, activeId, onSelect, onClose, dirty = false, savedAt = nu
   );
 }
 
-function AddPalette() {
+function EditToolbar({ libraryOpen, onToggleLibrary }) {
   return (
-    <div className="add-palette">
-      <button><Ic.PlusSm/> Add node</button>
-      <button><Ic.Code/> code</button>
-      <button><Ic.Doc/> doc</button>
+    <div className="edit-toolbar">
+      <button title="Add node">
+        <Ic.PlusSm/>
+        <span className="et-tip">Add node · N</span>
+      </button>
+      <span className="et-divider"/>
+      <button className={libraryOpen ? 'active' : ''} title="Library" onClick={onToggleLibrary}>
+        <Ic.Library/>
+        <span className="et-tip">Library · L</span>
+      </button>
+      <button title="Loop">
+        <Ic.Loop/>
+        <span className="et-tip">Loop node</span>
+      </button>
+      <button title="Switch">
+        <Ic.Switch/>
+        <span className="et-tip">Switch node</span>
+      </button>
     </div>
   );
 }
@@ -129,6 +143,6 @@ function EmptyPipelines() {
 
 window.NewRunModal = NewRunModal;
 window.TabBar = TabBar;
-window.AddPalette = AddPalette;
+window.EditToolbar = EditToolbar;
 window.EmptyRuns = EmptyRuns;
 window.EmptyPipelines = EmptyPipelines;

@@ -1,0 +1,24 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Run
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - complementary [ref=e21]:
+        - generic [ref=e22]:
+          - text: Runs
+          - button "New Run" [ref=e23]:
+            - img [ref=e24]
+            - text: New Run
+        - generic [ref=e26]: No runs yet
+      - separator [ref=e27]
+      - generic [ref=e31]: Select a run to view its pipeline
+      - separator [ref=e32]
+  - contentinfo [ref=e35]:
+    - generic [ref=e36]: "Daemon: connected"
+    - generic [ref=e38]: v0.1.0

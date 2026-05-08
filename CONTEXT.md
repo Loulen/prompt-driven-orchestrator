@@ -43,56 +43,110 @@ Modèle (A) — **document-first, code en side-channel** :
 
 ---
 
-## Conditional edges
+## Switch — branchement conditionnel mécanique
 
-Réfute Q1 dans sa formulation initiale ("pas de conditional edges"), précisé par ADR-0002. Maestro autorise des **arêtes conditionnelles** dans la topologie d'une pipeline, sous **contrainte stricte** : les conditions sont **mécaniques uniquement**, jamais LLM.
+Le **`Switch`** est un nœud first-class dont la fonction est de router un artefact d'entrée vers une de N branches selon des prédicats mécaniques (jamais LLM, ADR-0002). Il remplace l'ancien modèle "clause `when:` portée par l'edge" : **les conditions vivent désormais sur les ports de sortie d'un Switch, pas sur les edges**.
 
-- Une edge porte une clause optionnelle `when:` (map de `<champ>: <prédicat>`, AND implicite).
-- Champs autorisés dans `when:` :
-  - `iter` — compteur d'itération du nœud source pour ce Run (incrémenté à chaque trigger ; vaut 1 pour les nœuds non revisités).
-  - Tout **champ de frontmatter** de l'artefact `source.port`.
-  - Toute **variable pipeline** déclarée dans `variables:` au niveau pipeline (référence `$<name>`).
-- Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pour OR : wrapper `any: [...]`.
-- Pas d'eval libre, pas de string-expression. Le runtime parse YAML, résout les variables, applique les prédicats.
+Justifié par les pratiques des outils matures (n8n `Switch`, Unreal `Branch`/`Switch on Int`, ComfyUI `ifElse`) : un nœud routeur dédié rend les points de décision visibles au coup d'œil et permet une UI de composition AND/OR par branche.
 
-### Cycle = propriété émergente
+### Forme
 
-Un "cycle" n'est pas un construct YAML dédié — c'est juste une **back-edge topologique** entre deux nœuds. Le pattern review-loop devient un trio d'edges aux conditions disjointes :
+- 1 input port (`in`) qui reçoit l'artefact à inspecter.
+- N output ports nommés, chacun porteur d'une clause `when:`.
+- 1 output port `default` implicite, sans clause, qui fire si aucune autre branche n'a matché.
+
+### Évaluation
+
+`first-match-wins`, dans l'ordre déclaré (ordre dans l'Inspector, persisté en YAML). Les conditions opèrent sur :
+
+- Tout champ de frontmatter de l'artefact entrant.
+- Toute variable pipeline référencée par `$<name>`.
+
+`iter` n'est **plus** un champ de `when:` — le compteur d'itération est désormais une propriété du nœud `Loop` (cf. ci-dessous), pas une variable globale d'un nœud source.
+
+### Composabilité
+
+Plusieurs prédicats dans une même branche sont **AND'd implicitement**. Pour OR :
+- `in: [...]` pour OR-sur-un-même-champ (cas dominant).
+- Plusieurs branches Switch qui wirent vers la même target downstream (cas cross-fields).
+
+Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pas d'eval libre, pas de string-expression — le runtime parse YAML, résout les variables, applique les prédicats.
+
+### YAML
 
 ```yaml
-# loop-back tant qu'on a du budget et pas d'approval
-- source: { node: reviewer, port: review }
-  target: { node: implementer, port: reviews }
-  when:
-    iter: { lt: "$max_iter_review" }
-    verdict: { not_in: [PASS, APPROVED] }
-
-# halt si budget épuisé sans approval
-- source: { node: reviewer }
-  target: { halt: { message: "Bloqué après {iter} itérations sans PASS" } }
-  when:
-    iter: { gte: "$max_iter_review" }
-    verdict: { not_in: [PASS, APPROVED] }
-
-# poursuite downstream si approuvé
-- source: { node: reviewer, port: review }
-  target: { node: shipper, port: review }
-  when:
-    verdict: { in: [PASS, APPROVED] }
+- id: gate
+  type: switch
+  inputs:
+    - { name: in }
+  outputs:
+    - name: pass
+      when:
+        verdict: { eq: PASS }
+        complexity_score: { lt: 3 }
+    - name: rework
+      when:
+        verdict: { in: [FAIL, NEEDS_WORK] }
+    - { name: default }
 ```
 
-### Cibles d'arête
+---
 
-- `target: { node: <id>, port: <port> }` — routage vers un autre nœud (cas standard).
-- `target: { halt: { message: "..." } }` — termine le Run en `BLOCKED`. Émet un événement `run_halted` avec le message rendu (substitution de `{iter}`, `{verdict}`, etc.). Le manager affiche.
+## Loop — itération bornée first-class
+
+Le **`Loop`** est un nœud first-class qui matérialise les boucles précédemment "émergentes". Il remplace le pattern back-edge + `iter < N`. L'ancienne formulation "Cycle = propriété émergente" est **obsolète** : les cycles d'une pipeline Maestro sont désormais des Loop nodes explicites, dans l'esprit de Unreal `ForLoopWithBreak` ou n8n `Loop Over Items`.
+
+### Forme
+
+- 2 input ports : `in` (entrée), `break` (force la sortie immédiate).
+- 2 output ports : `body` (fire une fois par itération), `done` (fire à la sortie).
+- Config : `max_iter: int` (référencable via `$<var>` pipeline).
+
+### Sémantique runtime
+
+- Réception sur `in` : initialise `iter = 1`, fire `body`.
+- Le **body subgraph** = ensemble des nœuds joignables depuis `body` qui ne pointent pas vers `break`/`done`. Calculé par le runtime au lancement, pas déclaré dans le YAML.
+- Quand tous les NodeRuns du body subgraph pour iter N sont terminés : si `iter < max_iter`, incrémente `iter` et re-fire `body` avec mêmes inputs ; sinon, fire `done` (event `loop_max_reached`).
+- Trigger sur `break` : court-circuite, fire `done` immédiatement (event `loop_break`).
+
+Le compteur `iter` est scopé à un Loop instance pour ce Run. Plusieurs Loops dans une même pipeline ont chacun leur propre compteur, indépendant.
 
 ### Itération intra-Run uniquement
 
 Les compteurs `iter` sont remis à zéro pour chaque nouveau Run. Pas de "mémoire d'itérations" entre Runs distincts du même pipeline.
 
-### Accumulation côté input
+### Accumulation côté input (inchangé)
 
-Quand un nœud reçoit un input depuis une back-edge avec un port `repeated: true` (ex. l'Implementer recevant `reviews_bloquantes` du Reviewer dans une boucle), il lit le **glob** `iter-*/<port>.md` du nœud source — donc il voit l'historique cumulé naturellement.
+Un nœud du body avec un input port `repeated: true` lit le glob `iter-*/<port>.md` du nœud source amont — le mécanisme reste valide, scopé au Loop courant via le sous-dossier d'artefacts.
+
+### YAML
+
+```yaml
+- id: review-loop
+  type: loop
+  inputs:
+    - { name: in }
+    - { name: break }
+  outputs:
+    - { name: body }
+    - { name: done }
+  max_iter: 5
+```
+
+---
+
+## Edges — purement structurelles
+
+Une edge transporte un artefact d'un output port à un input port. Forme :
+
+```yaml
+- source: { node: <id>, port: <port> }
+  target: { node: <id>, port: <port> }
+```
+
+**Plus aucune clause `when:` sur les edges.** Toute la logique conditionnelle est portée par les nœuds `Switch` et `Loop`. Les edges sont un graphe muet — leur rôle est purement structurel : déclarer le câblage des ports.
+
+Le pattern halt-edge décrit dans des versions antérieures est lui aussi déprécié — depuis #39, la terminaison du Run passe par un edge vers le nœud `End` mandatoire.
 
 ---
 

@@ -77,10 +77,10 @@ const PIPELINES = [
 // Coords are in canvas-px, anchored top-left of the node.
 const FWR_NODES = [
   { id: 'plan',        nid: 'k7m2x9',  name: 'Planner',        type: 'doc',  status: 'done',          x:  60,  y: 200, ports: { in: ['issue'], out: ['plan'] } },
-  { id: 'impl',        nid: '9k2x7m',  name: 'Implementer',    type: 'code', status: 'running',       x: 320,  y: 100, iter: '2/5', ports: { in: ['plan', 'review_feedback'], out: ['diff'] } },
-  { id: 'review',      nid: 'q4n8jp',  name: 'Reviewer',       type: 'doc',  status: 'running',       x: 320,  y: 320, iter: '2/5', ports: { in: ['diff'], out: ['review_feedback', 'verdict'] } },
+  { id: 'impl',        nid: '9k2x7m',  name: 'Implementer',    type: 'code', status: 'running',       x: 320,  y: 100, iter: '2/5', ports: { in: ['plan', 'review_feedback'], out: ['diff'] }, portSides: { review_feedback: 'bottom' } },
+  { id: 'review',      nid: 'q4n8jp',  name: 'Reviewer',       type: 'doc',  status: 'running',       x: 320,  y: 320, iter: '2/5', ports: { in: ['diff'], out: ['review_feedback', 'verdict'] }, portSides: { review_feedback: 'top' } },
   { id: 'tests',       nid: 'r3w6tz',  name: 'Tests',          type: 'code', status: 'pending',       x: 600,  y: 100, ports: { in: ['diff'], out: ['result'] } },
-  { id: 'merge',       nid: 'h8s1vc',  name: 'Merge',          type: 'code', status: 'pending',       x: 600,  y: 320, ports: { in: ['verdict', 'result'], out: ['branch'] } },
+  { id: 'merge',       nid: 'h8s1vc',  name: 'Merge',          type: 'code', status: 'pending',       x: 600,  y: 320, ports: { in: ['verdict', 'result'], out: ['branch'] }, portSides: { verdict: 'top' } },
 ];
 
 const FWR_EDGES = [

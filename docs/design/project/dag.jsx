@@ -1,4 +1,7 @@
 // dag.jsx — DAG canvas: nodes, edges, halt icons, run overlay
+// Ports are per-side configurable (left | right | top | bottom).
+
+const NODE_W = 200, NODE_H = 70;
 
 function statusBorder(s) {
   return ({
@@ -7,9 +10,37 @@ function statusBorder(s) {
   })[s] || 'var(--st-pending)';
 }
 
-function TriHandle({ side = 'left', kind = 'in', active = false }) {
-  // Triangle pointing toward node body (in) or away (out), per side.
-  // Vertices for an inward-pointing triangle on each side:
+// Resolve port side: explicit override OR default by kind (in=left, out=right).
+function portSide(node, portName, kind) {
+  if (node && node.portSides && node.portSides[portName]) return node.portSides[portName];
+  return kind === 'in' ? 'left' : 'right';
+}
+
+// Anchor of a port on a node + outward direction unit vector.
+function portAnchor(node, side) {
+  const cx = node.x + NODE_W / 2;
+  const cy = node.y + NODE_H / 2;
+  switch (side) {
+    case 'left':   return { x: node.x,            y: cy,             dx: -1, dy: 0 };
+    case 'right':  return { x: node.x + NODE_W,   y: cy,             dx: +1, dy: 0 };
+    case 'top':    return { x: cx,                y: node.y,         dx: 0,  dy: -1 };
+    case 'bottom': return { x: cx,                y: node.y + NODE_H,dx: 0,  dy: +1 };
+  }
+  return { x: node.x + NODE_W, y: cy, dx: 1, dy: 0 };
+}
+
+// Distribute multiple handles along a side: returns inline style per index.
+function handleStyleFor(side, idx, total) {
+  // Evenly spread along the side (excluding very edges).
+  const t = total === 1 ? 0.5 : 0.2 + (idx * 0.6) / (total - 1);
+  if (side === 'left')   return { left: -7,           top: `calc(${t * 100}% - 6px)` };
+  if (side === 'right')  return { right: -7,          top: `calc(${t * 100}% - 6px)` };
+  if (side === 'top')    return { top: -7,            left: `calc(${t * 100}% - 6px)` };
+  if (side === 'bottom') return { bottom: -7,         left: `calc(${t * 100}% - 6px)` };
+  return {};
+}
+
+function TriHandle({ side = 'left', kind = 'in', active = false, style }) {
   let points;
   const inward = (kind === 'in');
   if (side === 'left')   points = inward ? "2,5 2,11 10,8" : "10,5 10,11 2,8";
@@ -17,7 +48,7 @@ function TriHandle({ side = 'left', kind = 'in', active = false }) {
   if (side === 'top')    points = inward ? "5,2 11,2 8,10" : "5,10 11,10 8,2";
   if (side === 'bottom') points = inward ? "5,10 11,10 8,2" : "5,2 11,2 8,10";
   return (
-    <span className={"tri-handle side-" + side + (active ? ' active' : '')}>
+    <span className={"tri-handle side-" + side + (active ? ' active' : '')} style={style}>
       <svg width="13" height="13" viewBox="0 0 13 13"><polygon className="tri" points={points}/></svg>
     </span>
   );
@@ -25,9 +56,21 @@ function TriHandle({ side = 'left', kind = 'in', active = false }) {
 
 function Node({ node, selected, onSelect }) {
   const { id, nid, name, type, status, x, y, iter, ports = {} } = node;
-  const inSide  = node.inSide  || 'left';
-  const outSide = node.outSide || 'right';
   const flowing = (status === 'running' || status === 'done');
+
+  // Group ports by side for distribution.
+  const handles = [];
+  const bySide = { left: [], right: [], top: [], bottom: [] };
+  (ports.in || []).forEach(p => bySide[portSide(node, p, 'in')].push({ port: p, kind: 'in' }));
+  (ports.out || []).forEach(p => bySide[portSide(node, p, 'out')].push({ port: p, kind: 'out' }));
+  Object.entries(bySide).forEach(([side, list]) => {
+    list.forEach((h, i) => handles.push({
+      ...h, side,
+      style: handleStyleFor(side, i, list.length),
+      active: h.kind === 'out' && flowing,
+    }));
+  });
+
   return (
     <div className={"node " + status + (selected ? " selected" : "")}
          style={{ left: x, top: y }}
@@ -51,40 +94,28 @@ function Node({ node, selected, onSelect }) {
            status === 'failed' ? '· failed' : '· pending'}
         </span>
       </div>
-      <TriHandle side={inSide}  kind="in"  active={false}/>
-      <TriHandle side={outSide} kind="out" active={flowing}/>
+      {handles.map((h, i) => (
+        <TriHandle key={h.kind + '-' + h.port} side={h.side} kind={h.kind} active={h.active} style={h.style}/>
+      ))}
     </div>
   );
 }
 
-// Build a smooth bezier between two node ports.
-function edgePath(fromNode, toX, toY, NODE_W = 200, NODE_H = 70) {
-  const sx = fromNode.x + NODE_W;
-  const sy = fromNode.y + NODE_H / 2;
-  const tx = toX, ty = toY;
-  const dx = Math.max(40, Math.abs(tx - sx) * 0.5);
-  const c1x = sx + dx, c1y = sy;
-  const c2x = tx - dx, c2y = ty;
-  return { d: `M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}`, mid: { x: (sx + tx) / 2, y: (sy + ty) / 2 } };
+// Bezier from one anchor (with outward dir) to another (with outward dir).
+function bezierBetween(a, b) {
+  // Cap the control distance so very long edges don't blow off-canvas.
+  const dist = Math.max(60, Math.min(180, Math.hypot(b.x - a.x, b.y - a.y) * 0.45));
+  const c1x = a.x + a.dx * dist, c1y = a.y + a.dy * dist;
+  const c2x = b.x + b.dx * dist, c2y = b.y + b.dy * dist;
+  const d = `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`;
+  // mid: rough midpoint shifted along the perpendicular
+  const mx = (a.x + b.x) / 2 + (a.dx + b.dx) * dist * 0.25;
+  const my = (a.y + b.y) / 2 + (a.dy + b.dy) * dist * 0.25;
+  return { d, mid: { x: mx, y: my } };
 }
 
-function backEdgePath(fromNode, toNode, NODE_W = 200, NODE_H = 70) {
-  // route a back-edge under the source through to target's left handle
-  const sx = fromNode.x + NODE_W;
-  const sy = fromNode.y + NODE_H / 2;
-  const tx = toNode.x;
-  const ty = toNode.y + NODE_H / 2;
-  const drop = sy + 80;
-  return {
-    d: `M ${sx} ${sy} C ${sx + 40} ${sy}, ${sx + 60} ${drop}, ${sx - 20} ${drop} L ${tx - 30} ${drop} C ${tx - 60} ${drop}, ${tx - 40} ${ty}, ${tx} ${ty}`,
-    mid: { x: (sx + tx) / 2 + 10, y: drop }
-  };
-}
-
-function Edges({ nodes, edges, runningSet, halts }) {
+function Edges({ nodes, edges, runningSet }) {
   const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const NODE_W = 200, NODE_H = 70;
-
   return (
     <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
       <defs>
@@ -101,9 +132,9 @@ function Edges({ nodes, edges, runningSet, halts }) {
       {edges.filter(e => e.to !== 'halt').map(e => {
         const a = byId[e.from], b = byId[e.to];
         if (!a || !b) return null;
-        const isBack = a.x > b.x;
-        const tx = b.x, ty = b.y + NODE_H / 2;
-        const { d } = isBack ? backEdgePath(a, b) : edgePath(a, tx, ty);
+        const aSide = e.fromSide || (e.fromPort ? portSide(a, e.fromPort, 'out') : 'right');
+        const bSide = e.toSide   || (e.toPort   ? portSide(b, e.toPort,   'in')  : 'left');
+        const { d } = bezierBetween(portAnchor(a, aSide), portAnchor(b, bSide));
         const active = runningSet.has(e.from) && (b.status === 'running' || b.status === 'pending');
         const cond = e.cond;
         return (
@@ -121,14 +152,14 @@ function Edges({ nodes, edges, runningSet, halts }) {
 
 function EdgeLabels({ nodes, edges }) {
   const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const NODE_W = 200, NODE_H = 70;
   return (
     <>
       {edges.filter(e => e.cond && e.to !== 'halt').map(e => {
         const a = byId[e.from], b = byId[e.to];
         if (!a || !b) return null;
-        const isBack = a.x > b.x;
-        const { mid } = isBack ? backEdgePath(a, b) : edgePath(a, b.x, b.y + NODE_H / 2);
+        const aSide = e.fromSide || (e.fromPort ? portSide(a, e.fromPort, 'out') : 'right');
+        const bSide = e.toSide   || (e.toPort   ? portSide(b, e.toPort,   'in')  : 'left');
+        const { mid } = bezierBetween(portAnchor(a, aSide), portAnchor(b, bSide));
         return (
           <div key={e.id} className="edge-label cond" style={{ left: mid.x - 60, top: mid.y - 12 }}>
             when: {e.cond}
@@ -141,23 +172,23 @@ function EdgeLabels({ nodes, edges }) {
 
 function HaltIcons({ nodes, edges }) {
   const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const NODE_W = 200, NODE_H = 70;
   return (
     <>
       {edges.filter(e => e.to === 'halt').map(e => {
         const a = byId[e.from];
         if (!a) return null;
-        const sx = a.x + NODE_W, sy = a.y + NODE_H / 2;
-        const hx = sx + 60, hy = sy + 80;
-        const d = `M ${sx} ${sy} C ${sx + 30} ${sy}, ${hx - 20} ${hy}, ${hx} ${hy}`;
+        const aSide = e.fromPort ? portSide(a, e.fromPort, 'out') : 'right';
+        const aA = portAnchor(a, aSide);
+        const hx = aA.x + aA.dx * 80 + 20;
+        const hy = aA.y + aA.dy * 80 + (aA.dx === 0 ? 0 : 80);
+        const c1x = aA.x + aA.dx * 40, c1y = aA.y + aA.dy * 40;
+        const d = `M ${aA.x} ${aA.y} C ${c1x} ${c1y}, ${hx - 20} ${hy}, ${hx} ${hy}`;
         return (
           <React.Fragment key={e.id}>
             <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
               <path d={d} stroke="#f97316" strokeWidth="1.5" strokeDasharray="4 4" fill="none"/>
             </svg>
-            <div className="halt-icon" style={{ left: hx - 14, top: hy - 14 }}>
-              ◌
-            </div>
+            <div className="halt-icon" style={{ left: hx - 14, top: hy - 14 }}>◌</div>
             <div className="edge-label cond" style={{ left: hx - 70, top: hy - 32, color: '#fdba74', borderColor: 'rgba(249,115,22,0.32)', background: 'rgba(249,115,22,0.10)' }}>
               halt: {e.cond}
             </div>
@@ -168,7 +199,7 @@ function HaltIcons({ nodes, edges }) {
   );
 }
 
-function MiniMap({ nodes, halts = [] }) {
+function MiniMap({ nodes }) {
   const W = 180, H = 110;
   const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
   const minX = Math.min(...xs) - 40, maxX = Math.max(...xs) + 240;
@@ -182,8 +213,8 @@ function MiniMap({ nodes, halts = [] }) {
           <rect key={n.id}
             x={6 + (n.x - minX) * s}
             y={6 + (n.y - minY) * s}
-            width={200 * s}
-            height={70 * s}
+            width={NODE_W * s}
+            height={NODE_H * s}
             rx="2"
             fill={statusBorder(n.status)}
             opacity={n.status === 'pending' ? 0.4 : 0.85}/>
@@ -258,3 +289,7 @@ window.HaltIcons = HaltIcons;
 window.MiniMap = MiniMap;
 window.CanvasControls = CanvasControls;
 window.RunOverlay = RunOverlay;
+window.portSide = portSide;
+window.portAnchor = portAnchor;
+window.NODE_W = NODE_W;
+window.NODE_H = NODE_H;

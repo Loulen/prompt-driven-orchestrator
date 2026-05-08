@@ -1,0 +1,138 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+    - navigation [ref=e10]:
+      - generic [ref=e11]: Edit
+    - button "Toggle edit mode" [ref=e13]:
+      - img [ref=e14]
+  - main [ref=e17]:
+    - generic [ref=e88]:
+      - complementary [ref=e91]:
+        - generic [ref=e92]:
+          - generic [ref=e93]: Pipelines
+          - button "New pipeline" [ref=e94]:
+            - img [ref=e95]
+        - generic [ref=e96]:
+          - button "All" [ref=e97]
+          - button "Repo" [ref=e98]
+          - button "User" [ref=e99]
+        - generic [ref=e100]:
+          - button "review-loop 0 nodes repo" [ref=e101]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: review-loop
+              - generic [ref=e105]: 0 nodes
+            - generic [ref=e106]: repo
+          - button "edit-and-save-scenario 4 nodes repo" [ref=e107]:
+            - generic [ref=e108]:
+              - generic [ref=e109]: edit-and-save-scenario
+              - generic [ref=e111]: 4 nodes
+            - generic [ref=e112]: repo
+          - button "plan-implement-loop 0 nodes repo" [ref=e113]:
+            - generic [ref=e114]:
+              - generic [ref=e115]: plan-implement-loop
+              - generic [ref=e117]: 0 nodes
+            - generic [ref=e118]: repo
+      - separator [ref=e119]
+      - generic [ref=e122]:
+        - generic [ref=e127]:
+          - button "• edit-and-save-scenario.yaml" [ref=e245]:
+            - generic [ref=e129]: • edit-and-save-scenario.yaml
+          - button "Save" [ref=e131]:
+            - img [ref=e132]
+            - text: Save
+        - generic [ref=e123]:
+          - generic [ref=e136]:
+            - img [ref=e137]
+            - button "code" [ref=e138]
+            - button "doc" [ref=e139]
+          - application [ref=e140]:
+            - generic [ref=e142]:
+              - generic:
+                - generic:
+                  - group [ref=e143]:
+                    - generic [ref=e144]:
+                      - generic [ref=e145]:
+                        - generic [ref=e147]: Start
+                        - generic [ref=e148]: start
+                      - generic [ref=e149]: start
+                      - generic [ref=e150]:
+                        - img
+                  - group [ref=e151]:
+                    - generic [ref=e152]:
+                      - generic [ref=e153]:
+                        - img
+                      - generic [ref=e154]:
+                        - generic [ref=e156]: alpha
+                        - generic [ref=e157]: doc
+                      - generic [ref=e158]: alpha
+                      - generic [ref=e159]:
+                        - img
+                  - group [ref=e160]:
+                    - generic [ref=e161]:
+                      - generic [ref=e162]:
+                        - img
+                      - generic [ref=e163]:
+                        - generic [ref=e165]: beta
+                        - generic [ref=e166]: doc
+                      - generic [ref=e167]: beta
+                      - generic [ref=e168]:
+                        - img
+                  - group [ref=e169]:
+                    - generic [ref=e170]:
+                      - generic [ref=e171]:
+                        - img
+                      - generic [ref=e172]:
+                        - generic [ref=e174]: End
+                        - generic [ref=e175]: end
+                      - generic [ref=e176]: end
+            - img
+      - separator [ref=e124]
+      - complementary [ref=e202]:
+        - generic [ref=e203]: Node Inspector
+        - generic [ref=e204]:
+          - generic [ref=e206]: Identity
+          - generic [ref=e207]:
+            - generic [ref=e208]: ID
+            - generic "Click to copy" [ref=e209] [cursor=pointer]: alpha
+          - generic [ref=e210]:
+            - generic [ref=e211]: Name
+            - textbox "alpha" [ref=e212]
+          - generic [ref=e214]: Type
+          - generic [ref=e215]:
+            - button "code-mutating" [ref=e216]
+            - button "doc-only" [ref=e217]
+          - generic [ref=e219]: Behavior
+          - generic [ref=e220]:
+            - generic [ref=e221]: Interactive
+            - button [ref=e222]
+          - generic [ref=e225]: Prompt
+          - textbox "Enter the node's role prompt..." [active] [ref=e226]: MARKER_T1_FIRST
+          - generic [ref=e227]:
+            - generic [ref=e228]: Inputs1
+            - button "+ Add" [ref=e229]
+          - generic [ref=e230]:
+            - textbox [ref=e232]: in
+            - combobox "Handle side" [ref=e233]:
+              - option "left" [selected]
+              - option "right"
+              - option "top"
+              - option "bottom"
+            - button "repeated" [ref=e234]
+            - button "×" [ref=e235]
+          - generic [ref=e236]:
+            - generic [ref=e237]: Outputs1
+            - button "+ Add" [ref=e238]
+          - generic [ref=e239]:
+            - textbox [ref=e241]: out
+            - combobox "Handle side" [ref=e242]:
+              - option "left"
+              - option "right" [selected]
+              - option "top"
+              - option "bottom"
+            - button "repeated" [ref=e243]
+            - button "×" [ref=e244]
+  - contentinfo [ref=e84]:
+    - generic [ref=e85]: "Daemon: connected"
+    - generic [ref=e87]: v0.1.0

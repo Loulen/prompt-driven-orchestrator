@@ -51,19 +51,38 @@ function RunsListPanel({ runs, selectedId, onSelect, onNewRun }) {
   );
 }
 
-function PipeRow({ pipe, selected, onClick }) {
+function PipeRow({ pipe, selected, onClick, menuOpen, onOpenMenu, onDelete }) {
   return (
-    <div className={"pipe-row" + (selected ? " selected" : "")} onClick={onClick}>
+    <div className={"pipe-row" + (selected ? " selected" : "") + (menuOpen ? " menu-open" : "")} onClick={onClick}>
       <div className="pr-top">
         <span className="pr-name">{pipe.id}</span>
         <span className={"badge " + pipe.kind}>{pipe.kind}</span>
       </div>
       <div className="pr-sub">{pipe.nodes} nodes · {pipe.modified}</div>
+      <div className="pr-actions">
+        <button className="icon-btn danger" onClick={(e)=>{e.stopPropagation(); onDelete && onDelete(pipe);}} title="Delete">
+          <Ic.Trash/>
+        </button>
+        <button className="icon-btn" onClick={(e)=>{e.stopPropagation(); onOpenMenu && onOpenMenu(pipe);}} title="More">
+          <Ic.Kebab/>
+        </button>
+      </div>
+      {menuOpen && (
+        <div className="ctx-menu" onClick={(e)=>e.stopPropagation()}>
+          <button>Duplicate <span className="ctx-shortcut">⌘D</span></button>
+          <button>Rename…</button>
+          <button>Export YAML</button>
+          <div className="ctx-sep"/>
+          <button className="danger" onClick={(e)=>{e.stopPropagation(); onDelete && onDelete(pipe);}}>
+            <Ic.Trash/> Delete pipeline
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function PipelinesListPanel({ pipelines, selectedId, onSelect }) {
+function PipelinesListPanel({ pipelines, selectedId, onSelect, menuFor, onOpenMenu, onDelete }) {
   const [filter, setFilter] = React.useState('All');
   const filtered = pipelines.filter(p => filter === 'All' ? true : p.kind === filter.toLowerCase());
   return (
@@ -83,7 +102,8 @@ function PipelinesListPanel({ pipelines, selectedId, onSelect }) {
       <div className="p-body">
         <div className="pipe-list">
           {filtered.map(p => (
-            <PipeRow key={p.id} pipe={p} selected={p.id === selectedId} onClick={() => onSelect(p.id)}/>
+            <PipeRow key={p.id} pipe={p} selected={p.id === selectedId} onClick={() => onSelect(p.id)}
+              menuOpen={menuFor === p.id} onOpenMenu={onOpenMenu} onDelete={onDelete}/>
           ))}
         </div>
       </div>

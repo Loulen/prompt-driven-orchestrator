@@ -38,6 +38,7 @@ vi.mock("./MarkdownArtifactModal", () => ({
 }));
 
 import NodeDetailPanel from "./NodeDetailPanel";
+import { TooltipProvider } from "./ui/tooltip";
 import type { NodeState } from "../types";
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
@@ -61,7 +62,7 @@ describe("NodeDetailPanel", () => {
   describe("PromptSection", () => {
     it("renders Initial Prompt section collapsed by default", () => {
       render(
-        <NodeDetailPanel node={makeNode()} runId="run-1" />,
+        <TooltipProvider><NodeDetailPanel node={makeNode()} runId="run-1" /></TooltipProvider>,
       );
       const toggle = screen.getByTestId("prompt-toggle");
       expect(toggle).toBeInTheDocument();
@@ -71,7 +72,7 @@ describe("NodeDetailPanel", () => {
 
     it("expands on chevron click and collapses again", async () => {
       render(
-        <NodeDetailPanel node={makeNode()} runId="run-1" />,
+        <TooltipProvider><NodeDetailPanel node={makeNode()} runId="run-1" /></TooltipProvider>,
       );
       const toggle = screen.getByTestId("prompt-toggle");
 

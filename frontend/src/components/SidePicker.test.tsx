@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import SidePicker from "./SidePicker";
 import NodeInspector from "./NodeInspector";
+import { TooltipProvider } from "./ui/tooltip";
 import { useEditStore } from "../stores/editStore";
 import type { NodeDef, PipelineDef } from "../types";
 
@@ -77,14 +78,14 @@ describe("SidePicker retrofit in NodeInspector PortRow", () => {
   });
 
   it("renders SidePicker buttons (L/R/T/B) in port rows", () => {
-    render(<NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />);
+    render(<TooltipProvider><NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} /></TooltipProvider>);
     const sideButtons = screen.getAllByTitle("left");
     expect(sideButtons.length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByTitle("right").length).toBeGreaterThanOrEqual(1);
   });
 
   it("clicking a side button updates the port side", () => {
-    render(<NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />);
+    render(<TooltipProvider><NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} /></TooltipProvider>);
     const topButtons = screen.getAllByTitle("top");
     fireEvent.click(topButtons[0]);
 

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import LoopInspector from "./LoopInspector";
+import { TooltipProvider } from "./ui/tooltip";
 import { useEditStore } from "../stores/editStore";
 import type { PipelineDef, NodeDef } from "../types";
 
@@ -60,32 +61,32 @@ describe("LoopInspector", () => {
   });
 
   it("renders nothing when no loop node is selected", () => {
-    const { container } = render(<LoopInspector />);
+    const { container } = render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(container.innerHTML).toBe("");
   });
 
   it("renders inspector title", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(screen.getByText("Loop Inspector")).toBeInTheDocument();
   });
 
   it("displays the node ID", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(screen.getByText("loop1")).toBeInTheDocument();
   });
 
   it("displays max_iter input with current value", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     const input = screen.getByTestId("max-iter-input") as HTMLInputElement;
     expect(input.defaultValue).toBe("5");
   });
 
   it("renders all 4 fixed ports", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(screen.getByTestId("port-row-in")).toBeInTheDocument();
     expect(screen.getByTestId("port-row-break")).toBeInTheDocument();
     expect(screen.getByTestId("port-row-body")).toBeInTheDocument();
@@ -94,7 +95,7 @@ describe("LoopInspector", () => {
 
   it("shows input/output badges on ports", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     const badges = screen.getAllByText(/^(input|output)$/);
     const inputBadges = badges.filter((b) => b.textContent === "input");
     const outputBadges = badges.filter((b) => b.textContent === "output");
@@ -104,19 +105,19 @@ describe("LoopInspector", () => {
 
   it("shows port count of 4", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(screen.getByText("4")).toBeInTheDocument();
   });
 
   it("shows help text about fixed ports", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     expect(screen.getByText(/Port names are fixed/)).toBeInTheDocument();
   });
 
   it("updates max_iter via blur", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     const input = screen.getByTestId("max-iter-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "10" } });
     fireEvent.blur(input);
@@ -128,7 +129,7 @@ describe("LoopInspector", () => {
 
   it("supports variable reference for max_iter", () => {
     setStoreState(makeLoopNode());
-    render(<LoopInspector />);
+    render(<TooltipProvider><LoopInspector /></TooltipProvider>);
     const input = screen.getByTestId("max-iter-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "$max_iter_review" } });
     fireEvent.blur(input);

@@ -133,6 +133,7 @@ interface EndNodeData {
 }
 
 function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
+  const inputs = data.inputs ?? [];
   return (
     <div
       className="grid place-items-center rounded-full border font-mono font-bold"
@@ -145,14 +146,14 @@ function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
         fontSize: "11px",
       }}
     >
-      {(data.inputs ?? []).map((port, i) => (
+      {inputs.map((port, i) => (
         <TriangleHandle
           key={`in-${port.name}`}
           id={port.name}
           kind="input"
           side={port.side}
           index={i}
-          total={(data.inputs ?? []).length}
+          total={inputs.length}
         />
       ))}
       &#x25CC;
@@ -166,6 +167,7 @@ interface StartNodeData {
 }
 
 function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
+  const outputs = data.outputs ?? [];
   return (
     <div
       className="start-node grid place-items-center rounded-full border-2 font-mono font-semibold"
@@ -179,14 +181,14 @@ function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
       }}
     >
       &#x25B6;
-      {(data.outputs ?? []).map((port, i) => (
+      {outputs.map((port, i) => (
         <TriangleHandle
           key={`out-${port.name}`}
           id={port.name}
           kind="output"
           side={port.side}
           index={i}
-          total={(data.outputs ?? []).length}
+          total={outputs.length}
         />
       ))}
     </div>

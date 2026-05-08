@@ -19,6 +19,7 @@ import { generateNodeId } from "../lib/nanoid";
 import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchEditNode } from "./SwitchNode";
+import { LoopEditNode } from "./LoopNode";
 
 interface EditNodeData {
   label: string;
@@ -88,11 +89,12 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode };
+const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
   "switch": "switch",
+  "loop": "loop",
 };
 
 function deriveEditNodes(pipeline: PipelineDef): Node[] {
@@ -114,6 +116,25 @@ function deriveEditNodes(pipeline: PipelineDef): Node[] {
             hasWhen: p.when != null,
           })),
           inputSide: n.inputs[0]?.side ?? "left",
+        },
+      };
+    }
+    if (n.type === "loop") {
+      return {
+        id: n.id,
+        type: "loop",
+        position: {
+          x: n.view?.x ?? 200,
+          y: n.view?.y ?? 80 + i * 140,
+        },
+        data: {
+          label: n.name ?? n.id,
+          nodeId: n.id,
+          maxIter: n.max_iter ?? 5,
+          ports: [
+            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
+            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
+          ],
         },
       };
     }
@@ -283,17 +304,34 @@ function EditCanvasInner() {
     const id = generateNodeId();
     const name = DEFAULT_NODE_NAMES[type] ?? "node";
 
-    const newNode: NodeDef = {
-      id,
-      name,
-      type,
-      inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: type === "switch"
-        ? [{ name: "default", repeated: false, side: "right" }]
-        : [{ name: "out", repeated: false, side: "right" }],
-      interactive: false,
-      view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
-    };
+    const newNode: NodeDef = type === "loop"
+      ? {
+          id,
+          name,
+          type,
+          inputs: [
+            { name: "in", repeated: false, side: "left" },
+            { name: "break", repeated: false, side: "left" },
+          ],
+          outputs: [
+            { name: "body", repeated: false, side: "right" },
+            { name: "done", repeated: false, side: "right" },
+          ],
+          interactive: false,
+          view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
+          max_iter: 5,
+        }
+      : {
+          id,
+          name,
+          type,
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: type === "switch"
+            ? [{ name: "default", repeated: false, side: "right" }]
+            : [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
+        };
     addNodeToStore(newNode);
   };
 
@@ -322,6 +360,12 @@ function EditCanvasInner() {
           className="cursor-pointer rounded border border-[var(--color-switch-tint,#a78bfa)] bg-[var(--color-switch-tint,#a78bfa)]/10 px-1.5 py-0.5 font-medium text-[var(--color-switch-tint,#a78bfa)] transition-colors hover:bg-[var(--color-switch-tint,#a78bfa)]/20"
         >
           switch
+        </button>
+        <button
+          onClick={() => handleAddNode("loop")}
+          className="cursor-pointer rounded border border-[var(--color-loop-tint,#60a5fa)] bg-[var(--color-loop-tint,#60a5fa)]/10 px-1.5 py-0.5 font-medium text-[var(--color-loop-tint,#60a5fa)] transition-colors hover:bg-[var(--color-loop-tint,#60a5fa)]/20"
+        >
+          loop
         </button>
       </div>
 

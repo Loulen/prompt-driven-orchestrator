@@ -78,6 +78,14 @@ export interface MergeResolverInfo {
   failure_reason: string | null;
 }
 
+export interface LoopStateInfo {
+  loop_node_id: string;
+  current_iter: number;
+  max_iter: number;
+  break_received: boolean;
+  done: boolean;
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -91,6 +99,7 @@ export interface RunState {
   start_node: StartNodeInfo | null;
   end_node: EndNodeInfo | null;
   merge_resolver: MergeResolverInfo | null;
+  loop_states?: Record<string, LoopStateInfo>;
 }
 
 export interface DaemonEvent {

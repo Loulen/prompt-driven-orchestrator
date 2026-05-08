@@ -4,6 +4,7 @@ mod condition;
 mod event_log;
 mod frontmatter_parser;
 pub mod library_store;
+mod loop_body_resolver;
 mod node_io_resolver;
 mod outputs_validator;
 mod pipeline;
@@ -1105,6 +1106,121 @@ async fn handle_node_completion(
                     })),
                 )
                 .await;
+            }
+            scheduler::SchedulerAction::LoopIterStarted { loop_node_id, iter } => {
+                emit_run_event(
+                    state,
+                    run_id,
+                    event_log::EventKind::LoopIterStarted,
+                    Some(serde_json::json!({
+                        "loop_node_id": loop_node_id,
+                        "iter": iter,
+                    })),
+                )
+                .await;
+            }
+            scheduler::SchedulerAction::LoopBreakReceived { loop_node_id } => {
+                emit_run_event(
+                    state,
+                    run_id,
+                    event_log::EventKind::LoopBreakReceived,
+                    Some(serde_json::json!({
+                        "loop_node_id": loop_node_id,
+                    })),
+                )
+                .await;
+            }
+            scheduler::SchedulerAction::LoopMaxReached {
+                loop_node_id,
+                max_iter,
+            } => {
+                emit_run_event(
+                    state,
+                    run_id,
+                    event_log::EventKind::LoopMaxReached,
+                    Some(serde_json::json!({
+                        "loop_node_id": loop_node_id,
+                        "max_iter": max_iter,
+                    })),
+                )
+                .await;
+            }
+            scheduler::SchedulerAction::LoopDone { loop_node_id } => {
+                emit_run_event(
+                    state,
+                    run_id,
+                    event_log::EventKind::LoopDone,
+                    Some(serde_json::json!({
+                        "loop_node_id": loop_node_id,
+                    })),
+                )
+                .await;
+            }
+        }
+    }
+
+    // Check loop body completion for all loop nodes
+    for loop_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == pipeline::NodeType::Loop)
+    {
+        let loop_actions = scheduler::evaluate_loop_body_completion(
+            &pipeline,
+            run_state,
+            &loop_node.id,
+            &resolved_vars,
+        );
+        for action in &loop_actions {
+            match action {
+                scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                    if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                        spawn_node(state, &spawn_ctx, node, *iter).await;
+                    }
+                }
+                scheduler::SchedulerAction::Complete => {
+                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                    return;
+                }
+                scheduler::SchedulerAction::LoopIterStarted { loop_node_id, iter } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopIterStarted,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "iter": iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopMaxReached {
+                    loop_node_id,
+                    max_iter,
+                } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopMaxReached,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "max_iter": max_iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopDone { loop_node_id } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopDone,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                        })),
+                    )
+                    .await;
+                }
+                _ => {}
             }
         }
     }
@@ -3046,6 +3162,128 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                     )
                     .await;
                 }
+                scheduler::SchedulerAction::LoopIterStarted { loop_node_id, iter } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopIterStarted,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "iter": iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopBreakReceived { loop_node_id } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopBreakReceived,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopMaxReached {
+                    loop_node_id,
+                    max_iter,
+                } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopMaxReached,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "max_iter": max_iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopDone { loop_node_id } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopDone,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                        })),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    // Check loop body completion for all loop nodes
+    for loop_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == pipeline::NodeType::Loop)
+    {
+        let loop_actions = scheduler::evaluate_loop_body_completion(
+            &pipeline,
+            &run_state,
+            &loop_node.id,
+            &resolved_vars,
+        );
+        for action in &loop_actions {
+            match action {
+                scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                    let already_active = run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
+                        n.iter >= *iter
+                            && (n.status == event_log::NodeStatus::Running
+                                || n.status == event_log::NodeStatus::Completed)
+                    });
+                    if !already_active {
+                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                            spawn_node(state, &spawn_ctx, node, *iter).await;
+                        }
+                    }
+                }
+                scheduler::SchedulerAction::Complete => {
+                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                    return;
+                }
+                scheduler::SchedulerAction::LoopIterStarted { loop_node_id, iter } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopIterStarted,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "iter": iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopMaxReached {
+                    loop_node_id,
+                    max_iter,
+                } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopMaxReached,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                            "max_iter": max_iter,
+                        })),
+                    )
+                    .await;
+                }
+                scheduler::SchedulerAction::LoopDone { loop_node_id } => {
+                    emit_run_event(
+                        state,
+                        run_id,
+                        event_log::EventKind::LoopDone,
+                        Some(serde_json::json!({
+                            "loop_node_id": loop_node_id,
+                        })),
+                    )
+                    .await;
+                }
+                _ => {}
             }
         }
     }

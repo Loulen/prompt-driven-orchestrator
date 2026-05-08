@@ -15,6 +15,7 @@ import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
 import SwitchInspector from "./components/SwitchInspector";
+import LoopInspector from "./components/LoopInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -253,7 +254,10 @@ export default function App() {
                 {selection.kind === "node" && editNodeType === "switch" && (
                   <SwitchInspector />
                 )}
-                {selection.kind === "node" && editNodeType !== "switch" && (
+                {selection.kind === "node" && editNodeType === "loop" && (
+                  <LoopInspector />
+                )}
+                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && (
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}

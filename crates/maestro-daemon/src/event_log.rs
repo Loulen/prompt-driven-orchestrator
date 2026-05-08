@@ -45,6 +45,10 @@ pub enum EventKind {
     MergeResolverCompleted,
     MergeResolverFailed,
     SwitchRouted,
+    LoopIterStarted,
+    LoopBreakReceived,
+    LoopMaxReached,
+    LoopDone,
     PipelineModified,
     RunCompleted,
     RunFailed,
@@ -138,6 +142,15 @@ pub struct MergeResolverInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopState {
+    pub loop_node_id: String,
+    pub current_iter: i64,
+    pub max_iter: i64,
+    pub break_received: bool,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
     pub status: RunStatus,
@@ -156,6 +169,8 @@ pub struct RunState {
     pub end_node: Option<EndNodeInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_resolver: Option<MergeResolverInfo>,
+    #[serde(default)]
+    pub loop_states: HashMap<String, LoopState>,
 }
 
 impl RunState {
@@ -173,6 +188,7 @@ impl RunState {
             start_node: None,
             end_node: None,
             merge_resolver: None,
+            loop_states: HashMap::new(),
         }
     }
 }
@@ -351,6 +367,53 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             }
             EventKind::SwitchRouted => {
                 // Informational — records which branch the switch chose
+            }
+            EventKind::LoopIterStarted => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
+                    {
+                        let iter = payload.get("iter").and_then(|v| v.as_i64()).unwrap_or(1);
+                        let max_iter = payload
+                            .get("max_iter")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(5);
+                        let ls = state
+                            .loop_states
+                            .entry(loop_node_id.to_string())
+                            .or_insert_with(|| LoopState {
+                                loop_node_id: loop_node_id.to_string(),
+                                current_iter: 1,
+                                max_iter,
+                                break_received: false,
+                                done: false,
+                            });
+                        ls.current_iter = iter;
+                        ls.max_iter = max_iter;
+                    }
+                }
+            }
+            EventKind::LoopBreakReceived => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
+                    {
+                        if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                            ls.break_received = true;
+                        }
+                    }
+                }
+            }
+            EventKind::LoopMaxReached => {
+                // Informational
+            }
+            EventKind::LoopDone => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
+                    {
+                        if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                            ls.done = true;
+                        }
+                    }
+                }
             }
             EventKind::MergeResolverStarted => {
                 if let Some(ref payload) = event.payload {

@@ -21,6 +21,7 @@ import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchRunNode } from "./SwitchNode";
+import { LoopRunNode } from "./LoopNode";
 
 
 const RUN_STATUS_DOTS: Record<RunStatus, string> = {
@@ -214,6 +215,7 @@ const nodeTypes = {
   start: StartNode,
   mergeResolver: MergeResolverNode,
   switchRun: SwitchRunNode,
+  loopRun: LoopRunNode,
 };
 
 const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "halted"];
@@ -276,6 +278,30 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
             inputSide: def.inputs[0]?.side ?? "left",
             activeBranch,
             iter,
+          },
+          selected: def.id === selectedNodeId,
+        };
+      }
+
+      if (def.node_type === "loop") {
+        const loopState = run.loop_states?.[def.id];
+        return {
+          id: def.id,
+          type: "loopRun",
+          position: {
+            x: (def.view_x ?? 200) + START_NODE_OFFSET_X,
+            y: def.view_y ?? 80 + i * 140,
+          },
+          data: {
+            label: def.name ?? def.id,
+            nodeId: def.id,
+            status,
+            maxIter: loopState?.max_iter ?? 5,
+            currentIter: loopState?.current_iter ?? 0,
+            ports: [
+              ...def.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
+              ...def.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
+            ],
           },
           selected: def.id === selectedNodeId,
         };

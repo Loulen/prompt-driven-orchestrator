@@ -2,37 +2,88 @@ name: review-loop
 version: "1.0"
 
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+
+  - id: qdtXejYS
+    name: loop
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+    view: { x: 100, y: 160 }
+
   - id: XBG5Cxkn
     name: implementer
     type: code-mutating
     inputs:
-      - name: review
+      - name: task
+        side: left
     outputs:
       - name: code
-    view: { x: 100, y: 160 }
+        side: right
+    view: { x: 300, y: 100 }
 
   - id: Qws9KzRZ
     name: reviewer
     type: doc-only
     inputs:
       - name: code
+        side: left
     outputs:
       - name: review
-    view: { x: 500, y: 160 }
+        side: right
+    view: { x: 500, y: 100 }
+
+  - id: tmkRzihO
+    name: switch
+    type: switch
+    inputs:
+      - name: in
+        side: left
+    outputs:
+      - name: pass
+        side: right
+        when:
+          verdict: { in: [PASS, APPROVED] }
+      - name: default
+        side: right
+    view: { x: 700, y: 100 }
+
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
 
 edges:
-  # Forward: implementer → reviewer (unconditional)
+  - source: { node: start, port: user_prompt }
+    target: { node: qdtXejYS, port: in }
+
+  - source: { node: qdtXejYS, port: body }
+    target: { node: XBG5Cxkn, port: task }
+
   - source: { node: XBG5Cxkn, port: code }
     target: { node: Qws9KzRZ, port: code }
 
-  # Back-edge: reviewer → implementer while iter < 3
   - source: { node: Qws9KzRZ, port: review }
-    target: { node: XBG5Cxkn, port: review }
-    when:
-      iter: { lt: 3 }
+    target: { node: tmkRzihO, port: in }
 
-  # Halt when the cycle has run 3 iterations
-  - source: { node: Qws9KzRZ, port: review }
-    target: { halt: { message: "Review loop completed after {iter} iterations on {node-id}" } }
-    when:
-      iter: { gte: 3 }
+  - source: { node: tmkRzihO, port: pass }
+    target: { node: qdtXejYS, port: break }
+
+  - source: { node: qdtXejYS, port: done }
+    target: { node: end, port: result }

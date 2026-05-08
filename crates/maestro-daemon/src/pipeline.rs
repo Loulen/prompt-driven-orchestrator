@@ -24,6 +24,8 @@ pub enum NodeType {
     CodeMutating,
     Start,
     End,
+    Switch,
+    Loop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +65,8 @@ pub struct Port {
     pub side: Option<PortSide>,
     #[serde(default)]
     pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +88,8 @@ pub struct NodeDef {
     #[serde(default)]
     pub interactive: bool,
     pub view: Option<ViewPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iter: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,8 +102,6 @@ pub struct EdgeEndpoint {
 pub struct EdgeDef {
     pub source: EdgeEndpoint,
     pub target: EdgeEndpoint,
-    #[serde(default)]
-    pub when: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -215,7 +219,14 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     let mut diagnostics = Vec::new();
-    let valid_types = ["doc-only", "code-mutating", "start", "end"];
+    let valid_types = [
+        "doc-only",
+        "code-mutating",
+        "start",
+        "end",
+        "switch",
+        "loop",
+    ];
 
     if let Some(nodes) = raw
         .as_mapping_mut()
@@ -256,6 +267,23 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
+    // Reject when: on edges (moved to Switch nodes since #45)
+    if let Some(edges) = raw
+        .as_mapping()
+        .and_then(|m| m.get(serde_yaml::Value::String("edges".into())))
+        .and_then(|v| v.as_sequence())
+    {
+        for edge_val in edges {
+            if let Some(edge_map) = edge_val.as_mapping() {
+                if edge_map.contains_key(serde_yaml::Value::String("when".into())) {
+                    return Err(ParseError::MissingField(
+                        "edges no longer accept 'when:' (since #45). Move the condition into a Switch node.".into(),
+                    ));
+                }
+            }
+        }
+    }
+
     let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
     for node in &mut pipeline.nodes {
@@ -268,6 +296,60 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
             if port.side.is_none() {
                 port.side = Some(PortSide::Right);
             }
+        }
+    }
+
+    // Validate Switch and Loop node constraints
+    for node in &mut pipeline.nodes {
+        match node.node_type {
+            NodeType::Switch => {
+                if node.inputs.len() != 1 || node.inputs[0].name != "in" {
+                    return Err(ParseError::MissingField(format!(
+                        "switch node '{}' must have exactly one input named 'in'",
+                        node.id
+                    )));
+                }
+                let has_default = node.outputs.iter().any(|p| p.name == "default");
+                if !has_default {
+                    node.outputs.push(Port {
+                        name: "default".into(),
+                        repeated: false,
+                        side: Some(PortSide::Right),
+                        frontmatter: None,
+                        when: None,
+                    });
+                }
+            }
+            NodeType::Loop => {
+                if node.max_iter.is_none() {
+                    return Err(ParseError::MissingField(format!(
+                        "loop node '{}' must declare 'max_iter'",
+                        node.id
+                    )));
+                }
+                let expected_inputs = ["in", "break"];
+                let expected_outputs = ["body", "done"];
+                let input_names: Vec<&str> = node.inputs.iter().map(|p| p.name.as_str()).collect();
+                let output_names: Vec<&str> =
+                    node.outputs.iter().map(|p| p.name.as_str()).collect();
+                for name in &expected_inputs {
+                    if !input_names.contains(name) {
+                        return Err(ParseError::MissingField(format!(
+                            "loop node '{}' must have input '{}'",
+                            node.id, name
+                        )));
+                    }
+                }
+                for name in &expected_outputs {
+                    if !output_names.contains(name) {
+                        return Err(ParseError::MissingField(format!(
+                            "loop node '{}' must have output '{}'",
+                            node.id, name
+                        )));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -703,8 +785,6 @@ edges:
   - source: { node: ab12cd34, port: review }
     target: { node: end, port: result }
     reason: "Blocked after {iter} iterations"
-    when:
-      iter: { gte: 5 }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1000,7 +1080,7 @@ nodes:
     }
 
     #[test]
-    fn parses_edge_with_when_clause() {
+    fn rejects_edge_with_when_clause() {
         let yaml = with_start_end(
             r#"
 name: conditional
@@ -1024,11 +1104,12 @@ edges:
       iter: { lt: 5 }
 "#,
         );
-        let result = parse_pipeline(&yaml).unwrap();
-        let edge = &result.pipeline.edges[0];
-        assert!(edge.when.is_some());
-        let when = edge.when.as_ref().unwrap();
-        assert!(when.as_mapping().unwrap().contains_key("iter"));
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("edges no longer accept 'when:'"),
+            "error should mention when removal: {msg}"
+        );
     }
 
     #[test]
@@ -1256,23 +1337,444 @@ nodes:
 
     #[test]
     fn auto_merge_resolver_explicit_false() {
-        let yaml = r#"
+        let yaml = with_start_end(
+            r#"
 name: no-resolver
 auto_merge_resolver: false
 nodes: []
-"#;
-        let result = parse_pipeline(yaml).unwrap();
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
         assert!(!result.pipeline.auto_merge_resolver);
     }
 
     #[test]
     fn auto_merge_resolver_explicit_true() {
-        let yaml = r#"
+        let yaml = with_start_end(
+            r#"
 name: with-resolver
 auto_merge_resolver: true
 nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.auto_merge_resolver);
+    }
+
+    // --- Switch node tests (issue #46) ---
+
+    #[test]
+    fn parses_switch_node_with_when_on_outputs() {
+        let yaml = with_start_end(
+            r#"
+name: switch-test
+nodes:
+  - id: ab000001
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { in: [PASS, APPROVED] }
+      - name: default
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let sw = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(sw.node_type, NodeType::Switch);
+        assert_eq!(sw.inputs.len(), 1);
+        assert_eq!(sw.inputs[0].name, "in");
+        assert_eq!(sw.outputs.len(), 2);
+        assert_eq!(sw.outputs[0].name, "pass");
+        assert!(sw.outputs[0].when.is_some());
+        assert_eq!(sw.outputs[1].name, "default");
+        assert!(sw.outputs[1].when.is_none());
+    }
+
+    #[test]
+    fn switch_node_auto_appends_default_if_missing() {
+        let yaml = with_start_end(
+            r#"
+name: switch-no-default
+nodes:
+  - id: ab000001
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { in: [PASS] }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let sw = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(sw.outputs.len(), 2);
+        assert_eq!(sw.outputs[1].name, "default");
+        assert!(sw.outputs[1].when.is_none());
+        assert_eq!(sw.outputs[1].side, Some(PortSide::Right));
+    }
+
+    #[test]
+    fn switch_node_explicit_default_not_duplicated() {
+        let yaml = with_start_end(
+            r#"
+name: switch-explicit-default
+nodes:
+  - id: ab000001
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { in: [PASS] }
+      - name: default
+        side: bottom
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let sw = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(sw.outputs.len(), 2);
+        let default_port = sw.outputs.iter().find(|p| p.name == "default").unwrap();
+        assert_eq!(default_port.side, Some(PortSide::Bottom));
+    }
+
+    #[test]
+    fn switch_node_rejects_wrong_input_name() {
+        let yaml = with_start_end(
+            r#"
+name: bad-switch
+nodes:
+  - id: ab000001
+    name: bad-switch
+    type: switch
+    inputs:
+      - name: data
+    outputs:
+      - name: default
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exactly one input named 'in'"),
+            "error should mention input 'in': {msg}"
+        );
+    }
+
+    #[test]
+    fn switch_node_rejects_multiple_inputs() {
+        let yaml = with_start_end(
+            r#"
+name: bad-switch
+nodes:
+  - id: ab000001
+    name: bad-switch
+    type: switch
+    inputs:
+      - name: in
+      - name: extra
+    outputs:
+      - name: default
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exactly one input named 'in'"),
+            "error should mention input constraint: {msg}"
+        );
+    }
+
+    // --- Loop node tests (issue #46) ---
+
+    #[test]
+    fn parses_loop_node_with_max_iter() {
+        let yaml = with_start_end(
+            r#"
+name: loop-test
+nodes:
+  - id: ab000001
+    name: review-loop
+    type: loop
+    max_iter: 5
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let lp = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(lp.node_type, NodeType::Loop);
+        assert_eq!(lp.inputs.len(), 2);
+        assert_eq!(lp.outputs.len(), 2);
+        let max_iter = lp.max_iter.as_ref().unwrap();
+        assert_eq!(max_iter.as_u64(), Some(5));
+    }
+
+    #[test]
+    fn parses_loop_node_with_variable_max_iter() {
+        let yaml = with_start_end(
+            r#"
+name: loop-var-test
+variables:
+  max_iter_review: 3
+nodes:
+  - id: ab000001
+    name: review-loop
+    type: loop
+    max_iter: "$max_iter_review"
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let lp = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        let max_iter = lp.max_iter.as_ref().unwrap();
+        assert_eq!(max_iter.as_str(), Some("$max_iter_review"));
+    }
+
+    #[test]
+    fn loop_node_rejects_missing_max_iter() {
+        let yaml = with_start_end(
+            r#"
+name: bad-loop
+nodes:
+  - id: ab000001
+    name: bad-loop
+    type: loop
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must declare 'max_iter'"),
+            "error should mention max_iter: {msg}"
+        );
+    }
+
+    #[test]
+    fn loop_node_rejects_missing_break_input() {
+        let yaml = with_start_end(
+            r#"
+name: bad-loop
+nodes:
+  - id: ab000001
+    name: bad-loop
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must have input 'break'"),
+            "error should mention break: {msg}"
+        );
+    }
+
+    #[test]
+    fn loop_node_rejects_missing_body_output() {
+        let yaml = with_start_end(
+            r#"
+name: bad-loop
+nodes:
+  - id: ab000001
+    name: bad-loop
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: done
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must have output 'body'"),
+            "error should mention body: {msg}"
+        );
+    }
+
+    // --- Round-trip test (issue #46) ---
+
+    #[test]
+    fn round_trip_loop_switch_pipeline() {
+        let yaml = r#"
+name: review-loop
+version: "1.0"
+variables:
+  max_iter_review: 3
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: review-loop
+    type: loop
+    max_iter: "$max_iter_review"
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: body
+      - name: done
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: ab000003
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL, APPROVED]
+  - id: ab000004
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { in: [PASS, APPROVED] }
+      - name: default
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: in }
+  - source: { node: ab000001, port: body }
+    target: { node: ab000002, port: task }
+  - source: { node: ab000002, port: code }
+    target: { node: ab000003, port: code }
+  - source: { node: ab000003, port: review }
+    target: { node: ab000004, port: in }
+  - source: { node: ab000004, port: pass }
+    target: { node: ab000001, port: break }
+  - source: { node: ab000001, port: done }
+    target: { node: end, port: result }
 "#;
         let result = parse_pipeline(yaml).unwrap();
-        assert!(result.pipeline.auto_merge_resolver);
+        assert_eq!(result.pipeline.name, "review-loop");
+        assert_eq!(result.pipeline.nodes.len(), 6);
+        assert_eq!(result.pipeline.edges.len(), 6);
+
+        let loop_node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Loop)
+            .unwrap();
+        assert_eq!(
+            loop_node.max_iter.as_ref().unwrap().as_str(),
+            Some("$max_iter_review")
+        );
+
+        let switch_node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Switch)
+            .unwrap();
+        assert_eq!(switch_node.outputs.len(), 2);
+
+        // Re-serialize and re-parse — no drift
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        assert_eq!(result2.pipeline.name, result.pipeline.name);
+        assert_eq!(result2.pipeline.nodes.len(), result.pipeline.nodes.len());
+        assert_eq!(result2.pipeline.edges.len(), result.pipeline.edges.len());
+    }
+
+    // --- Existing variants unchanged (issue #46) ---
+
+    #[test]
+    fn parse_fixture_review_loop_yaml() {
+        let yaml = include_str!("../../../.maestro/pipelines/review-loop.yaml");
+        let result = parse_pipeline(yaml).unwrap();
+        assert_eq!(result.pipeline.name, "review-loop");
+        assert!(result
+            .pipeline
+            .nodes
+            .iter()
+            .any(|n| n.node_type == NodeType::Loop));
+        assert!(result
+            .pipeline
+            .nodes
+            .iter()
+            .any(|n| n.node_type == NodeType::Switch));
+    }
+
+    #[test]
+    fn existing_node_types_still_parse() {
+        let result = parse_pipeline(VALID_MINIMAL).unwrap();
+        let types: Vec<&NodeType> = result.pipeline.nodes.iter().map(|n| &n.node_type).collect();
+        assert!(types.contains(&&NodeType::Start));
+        assert!(types.contains(&&NodeType::End));
+        assert!(types.contains(&&NodeType::DocOnly));
     }
 }

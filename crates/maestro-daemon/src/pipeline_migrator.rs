@@ -49,6 +49,17 @@ fn has_start_end_nodes(yaml_value: &serde_yaml::Value) -> bool {
     nodes_contain_type(nodes, "start") && nodes_contain_type(nodes, "end")
 }
 
+fn has_when_on_edges(yaml_value: &serde_yaml::Value) -> bool {
+    let edges = match yaml_value.get("edges").and_then(|e| e.as_sequence()) {
+        Some(seq) => seq,
+        None => return false,
+    };
+    edges.iter().any(|e| {
+        e.as_mapping()
+            .is_some_and(|m| m.contains_key(serde_yaml::Value::String("when".into())))
+    })
+}
+
 fn has_halt_edges(yaml_value: &serde_yaml::Value) -> bool {
     let edges = match yaml_value.get("edges").and_then(|e| e.as_sequence()) {
         Some(seq) => seq,
@@ -74,7 +85,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     };
     for node in nodes {
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if node_type == "start" || node_type == "end" {
+        if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
         }
         if node.get("prompt_file").and_then(|v| v.as_str()).is_some() {
@@ -99,6 +110,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     false
 }
 
+#[derive(Debug)]
 pub struct MigrateResult {
     pub migrated: bool,
     pub yaml_text: String,
@@ -111,6 +123,12 @@ pub fn migrate_pipeline_yaml(
 ) -> Result<MigrateResult, String> {
     let mut doc: serde_yaml::Value =
         serde_yaml::from_str(yaml_text).map_err(|e| format!("YAML parse error: {e}"))?;
+
+    if has_when_on_edges(&doc) {
+        return Err("edge-level `when:` clauses are no longer supported; \
+             use a Switch node instead (see issue #45)"
+            .into());
+    }
 
     if !needs_migration(&doc) {
         return Ok(MigrateResult {
@@ -137,7 +155,7 @@ pub fn migrate_pipeline_yaml(
             .get(serde_yaml::Value::String("type".into()))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if node_type == "start" || node_type == "end" {
+        if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
         }
 
@@ -506,8 +524,6 @@ edges:
     target: { node: reviewer, port: code }
   - source: { node: reviewer, port: review }
     target: { node: implementer, port: review }
-    when:
-      iter: { lt: 3 }
 "#;
         let result = migrate_pipeline_yaml(yaml, Path::new("/pipelines/review-loop.yaml")).unwrap();
         assert!(result.migrated);
@@ -707,5 +723,99 @@ edges: []
         // second run: already migrated
         let count2 = migrate_all(tmp.path()).unwrap();
         assert_eq!(count2, 0);
+    }
+
+    #[test]
+    fn switch_loop_nodes_pass_through_unchanged() {
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: my-loop
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: xYzW5678
+    name: my-switch
+    type: switch
+    inputs:
+      - name: in
+        side: left
+    outputs:
+      - name: pass
+        side: right
+        when:
+          verdict: { in: [PASS] }
+      - name: default
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(!result.migrated);
+    }
+
+    #[test]
+    fn rejects_when_on_edges() {
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: worker
+    type: doc-only
+    inputs:
+      - name: task
+        side: left
+    outputs:
+      - name: result
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: aBcD1234, port: result }
+    target: { node: end, port: result }
+    when:
+      iter: { lt: 3 }
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("when:"), "error should mention when:");
+        assert!(
+            err.contains("Switch node"),
+            "error should mention Switch node"
+        );
+        assert!(
+            err.contains("issue #45"),
+            "error should reference issue #45"
+        );
     }
 }

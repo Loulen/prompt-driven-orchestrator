@@ -1,6 +1,6 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "halted" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed";
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop";
 
 export interface RunListEntry {
   run_id: string;
@@ -139,6 +139,7 @@ export interface PortDef {
   repeated: boolean;
   side?: PortSide;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
+  when?: Record<string, unknown> | null;
 }
 
 export interface FrontmatterFieldDecl {
@@ -159,6 +160,7 @@ export interface NodeDef {
   outputs: PortDef[];
   interactive: boolean;
   view?: { x: number; y: number } | null;
+  max_iter?: number | string | null;
 }
 
 export interface EdgeEndpoint {
@@ -169,7 +171,6 @@ export interface EdgeEndpoint {
 export interface EdgeDef {
   source: EdgeEndpoint;
   target: EdgeEndpoint;
-  when?: Record<string, unknown> | null;
   reason?: string | null;
 }
 

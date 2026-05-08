@@ -328,15 +328,18 @@ mod tests {
                     repeated: false,
                     side: None,
                     frontmatter: None,
+                    when: None,
                 }],
                 outputs: vec![Port {
                     name: "plan".into(),
                     repeated: false,
                     side: None,
                     frontmatter: None,
+                    when: None,
                 }],
                 interactive: false,
                 view: None,
+                max_iter: None,
             }],
             edges: vec![],
             auto_merge_resolver: true,
@@ -444,15 +447,18 @@ mod tests {
                 repeated: false,
                 side: None,
                 frontmatter: None,
+                when: None,
             }],
             outputs: vec![Port {
                 name: "summary".into(),
                 repeated: false,
                 side: None,
                 frontmatter: None,
+                when: None,
             }],
             interactive: false,
             view: None,
+            max_iter: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -463,7 +469,6 @@ mod tests {
                 node: "implementer".into(),
                 port: "plan".into(),
             },
-            when: None,
             reason: None,
         });
 
@@ -540,9 +545,11 @@ mod tests {
                         repeated: false,
                         side: None,
                         frontmatter: None,
+                        when: None,
                     }],
                     interactive: false,
                     view: None,
+                    max_iter: None,
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -554,9 +561,11 @@ mod tests {
                         repeated: false,
                         side: None,
                         frontmatter: None,
+                        when: None,
                     }],
                     interactive: false,
                     view: None,
+                    max_iter: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -568,12 +577,14 @@ mod tests {
                             repeated: false,
                             side: None,
                             frontmatter: None,
+                            when: None,
                         },
                         Port {
                             name: "context".into(),
                             repeated: false,
                             side: None,
                             frontmatter: None,
+                            when: None,
                         },
                     ],
                     outputs: vec![Port {
@@ -581,9 +592,11 @@ mod tests {
                         repeated: false,
                         side: None,
                         frontmatter: None,
+                        when: None,
                     }],
                     interactive: false,
                     view: None,
+                    max_iter: None,
                 },
             ],
             edges: vec![
@@ -596,7 +609,6 @@ mod tests {
                         node: "implementer".into(),
                         port: "plan".into(),
                     },
-                    when: None,
                     reason: None,
                 },
                 EdgeDef {
@@ -608,7 +620,6 @@ mod tests {
                         node: "implementer".into(),
                         port: "context".into(),
                     },
-                    when: None,
                     reason: None,
                 },
             ],
@@ -656,6 +667,7 @@ mod tests {
                     repeated: false,
                     side: None,
                     frontmatter: None,
+                    when: None,
                 }],
                 outputs: vec![Port {
                     name: "review".into(),
@@ -672,9 +684,11 @@ mod tests {
                         .into_iter()
                         .collect(),
                     ),
+                    when: None,
                 }],
                 interactive: false,
                 view: None,
+                max_iter: None,
             }],
             edges: vec![],
             auto_merge_resolver: true,

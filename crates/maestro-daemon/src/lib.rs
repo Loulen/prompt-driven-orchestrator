@@ -1,4 +1,5 @@
 mod blackboard;
+#[allow(dead_code)]
 mod condition;
 mod event_log;
 mod frontmatter_parser;
@@ -11,6 +12,7 @@ mod prompt_augmenter;
 mod scheduler;
 mod scheduler_dispatcher;
 pub mod tmux_session_manager;
+#[allow(dead_code)]
 mod variable_resolver;
 
 use std::collections::HashMap;
@@ -795,6 +797,8 @@ async fn spawn_node(
                 pipeline::NodeType::CodeMutating => "code-mutating",
                 pipeline::NodeType::Start => "start",
                 pipeline::NodeType::End => "end",
+                pipeline::NodeType::Switch => "switch",
+                pipeline::NodeType::Loop => "loop",
             },
         })),
     };
@@ -2843,7 +2847,8 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
     }
 }
 
-/// Extract variable references ($name) from when clauses on outgoing edges of a node.
+/// Extract variable references ($name) from when clauses on Switch output ports
+/// reachable from outgoing edges of a node.
 fn extract_variable_refs_from_outgoing_edges(
     pipeline: &pipeline::PipelineDef,
     node_id: &str,
@@ -2853,8 +2858,18 @@ fn extract_variable_refs_from_outgoing_edges(
         if edge.source.node != node_id {
             continue;
         }
-        if let Some(ref when) = edge.when {
-            collect_yaml_var_refs(when, &mut refs);
+        let target_node = pipeline.nodes.iter().find(|n| n.id == edge.target.node);
+        if let Some(node) = target_node {
+            if node.node_type == pipeline::NodeType::Switch {
+                for port in &node.outputs {
+                    if let Some(ref when) = port.when {
+                        collect_yaml_var_refs(when, &mut refs);
+                    }
+                }
+            }
+            if let Some(ref max_iter) = node.max_iter {
+                collect_yaml_var_refs(max_iter, &mut refs);
+            }
         }
     }
     refs.sort();
@@ -3337,6 +3352,8 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
             pipeline::NodeType::CodeMutating => "code-mutating".into(),
             pipeline::NodeType::Start => "start".into(),
             pipeline::NodeType::End => "end".into(),
+            pipeline::NodeType::Switch => "switch".into(),
+            pipeline::NodeType::Loop => "loop".into(),
         },
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
@@ -3346,14 +3363,13 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
 }
 
 fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> event_log::EdgeInfo {
-    let when_json = e.when.as_ref().and_then(|w| serde_json::to_value(w).ok());
     event_log::EdgeInfo {
         source_node: e.source.node.clone(),
         source_port: e.source.port.clone(),
         target_node: e.target.node.clone(),
         target_port: e.target.port.clone(),
         halt_message: e.reason.clone(),
-        when_clause: when_json,
+        when_clause: None,
     }
 }
 
@@ -6434,24 +6450,44 @@ mod tests {
     // --- extract_variable_refs_from_outgoing_edges unit test ---
 
     #[test]
-    fn extract_var_refs_finds_dollar_variables() {
+    fn extract_var_refs_finds_dollar_variables_in_switch_outputs() {
         use crate::pipeline::*;
 
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![],
+            nodes: vec![NodeDef {
+                id: "sw1".into(),
+                name: "switch".into(),
+                node_type: NodeType::Switch,
+                inputs: vec![Port {
+                    name: "in".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                }],
+                outputs: vec![Port {
+                    name: "pass".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+            }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
                     node: "reviewer".into(),
                     port: "review".into(),
                 },
                 target: EdgeEndpoint {
-                    node: "implementer".into(),
-                    port: "review".into(),
+                    node: "sw1".into(),
+                    port: "in".into(),
                 },
-                when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
                 reason: None,
             }],
             auto_merge_resolver: true,
@@ -6469,7 +6505,22 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![],
+            nodes: vec![NodeDef {
+                id: "b".into(),
+                name: "b".into(),
+                node_type: NodeType::DocOnly,
+                inputs: vec![Port {
+                    name: "in".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                }],
+                outputs: vec![],
+                interactive: false,
+                view: None,
+                max_iter: None,
+            }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
                     node: "a".into(),
@@ -6479,7 +6530,6 @@ mod tests {
                     node: "b".into(),
                     port: "in".into(),
                 },
-                when: Some(serde_yaml::from_str("iter: { lt: 3 }").unwrap()),
                 reason: None,
             }],
             auto_merge_resolver: true,

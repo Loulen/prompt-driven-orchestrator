@@ -39,6 +39,7 @@ mod tests {
                     repeated: false,
                     side: None,
                     frontmatter: None,
+                    when: None,
                 })
                 .collect(),
             outputs: outputs
@@ -48,10 +49,12 @@ mod tests {
                     repeated: false,
                     side: None,
                     frontmatter: None,
+                    when: None,
                 })
                 .collect(),
             interactive: false,
             view: None,
+            max_iter: None,
         }
     }
 
@@ -65,7 +68,6 @@ mod tests {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
             },
-            when: None,
             reason: None,
         }
     }

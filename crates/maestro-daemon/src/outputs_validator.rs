@@ -85,6 +85,7 @@ mod tests {
             outputs,
             interactive: false,
             view: None,
+            max_iter: None,
         }
     }
 
@@ -94,6 +95,7 @@ mod tests {
             repeated: false,
             side: None,
             frontmatter: None,
+            when: None,
         }
     }
 
@@ -103,6 +105,7 @@ mod tests {
             repeated: true,
             side: None,
             frontmatter: None,
+            when: None,
         }
     }
 

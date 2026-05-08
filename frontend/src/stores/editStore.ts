@@ -109,7 +109,6 @@ function serializePipeline(p: PipelineDef): string {
       source: e.source,
       target: e.target,
     };
-    if (e.when) edge.when = e.when;
     return edge;
   });
 

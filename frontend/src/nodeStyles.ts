@@ -5,6 +5,8 @@ export const TYPE_LABELS: Record<NodeType, string> = {
   "code-mutating": "code",
   "start": "start",
   "end": "end",
+  "switch": "switch",
+  "loop": "loop",
 };
 
 export const TYPE_COLORS: Record<NodeType, string> = {
@@ -12,4 +14,6 @@ export const TYPE_COLORS: Record<NodeType, string> = {
   "code-mutating": "border-acc text-acc",
   "start": "border-acc text-acc",
   "end": "border-st-blocked text-st-blocked",
+  "switch": "border-st-pending text-fg-3",
+  "loop": "border-st-pending text-fg-3",
 };

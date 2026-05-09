@@ -203,8 +203,12 @@ pub mod pipelines {
     use serde::{Deserialize, Serialize};
 
     fn pipelines_dir() -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".maestro").join("library").join("pipelines"))
+        std::env::var_os("HOME").map(|h| {
+            PathBuf::from(h)
+                .join(".maestro")
+                .join("library")
+                .join("pipelines")
+        })
     }
 
     fn slugify(name: &str) -> String {
@@ -294,8 +298,7 @@ pub mod pipelines {
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("failed to create library pipelines dir: {e}"))?;
 
-        crate::pipeline::parse_pipeline(yaml)
-            .map_err(|e| format!("invalid pipeline YAML: {e}"))?;
+        crate::pipeline::parse_pipeline(yaml).map_err(|e| format!("invalid pipeline YAML: {e}"))?;
 
         let id = slugify(name);
         let path = dir.join(format!("{id}.yaml"));
@@ -628,7 +631,10 @@ mod tests {
             }
 
             let names: Vec<String> = pipelines::list().into_iter().map(|e| e.name).collect();
-            assert_eq!(names, vec!["Alpha Pipeline", "middle pipeline", "Zebra Pipeline"]);
+            assert_eq!(
+                names,
+                vec!["Alpha Pipeline", "middle pipeline", "Zebra Pipeline"]
+            );
         });
     }
 
@@ -657,7 +663,10 @@ mod tests {
 
             let path = pipelines::get_path("test-path").unwrap();
             assert!(path.exists());
-            assert!(path.to_str().unwrap().contains("library/pipelines/test-path.yaml"));
+            assert!(path
+                .to_str()
+                .unwrap()
+                .contains("library/pipelines/test-path.yaml"));
 
             assert!(pipelines::get_path("nonexistent").is_none());
         });

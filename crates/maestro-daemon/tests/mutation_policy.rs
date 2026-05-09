@@ -4,8 +4,8 @@
 
 mod common;
 
-use std::process::Command;
 use common::TestDaemon;
+use std::process::Command;
 
 const PIPELINE_NAME: &str = "mutation-test";
 const PIPELINE_YAML: &str = r#"name: mutation-test
@@ -178,11 +178,7 @@ edges:
         .await
         .unwrap();
 
-    assert_eq!(
-        resp.status(),
-        200,
-        "adding a new node should succeed"
-    );
+    assert_eq!(resp.status(), 200, "adding a new node should succeed");
 
     // Verify auto-sync: template file should now contain the reviewer node
     let template_path = daemon

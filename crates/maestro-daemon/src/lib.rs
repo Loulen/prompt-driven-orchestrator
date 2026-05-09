@@ -935,7 +935,11 @@ async fn save_library_pipeline(
         Ok(id) => {
             let entry_list = library_store::pipelines::list();
             let entry = entry_list.into_iter().find(|e| e.id == id);
-            (StatusCode::CREATED, Json(serde_json::json!({ "id": id, "entry": entry }))).into_response()
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "id": id, "entry": entry })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -1840,11 +1844,8 @@ async fn save_run_pipeline(
         }
     };
 
-    let rejections = mutation_validator::validate_run_mutation(
-        &old_pipeline,
-        &new_pipeline,
-        &run_state,
-    );
+    let rejections =
+        mutation_validator::validate_run_mutation(&old_pipeline, &new_pipeline, &run_state);
     if !rejections.is_empty() {
         let details: Vec<_> = rejections
             .iter()
@@ -1878,7 +1879,13 @@ async fn save_run_pipeline(
         }
     }
 
-    sync_run_pipeline_to_template(&state, &run_id, &run_state.pipeline_name, &req.yaml, &req.prompts);
+    sync_run_pipeline_to_template(
+        &state,
+        &run_id,
+        &run_state.pipeline_name,
+        &req.yaml,
+        &req.prompts,
+    );
 
     info!("Run-scoped pipeline for {run_id} saved (validated + synced to template)");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -1893,7 +1900,7 @@ fn sync_run_pipeline_to_template(
 ) {
     let name = pipeline_name;
 
-    let template_path = resolve_pipeline_path(&state.repo_root, &name);
+    let template_path = resolve_pipeline_path(&state.repo_root, name);
     let tmp_path = template_path.with_extension("yaml.tmp");
 
     if let Some(parent) = template_path.parent() {
@@ -1927,7 +1934,10 @@ fn sync_run_pipeline_to_template(
         }
     }
 
-    info!("Synced run {run_id} pipeline to template at {}", template_path.display());
+    info!(
+        "Synced run {run_id} pipeline to template at {}",
+        template_path.display()
+    );
 }
 
 // --- Orphan sweep / reaper ---
@@ -3412,11 +3422,14 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     let already_active =
-                        fresh_run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
-                            n.iter >= *iter
-                                && (n.status == event_log::NodeStatus::Running
-                                    || n.status == event_log::NodeStatus::Completed)
-                        });
+                        fresh_run_state
+                            .nodes
+                            .get(node_id.as_str())
+                            .is_some_and(|n| {
+                                n.iter >= *iter
+                                    && (n.status == event_log::NodeStatus::Running
+                                        || n.status == event_log::NodeStatus::Completed)
+                            });
                     if !already_active {
                         if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
                             spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
@@ -7672,10 +7685,7 @@ edges: []
         static LIB_TEST_LOCK: StdMutex<()> = StdMutex::new(());
         let _guard = LIB_TEST_LOCK.lock().unwrap();
 
-        let tmp = std::env::temp_dir().join(format!(
-            "maestro-lib-nopipe-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("maestro-lib-nopipe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let prev_home = std::env::var("HOME").ok();

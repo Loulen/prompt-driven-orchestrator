@@ -2,7 +2,6 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectNonZeroBBox } from "./assertions";
 
 // Layer 3b — proves issue #57 unified edit mode. Boots the daemon, creates a
 // run, asserts the editor canvas appears automatically (no "Edit this run"

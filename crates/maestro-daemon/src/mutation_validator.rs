@@ -98,7 +98,9 @@ mod tests {
             outputs: vec![],
             interactive: false,
             view: None,
-            max_iter: Some(serde_yaml::Value::Number(serde_yaml::Number::from(max_iter))),
+            max_iter: Some(serde_yaml::Value::Number(serde_yaml::Number::from(
+                max_iter,
+            ))),
         }
     }
 
@@ -145,7 +147,10 @@ mod tests {
         ]);
 
         let result = validate_run_mutation(&old, &new, &rs);
-        assert!(result.is_empty(), "deleting a pending node should be allowed");
+        assert!(
+            result.is_empty(),
+            "deleting a pending node should be allowed"
+        );
     }
 
     #[test]

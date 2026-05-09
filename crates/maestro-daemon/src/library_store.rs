@@ -659,6 +659,138 @@ mod tests {
     }
 
     #[test]
+    fn json_round_trip_preserves_all_port_fields() {
+        let entry = LibraryEntry {
+            name: "Typed Node".to_string(),
+            node_type: pipeline::NodeType::DocOnly,
+            inputs: vec![
+                pipeline::Port {
+                    name: "task".to_string(),
+                    repeated: false,
+                    side: Some(pipeline::PortSide::Left),
+                    frontmatter: None,
+                    when: None,
+                },
+                pipeline::Port {
+                    name: "reviews".to_string(),
+                    repeated: true,
+                    side: Some(pipeline::PortSide::Top),
+                    frontmatter: None,
+                    when: None,
+                },
+            ],
+            outputs: vec![pipeline::Port {
+                name: "review".to_string(),
+                repeated: false,
+                side: Some(pipeline::PortSide::Right),
+                frontmatter: Some({
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "verdict".to_string(),
+                        pipeline::FrontmatterFieldDecl {
+                            field_type: "enum".to_string(),
+                            allowed: Some(vec!["PASS".to_string(), "FAIL".to_string()]),
+                        },
+                    );
+                    m.insert(
+                        "score".to_string(),
+                        pipeline::FrontmatterFieldDecl {
+                            field_type: "int".to_string(),
+                            allowed: None,
+                        },
+                    );
+                    m
+                }),
+                when: Some(serde_yaml::Value::Mapping({
+                    let mut m = serde_yaml::Mapping::new();
+                    m.insert(
+                        serde_yaml::Value::String("verdict".to_string()),
+                        serde_yaml::Value::Mapping({
+                            let mut inner = serde_yaml::Mapping::new();
+                            inner.insert(
+                                serde_yaml::Value::String("eq".to_string()),
+                                serde_yaml::Value::String("PASS".to_string()),
+                            );
+                            inner
+                        }),
+                    );
+                    m
+                })),
+            }],
+            interactive: true,
+            max_iter: Some(5),
+            branches: None,
+            prompt: "You are a reviewer.".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: LibraryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, entry);
+
+        let output = &parsed.outputs[0];
+        assert!(output.frontmatter.is_some());
+        let fm = output.frontmatter.as_ref().unwrap();
+        assert_eq!(fm["verdict"].field_type, "enum");
+        assert_eq!(
+            fm["verdict"].allowed,
+            Some(vec!["PASS".to_string(), "FAIL".to_string()])
+        );
+        assert_eq!(fm["score"].field_type, "int");
+
+        assert!(output.when.is_some());
+    }
+
+    #[test]
+    fn json_round_trip_via_disk_preserves_port_fields() {
+        with_temp_home(|| {
+            let entry = LibraryEntry {
+                name: "Schema Node".to_string(),
+                node_type: pipeline::NodeType::CodeMutating,
+                inputs: vec![pipeline::Port {
+                    name: "in".to_string(),
+                    repeated: false,
+                    side: Some(pipeline::PortSide::Left),
+                    frontmatter: None,
+                    when: None,
+                }],
+                outputs: vec![pipeline::Port {
+                    name: "result".to_string(),
+                    repeated: false,
+                    side: Some(pipeline::PortSide::Right),
+                    frontmatter: Some({
+                        let mut m = HashMap::new();
+                        m.insert(
+                            "status".to_string(),
+                            pipeline::FrontmatterFieldDecl {
+                                field_type: "enum".to_string(),
+                                allowed: Some(vec!["OK".to_string(), "ERROR".to_string()]),
+                            },
+                        );
+                        m
+                    }),
+                    when: None,
+                }],
+                interactive: false,
+                max_iter: None,
+                branches: None,
+                prompt: "Implement changes.".to_string(),
+            };
+
+            save(&entry).unwrap();
+
+            let loaded = get("Schema Node").unwrap();
+            assert_eq!(loaded, entry);
+
+            let fm = loaded.outputs[0].frontmatter.as_ref().unwrap();
+            assert_eq!(fm["status"].field_type, "enum");
+            assert_eq!(
+                fm["status"].allowed,
+                Some(vec!["OK".to_string(), "ERROR".to_string()])
+            );
+        });
+    }
+
+    #[test]
     fn pipeline_library_get_path() {
         with_temp_home(|| {
             let yaml = sample_pipeline_yaml("Test Path");

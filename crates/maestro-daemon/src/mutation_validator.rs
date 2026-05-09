@@ -130,7 +130,7 @@ mod tests {
                     failure_reason: None,
                     iterations: vec![],
                     frontmatter_retries: 0,
-                    frontmatter_violations: Vec::new(),
+                    frontmatter_violations: vec![],
                 },
             );
         }

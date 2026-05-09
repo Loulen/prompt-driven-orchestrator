@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { BookOpen, Plus, Trash2 } from "lucide-react";
 import type { LibraryEntry } from "../api";
-import { instantiateFromLibrary } from "../api";
+import { instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import type { NodeDef, NodeType, PortSide } from "../types";
+import type { NodeDef, NodeType } from "../types";
 import { Tooltip } from "./ui/tooltip";
 
 const TYPE_ICONS: Record<string, string> = {
@@ -48,16 +48,8 @@ export default function LibraryDropdown({
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,
-        inputs: result.spec.inputs.map((p) => ({
-          name: p.name,
-          repeated: p.repeated,
-          side: (p.side as PortSide) ?? "left",
-        })),
-        outputs: result.spec.outputs.map((p) => ({
-          name: p.name,
-          repeated: p.repeated,
-          side: (p.side as PortSide) ?? "right",
-        })),
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
         view: { x: 200, y: 200 },
       };

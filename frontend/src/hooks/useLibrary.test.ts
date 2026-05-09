@@ -96,4 +96,59 @@ describe("computeSyncState", () => {
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("outline");
   });
+
+  it("returns diverged when output frontmatter schema differs", () => {
+    const node = makeNode({
+      outputs: [
+        {
+          name: "review",
+          repeated: false,
+          side: "right",
+          frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
+        },
+      ],
+    });
+    const entries = [
+      makeEntry({
+        outputs: [{ name: "review", repeated: false, side: "right" }],
+      }),
+    ];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns synced when frontmatter schemas match", () => {
+    const fm = { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } };
+    const node = makeNode({
+      outputs: [
+        { name: "review", repeated: false, side: "right", frontmatter: fm },
+      ],
+    });
+    const entries = [
+      makeEntry({
+        outputs: [
+          { name: "review", repeated: false, side: "right", frontmatter: fm },
+        ],
+      }),
+    ];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
+  it("returns diverged when output when clause differs", () => {
+    const node = makeNode({
+      outputs: [
+        {
+          name: "pass",
+          repeated: false,
+          side: "right",
+          when: { verdict: { eq: "PASS" } },
+        },
+      ],
+    });
+    const entries = [
+      makeEntry({
+        outputs: [{ name: "pass", repeated: false, side: "right" }],
+      }),
+    ];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
 });

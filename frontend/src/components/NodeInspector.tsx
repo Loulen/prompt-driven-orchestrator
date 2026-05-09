@@ -7,7 +7,7 @@ import SidePicker from "./SidePicker";
 import OutputSchemaEditor from "./OutputSchemaEditor";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
-import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api";
+import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
 
@@ -344,11 +344,15 @@ function StarButton({
         name: p.name,
         repeated: p.repeated,
         side: p.side,
+        ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
+        ...(p.when ? { when: p.when } : {}),
       })),
       outputs: node.outputs.map((p) => ({
         name: p.name,
         repeated: p.repeated,
         side: p.side,
+        ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
+        ...(p.when ? { when: p.when } : {}),
       })),
       interactive: node.interactive,
       prompt,
@@ -384,16 +388,8 @@ function StarButton({
       updateNodeFn({
         name: result.spec.name,
         type: result.spec.type as NodeType,
-        inputs: result.spec.inputs.map((p) => ({
-          name: p.name,
-          repeated: p.repeated,
-          side: (p.side as PortSide) ?? "left",
-        })),
-        outputs: result.spec.outputs.map((p) => ({
-          name: p.name,
-          repeated: p.repeated,
-          side: (p.side as PortSide) ?? "right",
-        })),
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
       });
       updatePromptFn(result.prompt);

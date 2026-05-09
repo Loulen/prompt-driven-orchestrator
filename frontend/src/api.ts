@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, RunListEntry, RunState } from "./types";
+import type { PipelineListEntry, PipelineDetail, RunListEntry, RunState, PortDef, PortSide, FrontmatterFieldDecl } from "./types";
 
 const BASE = "";
 
@@ -234,11 +234,29 @@ export async function createPipeline(
 
 // --- Library API ---
 
+export interface LibraryPort {
+  name: string;
+  repeated: boolean;
+  side?: string;
+  frontmatter?: Record<string, FrontmatterFieldDecl> | null;
+  when?: Record<string, unknown> | null;
+}
+
+export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
+  return {
+    name: port.name,
+    repeated: port.repeated,
+    side: (port.side as PortSide) ?? defaultSide,
+    ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
+    ...(port.when ? { when: port.when } : {}),
+  };
+}
+
 export interface LibraryEntry {
   name: string;
   type: string;
-  inputs: { name: string; repeated: boolean; side?: string }[];
-  outputs: { name: string; repeated: boolean; side?: string }[];
+  inputs: LibraryPort[];
+  outputs: LibraryPort[];
   interactive: boolean;
   max_iter?: number | null;
   branches?: number | null;
@@ -254,8 +272,8 @@ export async function fetchLibrary(): Promise<LibraryEntry[]> {
 export interface LibrarySaveSpec {
   name: string;
   type: string;
-  inputs: { name: string; repeated: boolean; side?: string }[];
-  outputs: { name: string; repeated: boolean; side?: string }[];
+  inputs: LibraryPort[];
+  outputs: LibraryPort[];
   interactive: boolean;
   prompt: string;
 }
@@ -281,8 +299,8 @@ export interface InstantiateResult {
   spec: {
     name: string;
     type: string;
-    inputs: { name: string; repeated: boolean; side?: string }[];
-    outputs: { name: string; repeated: boolean; side?: string }[];
+    inputs: LibraryPort[];
+    outputs: LibraryPort[];
     interactive: boolean;
   };
   prompt: string;

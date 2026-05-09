@@ -46,6 +46,8 @@ function portsMatch(
     if (np.name !== lp.name) return false;
     if (np.repeated !== lp.repeated) return false;
     if ((np.side ?? null) !== (lp.side ?? null)) return false;
+    if (JSON.stringify(np.frontmatter ?? null) !== JSON.stringify(lp.frontmatter ?? null)) return false;
+    if (JSON.stringify(np.when ?? null) !== JSON.stringify(lp.when ?? null)) return false;
   }
   return true;
 }

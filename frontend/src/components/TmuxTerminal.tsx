@@ -192,7 +192,7 @@ export default function TmuxTerminal({
 
   return (
     <div
-      className={`flex flex-col overflow-hidden ${expanded ? "flex-1" : ""}`}
+      className="flex flex-1 flex-col overflow-hidden"
       data-testid="tmux-terminal"
     >
       {/* Toolbar */}
@@ -249,8 +249,7 @@ export default function TmuxTerminal({
       {/* Terminal container */}
       <div
         ref={containerRef}
-        className={`min-h-0 bg-bg-0 ${expanded ? "flex-1" : ""}`}
-        style={!expanded ? { height: 220 } : undefined}
+        className="min-h-0 flex-1 bg-bg-0"
         data-testid="xterm-container"
       />
     </div>

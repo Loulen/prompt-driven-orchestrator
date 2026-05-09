@@ -302,4 +302,27 @@ describe("TmuxTerminal", () => {
 
     expect(preventDefaultSpy).toHaveBeenCalled();
   });
+
+  it("does not pin xterm container to a hardcoded height (collapsed state)", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    expect(container.style.height).toBe("");
+    expect(container.className).toContain("flex-1");
+  });
+
+  it("xterm container is flex-1 in expanded state too", () => {
+    render(<TmuxTerminal session="test-session" expanded />);
+    const container = screen.getByTestId("xterm-container");
+    expect(container.style.height).toBe("");
+    expect(container.className).toContain("flex-1");
+  });
+
+  it("wrapper grows to fill its parent in both states", () => {
+    const { rerender } = render(
+      <TmuxTerminal session="test-session" expanded={false} />,
+    );
+    expect(screen.getByTestId("tmux-terminal").className).toContain("flex-1");
+    rerender(<TmuxTerminal session="test-session" expanded />);
+    expect(screen.getByTestId("tmux-terminal").className).toContain("flex-1");
+  });
 });

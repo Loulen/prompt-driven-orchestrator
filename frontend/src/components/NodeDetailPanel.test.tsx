@@ -109,6 +109,55 @@ describe("NodeDetailPanel", () => {
         "maestro-run-abc-impl-iter-3",
       );
     });
+
+    it("renders the details pane (Mark complete + sections) by default (collapsed)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByText("Mark complete")).toBeInTheDocument();
+      expect(screen.getByTestId("prompt-toggle")).toBeInTheDocument();
+    });
+
+    it("hides the details pane when the terminal is expanded (fullsize)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal.getAttribute("data-expanded")).toBe("false");
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      const reTerminal = screen.getByTestId("tmux-terminal");
+      expect(reTerminal.getAttribute("data-expanded")).toBe("true");
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
+      expect(screen.queryByText("Mark complete")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("prompt-toggle")).not.toBeInTheDocument();
+    });
+
+    it("re-renders the details pane after collapsing the terminal", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      // Expand
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
+
+      // Collapse again
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.getByText("Mark complete")).toBeInTheDocument();
+    });
   });
 
   describe("IterSelector", () => {

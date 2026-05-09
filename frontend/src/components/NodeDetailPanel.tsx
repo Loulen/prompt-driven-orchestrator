@@ -275,14 +275,12 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
         </div>
       )}
 
-      <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-        {/* Inline terminal (xterm.js) */}
-        <ResizablePanel
-          defaultSize={terminalExpanded ? 85 : 45}
-          minSize="100px"
-          id="terminal"
-        >
-          <div className="flex h-full flex-col overflow-hidden">
+      {(() => {
+        const terminalPane = (
+          <div
+            className="flex h-full flex-col overflow-hidden"
+            data-testid="terminal-pane-wrapper"
+          >
             {showTerminal ? (
               <TmuxTerminal
                 session={sessionName}
@@ -307,13 +305,13 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
               </div>
             )}
           </div>
-        </ResizablePanel>
+        );
 
-        <ResizableHandle />
-
-        {/* Inputs / Outputs / Actions / Prompt */}
-        <ResizablePanel defaultSize={terminalExpanded ? 15 : 55} minSize="100px" id="details">
-          <div className="flex h-full flex-col overflow-auto">
+        const detailsPane = (
+          <div
+            className="flex h-full flex-col overflow-auto"
+            data-testid="details-pane"
+          >
             {/* Actions */}
             <div className="flex flex-col gap-1.5 px-3 py-2">
               {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed") && !isArchived && (
@@ -368,8 +366,31 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             {/* Initial Prompt */}
             <PromptSection promptText={promptText} status={node.status} />
           </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        );
+
+        if (terminalExpanded) {
+          return (
+            <div
+              className="flex min-h-0 flex-1 flex-col"
+              data-testid="terminal-fullsize"
+            >
+              {terminalPane}
+            </div>
+          );
+        }
+
+        return (
+          <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+            <ResizablePanel defaultSize={45} minSize="100px" id="terminal">
+              {terminalPane}
+            </ResizablePanel>
+            <ResizableHandle />
+            <ResizablePanel defaultSize={55} minSize="100px" id="details">
+              {detailsPane}
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        );
+      })()}
 
       {modal && (
         <MarkdownArtifactModal

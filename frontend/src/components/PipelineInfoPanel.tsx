@@ -220,7 +220,7 @@ function InfoTab({
           >
             <Info size={14} className="shrink-0" />
             <span>
-              No active run. Manager terminal appears here while a Run is in
+              No active run. The Manager tab becomes available while a Run is in
               progress.
             </span>
           </div>
@@ -260,21 +260,17 @@ function YamlTab({ pipeline }: { pipeline: PipelineDef | null }) {
 function highlightYaml(yaml: string): React.ReactNode {
   const lines = yaml.split("\n");
   return lines.map((line, i) => {
-    const parts: React.ReactNode[] = [];
-
     const commentIdx = line.indexOf("#");
-    if (commentIdx >= 0) {
-      parts.push(
-        <span key="pre">{highlightLine(line.slice(0, commentIdx))}</span>,
-        <span key="comment" className="text-fg-4 italic">{line.slice(commentIdx)}</span>,
-      );
-    } else {
-      parts.push(<span key="line">{highlightLine(line)}</span>);
-    }
-
     return (
       <span key={i}>
-        {parts}
+        {commentIdx >= 0 ? (
+          <>
+            {highlightLine(line.slice(0, commentIdx))}
+            <span className="text-fg-4 italic">{line.slice(commentIdx)}</span>
+          </>
+        ) : (
+          highlightLine(line)
+        )}
         {i < lines.length - 1 ? "\n" : null}
       </span>
     );

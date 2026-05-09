@@ -248,7 +248,7 @@ export default function App() {
                 pipeline={editTab?.pipeline ?? null}
                 libraryPipelines={libraryPipelines}
                 onLibraryChanged={refreshLibraryPipelines}
-                onClose={() => setInfoPanelOpen(false)}
+                onClose={handleCloseInfo}
               />
             ) : hasEditTab ? (
               <>

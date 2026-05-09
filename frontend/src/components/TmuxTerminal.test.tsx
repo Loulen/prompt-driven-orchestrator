@@ -59,22 +59,43 @@ class MockWebSocket {
 vi.stubGlobal("WebSocket", MockWebSocket);
 
 // Use vi.hoisted to create mocks that are accessible in vi.mock factories
-const { mockTerminalCalls } = vi.hoisted(() => {
+const { mockTerminalCalls, mockTerminalInstances } = vi.hoisted(() => {
   const calls: unknown[][] = [];
-  return { mockTerminalCalls: calls };
+  const instances: MockTerminal[] = [];
+  return { mockTerminalCalls: calls, mockTerminalInstances: instances };
 });
+
+interface MockTerminal {
+  loadAddon: ReturnType<typeof vi.fn>;
+  open: ReturnType<typeof vi.fn>;
+  write: ReturnType<typeof vi.fn>;
+  onData: ReturnType<typeof vi.fn>;
+  onBinary: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  scrollLines: ReturnType<typeof vi.fn>;
+  buffer: { active: { baseY: number; viewportY: number }; normal: { baseY: number } };
+  rows: number;
+}
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: function Terminal(config: unknown) {
     mockTerminalCalls.push([config]);
-    return {
+    const instance: MockTerminal = {
       loadAddon: vi.fn(),
       open: vi.fn(),
       write: vi.fn(),
       onData: vi.fn(() => ({ dispose: vi.fn() })),
       onBinary: vi.fn(() => ({ dispose: vi.fn() })),
       dispose: vi.fn(),
+      scrollLines: vi.fn(),
+      buffer: {
+        active: { baseY: 50, viewportY: 25 },
+        normal: { baseY: 50 },
+      },
+      rows: 24,
     };
+    mockTerminalInstances.push(instance);
+    return instance;
   },
 }));
 
@@ -107,6 +128,7 @@ describe("TmuxTerminal", () => {
   beforeEach(() => {
     wsInstances.length = 0;
     mockTerminalCalls.length = 0;
+    mockTerminalInstances.length = 0;
   });
 
   afterEach(() => {
@@ -181,5 +203,103 @@ describe("TmuxTerminal", () => {
     const theme = config.theme as Record<string, string>;
     expect(theme.background).toBe("#0f1115");
     expect(theme.cursor).toBe("#10b981");
+  });
+
+  it("wheel event scrolls xterm buffer instead of propagating", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(wheelEvent, "preventDefault");
+    container.dispatchEvent(wheelEvent);
+
+    expect(term.scrollLines).toHaveBeenCalled();
+    expect(preventDefaultSpy).toHaveBeenCalled();
+  });
+
+  it("wheel down scrolls buffer forward", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+    term.buffer.active.viewportY = 10;
+    term.buffer.active.baseY = 50;
+
+    container.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }),
+    );
+
+    const arg = term.scrollLines.mock.calls[0][0] as number;
+    expect(arg).toBeGreaterThan(0);
+  });
+
+  it("wheel up scrolls buffer backward", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+
+    container.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true }),
+    );
+
+    const arg = term.scrollLines.mock.calls[0][0] as number;
+    expect(arg).toBeLessThan(0);
+  });
+
+  it("does not intercept wheel with Ctrl modifier (browser zoom)", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+
+    container.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -100,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(term.scrollLines).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept wheel with Shift modifier (horizontal scroll)", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+
+    container.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -100,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(term.scrollLines).not.toHaveBeenCalled();
+  });
+
+  it("suppresses wheel event even when no scrollback remains", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+    term.buffer.active.viewportY = 0;
+    term.buffer.active.baseY = 0;
+    term.buffer.normal.baseY = 0;
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(wheelEvent, "preventDefault");
+    container.dispatchEvent(wheelEvent);
+
+    expect(preventDefaultSpy).toHaveBeenCalled();
   });
 });

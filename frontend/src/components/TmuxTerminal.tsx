@@ -36,6 +36,7 @@ export default function TmuxTerminal({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    const container = containerRef.current;
 
     const term = new Terminal({
       cursorBlink: true,
@@ -73,7 +74,7 @@ export default function TmuxTerminal({
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
-    term.open(containerRef.current);
+    term.open(container);
     fitAddon.fit();
 
     terminalRef.current = term;
@@ -132,6 +133,16 @@ export default function TmuxTerminal({
       }
     });
 
+    // xterm.js in alt-screen mode forwards wheel as arrow-key escapes to the TTY.
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.shiftKey || e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const lines = Math.round(e.deltaY / 25) || (e.deltaY > 0 ? 1 : -1);
+      term.scrollLines(lines);
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+
     // Resize observer
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
@@ -148,9 +159,10 @@ export default function TmuxTerminal({
         }
       }
     });
-    resizeObserver.observe(containerRef.current);
+    resizeObserver.observe(container);
 
     return () => {
+      container.removeEventListener("wheel", handleWheel);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();

@@ -99,7 +99,6 @@ export default function App() {
   const openTabs = useEditStore((s) => s.openTabs);
   const editSave = useEditStore((s) => s.save);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
-
   const resolveConflict = useEditStore((s) => s.resolveConflict);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
@@ -176,7 +175,6 @@ export default function App() {
 
   const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
   const minSizePx = `${layout.minSizePx}px`;
-
   const conflictTab = openTabs.find((t) => t.conflict != null);
 
   const showRunDetail = !hasEditTab && selectedRun;

@@ -438,7 +438,7 @@ describe("reloadPipeline conflict detection", () => {
 });
 
 describe("resolveConflict", () => {
-  it("'keep' discards external data and keeps canvas", async () => {
+  it("'keep' discards external data and keeps canvas", () => {
     seedTab("my-pipe", true);
 
     // Simulate conflict state
@@ -465,7 +465,7 @@ describe("resolveConflict", () => {
     expect(tab.dirty).toBe(true);
   });
 
-  it("'take' applies external data and clears dirty+conflict", async () => {
+  it("'take' applies external data and clears dirty+conflict", () => {
     seedTab("my-pipe", true);
 
     useEditStore.setState((s) => ({

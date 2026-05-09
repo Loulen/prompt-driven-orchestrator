@@ -109,7 +109,9 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
   }, [runId, node.node_id, selectedIter, shouldFetchPrompt]);
 
   useEffect(() => {
-    if (isStaleIter) {
+    const oneShot = isStaleIter || (interval === null && node.status === "pending");
+
+    if (oneShot) {
       let cancelled = false;
       fetchNodeIO(runId, node.node_id, selectedIter)
         .then((io) => {
@@ -124,23 +126,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
       };
     }
 
-    if (interval === null) {
-      if (node.status === "pending") {
-        let cancelled = false;
-        fetchNodeIO(runId, node.node_id, selectedIter)
-          .then((io) => {
-            if (!cancelled) {
-              setInputs(io.inputs);
-              setOutputs(io.outputs);
-            }
-          })
-          .catch(() => {});
-        return () => {
-          cancelled = true;
-        };
-      }
-      return;
-    }
+    if (interval === null) return;
 
     let cancelled = false;
 

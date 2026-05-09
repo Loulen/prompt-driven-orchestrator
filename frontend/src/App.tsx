@@ -117,6 +117,38 @@ export default function App() {
       ? selectedRun.nodes[selection.id] ?? null
       : null;
 
+  function inspectorTabContent() {
+    if (inspectorTab === "run") {
+      if (isEditingRun && selectedRun && runNode) {
+        return (
+          <NodeDetailPanel
+            node={runNode}
+            runId={selectedRun.run_id}
+            isArchived={isArchived}
+            nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          />
+        );
+      }
+      if (isEditingRun && selectedRun) {
+        return <RunTabPlaceholder nodeId={selection.id} />;
+      }
+      return <NoRunPlaceholder />;
+    }
+
+    switch (editNodeType) {
+      case "switch": return <SwitchInspector />;
+      case "loop": return <LoopInspector />;
+      case "for-each": return <ForEachInspector />;
+      case "merge": return <MergeInspector />;
+      default: return (
+        <NodeInspector
+          libraryEntries={libraryEntries}
+          onLibraryChanged={refreshLibrary}
+        />
+      );
+    }
+  }
+
   const handleToggleInfo = useCallback(() => {
     setInfoPanelOpen((prev) => !prev);
   }, []);
@@ -254,33 +286,7 @@ export default function App() {
               <>
                 {selection.kind === "node" && editNodeType != null && editNodeType !== "start" && editNodeType !== "end" ? (
                   <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
-                    {inspectorTab === "run" ? (
-                      isEditingRun && selectedRun && runNode ? (
-                        <NodeDetailPanel
-                          node={runNode}
-                          runId={selectedRun.run_id}
-                          isArchived={isArchived}
-                          nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
-                        />
-                      ) : isEditingRun && selectedRun ? (
-                        <RunTabPlaceholder nodeId={selection.id} />
-                      ) : (
-                        <NoRunPlaceholder />
-                      )
-                    ) : editNodeType === "switch" ? (
-                      <SwitchInspector />
-                    ) : editNodeType === "loop" ? (
-                      <LoopInspector />
-                    ) : editNodeType === "for-each" ? (
-                      <ForEachInspector />
-                    ) : editNodeType === "merge" ? (
-                      <MergeInspector />
-                    ) : (
-                      <NodeInspector
-                        libraryEntries={libraryEntries}
-                        onLibraryChanged={refreshLibrary}
-                      />
-                    )}
+                    {inspectorTabContent()}
                   </InspectorTabs>
                 ) : selection.kind === "node" ? (
                   <NodeInspector

@@ -92,6 +92,7 @@ export function serializePipeline(p: PipelineDef): string {
     if (n.interactive) node.interactive = true;
     if (n.type === "loop" && n.max_iter !== undefined && n.max_iter !== null)
       node.max_iter = n.max_iter;
+    if (n.type === "for-each" && n.over) node.over = n.over;
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
@@ -373,7 +374,14 @@ export const useEditStore = create<EditState>((set, get) => ({
   deleteEdge: (index: number) => {
     set((s) => ({
       ...mutateActiveTab(s, (tab) => {
+        const removed = tab.pipeline.edges[index];
         tab.pipeline.edges = tab.pipeline.edges.filter((_, i) => i !== index);
+        if (removed && removed.target.port === "in") {
+          const targetNode = tab.pipeline.nodes.find((n) => n.id === removed.target.node);
+          if (targetNode && targetNode.type === "for-each") {
+            targetNode.over = null;
+          }
+        }
       }),
       selection: { kind: "none" as const, id: null },
     }));

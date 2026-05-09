@@ -319,8 +319,8 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
         </div>
       )}
 
-      {/* Failed banner */}
-      {node.status === "failed" && node.failure_reason === "output validation failed" ? (
+      {/* Failed banner — validation exhausted variant */}
+      {node.status === "failed" && node.failure_reason === "output validation failed" && (
         <div
           className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2"
           data-testid="frontmatter-exhausted-banner"
@@ -348,7 +348,10 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             </ul>
           )}
         </div>
-      ) : node.status === "failed" ? (
+      )}
+
+      {/* Failed banner — generic */}
+      {node.status === "failed" && node.failure_reason !== "output validation failed" && (
         <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-failed" />
           <span
@@ -358,7 +361,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             Failed{node.failure_reason ? ` — ${node.failure_reason}` : ""}
           </span>
         </div>
-      ) : null}
+      )}
 
       <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
         {/* Terminal preview */}

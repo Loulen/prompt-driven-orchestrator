@@ -3878,18 +3878,18 @@ async fn check_output_validation_with_retry(
                 .map(|n| n.frontmatter_retries)
                 .unwrap_or(0);
 
-            if retries >= 1 {
-                let violation_details: Vec<serde_json::Value> = violations
-                    .iter()
-                    .map(|v| {
-                        serde_json::json!({
-                            "port": v.port,
-                            "field": v.field,
-                            "reason": v.reason,
-                        })
+            let violation_details: Vec<serde_json::Value> = violations
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "port": v.port,
+                        "field": v.field,
+                        "reason": v.reason,
                     })
-                    .collect();
+                })
+                .collect();
 
+            if retries >= 1 {
                 let fail_event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
@@ -3932,17 +3932,6 @@ async fn check_output_validation_with_retry(
                 let msg = outputs_validator::corrective_message(&violations);
                 let session_name = tmux_session_manager::node_session_name(run_id, node_id, iter);
                 tmux_session_manager::send_keys(&session_name, &msg);
-
-                let violation_details: Vec<serde_json::Value> = violations
-                    .iter()
-                    .map(|v| {
-                        serde_json::json!({
-                            "port": v.port,
-                            "field": v.field,
-                            "reason": v.reason,
-                        })
-                    })
-                    .collect();
 
                 let retry_event = event_log::Event {
                     id: None,

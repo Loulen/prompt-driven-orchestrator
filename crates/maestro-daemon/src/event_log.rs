@@ -360,10 +360,8 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                                 .get("reason")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                            if let Some(violations) = payload.get("violations") {
-                                if let Some(arr) = violations.as_array() {
-                                    node.frontmatter_violations = arr.clone();
-                                }
+                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array()) {
+                                node.frontmatter_violations = arr.clone();
                             }
                         }
                         let iter = event.iter.unwrap_or(node.iter);

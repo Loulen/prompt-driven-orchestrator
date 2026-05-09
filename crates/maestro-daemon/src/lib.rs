@@ -801,6 +801,14 @@ fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>
         pipeline::ParseError::MissingField(field) => {
             (format!("missing required field: {field}"), None)
         }
+        pipeline::ParseError::UndeclaredWhenField {
+            node_id,
+            port,
+            field,
+        } => (
+            format!("switch node '{node_id}' output '{port}': when-clause field '{field}' not found in upstream schema"),
+            None,
+        ),
     }
 }
 

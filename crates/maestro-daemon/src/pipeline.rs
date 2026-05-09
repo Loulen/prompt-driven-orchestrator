@@ -515,8 +515,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 }
 
 fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {
-    let variable_names: HashSet<&str> =
-        pipeline.variables.keys().map(|k| k.as_str()).collect();
+    let variable_names: HashSet<&str> = pipeline.variables.keys().map(|k| k.as_str()).collect();
 
     for node in &pipeline.nodes {
         if node.node_type != NodeType::Switch {
@@ -2513,5 +2512,150 @@ nodes:
             .find(|n| n.id == "ab000001")
             .unwrap();
         assert_eq!(fe.over.as_deref(), Some("tasks"));
+    }
+
+    #[test]
+    fn round_trip_frontmatter_output_port() {
+        let yaml = with_start_end(
+            r#"
+name: frontmatter-rt
+nodes:
+  - id: reviewer
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+          score:
+            type: int
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        let reviewer = result2
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "reviewer")
+            .unwrap();
+        let out = &reviewer.outputs[0];
+        let fm = out.frontmatter.as_ref().unwrap();
+        assert_eq!(fm["verdict"].field_type, "enum");
+        assert_eq!(
+            fm["verdict"].allowed.as_deref(),
+            Some(&["PASS".into(), "FAIL".into()][..])
+        );
+        assert_eq!(fm["score"].field_type, "int");
+    }
+
+    #[test]
+    fn round_trip_switch_with_when_clauses() {
+        let yaml = with_start_end(
+            r#"
+name: switch-rt
+nodes:
+  - id: reviewer
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, APPROVED, FAIL]
+  - id: gate
+    name: gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict:
+            in: [PASS, APPROVED]
+      - name: rework
+        when:
+          verdict:
+            eq: FAIL
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        let gate = result2
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "gate")
+            .unwrap();
+        let pass_port = gate.outputs.iter().find(|p| p.name == "pass").unwrap();
+        assert!(pass_port.when.is_some());
+        let rework_port = gate.outputs.iter().find(|p| p.name == "rework").unwrap();
+        assert!(rework_port.when.is_some());
+    }
+
+    #[test]
+    fn round_trip_multi_field_when_clause() {
+        let yaml = with_start_end(
+            r#"
+name: multi-when-rt
+nodes:
+  - id: reviewer
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+          complexity_score:
+            type: int
+  - id: gate
+    name: gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict:
+            eq: PASS
+          complexity_score:
+            lt: 3
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        let gate = result2
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "gate")
+            .unwrap();
+        let pass_port = gate.outputs.iter().find(|p| p.name == "pass").unwrap();
+        let when = pass_port.when.as_ref().unwrap();
+        assert!(when.as_mapping().unwrap().len() >= 2);
     }
 }

@@ -200,7 +200,9 @@ function dumpYaml(val: unknown, indent: number): string {
           if (lines.length === 1 && lines[0].startsWith("{")) {
             return `${k}: ${lines[0]}`;
           }
-          return `${k}:\n${lines.map((l) => `  ${prefix}${l}`).join("\n")}`;
+          const [first, ...rest] = lines;
+          const head = `${k}:\n  ${prefix}${first}`;
+          return rest.length > 0 ? `${head}\n${rest.join("\n")}` : head;
         }
         if (Array.isArray(v) && v.length > 0 && !v.every((x) => typeof x !== "object" || x === null)) {
           return `${k}:\n${child}`;

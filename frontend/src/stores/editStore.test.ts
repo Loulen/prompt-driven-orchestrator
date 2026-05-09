@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useEditStore } from "./editStore";
+import { useEditStore, serializePipeline } from "./editStore";
 import { savePipeline, fetchPipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
@@ -669,5 +669,167 @@ describe("resolveConflict", () => {
     expect(tab.prompts["ext-node"]).toBe("ext");
     expect(tab.diagnostics).toEqual(["d1"]);
     expect(tab.dirty).toBe(false);
+  });
+});
+
+describe("serializePipeline round-trip: YAML structural correctness", () => {
+  function makeFullPipeline(extraNodes: NodeDef[], edges: EdgeDef[] = []): PipelineDef {
+    const start: NodeDef = {
+      id: "start", name: "Start", type: "start",
+      inputs: [], outputs: [{ name: "user_prompt", repeated: false, side: "right" }],
+      interactive: false, view: { x: 0, y: 0 },
+    };
+    const end: NodeDef = {
+      id: "end", name: "End", type: "end",
+      inputs: [{ name: "result", repeated: false, side: "left" }], outputs: [],
+      interactive: false, view: { x: 400, y: 0 },
+    };
+    return {
+      name: "round-trip-test", version: "1.0", variables: {},
+      nodes: [start, ...extraNodes, end], edges,
+    };
+  }
+
+  it("serializes a minimal start+end pipeline to parseable YAML", () => {
+    const pipeline = makeFullPipeline([]);
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("name: round-trip-test");
+    expect(yaml).toContain("type: start");
+    expect(yaml).toContain("type: end");
+  });
+
+  it("serializes output port with frontmatter at correct indentation", () => {
+    const reviewer: NodeDef = {
+      id: "reviewer", name: "reviewer", type: "doc-only",
+      inputs: [{ name: "code", repeated: false, side: "left" }],
+      outputs: [{
+        name: "review", repeated: false, side: "right",
+        frontmatter: {
+          verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
+        },
+      }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([reviewer]));
+
+    // The frontmatter fields (type/allowed) must be siblings, not parent-child
+    const lines = yaml.split("\n");
+    const typeIdx = lines.findIndex((l) => l.includes("type: enum"));
+    const allowedIdx = lines.findIndex((l) => l.includes("allowed:"));
+    expect(typeIdx).toBeGreaterThan(-1);
+    expect(allowedIdx).toBeGreaterThan(-1);
+
+    // Both should have the same leading whitespace (they're siblings under verdict:)
+    const typeIndent = lines[typeIdx].match(/^(\s*)/)?.[1].length ?? -1;
+    const allowedIndent = lines[allowedIdx].match(/^(\s*)/)?.[1].length ?? -1;
+    expect(typeIndent).toBe(allowedIndent);
+  });
+
+  it("serializes output port with when clause at correct indentation", () => {
+    const switchNode: NodeDef = {
+      id: "gate", name: "gate", type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [
+        {
+          name: "pass", repeated: false, side: "right",
+          when: { verdict: { eq: "PASS" }, score: { gte: 7 } },
+        },
+        { name: "default", repeated: false, side: "right" },
+      ],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([switchNode]));
+
+    const lines = yaml.split("\n");
+    // Find verdict and score lines under when: — they must be at same indent
+    const verdictIdx = lines.findIndex((l) => l.includes("verdict:"));
+    const scoreIdx = lines.findIndex((l) => l.includes("score:"));
+    expect(verdictIdx).toBeGreaterThan(-1);
+    expect(scoreIdx).toBeGreaterThan(-1);
+
+    const verdictIndent = lines[verdictIdx].match(/^(\s*)/)?.[1].length ?? -1;
+    const scoreIndent = lines[scoreIdx].match(/^(\s*)/)?.[1].length ?? -1;
+    expect(verdictIndent).toBe(scoreIndent);
+  });
+
+  it("serializes multi-field frontmatter with all fields at same depth", () => {
+    const node: NodeDef = {
+      id: "multi", name: "multi", type: "doc-only",
+      inputs: [{ name: "in", repeated: false }],
+      outputs: [{
+        name: "out", repeated: false,
+        frontmatter: {
+          verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
+          score: { type: "int" },
+          summary: { type: "string" },
+        },
+      }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([node]));
+
+    const lines = yaml.split("\n");
+    const verdictLine = lines.find((l) => /^\s+verdict:/.test(l));
+    const scoreLine = lines.find((l) => /^\s+score:/.test(l));
+    const summaryLine = lines.find((l) => /^\s+summary:/.test(l));
+
+    expect(verdictLine).toBeDefined();
+    expect(scoreLine).toBeDefined();
+    expect(summaryLine).toBeDefined();
+
+    const indent = (l: string) => l.match(/^(\s*)/)?.[1].length ?? -1;
+    expect(indent(verdictLine!)).toBe(indent(scoreLine!));
+    expect(indent(scoreLine!)).toBe(indent(summaryLine!));
+  });
+
+  it("serializes deeply nested when clause with in-predicate correctly", () => {
+    const switchNode: NodeDef = {
+      id: "gate", name: "gate", type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [
+        {
+          name: "pass", repeated: false, side: "right",
+          when: { verdict: { in: ["PASS", "APPROVED"] } },
+        },
+        { name: "default", repeated: false, side: "right" },
+      ],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([switchNode]));
+
+    // The YAML must not contain excessive indentation (more than 16 spaces
+    // for any line would indicate double-indent bug)
+    const lines = yaml.split("\n");
+    for (const line of lines) {
+      const leadingSpaces = line.match(/^(\s*)/)?.[1].length ?? 0;
+      expect(leadingSpaces).toBeLessThan(16);
+    }
+  });
+
+  it("serializes pipeline with variables correctly", () => {
+    const pipeline: PipelineDef = {
+      name: "vars-test", version: "1.0",
+      variables: {
+        max_iter: { type: "int", default: 5 },
+        threshold: { type: "float", default: 0.8 },
+      },
+      nodes: [
+        {
+          id: "start", name: "Start", type: "start",
+          inputs: [], outputs: [{ name: "user_prompt", repeated: false, side: "right" }],
+          interactive: false, view: { x: 0, y: 0 },
+        },
+        {
+          id: "end", name: "End", type: "end",
+          inputs: [{ name: "result", repeated: false, side: "left" }], outputs: [],
+          interactive: false, view: { x: 400, y: 0 },
+        },
+      ],
+      edges: [],
+    };
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("variables:");
+    expect(yaml).toContain("max_iter: 5");
+    expect(yaml).toContain("threshold: 0.8");
   });
 });

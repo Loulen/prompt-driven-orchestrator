@@ -20,6 +20,7 @@ export interface OpenPipeline {
   scope: string;
   pipeline: PipelineDef;
   prompts: Record<string, string>;
+  diagnostics: string[];
   dirty: boolean;
   externalDirty: boolean;
   runId?: string;
@@ -54,7 +55,7 @@ interface EditState {
   deleteEdge: (index: number) => void;
 
   // Pipeline-level mutations
-  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "auto_merge_resolver">>) => void;
+  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables">>) => void;
 
   // Prompt mutations
   updatePrompt: (nodeId: string, content: string) => void;
@@ -111,7 +112,6 @@ export function serializePipeline(p: PipelineDef): string {
     if (n.view) node.view = n.view;
     return node;
   });
-  if (p.auto_merge_resolver !== undefined) obj.auto_merge_resolver = p.auto_merge_resolver;
   obj.edges = p.edges.map((e) => {
     const edge: Record<string, unknown> = {
       source: e.source,
@@ -244,6 +244,7 @@ export const useEditStore = create<EditState>((set, get) => ({
         scope: detail.scope,
         pipeline: detail.pipeline,
         prompts: detail.prompts,
+        diagnostics: detail.diagnostics ?? [],
         dirty: false,
         externalDirty: false,
       };
@@ -271,6 +272,7 @@ export const useEditStore = create<EditState>((set, get) => ({
         scope: "run",
         pipeline: detail.pipeline,
         prompts: detail.prompts,
+        diagnostics: detail.diagnostics ?? [],
         dirty: false,
         externalDirty: false,
         runId,
@@ -382,7 +384,6 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (updates.name !== undefined) tab.pipeline.name = updates.name;
       if (updates.version !== undefined) tab.pipeline.version = updates.version;
       if (updates.variables !== undefined) tab.pipeline.variables = updates.variables;
-      if (updates.auto_merge_resolver !== undefined) tab.pipeline.auto_merge_resolver = updates.auto_merge_resolver;
     }));
   },
 
@@ -445,6 +446,7 @@ export const useEditStore = create<EditState>((set, get) => ({
                 ...t,
                 pipeline: detail.pipeline,
                 prompts: detail.prompts,
+                diagnostics: detail.diagnostics ?? [],
                 dirty: false,
                 externalDirty: true,
               }

@@ -13,9 +13,9 @@ vi.mock("../api", () => ({
       variables: {},
       nodes: [],
       edges: [],
-      auto_merge_resolver: true,
     },
     prompts: {},
+    diagnostics: [],
   }),
   fetchRunPipeline: vi.fn().mockResolvedValue({
     scope: "run",
@@ -25,9 +25,9 @@ vi.mock("../api", () => ({
       variables: {},
       nodes: [],
       edges: [],
-      auto_merge_resolver: true,
     },
     prompts: {},
+    diagnostics: [],
   }),
   savePipeline: vi.fn().mockResolvedValue(undefined),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
@@ -39,7 +39,7 @@ function makePipeline(
   nodes: NodeDef[] = [],
   edges: EdgeDef[] = [],
 ): PipelineDef {
-  return { name: "test", version: "1.0", variables: {}, nodes, edges, auto_merge_resolver: true };
+  return { name: "test", version: "1.0", variables: {}, nodes, edges };
 }
 
 function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
@@ -63,6 +63,7 @@ function seedTabWithPipeline(pipeline: PipelineDef) {
         scope: "repo",
         pipeline,
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },
@@ -84,9 +85,9 @@ function seedTab(id = "test-pipeline", dirty = true) {
           variables: {},
           nodes: [],
           edges: [],
-          auto_merge_resolver: true,
         },
         prompts: {},
+        diagnostics: [],
         dirty,
         externalDirty: false,
       },
@@ -223,24 +224,27 @@ describe("editStore.flushPendingSaves", () => {
         {
           id: "a",
           scope: "repo",
-          pipeline: { name: "a", version: "1.0", variables: {}, nodes: [], edges: [], auto_merge_resolver: true },
+          pipeline: { name: "a", version: "1.0", variables: {}, nodes: [], edges: [] },
           prompts: {},
+          diagnostics: [],
           dirty: true,
           externalDirty: false,
         },
         {
           id: "b",
           scope: "repo",
-          pipeline: { name: "b", version: "1.0", variables: {}, nodes: [], edges: [], auto_merge_resolver: true },
+          pipeline: { name: "b", version: "1.0", variables: {}, nodes: [], edges: [] },
           prompts: {},
+          diagnostics: [],
           dirty: true,
           externalDirty: false,
         },
         {
           id: "c",
           scope: "repo",
-          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [], auto_merge_resolver: true },
+          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [] },
           prompts: {},
+          diagnostics: [],
           dirty: false,
           externalDirty: false,
         },
@@ -269,16 +273,18 @@ describe("editStore.flushPendingSaves", () => {
         {
           id: "dirty-one",
           scope: "repo",
-          pipeline: { name: "d", version: "1.0", variables: {}, nodes: [], edges: [], auto_merge_resolver: true },
+          pipeline: { name: "d", version: "1.0", variables: {}, nodes: [], edges: [] },
           prompts: {},
+          diagnostics: [],
           dirty: true,
           externalDirty: false,
         },
         {
           id: "clean-one",
           scope: "repo",
-          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [], auto_merge_resolver: true },
+          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [] },
           prompts: {},
+          diagnostics: [],
           dirty: false,
           externalDirty: false,
         },
@@ -349,29 +355,6 @@ describe("serializePipeline (via save) emits Loop max_iter", () => {
 
     const yaml = mockSavePipeline.mock.calls[0][1];
     expect(yaml).not.toMatch(/max_iter/);
-  });
-});
-
-describe("updatePipelineMeta with auto_merge_resolver", () => {
-  it("toggles auto_merge_resolver to false", () => {
-    seedTabWithPipeline(makePipeline());
-
-    useEditStore.getState().updatePipelineMeta({ auto_merge_resolver: false });
-
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.pipeline.auto_merge_resolver).toBe(false);
-    expect(tab.dirty).toBe(true);
-  });
-
-  it("toggles auto_merge_resolver back to true", () => {
-    const p = makePipeline();
-    p.auto_merge_resolver = false;
-    seedTabWithPipeline(p);
-
-    useEditStore.getState().updatePipelineMeta({ auto_merge_resolver: true });
-
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.pipeline.auto_merge_resolver).toBe(true);
   });
 });
 

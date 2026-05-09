@@ -21,7 +21,9 @@ import TriangleHandle from "./TriangleHandle";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
 import { ForEachEditNode } from "./ForEachNode";
+import { MergeEditNode } from "./MergeNode";
 import EditToolbar from "./EditToolbar";
+import LintBanner from "./LintBanner";
 
 interface EditNodeData {
   label: string;
@@ -91,13 +93,14 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, foreach: ForEachEditNode };
+const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
   "switch": "switch",
   "loop": "loop",
   "for-each": "foreach",
+  "merge": "merge",
 };
 
 function deriveEditNodes(pipeline: PipelineDef): Node[] {
@@ -119,6 +122,22 @@ function deriveEditNodes(pipeline: PipelineDef): Node[] {
             hasWhen: p.when != null,
           })),
           inputSide: n.inputs[0]?.side ?? "left",
+        },
+      };
+    }
+    if (n.type === "merge") {
+      return {
+        id: n.id,
+        type: "merge",
+        position: {
+          x: n.view?.x ?? 200,
+          y: n.view?.y ?? 80 + i * 140,
+        },
+        data: {
+          label: n.name ?? n.id,
+          nodeId: n.id,
+          inputSide: n.inputs[0]?.side ?? "left",
+          outputSide: n.outputs[0]?.side ?? "right",
         },
       };
     }
@@ -332,39 +351,58 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
 
     const view = { x: 200, y: 80 + pipeline.nodes.length * 140 };
     let newNode: NodeDef;
-
-    if (type === "loop" || type === "for-each") {
-      newNode = {
-        id,
-        name,
-        type,
-        inputs: [
-          { name: "in", repeated: false, side: "left" },
-          { name: "break", repeated: false, side: "left" },
-        ],
-        outputs: [
-          { name: "body", repeated: false, side: "right" },
-          { name: "done", repeated: false, side: "right" },
-        ],
-        interactive: false,
-        view,
-        ...(type === "loop" ? { max_iter: 5 } : {}),
-      };
-    } else {
-      newNode = {
-        id,
-        name,
-        type,
-        inputs: [{ name: "in", repeated: false, side: "left" }],
-        outputs: type === "switch"
-          ? [{ name: "default", repeated: false, side: "right" }]
-          : [{ name: "out", repeated: false, side: "right" }],
-        interactive: false,
-        view,
-      };
+    switch (type) {
+      case "merge":
+        newNode = {
+          id, name, type, interactive: false, view,
+          inputs: [{ name: "branches", repeated: true, side: "left" }],
+          outputs: [{ name: "merged", repeated: false, side: "right" }],
+        };
+        break;
+      case "loop":
+        newNode = {
+          id, name, type, interactive: false, view, max_iter: 5,
+          inputs: [
+            { name: "in", repeated: false, side: "left" },
+            { name: "break", repeated: false, side: "left" },
+          ],
+          outputs: [
+            { name: "body", repeated: false, side: "right" },
+            { name: "done", repeated: false, side: "right" },
+          ],
+        };
+        break;
+      case "for-each":
+        newNode = {
+          id, name, type, interactive: false, view,
+          inputs: [
+            { name: "in", repeated: false, side: "left" },
+            { name: "break", repeated: false, side: "left" },
+          ],
+          outputs: [
+            { name: "body", repeated: false, side: "right" },
+            { name: "done", repeated: false, side: "right" },
+          ],
+        };
+        break;
+      case "switch":
+        newNode = {
+          id, name, type, interactive: false, view,
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: [{ name: "default", repeated: false, side: "right" }],
+        };
+        break;
+      default:
+        newNode = {
+          id, name, type, interactive: false, view,
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+        };
     }
     addNodeToStore(newNode);
   };
+
+  const diagnostics = tab.diagnostics ?? [];
 
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
@@ -373,6 +411,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
         libraryEntries={libraryEntries}
         onLibraryDelete={onLibraryDelete}
       />
+      {diagnostics.length > 0 && (
+        <div className="absolute left-0 right-0 top-10 z-10">
+          <LintBanner diagnostics={diagnostics} />
+        </div>
+      )}
 
       <ReactFlow
         nodes={nodes}

@@ -37,6 +37,7 @@ function setStoreState(node: NodeDef) {
         scope: "repo",
         pipeline,
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },
@@ -234,7 +235,7 @@ describe("Layer 5: Switch node add, configure, and save roundtrip", () => {
     };
     useEditStore.setState({
       openTabs: [
-        { id: "tab-l5", scope: "repo", pipeline, prompts: {}, dirty: false, externalDirty: false },
+        { id: "tab-l5", scope: "repo", pipeline, prompts: {}, diagnostics: [], dirty: false, externalDirty: false },
       ],
       activeTabId: "tab-l5",
       selection: { kind: "node", id: "sw-new" },

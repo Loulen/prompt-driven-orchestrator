@@ -1,6 +1,6 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "halted" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed";
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop" | "for-each";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop" | "for-each" | "merge";
 
 export interface RunListEntry {
   run_id: string;
@@ -199,7 +199,6 @@ export interface PipelineDef {
   variables: Record<string, VariableDef>;
   nodes: NodeDef[];
   edges: EdgeDef[];
-  auto_merge_resolver?: boolean;
 }
 
 export interface PipelineDetail {

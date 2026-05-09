@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use tracing::{info, warn};
 
 use crate::pipeline;
+use crate::pipeline::{Diagnostic, NodeType, PipelineDef, Severity};
 
 const NANOID_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const NANOID_LEN: usize = 8;
@@ -85,7 +86,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     };
     for node in nodes {
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if matches!(node_type, "start" | "end" | "switch" | "loop") {
+        if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
             continue;
         }
         if node.get("prompt_file").and_then(|v| v.as_str()).is_some() {
@@ -155,7 +156,7 @@ pub fn migrate_pipeline_yaml(
             .get(serde_yaml::Value::String("type".into()))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if matches!(node_type, "start" | "end" | "switch" | "loop") {
+        if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
             continue;
         }
 
@@ -429,6 +430,55 @@ pub fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
         }
     }
     Ok(count)
+}
+
+/// Detects fan-outs where 2+ code-mutating nodes share a common downstream
+/// target but no Merge node sits between them and the target.
+///
+/// Returns info-only diagnostics (ADR-0001: non-blocking).
+pub fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    let cm_ids: HashSet<&str> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::CodeMutating)
+        .map(|n| n.id.as_str())
+        .collect();
+
+    let merge_ids: HashSet<&str> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::Merge)
+        .map(|n| n.id.as_str())
+        .collect();
+
+    let mut target_cm_sources: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for edge in &pipeline.edges {
+        let src = edge.source.node.as_str();
+        let tgt = edge.target.node.as_str();
+        if cm_ids.contains(src) && !merge_ids.contains(tgt) {
+            target_cm_sources.entry(tgt).or_default().push(src);
+        }
+    }
+
+    for (target_id, sources) in &target_cm_sources {
+        if sources.len() >= 2 {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "node '{}' receives edges from {} code-mutating nodes ({}) without a Merge node — \
+                     parallel code changes may conflict at merge time",
+                    target_id,
+                    sources.len(),
+                    sources.join(", "),
+                ),
+            });
+        }
+    }
+
+    diagnostics
 }
 
 #[cfg(test)]
@@ -817,5 +867,180 @@ edges:
             err.contains("issue #45"),
             "error should reference issue #45"
         );
+    }
+
+    // --- lint_missing_merge tests (issue #61) ---
+
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide};
+
+    fn make_cm_node(id: &str) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::CodeMutating,
+            inputs: vec![Port {
+                name: "in".into(),
+                repeated: false,
+                side: Some(PortSide::Left),
+                frontmatter: None,
+                when: None,
+            }],
+            outputs: vec![Port {
+                name: "out".into(),
+                repeated: false,
+                side: Some(PortSide::Right),
+                frontmatter: None,
+                when: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+        }
+    }
+
+    fn make_merge_node(id: &str) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Merge,
+            inputs: vec![Port {
+                name: "branches".into(),
+                repeated: true,
+                side: Some(PortSide::Left),
+                frontmatter: None,
+                when: None,
+            }],
+            outputs: vec![Port {
+                name: "merged".into(),
+                repeated: false,
+                side: Some(PortSide::Right),
+                frontmatter: None,
+                when: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+        }
+    }
+
+    fn make_doc_node(id: &str) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::DocOnly,
+            inputs: vec![Port {
+                name: "in".into(),
+                repeated: false,
+                side: Some(PortSide::Left),
+                frontmatter: None,
+                when: None,
+            }],
+            outputs: vec![Port {
+                name: "out".into(),
+                repeated: false,
+                side: Some(PortSide::Right),
+                frontmatter: None,
+                when: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+        }
+    }
+
+    fn make_edge(src: &str, src_port: &str, tgt: &str, tgt_port: &str) -> EdgeDef {
+        EdgeDef {
+            source: EdgeEndpoint {
+                node: src.into(),
+                port: src_port.into(),
+            },
+            target: EdgeEndpoint {
+                node: tgt.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn lint_flags_fan_out_cm_without_merge() {
+        let pipeline = PipelineDef {
+            name: "fan-out-no-merge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_cm_node("impl-a"),
+                make_cm_node("impl-b"),
+                make_doc_node("reviewer"),
+            ],
+            edges: vec![
+                make_edge("impl-a", "out", "reviewer", "in"),
+                make_edge("impl-b", "out", "reviewer", "in"),
+            ],
+        };
+        let diags = lint_missing_merge(&pipeline);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("reviewer"));
+        assert!(diags[0].message.contains("impl-a"));
+        assert!(diags[0].message.contains("impl-b"));
+    }
+
+    #[test]
+    fn lint_no_warning_when_merge_present() {
+        let pipeline = PipelineDef {
+            name: "fan-out-with-merge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_cm_node("impl-a"),
+                make_cm_node("impl-b"),
+                make_merge_node("merger"),
+                make_doc_node("downstream"),
+            ],
+            edges: vec![
+                make_edge("impl-a", "out", "merger", "branches"),
+                make_edge("impl-b", "out", "merger", "branches"),
+                make_edge("merger", "merged", "downstream", "in"),
+            ],
+        };
+        let diags = lint_missing_merge(&pipeline);
+        assert!(
+            diags.is_empty(),
+            "Merge downstream should suppress lint, got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lint_no_warning_for_single_cm_source() {
+        let pipeline = PipelineDef {
+            name: "single-cm".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_cm_node("impl-a"), make_doc_node("reviewer")],
+            edges: vec![make_edge("impl-a", "out", "reviewer", "in")],
+        };
+        let diags = lint_missing_merge(&pipeline);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn lint_no_warning_for_doc_only_fan_out() {
+        let pipeline = PipelineDef {
+            name: "doc-fan-out".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_doc_node("plan-a"),
+                make_doc_node("plan-b"),
+                make_doc_node("summary"),
+            ],
+            edges: vec![
+                make_edge("plan-a", "out", "summary", "in"),
+                make_edge("plan-b", "out", "summary", "in"),
+            ],
+        };
+        let diags = lint_missing_merge(&pipeline);
+        assert!(diags.is_empty());
     }
 }

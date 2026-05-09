@@ -27,6 +27,7 @@ pub enum NodeType {
     Switch,
     Loop,
     ForEach,
+    Merge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,12 +136,6 @@ pub struct PipelineDef {
     pub nodes: Vec<NodeDef>,
     #[serde(default)]
     pub edges: Vec<EdgeDef>,
-    #[serde(default = "default_true")]
-    pub auto_merge_resolver: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn infer_variable_type(val: &serde_yaml::Value) -> VariableType {
@@ -228,6 +223,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         "switch",
         "loop",
         "for-each",
+        "merge",
     ];
 
     if let Some(nodes) = raw
@@ -321,6 +317,23 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     });
                 }
             }
+            NodeType::Merge => {
+                if node.inputs.len() != 1
+                    || node.inputs[0].name != "branches"
+                    || !node.inputs[0].repeated
+                {
+                    return Err(ParseError::MissingField(format!(
+                        "merge node '{}' must have exactly one input named 'branches' with repeated: true",
+                        node.id
+                    )));
+                }
+                if node.outputs.len() != 1 || node.outputs[0].name != "merged" {
+                    return Err(ParseError::MissingField(format!(
+                        "merge node '{}' must have exactly one output named 'merged'",
+                        node.id
+                    )));
+                }
+            }
             NodeType::Loop => {
                 if node.max_iter.is_none() {
                     return Err(ParseError::MissingField(format!(
@@ -377,14 +390,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let known_keys: &[&str] = &[
-        "name",
-        "version",
-        "variables",
-        "nodes",
-        "edges",
-        "auto_merge_resolver",
-    ];
+    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
     if let Some(mapping) = raw.as_mapping() {
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {
@@ -1351,38 +1357,121 @@ nodes:
         );
     }
 
-    // --- auto_merge_resolver tests (issue #8) ---
+    // --- Merge node tests (issue #61) ---
 
     #[test]
-    fn auto_merge_resolver_defaults_to_true() {
-        let result = parse_pipeline(VALID_MINIMAL).unwrap();
-        assert!(result.pipeline.auto_merge_resolver);
-    }
-
-    #[test]
-    fn auto_merge_resolver_explicit_false() {
+    fn parses_merge_node() {
         let yaml = with_start_end(
             r#"
-name: no-resolver
-auto_merge_resolver: false
-nodes: []
+name: merge-test
+nodes:
+  - id: ab000001
+    name: merge-point
+    type: merge
+    inputs:
+      - name: branches
+        repeated: true
+    outputs:
+      - name: merged
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        assert!(!result.pipeline.auto_merge_resolver);
+        let mg = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(mg.node_type, NodeType::Merge);
+        assert_eq!(mg.inputs.len(), 1);
+        assert_eq!(mg.inputs[0].name, "branches");
+        assert!(mg.inputs[0].repeated);
+        assert_eq!(mg.outputs.len(), 1);
+        assert_eq!(mg.outputs[0].name, "merged");
     }
 
     #[test]
-    fn auto_merge_resolver_explicit_true() {
+    fn merge_node_rejects_wrong_input_name() {
         let yaml = with_start_end(
             r#"
-name: with-resolver
+name: bad-merge
+nodes:
+  - id: ab000001
+    name: bad-merge
+    type: merge
+    inputs:
+      - name: in
+        repeated: true
+    outputs:
+      - name: merged
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("branches"),
+            "error should mention 'branches': {msg}"
+        );
+    }
+
+    #[test]
+    fn merge_node_rejects_non_repeated_input() {
+        let yaml = with_start_end(
+            r#"
+name: bad-merge
+nodes:
+  - id: ab000001
+    name: bad-merge
+    type: merge
+    inputs:
+      - name: branches
+    outputs:
+      - name: merged
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repeated"),
+            "error should mention 'repeated': {msg}"
+        );
+    }
+
+    #[test]
+    fn merge_node_rejects_wrong_output_name() {
+        let yaml = with_start_end(
+            r#"
+name: bad-merge
+nodes:
+  - id: ab000001
+    name: bad-merge
+    type: merge
+    inputs:
+      - name: branches
+        repeated: true
+    outputs:
+      - name: out
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("merged"),
+            "error should mention 'merged': {msg}"
+        );
+    }
+
+    #[test]
+    fn legacy_auto_merge_resolver_field_ignored() {
+        let yaml = with_start_end(
+            r#"
+name: with-old-field
 auto_merge_resolver: true
 nodes: []
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        assert!(result.pipeline.auto_merge_resolver);
+        assert_eq!(result.pipeline.name, "with-old-field");
     }
 
     // --- Switch node tests (issue #46) ---

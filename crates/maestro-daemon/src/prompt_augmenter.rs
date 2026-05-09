@@ -361,7 +361,6 @@ mod tests {
                 max_iter: None,
             }],
             edges: vec![],
-            auto_merge_resolver: true,
         }
     }
 
@@ -643,7 +642,6 @@ mod tests {
                     reason: None,
                 },
             ],
-            auto_merge_resolver: true,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -711,7 +709,6 @@ mod tests {
                 max_iter: None,
             }],
             edges: vec![],
-            auto_merge_resolver: true,
         };
 
         let node = &pipeline.nodes[0];

@@ -28,7 +28,6 @@ function seedTab() {
           name: "My Pipeline",
           version: "1.0",
           variables: {},
-          auto_merge_resolver: true,
           nodes: [
             {
               id: "start",
@@ -55,6 +54,7 @@ function seedTab() {
           ],
         },
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },

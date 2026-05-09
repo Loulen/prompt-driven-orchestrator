@@ -6,6 +6,7 @@ import { SectionHead, Field } from "./InspectorPrimitives";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
+import LintBanner from "./LintBanner";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 
@@ -25,6 +26,7 @@ export default function PipelineInspector({
   if (!tab || selection.kind !== "none") return null;
 
   const pipeline = tab.pipeline;
+  const diagnostics = tab.diagnostics ?? [];
   const variables = Object.entries(pipeline.variables);
 
   const starredEntry = libraryPipelines.find((lp) => lp.name === pipeline.name);
@@ -107,17 +109,8 @@ export default function PipelineInspector({
           />
         ))}
 
-        {/* Config */}
-        <SectionHead title="Config" />
-        <label className="flex items-center gap-2 text-fg-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={pipeline.auto_merge_resolver !== false}
-            onChange={(e) => updateMeta({ auto_merge_resolver: e.target.checked })}
-            className="accent-acc"
-          />
-          <span>Auto merge resolver</span>
-        </label>
+        {/* Diagnostics */}
+        <LintBanner diagnostics={diagnostics} />
 
         {/* Stats */}
         <SectionHead title="Stats" />

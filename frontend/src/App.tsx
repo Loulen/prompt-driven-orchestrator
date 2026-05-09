@@ -16,6 +16,7 @@ import NodeInspector from "./components/NodeInspector";
 import SwitchInspector from "./components/SwitchInspector";
 import LoopInspector from "./components/LoopInspector";
 import ForEachInspector from "./components/ForEachInspector";
+import MergeInspector from "./components/MergeInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -232,7 +233,10 @@ export default function App() {
                 {selection.kind === "node" && editNodeType === "for-each" && (
                   <ForEachInspector />
                 )}
-                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && editNodeType !== "for-each" && (
+                {selection.kind === "node" && editNodeType === "merge" && (
+                  <MergeInspector />
+                )}
+                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && editNodeType !== "for-each" && editNodeType !== "merge" && (
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}

@@ -927,10 +927,7 @@ struct SaveLibraryPipelineRequest {
     yaml: String,
 }
 
-async fn save_library_pipeline(
-    State(_state): State<Arc<AppState>>,
-    Json(req): Json<SaveLibraryPipelineRequest>,
-) -> Response {
+async fn save_library_pipeline(Json(req): Json<SaveLibraryPipelineRequest>) -> Response {
     match library_store::pipelines::save(&req.name, &req.yaml) {
         Ok(id) => {
             let entry_list = library_store::pipelines::list();
@@ -1898,9 +1895,7 @@ fn sync_run_pipeline_to_template(
     yaml: &str,
     prompts: &HashMap<String, String>,
 ) {
-    let name = pipeline_name;
-
-    let template_path = resolve_pipeline_path(&state.repo_root, name);
+    let template_path = resolve_pipeline_path(&state.repo_root, pipeline_name);
     let tmp_path = template_path.with_extension("yaml.tmp");
 
     if let Some(parent) = template_path.parent() {

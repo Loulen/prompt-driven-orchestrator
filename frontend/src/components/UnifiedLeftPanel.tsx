@@ -156,7 +156,7 @@ export default function UnifiedLeftPanel({
 
       {/* Library / Pipelines section */}
       <div
-        className="flex h-[36px] shrink-0 items-center border-b border-line border-t border-t-line px-3 font-medium text-fg-2"
+        className="flex h-[36px] shrink-0 items-center border-b border-t border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
       >
         <button

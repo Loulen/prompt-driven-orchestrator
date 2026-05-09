@@ -304,7 +304,6 @@ function TopBar() {
         Maestro
       </div>
 
-      <nav className="flex min-w-0 flex-1 items-center gap-1.5 text-fg-3" style={{ fontSize: "12.5px" }} />
     </header>
   );
 }

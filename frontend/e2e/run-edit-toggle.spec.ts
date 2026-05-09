@@ -96,10 +96,4 @@ test("no pencil toggle or edit-this-run button exists", async ({ page, request }
 
   // No pencil toggle should exist in the toolbar
   await expect(page.getByTitle("Toggle edit mode")).not.toBeVisible();
-
-  // No Edit/Run mode badge should exist
-  await expect(page.locator("text=Edit").first()).not.toBeVisible({ timeout: 1_000 }).catch(() => {
-    // "Edit" might appear in other contexts (e.g. tab names), so just ensure
-    // the specific Edit/Run toggle badge is gone
-  });
 });

@@ -5,6 +5,7 @@
 <title>Maestro · Visual Editor & Run Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <link rel="stylesheet" href="styles.css"/>
+<link rel="stylesheet" href="styles-v2.css"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -36,6 +37,7 @@
 <script type="text/babel" src="switch-node.jsx"></script>
 <script type="text/babel" src="loop-node.jsx"></script>
 <script type="text/babel" src="screens.jsx"></script>
+<script type="text/babel" src="screens-v2.jsx"></script>
 
 <script type="text/babel" data-presets="env,react">
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -46,7 +48,6 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 function MaestroApp() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [modal1, setModal1] = React.useState(false);
 
   // apply tweaks via root css vars
   React.useEffect(() => {
@@ -69,59 +70,73 @@ function MaestroApp() {
   return (
     <>
       <DesignCanvas minScale={0.05} maxScale={2}>
-        <DCSection id="run" title="Run mode" subtitle="Monitor active and recent pipeline runs">
-          <DCArtboard id="run-default" label="01 · Run mode default — pipeline running" width={ART_W} height={ART_H}>
-            <Screen1 modal={modal1} setModal={setModal1}/>
+        <DCSection id="happyA" title="Happy path A — Monitor and intervene during a Run" subtitle="Inline xterm.js, fused panel, edit-during-run, frontmatter retry exhausted">
+          <DCArtboard id="a1-run-default" label="01 · Run · node terminal at default height" width={ART_W} height={ART_H}>
+            <ScreenA1/>
           </DCArtboard>
-          <DCArtboard id="run-blocked" label="02 · Run blocked at halt" width={ART_W} height={ART_H}>
-            <Screen2/>
+          <DCArtboard id="a2-info-manager" label="02 · Run · pipeline-info panel · Manager terminal" width={ART_W} height={ART_H}>
+            <ScreenA2/>
           </DCArtboard>
-          <DCArtboard id="run-awaiting" label="03 · Awaiting user input" width={ART_W} height={ART_H}>
-            <Screen3/>
+          <DCArtboard id="a3-edit-during-run" label="03 · Run · edit during run · pending node added" width={ART_W} height={ART_H}>
+            <ScreenA3/>
           </DCArtboard>
-          <DCArtboard id="run-edit" label="09 · Edit this run · in-place editing" width={ART_W} height={ART_H}>
-            <Screen10/>
-          </DCArtboard>
-        </DCSection>
-
-        <DCSection id="edit" title="Edit mode" subtitle="Author and edit pipeline definitions">
-          <DCArtboard id="edit-node" label="04 · Edit · node selected" width={ART_W} height={ART_H}>
-            <Screen4/>
-          </DCArtboard>
-          <DCArtboard id="edit-pipeline" label="05 · Edit · pipeline-level inspector" width={ART_W} height={ART_H}>
-            <Screen6/>
-          </DCArtboard>
-          <DCArtboard id="edit-switch" label="13 · Switch · branch editor" width={ART_W} height={ART_H}>
-            <Screen13/>
-          </DCArtboard>
-          <DCArtboard id="edit-loop" label="14 · Loop · config" width={ART_W} height={ART_H}>
-            <Screen14/>
-          </DCArtboard>
-          <DCArtboard id="edit-library" label="15 · Library dropdown open" width={ART_W} height={ART_H}>
-            <Screen15/>
+          <DCArtboard id="a4-fail-validation" label="04 · Run · failed · frontmatter retry exhausted" width={ART_W} height={ART_H}>
+            <ScreenA4/>
           </DCArtboard>
         </DCSection>
-
-        <DCSection id="states" title="Modals & empty states">
-          <DCArtboard id="new-run-modal" label="07 · + New Run modal" width={ART_W} height={ART_H}>
-            <Screen7/>
+        <DCSection id="happyB" title="Happy path B — Design a pipeline from the library" subtitle="Library focus, typed outputs, ForEach + Merge, lint diagnostic">
+          <DCArtboard id="b5-template-design" label="05 · Library · template selected · design context" width={ART_W} height={ART_H}>
+            <ScreenB5/>
           </DCArtboard>
-          <DCArtboard id="empty" label="08 · First launch — empty state" width={ART_W} height={ART_H}>
+          <DCArtboard id="b6-schema-enum" label="06 · Inspector · output schema with enum" width={ART_W} height={ART_H}>
+            <ScreenB6/>
+          </DCArtboard>
+          <DCArtboard id="b7-foreach-merge" label="07 · Canvas · ForEach + Merge convergence" width={ART_W} height={ART_H}>
+            <ScreenB7/>
+          </DCArtboard>
+          <DCArtboard id="b8-lint" label="08 · Canvas · fan-out without Merge · lint info" width={ART_W} height={ART_H}>
+            <ScreenB8/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="happyC" title="Happy path C — Launch a new Run" subtitle="+ New Run modal fed by starred templates">
+          <DCArtboard id="c9-new-run" label="09 · + New Run · pipeline picker" width={ART_W} height={ART_H}>
+            <ScreenC9/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="spotlight" title="Component spotlight" subtitle="Expanded terminal · star popover · enum schema row">
+          <DCArtboard id="s10-terminal-expanded" label="10 · Spotlight · expanded node terminal" width={ART_W} height={ART_H}>
+            <ScreenS10/>
+          </DCArtboard>
+          <DCArtboard id="s11-info-popover" label="11 · Spotlight · info panel · star popover" width={ART_W} height={ART_H}>
+            <ScreenS11/>
+          </DCArtboard>
+          <DCArtboard id="s12-schema-enum" label="12 · Spotlight · output schema · enum row" width={ART_W} height={ART_H}>
+            <ScreenS12/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="carryover" title="Carry-overs" subtitle="Out-of-scope screens kept as-is from the previous iteration">
+          <DCArtboard id="empty" label="Empty state — no run selected" width={ART_W} height={ART_H}>
             <Screen8/>
           </DCArtboard>
-          <DCArtboard id="md-verdict" label="10 · Markdown viewer · verdict" width={ART_W} height={ART_H}>
+          <DCArtboard id="md-verdict" label="Markdown viewer · verdict" width={ART_W} height={ART_H}>
             <Screen9/>
           </DCArtboard>
-          <DCArtboard id="md-feedback" label="11 · Markdown viewer · iter 4 of 5" width={ART_W} height={ART_H}>
+          <DCArtboard id="md-feedback" label="Markdown viewer · iter 4 of 5" width={ART_W} height={ART_H}>
             <Screen9b/>
           </DCArtboard>
-          <DCArtboard id="failed-state" label="12 · Failed node · validation error" width={ART_W} height={ART_H}>
-            <Screen12/>
+          <DCArtboard id="edit-switch" label="Switch · branch editor" width={ART_W} height={ART_H}>
+            <Screen13/>
           </DCArtboard>
-          <DCArtboard id="run-loop-switch" label="16 · Run · Loop + Switch executing" width={ART_W} height={ART_H}>
+          <DCArtboard id="edit-loop" label="Loop · config" width={ART_W} height={ART_H}>
+            <Screen14/>
+          </DCArtboard>
+          <DCArtboard id="edit-library" label="Library dropdown open" width={ART_W} height={ART_H}>
+            <Screen15/>
+          </DCArtboard>
+          <DCArtboard id="run-loop-switch" label="Run · Loop + Switch executing" width={ART_W} height={ART_H}>
             <Screen16/>
           </DCArtboard>
-          <DCArtboard id="star-states" label="17 · Star · favorite states" width={ART_W} height={ART_H}>
+          <DCArtboard id="star-states" label="Star · favorite states" width={ART_W} height={ART_H}>
             <Screen17/>
           </DCArtboard>
         </DCSection>

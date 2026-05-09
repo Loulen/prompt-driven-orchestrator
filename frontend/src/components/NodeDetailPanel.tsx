@@ -73,6 +73,7 @@ interface Props {
 interface ModalState {
   portName: string;
   files: FileInfo[];
+  portKind: "input" | "output";
 }
 
 export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: Props) {
@@ -417,7 +418,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
                 title="Inputs"
                 ports={inputs}
                 onOpenFile={(portName, files) =>
-                  setModal({ portName, files })
+                  setModal({ portName, files, portKind: "input" })
                 }
               />
             )}
@@ -429,7 +430,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
                 ports={outputs}
                 showFrontmatter
                 onOpenFile={(portName, files) =>
-                  setModal({ portName, files })
+                  setModal({ portName, files, portKind: "output" })
                 }
               />
             )}
@@ -444,7 +445,17 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
         <MarkdownArtifactModal
           runId={runId}
           portName={modal.portName}
-          files={modal.files}
+          source={
+            node.iterations && node.iterations.length > 1
+              ? {
+                  kind: "iter-nav",
+                  nodeId: node.node_id,
+                  portKind: modal.portKind,
+                  iterations: node.iterations,
+                  initialIter: selectedIter,
+                }
+              : { kind: "static", files: modal.files }
+          }
           onClose={() => setModal(null)}
         />
       )}
@@ -533,7 +544,8 @@ function IterSelector({
               it.iter === selectedIter ? "bg-bg-4" : ""
             }`}
             style={{ fontSize: "11px" }}
-            onSelect={() => onSelect(it.iter)}
+            onClick={() => onSelect(it.iter)}
+            data-testid={`iter-option-${it.iter}`}
           >
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOTS[it.status]}`}

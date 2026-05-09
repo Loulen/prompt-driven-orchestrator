@@ -92,7 +92,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
         <MarkdownArtifactModal
           runId={runId}
           portName="_input.md"
-          files={modalFiles}
+          source={{ kind: "static", files: modalFiles }}
           onClose={() => setModalOpen(false)}
         />
       )}

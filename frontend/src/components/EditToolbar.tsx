@@ -28,11 +28,7 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
 
       <span className="mx-0.5 h-4 w-px bg-line" />
 
-      <Tooltip content="Library · L">
-        <span data-testid="toolbar-library">
-          <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} />
-        </span>
-      </Tooltip>
+      <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} />
 
       <Tooltip content="Loop node">
         <button

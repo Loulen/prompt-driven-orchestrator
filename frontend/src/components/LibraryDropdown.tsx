@@ -5,6 +5,7 @@ import { instantiateFromLibrary } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import type { NodeDef, NodeType, PortSide } from "../types";
+import { Tooltip } from "./ui/tooltip";
 
 const TYPE_ICONS: Record<string, string> = {
   "code-mutating": "CM",
@@ -70,17 +71,19 @@ export default function LibraryDropdown({
 
   return (
     <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
-        title="Library"
-      >
-        <BookOpen size={14} />
-      </button>
+      <Tooltip content="Library · L">
+        <button
+          data-testid="toolbar-library"
+          onClick={() => setOpen(!open)}
+          className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+        >
+          <BookOpen size={14} />
+        </button>
+      </Tooltip>
 
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded-lg border border-line bg-bg-4 shadow-lg"
+          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded-lg border border-line bg-bg-4 shadow-lg"
           style={{ maxHeight: "60vh" }}
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-2">

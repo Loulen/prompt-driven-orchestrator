@@ -70,7 +70,7 @@ interface EditState {
   reloadPipeline: (id: string) => Promise<void>;
 }
 
-function serializePipeline(p: PipelineDef): string {
+export function serializePipeline(p: PipelineDef): string {
   const obj: Record<string, unknown> = {
     name: p.name,
   };
@@ -89,6 +89,8 @@ function serializePipeline(p: PipelineDef): string {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
+    if (n.type === "loop" && n.max_iter !== undefined && n.max_iter !== null)
+      node.max_iter = n.max_iter;
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };

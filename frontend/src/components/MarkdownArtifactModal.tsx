@@ -1,27 +1,81 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { fetchArtifact } from "../api";
+import { fetchArtifact, fetchNodeIO } from "../api";
 import type { FileInfo } from "../api";
+import type { IterationInfo } from "../types";
+
+export type ArtifactSource =
+  | { kind: "static"; files: FileInfo[] }
+  | {
+      kind: "iter-nav";
+      nodeId: string;
+      portKind: "input" | "output";
+      iterations: IterationInfo[];
+      initialIter: number;
+    };
 
 interface Props {
   runId: string;
   portName: string;
-  files: FileInfo[];
+  source: ArtifactSource;
   onClose: () => void;
 }
 
 export default function MarkdownArtifactModal({
   runId,
   portName,
-  files,
+  source,
   onClose,
 }: Props) {
-  const [index, setIndex] = useState(0);
-  const file = files[index];
+  const iterNumbers = useMemo(
+    () =>
+      source.kind === "iter-nav"
+        ? source.iterations.map((it) => it.iter).sort((a, b) => a - b)
+        : [],
+    [source],
+  );
+  const [iter, setIter] = useState(
+    source.kind === "iter-nav" ? source.initialIter : 0,
+  );
+  const [files, setFiles] = useState<FileInfo[]>(
+    source.kind === "static" ? source.files : [],
+  );
+  const [fileIndex, setFileIndex] = useState(0);
+  const [filesLoading, setFilesLoading] = useState(false);
+
+  useEffect(() => {
+    if (source.kind !== "iter-nav") return;
+    let cancelled = false;
+    setFilesLoading(true);
+    fetchNodeIO(runId, source.nodeId, iter)
+      .then((io) => {
+        if (cancelled) return;
+        const ports = source.portKind === "input" ? io.inputs : io.outputs;
+        const port = ports.find((p) => p.port === portName);
+        setFiles(port?.files ?? []);
+        setFileIndex(0);
+        setFilesLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFiles([]);
+        setFileIndex(0);
+        setFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, runId, iter, portName]);
+
+  const file = files[fileIndex];
   const total = files.length;
   const isRepeated = total > 1;
+
+  const iterIndex =
+    source.kind === "iter-nav" ? iterNumbers.indexOf(iter) : -1;
+  const hasIterNav = source.kind === "iter-nav" && iterNumbers.length > 1;
 
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,14 +110,30 @@ export default function MarkdownArtifactModal({
     };
   }, [runId, file?.path, file?.exists]);
 
+  const goPrevIter = useCallback(() => {
+    if (!hasIterNav || iterIndex <= 0) return;
+    setIter(iterNumbers[iterIndex - 1]);
+  }, [hasIterNav, iterIndex, iterNumbers]);
+
+  const goNextIter = useCallback(() => {
+    if (!hasIterNav || iterIndex < 0 || iterIndex >= iterNumbers.length - 1)
+      return;
+    setIter(iterNumbers[iterIndex + 1]);
+  }, [hasIterNav, iterIndex, iterNumbers]);
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (isRepeated && e.key === "ArrowLeft" && index > 0) setIndex(index - 1);
-      if (isRepeated && e.key === "ArrowRight" && index < total - 1)
-        setIndex(index + 1);
+      if (e.key === "ArrowLeft") {
+        if (isRepeated && fileIndex > 0) setFileIndex(fileIndex - 1);
+        else goPrevIter();
+      }
+      if (e.key === "ArrowRight") {
+        if (isRepeated && fileIndex < total - 1) setFileIndex(fileIndex + 1);
+        else goNextIter();
+      }
     },
-    [onClose, isRepeated, index, total],
+    [onClose, isRepeated, fileIndex, total, goPrevIter, goNextIter],
   );
 
   useEffect(() => {
@@ -102,12 +172,14 @@ export default function MarkdownArtifactModal({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {isRepeated && (
-              <div className="flex items-center gap-1">
+            {hasIterNav && (
+              <div className="flex items-center gap-1" data-testid="iter-nav">
                 <button
-                  onClick={() => setIndex(Math.max(0, index - 1))}
-                  disabled={index === 0}
+                  data-testid="iter-prev"
+                  onClick={goPrevIter}
+                  disabled={iterIndex <= 0}
                   className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+                  aria-label="Previous iteration"
                 >
                   <ChevronLeft size={14} />
                 </button>
@@ -115,12 +187,42 @@ export default function MarkdownArtifactModal({
                   className="font-mono text-fg-3"
                   style={{ fontSize: "11px" }}
                 >
-                  iter {index + 1} of {total}
+                  iter {iter} of {iterNumbers[iterNumbers.length - 1]}
                 </span>
                 <button
-                  onClick={() => setIndex(Math.min(total - 1, index + 1))}
-                  disabled={index === total - 1}
+                  data-testid="iter-next"
+                  onClick={goNextIter}
+                  disabled={iterIndex >= iterNumbers.length - 1}
                   className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+                  aria-label="Next iteration"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
+            {isRepeated && (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setFileIndex(Math.max(0, fileIndex - 1))}
+                  disabled={fileIndex === 0}
+                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+                  aria-label="Previous file"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span
+                  className="font-mono text-fg-3"
+                  style={{ fontSize: "11px" }}
+                >
+                  file {fileIndex + 1} of {total}
+                </span>
+                <button
+                  onClick={() =>
+                    setFileIndex(Math.min(total - 1, fileIndex + 1))
+                  }
+                  disabled={fileIndex === total - 1}
+                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+                  aria-label="Next file"
                 >
                   <ChevronRight size={14} />
                 </button>
@@ -154,7 +256,7 @@ export default function MarkdownArtifactModal({
           )}
 
           {/* Markdown body */}
-          {loading ? (
+          {filesLoading || loading ? (
             <span className="text-fg-4" style={{ fontSize: "11px" }}>
               Loading...
             </span>

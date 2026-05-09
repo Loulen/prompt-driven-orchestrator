@@ -190,4 +190,29 @@ Ic.Floppy = make(<>
   <path d="M4.5 12.5V8h5v4.5"/>
 </>);
 
+Ic.Bookmark = make(<>
+  <path d="M3 2h8v10.5l-4-2.5-4 2.5z"/>
+</>);
+
+Ic.Cursor = make(<>
+  <path d="M3 2l3 9 1.6-3.4L11 6 3 2z"/>
+</>);
+
+Ic.ArrowRight = make(<>
+  <path d="M3 7h8M8 4l3 3-3 3"/>
+</>);
+
+Ic.Lock = make(<>
+  <rect x="2.5" y="6.5" width="9" height="6" rx="1"/>
+  <path d="M4.5 6.5V4.5a2.5 2.5 0 0 1 5 0v2"/>
+</>);
+
+Ic.Minimize = make(<>
+  <path d="M5 2.5V5H2.5M9 2.5V5h2.5M9 11.5V9h2.5M5 11.5V9H2.5"/>
+</>);
+
+Ic.Play = make(<>
+  <path d="M3.5 2.5l8 4.5-8 4.5z"/>
+</>);
+
 window.Ic = Ic;

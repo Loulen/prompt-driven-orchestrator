@@ -1,7 +1,23 @@
-// screens.jsx — Composes the Maestro app shell into 8 distinct screens.
+// screens.jsx — Composes the Maestro app shell into screens.
 //
-// Each screen returns the full app frame (top bar, status bar, 3 panels)
-// styled for one specific state. They sit inside DCArtboards in index.html.
+// This file has been pruned for the unified-mode iteration:
+//   • Edit/Run toggle is removed — no more edit-mode screens (was Screen4, Screen6).
+//   • Polled tmux preview is replaced by inline xterm.js — old run screens
+//     (Screen1/2/3) and the failed-node screen (Screen12) are dropped pending
+//     redraw against the new NodeDetail terminal.
+//   • Per-run "Edit this run" tint is removed (was Screen10).
+//   • + New Run modal (was Screen7) is dropped pending redraw against
+//     the starred-templates dropdown.
+//
+// Screens that remain as-is per spec ("out of scope"):
+//   Screen8  — empty / first-launch state
+//   Screen9  — markdown viewer (verdict)
+//   Screen9b — markdown viewer (repeated port w/ navigator)
+//   Screen13 — Switch inspector
+//   Screen14 — Loop inspector
+//   Screen15 — Library dropdown (canvas toolbar)
+//   Screen16 — Run · Loop + Switch executing
+//   Screen17 — Star · favorite states strip
 
 const ART_W = 1440;
 const ART_H = 900;
@@ -18,9 +34,10 @@ function Frame({ mode = 'run', children, daemon = 'connected', activeRuns = 3, a
 }
 
 // ─────────── Run-mode canvas with nodes / overlay ───────────
+// Kept because Screen16 still uses RunOverlay-based composition. New run
+// screens for this iteration will compose their own canvases inline.
 
 function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelectNode, selectedNodeId = 'impl', editingRun = false, onToggleEditRun, startWhen = '4 m ago' }) {
-  // shift all nodes right to make room for the start pseudo-node
   const NODE_OFFSET = 200;
   const baseNodes = FWR_NODES.map(n => ({ ...n, x: n.x + NODE_OFFSET }));
   const nodes = baseNodes.map(n => {
@@ -39,10 +56,8 @@ function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelect
     return n;
   });
   const runningSet = new Set(nodes.filter(n => n.status === 'running' || n.status === 'done').map(n => n.id));
-  // Start pseudo-node positioned to the left of the leftmost entry
   const startX = 30, startY = 215;
   const entryIds = ['plan'];
-  // a fake source node so Edges can render start->entry edges using existing pipe
   const fakeStart = { id: '__start', x: startX - 56, y: startY - 35, status: 'running' };
   const fakeEdges = entryIds.map(t => ({ id: 'se-' + t, from: '__start', to: t }));
   return (
@@ -60,28 +75,24 @@ function RunCanvas({ blockedRun = false, awaitRun = false, runOverride, onSelect
         ))}
         <EdgeLabels nodes={nodes} edges={FWR_EDGES}/>
       </div>
-      <RunOverlay run={runOverride} blocked={blockedRun}
-        editingRun={editingRun} onToggleEditRun={onToggleEditRun}/>
+      <RunOverlay run={runOverride} blocked={blockedRun}/>
       <MiniMap nodes={nodes}/>
       <CanvasControls/>
     </div>
   );
 }
 
-// ────── Edit-mode canvas: same DAG but pending statuses + tabs ──────
+// ─────────── Edit-mode canvas: kept for Screen13/14/15 (out-of-scope screens) ───────────
 
 function EditCanvas({ selectedNodeId = 'impl', selectedEdgeId = null, onSelectNode = () => {} }) {
   const NODE_OFFSET = 200;
   const nodes = FWR_NODES.map(n => ({ ...n, x: n.x + NODE_OFFSET, status: 'pending', iter: undefined }));
   const runningSet = new Set();
-  // Start + End on the same (left) side, vertically stacked
   const startX = 30, startY = 215;
   const endX = 30, endY = 410;
   const fakeStart = { id: '__start', x: startX - 56, y: startY - 35, status: 'pending' };
-  // fakeEnd box positioned so its bottom-center lands at the bottom of the visual EndNode (endY+56)
   const fakeEnd = { id: '__end', x: endX + 28 - 100, y: endY + 56 - 70, status: 'pending' };
   const startEdges = [{ id: 'se-plan', from: '__start', to: 'plan' }];
-  // Edge wraps around: leaves merge from the bottom and arrives at End from below.
   const endEdges = [{ id: 'ee-merge', from: 'merge', to: '__end', fromSide: 'bottom', toSide: 'bottom' }];
   return (
     <div className="dag-canvas">
@@ -94,177 +105,9 @@ function EditCanvas({ selectedNodeId = 'impl', selectedEdgeId = null, onSelectNo
           <Node key={n.id} node={n} selected={n.id === selectedNodeId} onSelect={onSelectNode}/>
         ))}
         <EdgeLabels nodes={nodes} edges={FWR_EDGES}/>
-        {selectedEdgeId && (() => {
-          // highlight a selected edge with a glow rect at its midpoint
-          const e = FWR_EDGES.find(x => x.id === selectedEdgeId);
-          if (!e) return null;
-          const a = nodes.find(n => n.id === e.from), b = nodes.find(n => n.id === e.to);
-          if (!a || !b) return null;
-          const mid = { x: (a.x + 200 + b.x) / 2 - 70, y: (a.y + b.y) / 2 + 30 };
-          return (
-            <div style={{
-              position: 'absolute', left: mid.x, top: mid.y,
-              padding: '4px 10px', borderRadius: 6,
-              border: '1px solid var(--acc)', background: 'rgba(16,185,129,0.10)',
-              color: 'var(--acc)', fontSize: 10.5, fontFamily: 'var(--font-mono)',
-              pointerEvents: 'none'
-            }}>edge selected</div>
-          );
-        })()}
       </div>
       <MiniMap nodes={nodes}/>
       <CanvasControls/>
-    </div>
-  );
-}
-
-// ─────────── 1. Run mode default — feature-with-review running ───────────
-
-function Screen1({ onToggleMode, modal, setModal, light = false }) {
-  const [sel, setSel] = React.useState('__start');
-  const [mdOpen, setMdOpen] = React.useState(false);
-  const run = RUNS[0];
-  const rightTitle = sel === '__start' ? 'Run start' :
-                     sel === 'impl' ? 'Implementer' :
-                     (FWR_NODES.find(n => n.id === sel) || {}).name || 'Node';
-  return (
-    <div className="artboard-host" style={light ? lightVars() : null}>
-      <Frame mode="run" breadcrumb="feature-with-review" runId={run.id.slice(-8)} onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}} onNewRun={() => setModal && setModal(true)}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas runOverride={run} selectedNodeId={sel} onSelectNode={setSel}/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title={rightTitle}/>
-          {sel === '__start'
-            ? <StartInspector run={run} onOpenAsMarkdown={() => setMdOpen(true)}/>
-            : <NodeDetail node={FWR_NODES.find(n => n.id === sel) || FWR_NODES[1]}/>}
-        </div>
-      </Frame>
-      <NewRunModal open={modal} onClose={() => setModal && setModal(false)}/>
-      <MdVerdictModal open={mdOpen} onClose={() => setMdOpen(false)}/>
-    </div>
-  );
-}
-
-// ─────────── 2. Run blocked / halted ───────────
-
-function Screen2({ onToggleMode }) {
-  const run = { ...RUNS[2], elapsed: '32:05', iter: 5 };
-  return (
-    <div className="artboard-host">
-      <Frame mode="run" breadcrumb="bug-triage" runId={run.id.slice(-8)} onToggleMode={onToggleMode} awaiting={0}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas blockedRun runOverride={run} selectedNodeId="review" startWhen="2 h ago"/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Reviewer"/>
-          <NodeDetail node={{ ...FWR_NODES[2], status: 'blocked', iter: '5/5' }}/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
-// ─────────── 3. Awaiting user ───────────
-
-function Screen3({ onToggleMode }) {
-  const run = { ...RUNS[1] };
-  return (
-    <div className="artboard-host">
-      <Frame mode="run" breadcrumb="feature-with-review" runId={run.id.slice(-8)} onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas awaitRun runOverride={run} selectedNodeId="impl" startWhen="23 m ago"/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Implementer"/>
-          <NodeDetail node={{ ...FWR_NODES[1], status: 'awaiting_user', iter: '1/5' }} awaiting/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
-// ─────────── 4. Edit mode — pipeline open, node selected ───────────
-
-function Screen4({ onToggleMode }) {
-  const [tabs, setTabs] = React.useState([
-    { id: 'feature-with-review', dirty: false },
-    { id: 'bug-triage', dirty: true },
-  ]);
-  const [active, setActive] = React.useState('feature-with-review');
-  return (
-    <div className="artboard-host">
-      <Frame mode="edit" breadcrumb={`${active}.yaml`} onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <PipelinesListPanel pipelines={PIPELINES} selectedId={active} onSelect={setActive}/>
-        </div>
-        <div className="panel panel-c">
-          <TabBar tabs={tabs} activeId={active} onSelect={setActive}/>
-          <div style={{position: 'relative', flex: 1}}>
-            <EditCanvas selectedNodeId="impl"/>
-          </div>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Inspector"/>
-          <NodeInspectorEdit node={FWR_NODES[1]}/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
-// ─────────── 6. Edit mode — pipeline-level inspector (nothing selected) ───────────
-
-function Screen6({ onToggleMode }) {
-  return (
-    <div className="artboard-host">
-      <Frame mode="edit" breadcrumb="feature-with-review.yaml" onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <PipelinesListPanel pipelines={PIPELINES} selectedId="feature-with-review" onSelect={()=>{}}/>
-        </div>
-        <div className="panel panel-c">
-          <TabBar tabs={[{id:'feature-with-review', dirty:false}]} activeId="feature-with-review" onSelect={()=>{}}/>
-          <div style={{position: 'relative', flex: 1}}>
-            <EditCanvas selectedNodeId={null}/>
-          </div>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Pipeline"/>
-          <PipelineInspector/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
-// ─────────── 7. New Run modal ───────────
-
-function Screen7({ onToggleMode }) {
-  const run = RUNS[0];
-  return (
-    <div className="artboard-host">
-      <Frame mode="run" breadcrumb="feature-with-review" runId={run.id.slice(-8)} onToggleMode={onToggleMode}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={()=>{}}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas runOverride={run} selectedNodeId="impl"/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Implementer"/>
-          <NodeDetail node={FWR_NODES[1]}/>
-        </div>
-      </Frame>
-      <NewRunModal open={true} onClose={() => {}}/>
     </div>
   );
 }
@@ -287,7 +130,7 @@ function Screen8({ onToggleMode }) {
             <div className="empty">
               <div className="emp-art"><Ic.Grid/></div>
               <div className="emp-title">No run selected</div>
-              <div className="emp-sub">Launch a run to see its DAG. The graph will live-update as agents progress.</div>
+              <div className="emp-sub">Select a run or pipeline template from the left panel, or launch a new run to see its DAG.</div>
             </div>
           </div>
         </div>
@@ -296,7 +139,7 @@ function Screen8({ onToggleMode }) {
           <div className="p-body">
             <div className="empty">
               <div className="emp-art"><Ic.Code/></div>
-              <div className="emp-sub" style={{maxWidth: 240}}>Select a node in the canvas to see its terminal preview, inputs and outputs.</div>
+              <div className="emp-sub" style={{maxWidth: 240}}>Select a node in the canvas to see its terminal, inputs and outputs.</div>
             </div>
           </div>
         </div>
@@ -305,17 +148,6 @@ function Screen8({ onToggleMode }) {
   );
 }
 
-function lightVars() {
-  // not used in current spec (light_mode = no), but kept for future
-  return {};
-}
-
-window.Screen1 = Screen1;
-window.Screen2 = Screen2;
-window.Screen3 = Screen3;
-window.Screen4 = Screen4;
-window.Screen6 = Screen6;
-window.Screen7 = Screen7;
 window.Screen8 = Screen8;
 
 // ─────────── 9. Markdown modal — verdict (single file) ───────────
@@ -358,52 +190,6 @@ function Screen9b() {
         </div>
       </Frame>
       <MdFeedbackModal open={true} onClose={() => {}}/>
-    </div>
-  );
-}
-
-// ─────────── 10. Edit-this-run active state ───────────
-function Screen10() {
-  const run = RUNS[0];
-  return (
-    <div className="artboard-host">
-      <Frame mode="run" breadcrumb="feature-with-review" runId={run.id.slice(-8)}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas runOverride={run} selectedNodeId="impl" editingRun/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Inspector"/>
-          <NodeInspectorEdit node={FWR_NODES[1]}/>
-        </div>
-      </Frame>
-    </div>
-  );
-}
-
-// ─────────── 12. Run with failed node + validation error ───────────
-function Screen12() {
-  const run = { ...RUNS[5], status: 'failed', elapsed: '03:18' };
-  const failedNode = { ...FWR_NODES[1], status: 'failed', iter: '3/5',
-    failure_reason: 'Tool call exited 1: command not found `pnpm test`. Worker has stopped.',
-    validationFail: true,
-    scrolledUp: true };
-  return (
-    <div className="artboard-host">
-      <Frame mode="run" breadcrumb="security-audit" runId={run.id.slice(-8)}>
-        <div className="panel panel-l">
-          <RunsListPanel runs={RUNS} selectedId={run.id} onSelect={() => {}}/>
-        </div>
-        <div className="panel panel-c">
-          <RunCanvas runOverride={run} selectedNodeId="impl"/>
-        </div>
-        <div className="panel panel-r">
-          <PanelHead title="Implementer"/>
-          <NodeDetail node={failedNode} failed/>
-        </div>
-      </Frame>
     </div>
   );
 }
@@ -584,8 +370,6 @@ function Screen17() {
 
 window.Screen9 = Screen9;
 window.Screen9b = Screen9b;
-window.Screen10 = Screen10;
-window.Screen12 = Screen12;
 window.Screen13 = Screen13;
 window.Screen14 = Screen14;
 window.Screen15 = Screen15;

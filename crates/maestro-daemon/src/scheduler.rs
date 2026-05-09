@@ -23,6 +23,7 @@ pub enum SchedulerAction {
     LoopIterStarted {
         loop_node_id: String,
         iter: i64,
+        max_iter: i64,
     },
     LoopBreakReceived {
         loop_node_id: String,
@@ -34,6 +35,79 @@ pub enum SchedulerAction {
     LoopDone {
         loop_node_id: String,
     },
+}
+
+/// Bootstraps Loop nodes whose `in` port is fed by a Start node (or a node
+/// already completed) but whose first iteration has not yet been started.
+///
+/// Returns a list of `LoopIterStarted{1}` plus `Spawn{body_target, 1}` actions
+/// for each such loop. The caller is responsible for emitting the events and
+/// spawning the body subgraph entry nodes.
+///
+/// This closes the gap between [`ready_nodes`] (which deliberately skips Loop
+/// nodes — they are not spawnable as tmux sessions) and the regular outgoing
+/// edge handling in [`evaluate_outgoing_edges_with_context`] (which never
+/// fires when the loop is the very first downstream of `Start`, because Start
+/// itself never "completes" in the scheduler's eyes).
+pub fn seed_pending_loops(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    for loop_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::Loop)
+    {
+        if run_state.loop_states.contains_key(&loop_node.id) {
+            continue;
+        }
+
+        let in_edges: Vec<_> = pipeline
+            .edges
+            .iter()
+            .filter(|e| e.target.node == loop_node.id && e.target.port == "in")
+            .collect();
+        if in_edges.is_empty() {
+            continue;
+        }
+
+        let any_satisfied = in_edges.iter().any(|edge| {
+            let src = &edge.source.node;
+            let is_start = pipeline
+                .nodes
+                .iter()
+                .any(|n| n.id == *src && n.node_type == NodeType::Start);
+            if is_start {
+                return true;
+            }
+            run_state
+                .nodes
+                .get(src.as_str())
+                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+        });
+        if !any_satisfied {
+            continue;
+        }
+
+        actions.push(SchedulerAction::LoopIterStarted {
+            loop_node_id: loop_node.id.clone(),
+            iter: 1,
+            max_iter: resolve_max_iter(loop_node, resolved_vars),
+        });
+        for edge in &pipeline.edges {
+            if edge.source.node == loop_node.id && edge.source.port == "body" {
+                actions.push(SchedulerAction::Spawn {
+                    node_id: edge.target.node.clone(),
+                    iter: 1,
+                });
+            }
+        }
+    }
+
+    actions
 }
 
 pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> {
@@ -223,13 +297,14 @@ fn handle_loop_input(
     run_state: &RunState,
     loop_node_id: &str,
     target_port: &str,
-    _resolved_vars: &HashMap<String, serde_yaml::Value>,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
-    if !pipeline.nodes.iter().any(|n| n.id == loop_node_id) {
-        return actions;
-    }
+    let loop_node = match pipeline.nodes.iter().find(|n| n.id == loop_node_id) {
+        Some(n) => n,
+        None => return actions,
+    };
 
     match target_port {
         "in" => {
@@ -242,6 +317,7 @@ fn handle_loop_input(
             actions.push(SchedulerAction::LoopIterStarted {
                 loop_node_id: loop_node_id.to_string(),
                 iter,
+                max_iter: resolve_max_iter(loop_node, resolved_vars),
             });
 
             // Fire body subgraph entry nodes
@@ -340,6 +416,7 @@ pub fn evaluate_loop_body_completion(
         actions.push(SchedulerAction::LoopIterStarted {
             loop_node_id: loop_node_id.to_string(),
             iter: next_iter,
+            max_iter,
         });
 
         // Re-fire body subgraph entry nodes
@@ -1160,6 +1237,7 @@ mod tests {
         assert!(actions.contains(&SchedulerAction::LoopIterStarted {
             loop_node_id: "loop1".into(),
             iter: 1,
+            max_iter: 5,
         }));
         assert!(actions.contains(&SchedulerAction::Spawn {
             node_id: "impl".into(),
@@ -1241,6 +1319,7 @@ mod tests {
         assert!(actions.contains(&SchedulerAction::LoopIterStarted {
             loop_node_id: "loop1".into(),
             iter: 2,
+            max_iter: 5,
         }));
         assert!(actions.contains(&SchedulerAction::Spawn {
             node_id: "impl".into(),
@@ -1351,6 +1430,140 @@ mod tests {
     }
 
     #[test]
+    fn body_to_break_edge_stops_loop_at_iter_1_when_state_is_refreshed() {
+        // Loop.body → impl → Loop.break (no switch — every body completion
+        // unconditionally fires break). The orchestration in
+        // lib.rs::handle_node_completion runs two passes against the same
+        // RunState. If pass 2 sees the LoopBreakReceived just emitted by
+        // pass 1, the loop must terminate at iter 1.
+        //
+        // Regression: before the reload_run_state fix in lib.rs, pass 2 ran
+        // against a stale snapshot where break_received=false and wrongly
+        // advanced to iter 2. This test pins down the contract: when the
+        // dispatcher correctly re-projects between passes, evaluate_loop_body_completion
+        // sees break_received=true and emits LoopDone (not LoopIterStarted{2}).
+        let pipeline = PipelineDef {
+            name: "body-to-break".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "loop1", "break"),
+                make_edge("loop1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+
+        // Pass 1: outgoing edges of impl emit LoopBreakReceived.
+        let pass1 = evaluate_outgoing_edges(&pipeline, &state, "impl");
+        assert!(
+            pass1.contains(&SchedulerAction::LoopBreakReceived {
+                loop_node_id: "loop1".into(),
+            }),
+            "expected LoopBreakReceived in pass 1, got {pass1:?}"
+        );
+
+        // Mirror the projection of LoopBreakReceived (event_log.rs:395-403).
+        // In production, lib.rs::handle_node_completion achieves the same by
+        // calling reload_run_state between passes.
+        for action in &pass1 {
+            if let SchedulerAction::LoopBreakReceived { loop_node_id } = action {
+                if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                    ls.break_received = true;
+                }
+            }
+        }
+
+        // Pass 2: body completion check with refreshed state.
+        let pass2 = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+        assert!(
+            pass2.contains(&SchedulerAction::LoopDone {
+                loop_node_id: "loop1".into(),
+            }),
+            "expected LoopDone after break received, got {pass2:?}"
+        );
+        assert!(
+            !pass2
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { iter: 2, .. })),
+            "must NOT advance to iter 2 once break_received=true, got {pass2:?}"
+        );
+    }
+
+    #[test]
+    fn body_to_break_with_stale_state_wrongly_advances_iter() {
+        // This pins down the *bug shape* the reload_run_state fix prevents.
+        // If the dispatcher fails to refresh the RunState between passes,
+        // evaluate_loop_body_completion still observes break_received=false
+        // and emits LoopIterStarted{iter=2}. Catching this in CI ensures any
+        // future regression of the orchestration contract is loud.
+        let pipeline = PipelineDef {
+            name: "body-to-break-stale".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "loop1", "break"),
+                make_edge("loop1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+
+        // Pass 1 emits LoopBreakReceived (intentionally NOT applied to state).
+        let _pass1 = evaluate_outgoing_edges(&pipeline, &state, "impl");
+
+        // Pass 2 against the same stale state — this is the buggy path.
+        let pass2 = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+        assert!(
+            pass2
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { iter: 2, .. })),
+            "stale state must produce the bug — i.e. iter 2 spawn — to keep \
+             reload_run_state honest. Got {pass2:?}"
+        );
+    }
+
+    #[test]
     fn loop_body_not_complete_no_action() {
         let pipeline = PipelineDef {
             name: "loop-partial".into(),
@@ -1389,5 +1602,206 @@ mod tests {
         let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
 
         assert!(actions.is_empty());
+    }
+
+    // --- seed_pending_loops tests ---
+
+    fn make_start_node(id: &str) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Start,
+            inputs: vec![],
+            outputs: vec![Port {
+                name: "user_prompt".into(),
+                repeated: false,
+                side: None,
+                frontmatter: None,
+                when: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+        }
+    }
+
+    #[test]
+    fn seed_pending_loops_emits_iter_started_when_start_feeds_loop() {
+        // Start → loop1.in   loop1.body → impl
+        // At run start, seed_pending_loops must emit LoopIterStarted{1} +
+        // Spawn{impl, 1}, otherwise the run is stuck.
+        let pipeline = PipelineDef {
+            name: "start-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            auto_merge_resolver: true,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 1,
+            max_iter: 5,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "impl".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn seed_pending_loops_propagates_max_iter_from_loop_node_spec() {
+        // Regression: previously LoopIterStarted defaulted to max_iter=5 in
+        // loop_states, even when the spec said 3. Now it must reflect the spec.
+        let pipeline = PipelineDef {
+            name: "max-iter-3".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            auto_merge_resolver: true,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 1,
+            max_iter: 3,
+        }));
+    }
+
+    #[test]
+    fn seed_pending_loops_idempotent_after_iter_started() {
+        // Once the loop has a loop_state, seed must not re-emit.
+        let pipeline = PipelineDef {
+            name: "start-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            auto_merge_resolver: true,
+        };
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_skipped_when_in_edge_missing() {
+        // Loop has no edge feeding `in` — cannot bootstrap.
+        let pipeline = PipelineDef {
+            name: "loop-no-in".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 5),
+            ],
+            edges: vec![],
+            auto_merge_resolver: true,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_waits_when_upstream_non_start_not_completed() {
+        // upstream(running) → loop1.in. Don't seed yet.
+        let pipeline = PipelineDef {
+            name: "loop-waiting".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["x"], &["out"]),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            auto_merge_resolver: true,
+        };
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), running_node("upstream"));
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_fires_for_all_body_targets() {
+        // loop.body fan-outs to two targets — both should be spawned at iter 1.
+        let pipeline = PipelineDef {
+            name: "fanout".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 3),
+                make_node("a", &["in"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "a", "in"),
+                make_edge("loop1", "body", "b", "in"),
+            ],
+            auto_merge_resolver: true,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "a".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "b".into(),
+            iter: 1,
+        }));
     }
 }

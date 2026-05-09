@@ -250,14 +250,20 @@ export async function fetchLibrary(): Promise<LibraryEntry[]> {
   return resp.json();
 }
 
-export async function saveToLibrary(
-  sourceNodeId: string,
-  pipelineId: string,
-): Promise<LibraryEntry> {
+export interface LibrarySaveSpec {
+  name: string;
+  type: string;
+  inputs: { name: string; repeated: boolean; side?: string }[];
+  outputs: { name: string; repeated: boolean; side?: string }[];
+  interactive: boolean;
+  prompt: string;
+}
+
+export async function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
   const resp = await fetch(`${BASE}/library`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_node_id: sourceNodeId, pipeline_id: pipelineId }),
+    body: JSON.stringify(spec),
   });
   if (!resp.ok) throw new Error(`POST /library failed: ${resp.status}`);
   return resp.json();

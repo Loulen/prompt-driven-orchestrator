@@ -6,10 +6,11 @@ Glossaire vivant. Mis à jour au fil des décisions, lazy.
 
 ## Pipeline
 
-Un **Pipeline** est un DAG nommé, à **topologie figée**, qui décrit l'enchaînement de rôles d'agents pour accomplir une tâche d'ingénierie.
+Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décrit l'enchaînement de rôles d'agents pour accomplir une tâche d'ingénierie.
 
-- **Topologie figée** : aucun *conditional edge*. Le graphe est tracé à l'édition, et l'exécution suit ce graphe sans qu'aucun LLM ne décide d'embranchement à l'exécution.
-- **Pas de routage probabiliste** : le déterminisme porte sur la *structure* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
+- **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par `Switch` et `Loop` (ADR-0002). Aucun LLM ne décide à l'exécution quel nœud activer.
+- **Pas de routage probabiliste** : le déterminisme porte sur la *structure d'orchestration* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
+- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) — ajouter un nœud, créer une edge, etc. — et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run* ci-dessous).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
 
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
@@ -135,6 +136,43 @@ Un nœud du body avec un input port `repeated: true` lit le glob `iter-*/<port>.
 
 ---
 
+## ForEach — itération parallèle sur collection
+
+Le **`ForEach`** est un nœud first-class qui itère un body subgraph **en parallèle** sur les items d'une collection. Distinct du `Loop` (qui est un compteur borné, séquentiel) : `ForEach` est *data-driven* (la liste pilote les itérations) et *parallèle par construction*.
+
+Cas d'usage canonique : un nœud upstream produit un artefact dont la frontmatter contient `items: [...]` (ex. liste d'issues GitHub) ; le ForEach fan-out une itération du body par item, toutes les itérations tournent en parallèle, les `code-mutating` parmi elles produisent chacune leur sous-worktree, et un nœud `Merge` downstream rassemble (cf. ADR-0006).
+
+### Forme
+
+- 2 input ports : `in` (artefact contenant la liste), `break` (sortie anticipée).
+- 2 output ports : `body` (fire une fois par item, toutes les fires en parallèle), `done` (fire quand toutes les itérations body sont terminées).
+- Source de la collection : champ `items: [...]` dans la frontmatter de l'artefact reçu sur `in`.
+
+### Sémantique runtime
+
+- Réception sur `in` : lit `items` du frontmatter, taille N. Pour chaque item `i ∈ [1..N]`, fire `body` avec un préambule injecté contenant `current_item` (la valeur) + `current_iter` (1-based) + `total` (N), et dépose un fichier `<artifacts>/<foreach-id>/iter-<i>/_item.md` avec la valeur sérialisée.
+- Toutes les fires `body` sont **simultanées** — pas de sérialisation. Les NodeRuns body parallèles forkent chacun leur sous-worktree (s'ils sont `code-mutating`).
+- Le `done` port fire quand **toutes** les itérations body sont terminées (barrière intrinsèque). Si une convergence vers un nœud `code-mutating` downstream est nécessaire, le designer place un `Merge` (ADR-0006).
+- Liste vide (N = 0) : fire `done` immédiatement avec event `foreach_empty`.
+- `break` : court-circuite, les itérations body en cours finissent leur tour mais aucune nouvelle n'est lancée, `done` fire dès leur complétion.
+
+### YAML
+
+```yaml
+- id: per-issue
+  type: foreach
+  inputs:
+    - { name: in }
+    - { name: break }
+  outputs:
+    - { name: body }
+    - { name: done }
+```
+
+Pas de `max_iter` — la borne, c'est la taille de la collection. Pas de spec de schéma de l'item — l'agent du body fait du best-effort sur ce qu'il reçoit (cf. décision sur le typage : pas de typage côté input, ADR à venir / décision design 2026-05-08).
+
+---
+
 ## Edges — purement structurelles
 
 Une edge transporte un artefact d'un output port à un input port. Forme :
@@ -198,6 +236,39 @@ Le code de `foo()` ne gère pas le cas où...
 
 Pas de structures imbriquées, pas de listes lourdes en frontmatter. Si on a besoin de structure exploitable par le runtime, on l'ajoute champ par champ et on documente.
 
+### Schéma déclaratif par output port
+
+Un Node peut **déclarer le schéma de frontmatter attendu** sur chacun de ses output ports. Le runtime utilise ce schéma pour (a) injecter une description précise dans le préambule (l'agent sait quels champs écrire avec quelles contraintes) et (b) **valider à la complétion du NodeRun** que la frontmatter écrite respecte le schéma.
+
+Types supportés en v1 : `enum` (avec liste `allowed`), `int`, `string`, `bool`, `list` (de strings). Pas de `float`, pas de `date`, pas de nested — si un cas concret le force, on étend.
+
+YAML :
+
+```yaml
+outputs:
+  - name: review
+    frontmatter:
+      verdict:
+        type: enum
+        allowed: [PASS, FAIL]
+      score:
+        type: int
+      issues:
+        type: list
+```
+
+**Pas de typage côté input** — l'agent fait du best-effort sur ce qu'il reçoit (un wire vers un upstream typé donne malgré tout un format lisible dans le préambule, mais aucune validation runtime ni lint d'incompatibilité). Asymétrique volontaire : l'output est un contrat de production qu'on peut mécaniquement vérifier ; l'input est un contexte que l'agent interprète.
+
+### Validation à la complétion + fallback tmux
+
+Quand un NodeRun signale `maestro complete`, le runtime parse la frontmatter de chaque output produit et la matche contre le schéma déclaré. Si **mismatch** :
+
+1. **Fallback** : le runtime envoie un message dans la session tmux du NodeRun (*"Ton frontmatter ne respecte pas le schéma : <champ X manquant / valeur Y hors enum>. Corrige et retry."*). Le NodeRun reste en status `running` (pas marqué failed).
+2. L'agent corrige et appelle à nouveau `maestro complete`. Le runtime re-valide.
+3. Si la 2e tentative échoue (limite : **1 retry max**, 2 tentatives au total), le NodeRun est marqué `failed` avec raison *"output frontmatter mismatch après retry"*.
+
+Ce mécanisme évite de fail loud sur une erreur que l'agent peut typiquement corriger seul, tout en bornant la dérive (un agent qui boucle dans le mismatch finit failé en deux tours).
+
 ---
 
 ## Variables pipeline
@@ -251,7 +322,7 @@ Maestro **ne gère pas** les skills. Les skills disponibles dans une session Nod
 
 Chaque Node est typé par son **effet sur le code** :
 
-- **`code-mutating`** — Implementer, Refactorer, Migrator, Merge Resolver. Reçoit un sous-worktree forké depuis la branche du Pipeline Run. Peut éditer/commit/merger. À la fin du NodeRun, son sous-worktree est mergé dans la branche du Pipeline Run.
+- **`code-mutating`** — Implementer, Refactorer, Migrator, Merge. Reçoit un sous-worktree forké depuis la branche du Pipeline Run. Peut éditer/commit/merger. À la fin du NodeRun, son sous-worktree est mergé dans la branche du Pipeline Run.
 - **`doc-only`** — Planner, Reviewer, Architect, PRD-writer. Pas de sous-worktree. Lit la branche du Pipeline Run en read-only (`git show`, `git diff`, `git log`). Écrit uniquement dans le Blackboard.
 
 Garde-fou : à la fin d'un NodeRun `doc-only`, la branche du Pipeline Run doit rester intacte (pas de commit). Si une violation est détectée, le NodeRun échoue.
@@ -260,14 +331,27 @@ Conséquence sur la parallélisation : les `doc-only` sont gratis-parallèles (p
 
 ---
 
-## Merge Resolver
+## Merge — nœud first-class
 
-Rôle `code-mutating` **built-in** (livré par défaut, prompt overridable au niveau du pipeline) auto-spawné quand un `git merge` entre branches `code-mutating` parallèles produit un conflit.
+Le **`Merge`** est un nœud first-class du DAG, type `code-mutating` toujours, à placer explicitement par le designer (ADR-0006). Il remplace l'ancien Merge Resolver auto-spawné, dont la formulation est désormais **obsolète** (auto-spawn supprimé, toggle `auto_merge_resolver` supprimé). L'utilisateur dessine la convergence ; le runtime ne l'invente pas.
 
-- **Trigger déterministe** : conflit Git, signal mécanique. Pas d'orchestration LLM ambiante — c'est le runtime qui décide de spawn, pas un agent.
-- **Mission** : pas un résolveur syntaxique. Le Merge Resolver lit les artefacts du Blackboard produits par chaque branche amont (summaries, plans, reviews) pour reconstituer l'**intention** de chaque Implementer, puis fusionne en préservant les deux intentions.
-- **Gate** : suppression des markers + `git status` clean + commit posé. Aucune validation sémantique : si le pipeline n'a pas de Reviewer downstream pour rattraper une fusion bancale, c'est un défaut de design du pipeline (cf. principe *sharp-tool*).
-- **Toggle** : `auto_merge_resolver: enabled | disabled` au niveau pipeline.
+### Forme
+
+- 1 input port `branches: repeated` — accumule N edges parallèles (toutes les branches qui convergent).
+- 1 output port `merged` — artefact résumé du merge avec frontmatter `conflict_count`, `branches: [...]`, et corps narratif.
+
+### Sémantique runtime
+
+1. **Barrière** : attend que toutes les branches upstream soient `Completed`. Gratuit — le scheduler n'évalue le node que quand ses upstream sont tous terminés.
+2. **Fork** : forke un sous-worktree depuis la branche du Pipeline Run.
+3. **`git merge`** : tente le merge automatique sur chaque upstream qui a une branche dédiée (= les `code-mutating`). Les `doc-only` upstream n'ont pas de branche, leurs artefacts sont consommés via le Blackboard pour le summary.
+4. **Si conflit** → spawn Claude Code dans le sous-worktree, qui lit les artefacts du Blackboard pour reconstituer les intentions, résout, commit, écrit le `merged.md` avec frontmatter et résumé narratif.
+5. **Si pas de conflit** → écrit un `merged.md` trivial (frontmatter `conflict_count: 0`), commit le merge, sans LLM.
+6. À la fin : son sous-worktree est mergé dans la branche du Pipeline Run.
+
+### Lint info-only
+
+Si le designer dessine un fan-out `code-mutating` sans `Merge` downstream, l'éditeur affiche un diagnostic info-only sur le canvas (cf. ADR-0001 : pas bloquant, juste lisible). Pas de blocage à la sauvegarde.
 
 ---
 
@@ -276,9 +360,9 @@ Rôle `code-mutating` **built-in** (livré par défaut, prompt overridable au ni
 L'outil ne contraint pas l'utilisateur à dessiner des pipelines "sains". Pas de validation prescriptive du graphe (genre *"interdit fan-out `code-mutating` sans Reviewer downstream"*), pas de warnings paternalistes. Si une pipeline est foireuse — fan-out non revu, accumulation infinie, deadlock conceptuel — c'est la responsabilité du designer du pipeline. Maestro fournit des primitives nettes ; l'usage est libre.
 
 Conséquences à anticiper sur les décisions futures :
-- Pas de schéma rigide imposé sur les ports (cf. Q6 à venir) ; au plus du typage opportuniste.
-- Pas de "lint pipeline" bloquant. Au max, un lint info-only.
-- L'éditeur permet des graphes "exotiques" (cycles, fan-out `code-mutating` sans Merger explicite, ports déconnectés). Le runtime se débrouille ou halt explicitement.
+- Schéma déclaratif côté output uniquement (cf. *Frontmatter — Schéma déclaratif par output port*) ; pas de typage côté input — l'agent fait du best-effort.
+- Pas de "lint pipeline" bloquant. Au max, un lint info-only (ex. fan-out `code-mutating` sans Merge downstream).
+- L'éditeur permet des graphes "exotiques" (cycles, fan-out `code-mutating` sans Merge explicite, ports déconnectés). Le runtime se débrouille ou halt explicitement.
 
 ---
 
@@ -288,10 +372,33 @@ Maestro ne vise pas le *"set it and forget it"*. La valeur est dans le **temps p
 
 - **Tout NodeRun est attachable** en tmux à n'importe quel moment ; l'utilisateur peut intervenir, converser, corriger.
 - **Un Node peut être marqué `interactive: true`** à l'édition. Quand son NodeRun spawn, il s'arrête en attente que l'utilisateur attache la session et signale la complétion (slash command, fichier sentinelle, ou autre — TBD). Cas typique : nœud d'entrée qui grille l'utilisateur pour construire l'input du pipeline (à la `grill-with-docs`).
-- **Le Pipeline Manager** (Q8) est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état.
+- **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état. Il vit dans l'onglet info de la toolbar (cf. *UX — un seul mode d'édition unifié*).
 - **Pas d'auto-merge vers main, jamais.** Pas d'auto-cleanup. L'humain tranche les actions à effets durables.
 
 À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate over autonomous* parle du **runtime** (on ne court-circuite pas l'humain à l'exécution).
+
+---
+
+## Édition pendant un Run
+
+Le canvas est **toujours interactif** (ADR-0007). L'ancienne dichotomie "mode Edit" vs "mode Run" avec toggle global est **obsolète** — un seul mode d'édition, qui s'adapte selon que la pipeline tourne ou pas.
+
+### Modèle de mutation
+
+- **Quand aucun Run ne tourne** sur une pipeline : l'édition modifie directement la template en bibliothèque (`~/.maestro/library/pipelines/<id>.yaml`).
+- **Quand un Run tourne** : l'édition modifie le **snapshot run-scope** (`<repo>/.maestro/runs/<run-id>/pipeline.yaml`) ET propage la même modif vers la template d'origine en bibliothèque (auto-sync montant). Le pipeline_watcher observe le snapshot run-scope et émet un event `PipelineModified` à chaque mutation ; le scheduler se réajuste au prochain tick (la fonction est pure, pas de cache à invalider).
+
+### Politique de mutation pendant un Run
+
+- **Suppression** : interdiction stricte de supprimer un node de status non-`pending`. Les nodes `running` ou `completed` restent dans le graphe (le designer peut juste déconnecter leurs edges s'il veut les neutraliser).
+- **Modif config** : le `max_iter` d'un Loop live peut être modifié à chaud — équivaut à la commande `extend_cycle` du Pipeline Manager, qui devient redondante.
+- **Ajout de node + edge** : libre. Si la nouvelle edge active un node non-encore-spawné, le scheduler le pickup au prochain tick. Les nodes already-completed/running ne re-tournent pas — modif sans effet sur leur iter en cours, mais visible à l'iter suivante (Loop).
+
+### Étanchéité
+
+- Modif d'un run-snapshot n'impacte aucun autre run en cours (chaque run a son propre snapshot).
+- Modif d'une template hors-Run n'impacte aucun run en cours (qui ont déjà leur propre snapshot).
+- L'auto-sync montant ne va que du run-scope vers la template, jamais l'inverse.
 
 ---
 
@@ -315,11 +422,12 @@ L'input peut aussi être **construit interactivement** via un nœud d'entrée ma
 
 ### Échec / blocage
 
-NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event), Merge Resolver foiré, etc. → le Run passe en status `BLOCKED` ou `FAILED`. La branche pipeline et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut :
+NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event), Merge node foiré, etc. → le Run passe en status `BLOCKED` ou `FAILED`. La branche pipeline et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut :
 
 - Cleanup manuel intégral (suppression branches/worktrees).
 - Reprendre la main directement sur la branche.
-- Débloquer via le **Pipeline Manager** : conversation au cours de laquelle le user peut, par exemple, demander *"continue le cycle pour 3 itérations de plus"*. Le manager dispose des commandes pour modifier l'état runtime (cf. Q8).
+- Débloquer via le **Pipeline Manager** : conversation au cours de laquelle le user peut, par exemple, demander *"continue le cycle pour 3 itérations de plus"*. Le manager dispose des commandes pour modifier l'état runtime.
+- Éditer le graphe à chaud (ADR-0007) — ajouter un Reviewer, déconnecter une edge bloquante, etc.
 
 ### Parallélisation entre Runs
 
@@ -439,15 +547,17 @@ Chaque NodeRun = **une session tmux détachée** créée par le daemon (`tmux ne
 
 Les sessions sont **invisibles à l'utilisateur** par défaut — pas de fenêtre OS qui s'ouvre. Elles tournent en arrière-plan et survivent au crash de l'UI ou du daemon (le runtime peut récupérer leur état au redémarrage).
 
-### Pont UI ↔ tmux : option A (terminal natif spawn-on-demand)
+### Pont UI ↔ tmux : terminal inline xterm.js
 
-L'UI affiche pour chaque NodeRun :
+ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS native) est **obsolète**. Mécanisme actuel :
 
 - **Statut** (pending / running / awaiting_user / done / failed / blocked) — projeté depuis l'event log.
-- **Preview** — pull périodique (~1-2 s) de `tmux capture-pane -pe -S -1000 -t <session>`, rendu read-only avec ANSI dans l'UI. Push WebSocket-driven possible plus tard pour realtime parfait.
-- **Bouton "Open terminal"** — déclenche un `POST /sessions/<id>/attach` sur le daemon, qui `exec` un terminal OS natif (`gnome-terminal` / `konsole` / `Terminal.app` / `kitty`...) avec `tmux attach -t <session>`. Une fenêtre OS apparaît, l'utilisateur tape dedans, détach standard `Ctrl+B D`. La session tmux survit à la fermeture de la fenêtre.
+- **Terminal interactif inline** dans le panneau de détail du nœud, rendu via xterm.js. Le daemon expose `WS /sessions/<id>/pty` : pour chaque connexion, il spawn `tmux attach -t <session>` dans un PTY (crate `portable-pty`) et bridge les bytes I/O entre le browser et le PTY. Bidirectionnel : l'utilisateur tape dedans, voit la sortie en temps réel. Plus de polling 1-2 s — la WebSocket pousse.
+- **Icônes du panneau** : (1) **agrandir** — le terminal occupe tout l'espace vertical du panneau de détail ; (2) **détacher** — fallback opt-in qui spawn une fenêtre OS native (`gnome-terminal`/`konsole`/`Terminal.app`/`kitty`) attachée à la session via `tmux attach`. Garde un escape hatch pour les cas limite (copy-paste exotique, freeze WebSocket).
 
-Détection du terminal préféré : variable `MAESTRO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
+Détection du terminal natif (pour l'icône détacher) : variable `MAESTRO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
+
+Multi-client par session (deux onglets browser sur la même session tmux) : gratuit côté tmux, pas à coder. Sécurité : origin check sur la WebSocket pour éviter le DNS-rebinding (le daemon écoute sur `127.0.0.1` mais ce n'est pas suffisant en soi).
 
 ### Nœuds interactifs — signal de complétion
 
@@ -459,45 +569,43 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 
 ---
 
-## UX — modes Run et Edit
+## UX — un seul mode d'édition unifié
 
-Maestro est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. La disposition par défaut reflète ça.
+Maestro est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. ADR-0007. L'ancienne dichotomie "mode Run" vs "mode Edit (toggle crayon)" est **obsolète** — un seul mode, le canvas est toujours interactif, et son comportement s'adapte à l'état de la pipeline (running ou pas).
 
-> **Source visuelle de référence** : voir [`docs/design/`](./docs/design/) pour les 8 écrans rendus en HTML/CSS/JS (bundle Claude Design). Le `README.md` de ce dossier mappe chaque écran à la section correspondante du présent document. Les tokens CSS de `docs/design/project/styles.css` sont la spec de design tokens (couleurs, typo, espaces) — à reprendre tels quels dans le frontend React/Vite.
+> **Source visuelle de référence** : voir [`docs/design/`](./docs/design/) pour les écrans rendus en HTML/CSS/JS. Note : les écrans pré-2026-05 reflètent l'ancienne dichotomie Run/Edit avec toggle ; à re-designer en phase suivante.
 
-### Mode Run (par défaut au lancement)
+### Layout 3 panneaux
 
-Layout 3 panneaux :
-
-- **Gauche — Liste des Runs.** Runs actifs en haut (status `running`/`awaiting_user`/`blocked`), Runs récents en dessous. Click sur un Run → bascule l'affichage middle/droite.
-- **Centre — Vue graphe du Run sélectionné.** Render du DAG de la pipeline, avec :
+- **Gauche — Liste.** Runs actifs en haut (status `running`/`awaiting_user`/`blocked`), Runs récents en dessous, Pipelines de la bibliothèque (templates) en dessous encore avec badge favorite. Click → bascule l'affichage middle/droite. Le contexte d'édition (run-snapshot ou template) est inféré du clic, pas d'un toggle global.
+- **Centre — Canvas du graphe.** Render du DAG, toujours interactif (drag-drop nodes, créer edges, sélection multiple). Quand le contexte est un Run en cours :
   - **Highlight** sur le(s) nœud(s) en cours d'exécution (pluriel — fan-out parallèle peut en avoir plusieurs simultanés).
-  - **Encart overlay** flottant : run-id, pipeline name + version, variables en cours, status global, boutons d'action niveau Run (cancel, cleanup, attacher manager).
-  - Click sur n'importe quel nœud (en cours ou pas) → bascule le panneau de droite.
-- **Droite — Détail du nœud sélectionné.** Pour le NodeRun sélectionné :
-  - **Preview du terminal** (rendu read-only de `tmux capture-pane -pe`).
+  - **Encart overlay** flottant : run-id, status global, boutons d'action niveau Run (cancel, cleanup, attacher manager).
+  - Mutations contraintes par la politique d'édition pendant un Run (cf. *Édition pendant un Run*).
+- **Droite — Détail du nœud sélectionné** (NodeRun ou node-template).
+  - **Terminal interactif inline** (xterm.js, ADR-0005) si NodeRun sur Run actif. Icônes "agrandir" et "détacher OS".
   - **Inputs résolus** : noms des ports + chemins absolus des artefacts amont + bouton "open" pour les lire dans un viewer markdown.
-  - **Outputs produits** : pareil pour les fichiers du nœud lui-même.
-  - **Prompt initial** : visualisation du préambule runtime + prompt-utilisateur tels que reçus par le Claude Code de cette session. Permet de debug "qu'est-ce que l'agent a vu en entrée".
-  - Bouton **"Open terminal"** (cf. Q9b — spawn natif d'un terminal OS attaché à la session tmux).
-  - Bouton **"Mark complete"** si le nœud est interactif et en attente.
+  - **Outputs produits** : pareil pour les fichiers du nœud lui-même + le schéma de frontmatter déclaré.
+  - **Prompt initial** : visualisation du préambule runtime + prompt-utilisateur tels que reçus par le Claude Code de cette session.
+  - **Bouton "Mark complete"** si le nœud est interactif et en attente.
+  - **Formulaire d'édition du node** : nom, type (`code-mutating`/`doc-only`), `interactive`, prompt (textarea reliée au `prompt_file`), inputs, outputs (avec frontmatter schema). En mutation, contraintes par la politique d'édition pendant un Run.
+
+### Toolbar — bouton info pipeline
+
+La toolbar du canvas (où vivent les types de nodes ajoutables) contient une icône `i` qui ouvre un panneau **info pipeline** :
+- Nom de la pipeline, statut (running, idle), variables.
+- Bouton **favoriter** (= ajouter / retirer de la bibliothèque).
+- **Pipeline Manager** : si la pipeline tourne, le terminal manager (`maestro-mgr-<run-id>`) prend la place dominante du panneau ; les métadonnées restent en haut compactes. Hors run, pas de terminal manager — juste les métadonnées.
 
 Realtime via WebSocket depuis le daemon → chaque événement de l'event log push une update vers l'UI.
 
-### Mode Edit (toggle via icône crayon)
+### Workflow utilisateur typique
 
-Bascule globale, signalée par une icône crayon dans la chrome de l'app. En mode Edit :
-
-- **Gauche** — la liste devient les **Pipelines** (définitions), pas les Runs. Toutes les pipelines disponibles : repo-scoped (`<repo>/.maestro/pipelines/`) + user-scoped (`~/.maestro/pipelines/`), avec badge `repo` / `user`.
-- **Centre** — canvas éditable. Drag-drop de nœuds, création d'edges, sélection multiple, déplacement. Pas de validation bloquante (cf. ADR-0001).
-- **Droite** — formulaire de configuration du nœud / edge / pipeline sélectionné. Champs : name, type (`code-mutating`/`doc-only`), `interactive`, prompt (textarea reliée au `prompt_file` correspondant), inputs, outputs (avec frontmatter schema). Pour une edge sélectionnée : `when:` clause, target type. Pour la pipeline elle-même (rien de sélectionné) : nom, description, variables, config.
-- **Onglets** — multi-pipeline ouvert en parallèle. Copier-coller de nœuds entre onglets supporté.
-
-### Workflow utilisateur typique au démarrage
-
-1. **Monitor** : ouvre Maestro, voit ses Runs actifs, debug un Run bloqué via le manager ou en attachant directement.
-2. **Lancer un nouveau Run** : depuis la liste de gauche, bouton "+ New Run", modale avec sélecteur de pipeline + textarea input (free-text ou lien d'issue ou mix) + accordion "variables overrides" (déplié au besoin, valeurs par défaut sinon). Confirme → POST `/runs`, le Run apparaît dans la liste.
-3. **Créer/modifier une pipeline** : toggle crayon → bascule en mode Edit, choisit "+ New Pipeline" ou édite une existante.
+1. **Monitor** : ouvre Maestro, voit ses Runs actifs, debug un Run bloqué via le manager (onglet info) ou en attachant directement (terminal inline).
+2. **Lancer un nouveau Run** : bouton "+ New Run", modale avec sélecteur de **pipeline depuis la bibliothèque** (dropdown peuplé par les pipelines favorites) + textarea input (free-text ou lien d'issue ou mix) + accordion "variables overrides". Confirme → POST `/runs` qui clone la pipeline depuis la bibliothèque vers `<repo>/.maestro/runs/<run-id>/pipeline.yaml` et lance le Run.
+3. **Créer une nouvelle pipeline** : depuis la liste de gauche, bouton "+ New Pipeline" → ouvre un canvas vierge dans le scope template-bibliothèque.
+4. **Modifier une pipeline** : click dessus dans la liste, le canvas l'affiche, on édite. Pas de toggle.
+5. **Modifier pendant un Run** : click sur le Run en cours, le canvas affiche le run-snapshot, on édite à chaud. La politique d'édition pendant un Run s'applique.
 
 ### Status icon par Run
 
@@ -564,7 +672,7 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 
 ### Persistance et hot-reload
 
-- **Auto-save debounced** (1-2 s d'inactivité) sur toutes les modifications du canvas en mode Edit. Pas de "Ctrl+S", pas de modal. Le canvas EST le fichier YAML + les fichiers prompts.
+- **Auto-save debounced** (1-2 s d'inactivité) sur toutes les modifications du canvas. Pas de "Ctrl+S", pas de modal. Le canvas EST le fichier YAML + les fichiers prompts.
 - **Hot-reload bidirectionnel** : Maestro watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
 - **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
 
@@ -572,4 +680,16 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 
 - **From scratch** : "+ Add node" → nœud vide à remplir.
 - **Duplicate existing** : right-click sur un nœud → copie avec id auto-incrémenté.
-- **Pas de library de templates Maestro-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer").
+- **Depuis la bibliothèque** : drag-drop d'un node favori (cf. *Bibliothèque* ci-dessous).
+- **Pas de library de templates Maestro-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer"). La bibliothèque est exclusivement user-managed.
+
+---
+
+## Bibliothèque
+
+`~/.maestro/library/` — store user-managed à deux niveaux :
+
+- **Nodes** (`~/.maestro/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty".
+- **Pipelines** (`~/.maestro/library/pipelines/`) — pipelines complètes templatées. C'est cette liste qui peuple le **dropdown du modal "+ New Run"**. Bouton favoriter dans le panneau info de la toolbar pour ajouter / retirer une pipeline de la bibliothèque.
+
+Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.maestro/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run. Les modifs pendant un Run propagent vers la template d'origine (auto-sync montant, ADR-0007).

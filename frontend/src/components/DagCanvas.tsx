@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -14,8 +14,36 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Pencil, Trash2, Terminal } from "lucide-react";
-import type { NodeStatus, NodeType, RunState, RunStatus, PortBrief } from "../types";
-import { cleanupRun, attachManager } from "../api";
+import type { NodeStatus, NodeType, PipelineDef, PipelineDetail, RunState, RunStatus, PortBrief } from "../types";
+import { cleanupRun, attachManager, fetchRunPipeline, saveRunPipeline } from "../api";
+import { serializePipeline } from "../stores/editStore";
+
+export const START_NODE_OFFSET_X_PX = 180;
+
+// deriveNodes places non-start/end nodes at canvas (view_x + START_NODE_OFFSET_X_PX)
+// to leave room for the start node. When persisting a drag back to YAML we must
+// reverse that offset so the round-trip is stable.
+export function canvasToYamlX(type: string | undefined, canvasX: number): number {
+  return type === "start" || type === "end"
+    ? canvasX
+    : canvasX - START_NODE_OFFSET_X_PX;
+}
+
+export function withUpdatedNodeView(
+  pipeline: PipelineDef,
+  nodeId: string,
+  x: number,
+  y: number,
+): PipelineDef | null {
+  const idx = pipeline.nodes.findIndex((n) => n.id === nodeId);
+  if (idx < 0) return null;
+  const updated = pipeline.nodes.slice();
+  updated[idx] = {
+    ...updated[idx],
+    view: { x: Math.round(x), y: Math.round(y) },
+  };
+  return { ...pipeline, nodes: updated };
+}
 import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
 import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
@@ -266,7 +294,7 @@ interface Props {
   onToggleEdit?: (runId: string) => void;
 }
 
-const START_NODE_OFFSET_X = 180;
+const START_NODE_OFFSET_X = START_NODE_OFFSET_X_PX;
 
 function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
   const nodeDefs = run.node_defs ?? [];
@@ -598,6 +626,8 @@ function DagCanvasInner({
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const runPipelineRef = useRef<PipelineDetail | null>(null);
+  const runId = run?.run_id ?? null;
 
   const derivedNodes = useMemo(
     () => (run ? deriveNodes(run, selectedNodeId) : []),
@@ -608,13 +638,65 @@ function DagCanvasInner({
     [run],
   );
 
+  // Merge derived nodes with current local positions so that user drags
+  // are not snapped back when `run` refreshes (run mode persists drags
+  // asynchronously via PUT /runs/:id/pipeline; until the round-trip lands,
+  // the local position is the authoritative one for already-mounted nodes).
   useEffect(() => {
-    setNodes(derivedNodes);
+    setNodes((current) => {
+      const byId = new Map(current.map((n) => [n.id, n]));
+      return derivedNodes.map((dn) => {
+        const existing = byId.get(dn.id);
+        if (existing) return { ...dn, position: existing.position };
+        return dn;
+      });
+    });
   }, [derivedNodes, setNodes]);
 
   useEffect(() => {
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
+
+  // Drop the cached run pipeline when switching runs.
+  useEffect(() => {
+    runPipelineRef.current = null;
+  }, [runId]);
+
+  const persistNodeMove = useCallback(
+    async (nodeId: string, x: number, y: number) => {
+      if (!runId) return;
+      let detail = runPipelineRef.current;
+      if (!detail) {
+        try {
+          detail = await fetchRunPipeline(runId);
+          runPipelineRef.current = detail;
+        } catch {
+          return;
+        }
+      }
+      const updatedPipeline = withUpdatedNodeView(detail.pipeline, nodeId, x, y);
+      if (!updatedPipeline) return;
+      const yaml = serializePipeline(updatedPipeline);
+      runPipelineRef.current = { ...detail, pipeline: updatedPipeline, yaml };
+      try {
+        await saveRunPipeline(runId, yaml, detail.prompts);
+      } catch {
+        // ignore — next user move retries with fresh pipeline state
+      }
+    },
+    [runId],
+  );
+
+  const onNodeDragStop = useCallback(
+    (_e: unknown, node: Node) => {
+      void persistNodeMove(
+        node.id,
+        canvasToYamlX(node.type, node.position.x),
+        node.position.y,
+      );
+    },
+    [persistNodeMove],
+  );
 
   if (!run) {
     return (
@@ -717,6 +799,7 @@ function DagCanvasInner({
         onNodeClick={(_event, node) => onSelectNode(node.id)}
         onEdgeClick={(_event, edge) => onSelectNode(edge.source)}
         onPaneClick={() => onSelectNode(null)}
+        onNodeDragStop={onNodeDragStop}
         fitView
         proOptions={{ hideAttribution: true }}
         className="bg-bg-1"

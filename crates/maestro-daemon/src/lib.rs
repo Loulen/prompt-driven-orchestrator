@@ -451,7 +451,11 @@ async fn emit_run_event(
 
 async fn emit_loop_action(state: &AppState, run_id: &str, action: &scheduler::SchedulerAction) {
     match action {
-        scheduler::SchedulerAction::LoopIterStarted { loop_node_id, iter } => {
+        scheduler::SchedulerAction::LoopIterStarted {
+            loop_node_id,
+            iter,
+            max_iter,
+        } => {
             emit_run_event(
                 state,
                 run_id,
@@ -459,6 +463,7 @@ async fn emit_loop_action(state: &AppState, run_id: &str, action: &scheduler::Sc
                 Some(serde_json::json!({
                     "loop_node_id": loop_node_id,
                     "iter": iter,
+                    "max_iter": max_iter,
                 })),
             )
             .await;
@@ -830,44 +835,34 @@ async fn list_library() -> Response {
 
 #[derive(Deserialize)]
 struct SaveToLibraryRequest {
-    source_node_id: String,
-    pipeline_id: String,
+    name: String,
+    #[serde(rename = "type")]
+    node_type: pipeline::NodeType,
+    #[serde(default)]
+    inputs: Vec<pipeline::Port>,
+    #[serde(default)]
+    outputs: Vec<pipeline::Port>,
+    #[serde(default)]
+    interactive: bool,
+    #[serde(default)]
+    prompt: String,
 }
 
 async fn save_to_library(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Json(req): Json<SaveToLibraryRequest>,
 ) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &req.pipeline_id);
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(y) => y,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("parse error: {e}") })),
-            )
-                .into_response();
-        }
+    let entry = library_store::LibraryEntry {
+        name: req.name,
+        node_type: req.node_type,
+        inputs: req.inputs,
+        outputs: req.outputs,
+        interactive: req.interactive,
+        max_iter: None,
+        branches: None,
+        prompt: req.prompt,
     };
 
-    let node = match parsed
-        .pipeline
-        .nodes
-        .iter()
-        .find(|n| n.id == req.source_node_id)
-    {
-        Some(n) => n,
-        None => return (StatusCode::NOT_FOUND, "node not found in pipeline").into_response(),
-    };
-
-    let prompt = std::fs::read_to_string(pipeline::canonical_prompt_path(&path, &node.id))
-        .unwrap_or_default();
-
-    let entry = library_store::entry_from_node(node, &prompt);
     if let Err(e) = library_store::save(&entry) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1171,6 +1166,23 @@ async fn handle_node_completion(
         }
     }
 
+    // Pass 1 above may have appended events (e.g. LoopBreakReceived from an
+    // edge into a loop). Re-project so pass 2 sees the fresh state — without
+    // this, evaluate_loop_body_completion races against its own predecessors
+    // and advances the loop one extra iteration after a break.
+    let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
+        return;
+    };
+    let fresh_resolved_vars = resolve_run_variables(&pipeline, &fresh_events);
+    let fresh_spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &fresh_resolved_vars,
+    };
+
     // Check loop body completion for all loop nodes
     for loop_node in pipeline
         .nodes
@@ -1179,15 +1191,15 @@ async fn handle_node_completion(
     {
         let loop_actions = scheduler::evaluate_loop_body_completion(
             &pipeline,
-            run_state,
+            &fresh_run_state,
             &loop_node.id,
-            &resolved_vars,
+            &fresh_resolved_vars,
         );
         for action in &loop_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &spawn_ctx, node, *iter).await;
+                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
@@ -1198,6 +1210,27 @@ async fn handle_node_completion(
             }
         }
     }
+}
+
+/// Reload events and re-project the run state.
+///
+/// Use after appending events inside a multi-pass dispatch so the next pass
+/// observes the projection it would produce on the next tick. Without this,
+/// flags like `loop_states[id].break_received` stay stale within the function
+/// and downstream evaluators take decisions on stale state.
+async fn reload_run_state(
+    state: &AppState,
+    run_id: &str,
+) -> Option<(Vec<event_log::Event>, event_log::RunState)> {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("reload_run_state: failed to load events for {run_id}: {e}");
+            return None;
+        }
+    };
+    let run_state = event_log::project(&events)?;
+    Some((events, run_state))
 }
 
 async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
@@ -1228,8 +1261,11 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
     };
     let pipeline = parse_result.pipeline;
 
+    let resolved_vars = resolve_run_variables(&pipeline, &events);
     let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
-    if ready.is_empty() {
+    let loop_seed_actions = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
+
+    if ready.is_empty() && loop_seed_actions.is_empty() {
         // Pipeline was modified but no new nodes need spawning. If all current
         // pipeline nodes are completed, re-complete the run so it doesn't stay
         // dangling in Running state after a trivial YAML edit.
@@ -1244,7 +1280,6 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
         .join(run_id)
         .join("worktree");
     let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
-    let resolved_vars = resolve_run_variables(&pipeline, &events);
 
     let spawn_ctx = SpawnContext {
         pipeline: &pipeline,
@@ -1261,9 +1296,24 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
         }
     }
 
+    for action in &loop_seed_actions {
+        match action {
+            scheduler::SchedulerAction::LoopIterStarted { .. } => {
+                emit_loop_action(state, run_id, action).await;
+            }
+            scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                    spawn_node(state, &spawn_ctx, node, *iter).await;
+                }
+            }
+            _ => {}
+        }
+    }
+
     info!(
-        "spawn_ready_after_event: spawned {} node(s) for run {run_id}",
-        ready.len()
+        "spawn_ready_after_event: spawned {} node(s) and seeded {} loop action(s) for run {run_id}",
+        ready.len(),
+        loop_seed_actions.len()
     );
 }
 
@@ -3146,6 +3196,31 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         }
     }
 
+    // Pass 1 may have appended events; re-project so pass 2 sees fresh state
+    // (same race fix as handle_node_completion).
+    let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
+        return;
+    };
+    let mut fresh_resolved_vars = resolve_run_variables(&pipeline, &fresh_events);
+    for (ext_node_id, additional) in &extensions {
+        let var_refs = extract_variable_refs_from_outgoing_edges(&pipeline, ext_node_id);
+        for var_name in var_refs {
+            if let Some(val) = fresh_resolved_vars.get_mut(&var_name) {
+                if let Some(n) = val.as_i64() {
+                    *val = serde_yaml::Value::Number(serde_yaml::Number::from(n + additional));
+                }
+            }
+        }
+    }
+    let fresh_spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &fresh_resolved_vars,
+    };
+
     // Check loop body completion for all loop nodes
     for loop_node in pipeline
         .nodes
@@ -3154,21 +3229,22 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
     {
         let loop_actions = scheduler::evaluate_loop_body_completion(
             &pipeline,
-            &run_state,
+            &fresh_run_state,
             &loop_node.id,
-            &resolved_vars,
+            &fresh_resolved_vars,
         );
         for action in &loop_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    let already_active = run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
-                        n.iter >= *iter
-                            && (n.status == event_log::NodeStatus::Running
-                                || n.status == event_log::NodeStatus::Completed)
-                    });
+                    let already_active =
+                        fresh_run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
+                            n.iter >= *iter
+                                && (n.status == event_log::NodeStatus::Running
+                                    || n.status == event_log::NodeStatus::Completed)
+                        });
                     if !already_active {
                         if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                            spawn_node(state, &spawn_ctx, node, *iter).await;
+                            spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
                         }
                     }
                 }
@@ -7301,7 +7377,8 @@ edges: []
         .unwrap();
         assert_eq!(body.as_array().unwrap().len(), 0);
 
-        // POST /library — save node from pipeline
+        // POST /library — save node directly from in-memory spec (no disk
+        // round-trip through a pipeline file).
         let resp = app
             .clone()
             .oneshot(
@@ -7311,8 +7388,12 @@ edges: []
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&serde_json::json!({
-                            "source_node_id": "n1",
-                            "pipeline_id": "test-pipe"
+                            "name": "Reviewer",
+                            "type": "doc-only",
+                            "inputs": [{"name": "code"}],
+                            "outputs": [{"name": "review"}],
+                            "interactive": false,
+                            "prompt": "You are a reviewer."
                         }))
                         .unwrap(),
                     ))
@@ -7400,6 +7481,89 @@ edges: []
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         // Cleanup
+        if let Some(p) = prev_home {
+            std::env::set_var("HOME", p);
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn library_save_works_without_pipeline_on_disk() {
+        // Regression: POST /library used to read the source pipeline YAML
+        // from disk, forcing the UI to save the pipeline before adding a
+        // node to the library. The endpoint now takes the node spec inline.
+        use std::sync::Mutex as StdMutex;
+        static LIB_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+        let _guard = LIB_TEST_LOCK.lock().unwrap();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "maestro-lib-nopipe-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &tmp);
+
+        // No pipeline file is written. repo_root points to an empty dir.
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        let (event_tx, _) = broadcast::channel(64);
+        let (pipeline_tx, _) = broadcast::channel(16);
+        let state = Arc::new(AppState {
+            db,
+            event_tx,
+            pipeline_tx,
+            repo_root: repo.clone(),
+            port: 0,
+            merge_lock: tokio::sync::Mutex::new(()),
+            recent_writes: Arc::new(Mutex::new(HashMap::new())),
+        });
+        let app = build_router(state);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/library")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "name": "DraftReviewer",
+                            "type": "doc-only",
+                            "inputs": [{"name": "in"}],
+                            "outputs": [{"name": "out"}],
+                            "interactive": false,
+                            "prompt": "Inline prompt — pipeline never saved."
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["name"], "DraftReviewer");
+        assert_eq!(body["prompt"], "Inline prompt — pipeline never saved.");
+
+        // Cleanup
+        let _ = library_store::delete("DraftReviewer");
         if let Some(p) = prev_home {
             std::env::set_var("HOME", p);
         }

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 globalThis.ResizeObserver = class {
@@ -7,10 +7,16 @@ globalThis.ResizeObserver = class {
   disconnect() {}
 };
 
+const fetchPaneMock = vi.fn().mockResolvedValue({ content: "" });
+const fetchPromptMock = vi.fn().mockResolvedValue("system prompt here");
+const fetchNodeIOMock = vi
+  .fn()
+  .mockResolvedValue({ inputs: [], outputs: [] });
+
 vi.mock("../api", () => ({
-  fetchPane: vi.fn().mockResolvedValue({ content: "" }),
-  fetchPrompt: vi.fn().mockResolvedValue("system prompt here"),
-  fetchNodeIO: vi.fn().mockResolvedValue({ inputs: [], outputs: [] }),
+  fetchPane: (...args: unknown[]) => fetchPaneMock(...args),
+  fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
+  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   markNodeDone: vi.fn(),
   attachSession: vi.fn(),
 }));
@@ -56,7 +62,66 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
 
 describe("NodeDetailPanel", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    fetchPaneMock.mockClear();
+    fetchPromptMock.mockClear();
+    fetchNodeIOMock.mockClear();
+  });
+
+  describe("IterSelector", () => {
+    function renderPanel(overrides?: Partial<NodeState>) {
+      return render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode(overrides)} runId="run-1" />
+        </TooltipProvider>,
+      );
+    }
+
+    it("does not show selector when only one iteration", () => {
+      renderPanel({
+        iter: 1,
+        iterations: [
+          {
+            iter: 1,
+            status: "completed",
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      });
+      expect(screen.queryByTestId("iter-option-1")).not.toBeInTheDocument();
+    });
+
+    it("switches selectedIter when clicking another iteration", async () => {
+      renderPanel({
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "running", started_at: null, completed_at: null },
+        ],
+      });
+
+      // Initial fetches use node.iter (=2)
+      await act(async () => {});
+      const initialIters = fetchPaneMock.mock.calls.map((c) => c[2]);
+      expect(initialIters).toContain(2);
+
+      fetchPaneMock.mockClear();
+      fetchNodeIOMock.mockClear();
+      fetchPromptMock.mockClear();
+
+      // Open dropdown
+      const trigger = screen.getByText(/iter 2/);
+      fireEvent.click(trigger);
+
+      // Click iter 1 option
+      const option = await screen.findByTestId("iter-option-1");
+      fireEvent.click(option);
+
+      // After click, fetches should target iter 1 (regression: was never firing)
+      await act(async () => {});
+      const newIters = fetchPaneMock.mock.calls.map((c) => c[2]);
+      expect(newIters).toContain(1);
+    });
   });
 
   describe("PromptSection", () => {

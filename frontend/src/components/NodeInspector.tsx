@@ -91,9 +91,8 @@ export default function NodeInspector({
         <span>Node Inspector</span>
         <StarButton
           syncState={syncState}
-          nodeId={node.id}
-          nodeName={node.name ?? ""}
-          pipelineId={tab.id}
+          node={node}
+          prompt={promptContent}
           onLibraryChanged={onLibraryChanged}
           updateNodeFn={(updates) => updateNode(node.id, updates)}
           updatePromptFn={(content) => updatePrompt(node.id, content)}
@@ -304,17 +303,15 @@ const STAR_TOOLTIPS: Record<LibrarySyncState, string> = {
 
 function StarButton({
   syncState,
-  nodeId,
-  nodeName,
-  pipelineId,
+  node,
+  prompt,
   onLibraryChanged,
   updateNodeFn,
   updatePromptFn,
 }: {
   syncState: LibrarySyncState;
-  nodeId: string;
-  nodeName: string;
-  pipelineId: string;
+  node: NodeDef;
+  prompt: string;
   onLibraryChanged: () => void;
   updateNodeFn: (updates: Partial<NodeDef>) => void;
   updatePromptFn: (content: string) => void;
@@ -333,10 +330,29 @@ function StarButton({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [popoverOpen]);
 
+  function librarySpec() {
+    return {
+      name: node.name ?? "",
+      type: node.type,
+      inputs: node.inputs.map((p) => ({
+        name: p.name,
+        repeated: p.repeated,
+        side: p.side,
+      })),
+      outputs: node.outputs.map((p) => ({
+        name: p.name,
+        repeated: p.repeated,
+        side: p.side,
+      })),
+      interactive: node.interactive,
+      prompt,
+    };
+  }
+
   async function handleStarClick() {
     if (syncState === "outline") {
       try {
-        await saveToLibrary(nodeId, pipelineId);
+        await saveToLibrary(librarySpec());
         onLibraryChanged();
       } catch {
         // ignore
@@ -348,7 +364,7 @@ function StarButton({
 
   async function handleUpdateLibrary() {
     try {
-      await saveToLibrary(nodeId, pipelineId);
+      await saveToLibrary(librarySpec());
       onLibraryChanged();
       setPopoverOpen(false);
     } catch {
@@ -358,7 +374,7 @@ function StarButton({
 
   async function handleResetFromLibrary() {
     try {
-      const result = await instantiateFromLibrary(nodeName);
+      const result = await instantiateFromLibrary(node.name ?? "");
       updateNodeFn({
         name: result.spec.name,
         type: result.spec.type as NodeType,
@@ -383,7 +399,7 @@ function StarButton({
 
   async function handleRemoveFromLibrary() {
     try {
-      await deleteFromLibrary(nodeName);
+      await deleteFromLibrary(node.name ?? "");
       onLibraryChanged();
       setPopoverOpen(false);
     } catch {
@@ -392,13 +408,14 @@ function StarButton({
   }
 
   const isFilled = syncState !== "outline";
+  const tooltip = STAR_TOOLTIPS[syncState];
 
   return (
     <div className="relative" ref={popoverRef}>
       <button
         onClick={handleStarClick}
         className="grid h-6 w-6 place-items-center rounded transition-colors hover:bg-bg-3"
-        title={STAR_TOOLTIPS[syncState]}
+        title={tooltip}
       >
         <span className="relative">
           <Star

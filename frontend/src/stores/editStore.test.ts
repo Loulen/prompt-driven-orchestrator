@@ -294,6 +294,64 @@ describe("editStore.flushPendingSaves", () => {
   });
 });
 
+describe("serializePipeline (via save) emits Loop max_iter", () => {
+  it("includes max_iter in YAML for loop nodes (numeric)", async () => {
+    const loopNode: NodeDef = {
+      id: "loop1",
+      name: "review-loop",
+      type: "loop",
+      inputs: [
+        { name: "in", repeated: false, side: "left" },
+        { name: "break", repeated: false, side: "left" },
+      ],
+      outputs: [
+        { name: "body", repeated: false, side: "right" },
+        { name: "done", repeated: false, side: "right" },
+      ],
+      interactive: false,
+      view: { x: 100, y: 100 },
+      max_iter: 7,
+    };
+    seedTabWithPipeline(makePipeline([loopNode]));
+
+    await useEditStore.getState().save("test-tab");
+
+    expect(mockSavePipeline).toHaveBeenCalledTimes(1);
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).toMatch(/max_iter:\s*7/);
+  });
+
+  it("includes max_iter as variable reference (string)", async () => {
+    const loopNode: NodeDef = {
+      id: "loop1",
+      name: "review-loop",
+      type: "loop",
+      inputs: [{ name: "in", repeated: false }],
+      outputs: [{ name: "body", repeated: false }],
+      interactive: false,
+      view: { x: 0, y: 0 },
+      max_iter: "$max_iter_review",
+    };
+    seedTabWithPipeline(makePipeline([loopNode]));
+
+    await useEditStore.getState().save("test-tab");
+
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).toContain("max_iter:");
+    expect(yaml).toContain("$max_iter_review");
+  });
+
+  it("does not emit max_iter for non-loop nodes", async () => {
+    const docNode = makeNode({ id: "doc1", type: "doc-only" });
+    seedTabWithPipeline(makePipeline([docNode]));
+
+    await useEditStore.getState().save("test-tab");
+
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).not.toMatch(/max_iter/);
+  });
+});
+
 describe("updatePipelineMeta with auto_merge_resolver", () => {
   it("toggles auto_merge_resolver to false", () => {
     seedTabWithPipeline(makePipeline());

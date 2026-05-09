@@ -3,6 +3,7 @@ import type { NodeStatus } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 
 interface SwitchBranch {
   name: string;
@@ -37,14 +38,8 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
         total={1}
       />
       <div className="flex items-center gap-2">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--color-switch-tint,#a78bfa)]" />
+        <NodeTypeIcon type="switch" size={14} className="shrink-0 text-[var(--color-switch-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-[var(--color-switch-tint,#a78bfa)] text-[var(--color-switch-tint,#a78bfa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          switch
-        </span>
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
@@ -111,18 +106,13 @@ export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
             data.status === "running" ? "animate-pulse" : ""
           }`}
         />
+        <NodeTypeIcon type="switch" size={14} className="shrink-0 text-[var(--color-switch-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
         {data.iter > 1 && (
           <span className="rounded bg-bg-4 px-1 font-mono text-fg-4" style={{ fontSize: "9px" }}>
             iter {data.iter}
           </span>
         )}
-        <span
-          className="ml-auto rounded border border-[var(--color-switch-tint,#a78bfa)] text-[var(--color-switch-tint,#a78bfa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          switch
-        </span>
       </div>
       <div className="mt-0.5 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
         <span>{data.status}</span>

@@ -13,7 +13,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Trash2, Terminal, Info } from "lucide-react";
+import { Trash2, Terminal, Info, Play, Square } from "lucide-react";
 import type { NodeStatus, NodeType, PipelineDef, PipelineDetail, RunState, RunStatus, PortBrief } from "../types";
 import { cleanupRun, attachManager, fetchRunPipeline, saveRunPipeline } from "../api";
 import { serializePipeline } from "../stores/editStore";
@@ -46,7 +46,8 @@ export function withUpdatedNodeView(
 }
 import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
-import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { computeBodySubgraph } from "../loopBodySubgraph";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
@@ -80,8 +81,6 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
   const borderColor = STATUS_BORDER[data.status];
   const bgColor = STATUS_BG[data.status];
   const dotColor = STATUS_DOT[data.status];
-  const typeLabel = TYPE_LABELS[data.nodeType] ?? data.nodeType;
-  const typeColor = TYPE_COLORS[data.nodeType] ?? TYPE_COLORS["doc-only"];
 
   return (
     <div
@@ -104,6 +103,7 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
             data.status === "running" ? "animate-pulse" : ""
           }`}
         />
+        <NodeTypeIcon type={data.nodeType} size={14} className="shrink-0 text-fg-3" />
         <span className="font-medium text-fg">{data.label}</span>
         {data.iter > 1 && (
           <span
@@ -113,12 +113,7 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
             iter {data.iter}
           </span>
         )}
-        <span
-          className={`ml-auto rounded border ${typeColor} px-1 py-px`}
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          {typeLabel}
-        </span>
+        <CodeDocMarker type={data.nodeType} />
       </div>
       <div className="mt-0.5 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
         <span>{data.status}</span>
@@ -147,14 +142,13 @@ function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
   const inputs = data.inputs ?? [];
   return (
     <div
-      className="grid place-items-center rounded-full border font-mono font-bold"
+      className="grid place-items-center rounded-full border"
       style={{
         width: 28,
         height: 28,
         borderColor: "var(--color-st-blocked, #f97316)",
         color: "var(--color-st-blocked, #f97316)",
         background: "var(--color-bg-3, #1e1f23)",
-        fontSize: "11px",
       }}
     >
       {inputs.map((port, i) => (
@@ -167,7 +161,7 @@ function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
           total={inputs.length}
         />
       ))}
-      &#x25CC;
+      <Square data-testid="node-icon-end" size={12} />
     </div>
   );
 }
@@ -181,17 +175,16 @@ function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
   const outputs = data.outputs ?? [];
   return (
     <div
-      className="start-node grid place-items-center rounded-full border-2 font-mono font-semibold"
+      className="start-node grid place-items-center rounded-full border-2"
       style={{
         width: 32,
         height: 32,
         borderColor: "var(--color-acc, #10b981)",
         color: "var(--color-acc, #10b981)",
         background: "var(--color-bg-3, #1e1f23)",
-        fontSize: "14px",
       }}
     >
-      &#x25B6;
+      <Play data-testid="node-icon-start" size={14} />
       {outputs.map((port, i) => (
         <TriangleHandle
           key={`out-${port.name}`}

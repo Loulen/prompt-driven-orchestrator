@@ -16,8 +16,8 @@ import type { NodeDef, NodeType, PipelineDef, PortBrief } from "../types";
 import type { LibraryEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
+import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
 import { ForEachEditNode } from "./ForEachNode";
@@ -36,10 +36,12 @@ interface EditNodeData {
 }
 
 function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
-  const typeLabel = TYPE_LABELS[data.nodeType] ?? data.nodeType;
-  const typeColor = TYPE_COLORS[data.nodeType] ?? TYPE_COLORS["doc-only"];
   const selection = useEditStore((s) => s.selection);
   const isSelected = selection.kind === "node" && selection.id === id;
+  const iconColor =
+    data.nodeType === "start" ? "text-acc"
+    : data.nodeType === "end" ? "text-st-blocked"
+    : "text-fg-3";
 
   return (
     <div
@@ -59,7 +61,7 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
         />
       ))}
       <div className="flex items-center gap-2">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-st-pending" />
+        <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
         {data.interactive && (
           <span
@@ -69,12 +71,7 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
             interactive
           </span>
         )}
-        <span
-          className={`ml-auto rounded border ${typeColor} px-1 py-px`}
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          {typeLabel}
-        </span>
+        <CodeDocMarker type={data.nodeType} />
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}

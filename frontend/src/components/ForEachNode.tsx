@@ -3,6 +3,7 @@ import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 
 interface ForEachPort {
   name: string;
@@ -54,16 +55,8 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
         />
       ))}
       <div className="flex items-center gap-2">
-        <span className="text-[var(--color-foreach-tint,#a78bfa)]" style={{ fontSize: "13px" }}>
-          <ForEachIcon />
-        </span>
+        <NodeTypeIcon type="for-each" size={14} className="shrink-0 text-[var(--color-foreach-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-[var(--color-foreach-tint,#a78bfa)] text-[var(--color-foreach-tint,#a78bfa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          foreach
-        </span>
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
@@ -120,16 +113,8 @@ export function ForEachRunNode({ data }: NodeProps<Node<ForEachRunData>>) {
             data.status === "running" ? "animate-pulse" : ""
           }`}
         />
-        <span className="text-[var(--color-foreach-tint,#a78bfa)]" style={{ fontSize: "13px" }}>
-          <ForEachIcon />
-        </span>
+        <NodeTypeIcon type="for-each" size={14} className="shrink-0 text-[var(--color-foreach-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-[var(--color-foreach-tint,#a78bfa)] text-[var(--color-foreach-tint,#a78bfa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          foreach
-        </span>
       </div>
       <div className="mt-0.5 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
         <span>{data.status}</span>

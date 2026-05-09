@@ -1,26 +1,4 @@
-import type { NodeStatus, NodeType } from "./types";
-
-export const TYPE_LABELS: Record<NodeType, string> = {
-  "doc-only": "doc",
-  "code-mutating": "code",
-  "start": "start",
-  "end": "end",
-  "switch": "switch",
-  "loop": "loop",
-  "for-each": "foreach",
-  "merge": "merge",
-};
-
-export const TYPE_COLORS: Record<NodeType, string> = {
-  "doc-only": "border-st-pending text-fg-3",
-  "code-mutating": "border-acc text-acc",
-  "start": "border-acc text-acc",
-  "end": "border-st-blocked text-st-blocked",
-  "switch": "border-st-pending text-fg-3",
-  "loop": "border-st-pending text-fg-3",
-  "for-each": "border-st-pending text-fg-3",
-  "merge": "border-acc text-acc",
-};
+import type { NodeStatus } from "./types";
 
 export const STATUS_BORDER: Record<NodeStatus, string> = {
   pending: "border-st-pending",

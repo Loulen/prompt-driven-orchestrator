@@ -12,6 +12,7 @@ import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
 import ConflictModal from "./components/ConflictModal";
 import SaveErrorModal from "./components/SaveErrorModal";
+import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
@@ -94,7 +95,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
-  const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<"info" | "manager" | "yaml" | undefined>(undefined);
+  const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
   const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
   const mountedRef = useRef(false);
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);

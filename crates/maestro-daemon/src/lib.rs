@@ -826,9 +826,10 @@ async fn save_pipeline(
 
     mark_self_write(&state.recent_writes, &path);
     if let Err(e) = std::fs::write(&path, &req.yaml) {
+        let msg = format!("write failed: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("write failed: {e}"), "message": format!("write failed: {e}") })),
+            Json(serde_json::json!({ "error": msg, "message": msg })),
         )
             .into_response();
     }

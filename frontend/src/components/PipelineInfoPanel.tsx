@@ -8,7 +8,7 @@ import type { LibraryPipelineEntry } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { serializePipeline } from "../stores/editStore";
 
-type TabId = "info" | "manager" | "yaml";
+export type TabId = "info" | "manager" | "yaml";
 
 interface Props {
   run: RunState | null;

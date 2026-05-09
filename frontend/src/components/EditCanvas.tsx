@@ -22,6 +22,7 @@ import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
 import { MergeEditNode } from "./MergeNode";
 import EditToolbar from "./EditToolbar";
+import LintBanner from "./LintBanner";
 
 interface EditNodeData {
   label: string;
@@ -369,6 +370,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
     addNodeToStore(newNode);
   };
 
+  const diagnostics = tab.diagnostics ?? [];
+
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
       <EditToolbar
@@ -376,6 +379,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
         libraryEntries={libraryEntries}
         onLibraryDelete={onLibraryDelete}
       />
+      {diagnostics.length > 0 && (
+        <div className="absolute left-0 right-0 top-10 z-10">
+          <LintBanner diagnostics={diagnostics} />
+        </div>
+      )}
 
       <ReactFlow
         nodes={nodes}

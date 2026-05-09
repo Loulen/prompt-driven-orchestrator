@@ -365,13 +365,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let known_keys: &[&str] = &[
-        "name",
-        "version",
-        "variables",
-        "nodes",
-        "edges",
-    ];
+    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
     if let Some(mapping) = raw.as_mapping() {
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {

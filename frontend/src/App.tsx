@@ -18,7 +18,6 @@ import SwitchInspector from "./components/SwitchInspector";
 import LoopInspector from "./components/LoopInspector";
 import MergeInspector from "./components/MergeInspector";
 import PipelineInspector from "./components/PipelineInspector";
-import LintBanner from "./components/LintBanner";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
 import { TooltipProvider } from "./components/ui/tooltip";

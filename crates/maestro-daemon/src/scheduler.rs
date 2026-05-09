@@ -2010,7 +2010,6 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -2060,7 +2059,6 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -2125,7 +2123,6 @@ mod tests {
                 make_edge("worker", "out", "fe1", "break"),
                 make_edge("fe1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -2174,7 +2171,6 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -2236,7 +2232,6 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -2286,7 +2281,6 @@ mod tests {
                 make_node("worker", &["in"], &["out"]),
             ],
             edges: vec![make_edge("fe1", "body", "worker", "in")],
-            auto_merge_resolver: true,
         };
 
         let state = empty_run_state();

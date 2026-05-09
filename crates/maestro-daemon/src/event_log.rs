@@ -376,7 +376,8 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                                 .get("reason")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array()) {
+                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array())
+                            {
                                 node.frontmatter_violations = arr.clone();
                             }
                         }

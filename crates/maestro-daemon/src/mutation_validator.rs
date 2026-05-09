@@ -111,7 +111,6 @@ mod tests {
             variables: HashMap::new(),
             nodes,
             edges: vec![],
-            auto_merge_resolver: true,
         }
     }
 
@@ -128,6 +127,8 @@ mod tests {
                     completed_at: None,
                     failure_reason: None,
                     iterations: vec![],
+                    frontmatter_retries: 0,
+                    frontmatter_violations: vec![],
                 },
             );
         }

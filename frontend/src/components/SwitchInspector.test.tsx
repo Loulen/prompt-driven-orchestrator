@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import SwitchInspector from "./SwitchInspector";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef, NodeDef } from "../types";
+import type { PipelineDef, NodeDef, EdgeDef, VariableDef } from "../types";
 
 function makeSwitchNode(overrides?: Partial<NodeDef>): NodeDef {
   return {
@@ -19,12 +19,36 @@ function makeSwitchNode(overrides?: Partial<NodeDef>): NodeDef {
   };
 }
 
+function makeUpstreamNode(): NodeDef {
+  return {
+    id: "upstream",
+    name: "upstream",
+    type: "doc-only",
+    inputs: [],
+    outputs: [
+      {
+        name: "out",
+        repeated: false,
+        side: "right",
+        frontmatter: {
+          status: { type: "enum", allowed: ["ok", "fail"] },
+          field: { type: "string" },
+        },
+      },
+    ],
+    interactive: false,
+  };
+}
+
 function makePipeline(node: NodeDef): PipelineDef {
+  const upstream = makeUpstreamNode();
   return {
     name: "test-pipeline",
     variables: {},
-    nodes: [node],
-    edges: [],
+    nodes: [upstream, node],
+    edges: [
+      { source: { node: "upstream", port: "out" }, target: { node: node.id, port: "in" } },
+    ],
   };
 }
 
@@ -122,7 +146,6 @@ describe("SwitchInspector", () => {
     const when = yesBranch.when as Record<string, Record<string, unknown>>;
     expect(when).toBeDefined();
     expect(when["status"]).toBeDefined();
-    expect(when["field"]).toBeDefined();
   });
 
   it("deletes a condition row", () => {
@@ -255,5 +278,289 @@ describe("Layer 5: Switch node add, configure, and save roundtrip", () => {
     expect(updated.outputs[0].name).toBe("branch");
     expect(updated.outputs[1].name).toBe("default");
     expect(updated.type).toBe("switch");
+  });
+});
+
+describe("Edge disconnection clears frontmatter predicates (issue #64)", () => {
+  beforeEach(() => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "none", id: null },
+    });
+  });
+
+  it("removes frontmatter-based when fields but preserves $variable fields on edge delete", () => {
+    const reviewerNode: NodeDef = {
+      id: "reviewer",
+      name: "Reviewer",
+      type: "doc-only",
+      inputs: [],
+      outputs: [
+        {
+          name: "review",
+          repeated: false,
+          side: "right",
+          frontmatter: {
+            verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
+          },
+        },
+      ],
+      interactive: false,
+    };
+    const switchNode: NodeDef = {
+      id: "gate",
+      name: "Gate",
+      type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [
+        {
+          name: "pass",
+          repeated: false,
+          side: "right",
+          when: { verdict: { eq: "PASS" }, $threshold: { gte: 5 } },
+        },
+        { name: "default", repeated: false, side: "right" },
+      ],
+      interactive: false,
+    };
+    const edges: EdgeDef[] = [
+      { source: { node: "reviewer", port: "review" }, target: { node: "gate", port: "in" } },
+    ];
+    const pipeline: PipelineDef = {
+      name: "disconnect-test",
+      variables: { threshold: { type: "int", default: 7 } },
+      nodes: [reviewerNode, switchNode],
+      edges,
+    };
+
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "tab-disc",
+          scope: "repo",
+          pipeline,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "tab-disc",
+      selection: { kind: "none", id: null },
+    });
+
+    useEditStore.getState().deleteEdge(0);
+
+    const state = useEditStore.getState();
+    const gate = state.openTabs[0].pipeline.nodes.find((n) => n.id === "gate")!;
+    const passBranch = gate.outputs.find((o) => o.name === "pass")!;
+    const when = passBranch.when as Record<string, unknown> | null;
+    expect(when).toBeDefined();
+    expect(when).not.toBeNull();
+    expect(when!["$threshold"]).toBeDefined();
+    expect(when!["verdict"]).toBeUndefined();
+  });
+
+  it("clears when entirely if all fields were frontmatter-based", () => {
+    const reviewerNode: NodeDef = {
+      id: "reviewer",
+      name: "Reviewer",
+      type: "doc-only",
+      inputs: [],
+      outputs: [
+        {
+          name: "review",
+          repeated: false,
+          side: "right",
+          frontmatter: {
+            verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
+          },
+        },
+      ],
+      interactive: false,
+    };
+    const switchNode: NodeDef = {
+      id: "gate",
+      name: "Gate",
+      type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [
+        {
+          name: "pass",
+          repeated: false,
+          side: "right",
+          when: { verdict: { eq: "PASS" } },
+        },
+        { name: "default", repeated: false, side: "right" },
+      ],
+      interactive: false,
+    };
+    const edges: EdgeDef[] = [
+      { source: { node: "reviewer", port: "review" }, target: { node: "gate", port: "in" } },
+    ];
+    const pipeline: PipelineDef = {
+      name: "disconnect-test-2",
+      variables: {},
+      nodes: [reviewerNode, switchNode],
+      edges,
+    };
+
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "tab-disc2",
+          scope: "repo",
+          pipeline,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "tab-disc2",
+      selection: { kind: "none", id: null },
+    });
+
+    useEditStore.getState().deleteEdge(0);
+
+    const state = useEditStore.getState();
+    const gate = state.openTabs[0].pipeline.nodes.find((n) => n.id === "gate")!;
+    const passBranch = gate.outputs.find((o) => o.name === "pass")!;
+    expect(passBranch.when).toBeNull();
+  });
+});
+
+describe("Typed when clauses (issue #64)", () => {
+  function makeTypedPipeline(): {
+    pipeline: PipelineDef;
+    switchNode: NodeDef;
+  } {
+    const reviewerNode: NodeDef = {
+      id: "reviewer",
+      name: "Reviewer",
+      type: "doc-only",
+      inputs: [{ name: "code", repeated: false, side: "left" }],
+      outputs: [
+        {
+          name: "review",
+          repeated: false,
+          side: "right",
+          frontmatter: {
+            verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
+            score: { type: "int" },
+          },
+        },
+      ],
+      interactive: false,
+    };
+    const switchNode: NodeDef = {
+      id: "gate",
+      name: "Gate",
+      type: "switch",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [
+        { name: "pass", repeated: false, side: "right", when: { verdict: { eq: "PASS" } } },
+        { name: "default", repeated: false, side: "right" },
+      ],
+      interactive: false,
+    };
+    const edges: EdgeDef[] = [
+      { source: { node: "reviewer", port: "review" }, target: { node: "gate", port: "in" } },
+    ];
+    const pipeline: PipelineDef = {
+      name: "typed-test",
+      variables: {},
+      nodes: [reviewerNode, switchNode],
+      edges,
+    };
+    return { pipeline, switchNode };
+  }
+
+  function setTypedState(overrides?: {
+    variables?: Record<string, VariableDef>;
+    edges?: EdgeDef[];
+  }) {
+    const { pipeline, switchNode } = makeTypedPipeline();
+    if (overrides?.variables) pipeline.variables = overrides.variables;
+    if (overrides?.edges) pipeline.edges = overrides.edges;
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "tab-typed",
+          scope: "repo",
+          pipeline,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "tab-typed",
+      selection: { kind: "node", id: switchNode.id },
+    });
+  }
+
+  beforeEach(() => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "none", id: null },
+    });
+  });
+
+  it("renders field dropdown with upstream schema fields", () => {
+    setTypedState();
+    render(<SwitchInspector />);
+    const fieldDropdown = screen.getByTestId("field-dropdown");
+    expect(fieldDropdown).toBeInTheDocument();
+    const options = fieldDropdown.querySelectorAll("option");
+    const values = Array.from(options).map((o) => o.value);
+    expect(values).toContain("verdict");
+    expect(values).toContain("score");
+  });
+
+  it("renders value dropdown with allowed values for enum field", () => {
+    setTypedState();
+    render(<SwitchInspector />);
+    const valueDropdown = screen.getByTestId("value-dropdown");
+    expect(valueDropdown).toBeInTheDocument();
+    const options = valueDropdown.querySelectorAll("option");
+    const values = Array.from(options).map((o) => o.value);
+    expect(values).toContain("PASS");
+    expect(values).toContain("FAIL");
+  });
+
+  it("shows $variable options in field dropdown when variables declared", () => {
+    setTypedState({
+      variables: { threshold: { type: "int", default: 7 } },
+    });
+    render(<SwitchInspector />);
+    const fieldDropdown = screen.getByTestId("field-dropdown");
+    const options = fieldDropdown.querySelectorAll("option");
+    const values = Array.from(options).map((o) => o.value);
+    expect(values).toContain("$threshold");
+  });
+
+  it("disables add-condition when no upstream schema and no variables", () => {
+    setTypedState({ edges: [] });
+    render(<SwitchInspector />);
+    const addBtn = screen.getByTestId("add-condition");
+    expect(addBtn).toBeDisabled();
+  });
+
+  it("enables add-condition when upstream schema is available", () => {
+    setTypedState();
+    render(<SwitchInspector />);
+    const addBtn = screen.getByTestId("add-condition");
+    expect(addBtn).not.toBeDisabled();
+  });
+
+  it("removes free-text field input (uses dropdown instead)", () => {
+    setTypedState();
+    render(<SwitchInspector />);
+    const conditionRows = screen.getAllByTestId("condition-row");
+    const fieldInputs = conditionRows[0].querySelectorAll('input[placeholder="field"]');
+    expect(fieldInputs).toHaveLength(0);
   });
 });

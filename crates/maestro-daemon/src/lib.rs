@@ -5,9 +5,9 @@ mod event_log;
 mod frontmatter_parser;
 pub mod library_store;
 mod loop_body_resolver;
-mod mutation_validator;
 #[allow(dead_code)]
 mod merge_action;
+mod mutation_validator;
 mod node_io_resolver;
 mod outputs_validator;
 mod pipeline;

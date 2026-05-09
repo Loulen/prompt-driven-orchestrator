@@ -52,10 +52,7 @@ async fn manager_pty_ws_roundtrip() {
 
     let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
 
-    let ws_url = format!(
-        "ws://{}/sessions/{}/pty",
-        daemon.addr, session_name
-    );
+    let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
         .expect("WS connect to manager PTY should succeed");

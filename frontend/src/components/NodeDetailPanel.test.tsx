@@ -90,7 +90,9 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
-      expect(screen.getByText("Waiting to start...")).toBeInTheDocument();
+      const placeholder = screen.getByTestId("pending-placeholder");
+      expect(placeholder).toBeInTheDocument();
+      expect(placeholder).toHaveTextContent("en attente");
     });
 
     it("passes correct session name with iter", () => {

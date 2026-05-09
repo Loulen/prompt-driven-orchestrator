@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Star, Info, X } from "lucide-react";
+import { Star, Info, Terminal, X } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
@@ -36,7 +36,6 @@ export default function PipelineInfoPanel({
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
   const variables = pipeline?.variables ?? {};
   const variableEntries = Object.entries(variables);
-  const isRunning = run != null;
   const managerSession = run ? `maestro-mgr-${run.run_id}` : null;
 
   const starredEntry = libraryPipelines.find((lp) => lp.name === pipelineName);
@@ -47,7 +46,6 @@ export default function PipelineInfoPanel({
       className="flex h-full flex-col bg-bg-2 overflow-y-auto"
       data-testid="pipeline-info-panel"
     >
-      {/* Header */}
       <div
         className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
@@ -62,12 +60,11 @@ export default function PipelineInfoPanel({
         </button>
       </div>
 
-      {/* Metadata section */}
       <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }}>
         <div className="flex items-center gap-2">
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
-              run ? STATUS_DOT[run.status] ?? "bg-st-pending" : "bg-st-pending"
+              STATUS_DOT[run?.status ?? ""] ?? "bg-st-pending"
             }`}
           />
           <div className="min-w-0 flex-1">
@@ -90,7 +87,6 @@ export default function PipelineInfoPanel({
           />
         </div>
 
-        {/* Variables */}
         {variableEntries.length > 0 && (
           <div className="mt-3 flex flex-col gap-1" data-testid="info-panel-variables">
             {variableEntries.map(([name, def]) => (
@@ -109,46 +105,13 @@ export default function PipelineInfoPanel({
         )}
       </div>
 
-      {/* Manager terminal (running) or idle placeholder */}
-      {isRunning && managerSession ? (
+      {managerSession ? (
         <div
           className="flex min-h-0 flex-1 flex-col"
           style={{ fontSize: "11.5px" }}
         >
           <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              className="text-fg-3"
-            >
-              <rect
-                x="1"
-                y="3"
-                width="12"
-                height="9"
-                rx="1.5"
-                stroke="currentColor"
-                strokeWidth="1.3"
-              />
-              <path
-                d="M4 7L6 9L4 11"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <line
-                x1="7.5"
-                y1="11"
-                x2="10"
-                y2="11"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-              />
-            </svg>
+            <Terminal size={14} className="text-fg-3" />
             <span className="text-fg-2" style={{ fontSize: "11px" }}>
               Pipeline Manager
             </span>

@@ -2462,7 +2462,17 @@ async fn node_done(
     let pipeline_path =
         resolve_run_pipeline_path(&state.repo_root, &run_id, &pre_run_state.pipeline_name);
     let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
-    if let Some(resp) = check_output_validation(&pipeline_path, &node_id, iter, &artifacts_dir) {
+    if let Some(resp) = check_output_validation_with_retry(
+        &state,
+        &pipeline_path,
+        &node_id,
+        iter,
+        &artifacts_dir,
+        &run_id,
+        &pre_run_state,
+    )
+    .await
+    {
         return resp;
     }
 
@@ -2635,8 +2645,18 @@ async fn run_command(
                 .join("runs")
                 .join(&run_id)
                 .join("worktree/.maestro/artifacts");
-            if let Some(resp) =
-                check_output_validation(&pipeline_path, &node_id, iter, &artifacts_dir)
+            let empty_run_state = event_log::RunState::new(run_id.clone(), String::new());
+            let rs_ref = run_state.as_ref().unwrap_or(&empty_run_state);
+            if let Some(resp) = check_output_validation_with_retry(
+                &state,
+                &pipeline_path,
+                &node_id,
+                iter,
+                &artifacts_dir,
+                &run_id,
+                rs_ref,
+            )
+            .await
             {
                 return resp;
             }
@@ -3237,11 +3257,14 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     let already_active =
-                        fresh_run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
-                            n.iter >= *iter
-                                && (n.status == event_log::NodeStatus::Running
-                                    || n.status == event_log::NodeStatus::Completed)
-                        });
+                        fresh_run_state
+                            .nodes
+                            .get(node_id.as_str())
+                            .is_some_and(|n| {
+                                n.iter >= *iter
+                                    && (n.status == event_log::NodeStatus::Running
+                                        || n.status == event_log::NodeStatus::Completed)
+                            });
                     if !already_active {
                         if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
                             spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
@@ -3820,29 +3843,134 @@ fn resolve_run_pipeline_path(
     }
 }
 
-fn check_output_validation(
+async fn check_output_validation_with_retry(
+    state: &AppState,
     pipeline_path: &std::path::Path,
     node_id: &str,
     iter: i64,
     artifacts_dir: &std::path::Path,
+    run_id: &str,
+    run_state: &event_log::RunState,
 ) -> Option<Response> {
     let yaml = std::fs::read_to_string(pipeline_path).ok()?;
     let parse_result = pipeline::parse_pipeline(&yaml).ok()?;
-    let Err(missing) =
+    let Err(validation_error) =
         outputs_validator::validate(&parse_result.pipeline, node_id, iter, artifacts_dir)
     else {
         return None;
     };
-    Some(
-        (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "missing_outputs",
-                "missing": missing,
-            })),
-        )
-            .into_response(),
-    )
+
+    match validation_error {
+        outputs_validator::ValidationError::MissingOutputs(missing) => Some(
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "missing_outputs",
+                    "missing": missing,
+                })),
+            )
+                .into_response(),
+        ),
+        outputs_validator::ValidationError::FrontmatterMismatch(violations) => {
+            let retries = run_state
+                .nodes
+                .get(node_id)
+                .map(|n| n.frontmatter_retries)
+                .unwrap_or(0);
+
+            if retries >= 1 {
+                let violation_details: Vec<serde_json::Value> = violations
+                    .iter()
+                    .map(|v| {
+                        serde_json::json!({
+                            "port": v.port,
+                            "field": v.field,
+                            "reason": v.reason,
+                        })
+                    })
+                    .collect();
+
+                let fail_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.to_string(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::NodeFailed,
+                    node_id: Some(node_id.to_string()),
+                    iter: Some(iter),
+                    payload: Some(serde_json::json!({
+                        "reason": "output validation failed",
+                        "violations": violation_details,
+                    })),
+                };
+                let _ = append_event(state, &fail_event).await;
+
+                let run_failed = event_log::Event {
+                    id: None,
+                    run_id: run_id.to_string(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::RunFailed,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({
+                        "reason": format!("node {node_id} failed output validation after retry")
+                    })),
+                };
+                let _ = append_event(state, &run_failed).await;
+
+                warn!("Node {node_id} failed output validation after retry in run {run_id}");
+                Some(
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "frontmatter_retry_exhausted",
+                            "violations": violation_details,
+                        })),
+                    )
+                        .into_response(),
+                )
+            } else {
+                let msg = outputs_validator::corrective_message(&violations);
+                let session_name = tmux_session_manager::node_session_name(run_id, node_id, iter);
+                tmux_session_manager::send_keys(&session_name, &msg);
+
+                let violation_details: Vec<serde_json::Value> = violations
+                    .iter()
+                    .map(|v| {
+                        serde_json::json!({
+                            "port": v.port,
+                            "field": v.field,
+                            "reason": v.reason,
+                        })
+                    })
+                    .collect();
+
+                let retry_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.to_string(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::FrontmatterRetryPending,
+                    node_id: Some(node_id.to_string()),
+                    iter: Some(iter),
+                    payload: Some(serde_json::json!({
+                        "violations": violation_details,
+                    })),
+                };
+                let _ = append_event(state, &retry_event).await;
+
+                info!("Frontmatter mismatch for node {node_id} in run {run_id} — corrective message sent, awaiting retry");
+                Some(
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "frontmatter_retry_pending",
+                            "violations": violation_details,
+                        })),
+                    )
+                        .into_response(),
+                )
+            }
+        }
+    }
 }
 
 fn dirs_next_home() -> Option<PathBuf> {
@@ -7497,10 +7625,7 @@ edges: []
         static LIB_TEST_LOCK: StdMutex<()> = StdMutex::new(());
         let _guard = LIB_TEST_LOCK.lock().unwrap();
 
-        let tmp = std::env::temp_dir().join(format!(
-            "maestro-lib-nopipe-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("maestro-lib-nopipe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let prev_home = std::env::var("HOME").ok();

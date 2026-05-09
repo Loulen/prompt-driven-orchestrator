@@ -49,6 +49,7 @@ pub enum EventKind {
     LoopBreakReceived,
     LoopMaxReached,
     LoopDone,
+    FrontmatterRetryPending,
     PipelineModified,
     RunCompleted,
     RunFailed,
@@ -107,6 +108,8 @@ pub struct NodeState {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub iterations: Vec<IterationInfo>,
+    #[serde(default)]
+    pub frontmatter_retries: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +313,7 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                             completed_at: None,
                             failure_reason: None,
                             iterations: Vec::new(),
+                            frontmatter_retries: 0,
                         });
                     node.status = NodeStatus::Running;
                     node.iter = iter;
@@ -359,6 +363,13 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                             it.status = NodeStatus::Failed;
                             it.completed_at = Some(event.ts.clone());
                         }
+                    }
+                }
+            }
+            EventKind::FrontmatterRetryPending => {
+                if let Some(ref node_id) = event.node_id {
+                    if let Some(node) = state.nodes.get_mut(node_id) {
+                        node.frontmatter_retries += 1;
                     }
                 }
             }

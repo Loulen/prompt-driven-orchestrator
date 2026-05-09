@@ -24,6 +24,7 @@ export interface NodeState {
   completed_at: string | null;
   failure_reason: string | null;
   iterations: IterationInfo[];
+  frontmatter_retries?: number;
 }
 
 export interface EdgeInfo {

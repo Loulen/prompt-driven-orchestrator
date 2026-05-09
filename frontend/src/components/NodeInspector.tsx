@@ -4,6 +4,7 @@ import { useEditStore } from "../stores/editStore";
 import type { NodeDef, NodeType, PortDef, PortSide } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import SidePicker from "./SidePicker";
+import OutputSchemaEditor from "./OutputSchemaEditor";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api";
@@ -188,13 +189,18 @@ export default function NodeInspector({
         {/* Outputs */}
         <SectionHead title="Outputs" count={node.outputs.length} onAdd={() => handleAddPort("outputs")} />
         {node.outputs.map((port, i) => (
-          <PortRow
-            key={i}
-            port={port}
-            highlighted={highlightedPort === port.name}
-            onUpdate={(updates) => handleUpdatePort("outputs", i, updates)}
-            onRemove={() => handleRemovePort("outputs", i)}
-          />
+          <div key={i} className="flex flex-col gap-1">
+            <PortRow
+              port={port}
+              highlighted={highlightedPort === port.name}
+              onUpdate={(updates) => handleUpdatePort("outputs", i, updates)}
+              onRemove={() => handleRemovePort("outputs", i)}
+            />
+            <OutputSchemaEditor
+              schema={port.frontmatter}
+              onChange={(fm) => handleUpdatePort("outputs", i, { frontmatter: fm ?? null })}
+            />
+          </div>
         ))}
       </div>
     </aside>

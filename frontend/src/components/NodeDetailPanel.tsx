@@ -303,8 +303,39 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
         </div>
       )}
 
+      {/* Frontmatter retry pending banner (amber) */}
+      {node.status === "running" && (node.frontmatter_retries ?? 0) > 0 && (
+        <div
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          data-testid="frontmatter-retry-banner"
+        >
+          <AlertCircle size={14} className="shrink-0 text-st-await" />
+          <span
+            className="text-st-await"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            Frontmatter mismatch — corrective message sent, awaiting retry
+          </span>
+        </div>
+      )}
+
       {/* Failed banner */}
-      {node.status === "failed" && (
+      {node.status === "failed" && node.failure_reason === "output validation failed" ? (
+        <div
+          className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2"
+          data-testid="frontmatter-exhausted-banner"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle size={14} className="shrink-0 text-st-failed" />
+            <span
+              className="text-st-failed"
+              style={{ fontSize: "11.5px", fontWeight: 500 }}
+            >
+              Failed — output validation failed after retry
+            </span>
+          </div>
+        </div>
+      ) : node.status === "failed" ? (
         <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-failed" />
           <span
@@ -314,7 +345,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             Failed{node.failure_reason ? ` — ${node.failure_reason}` : ""}
           </span>
         </div>
-      )}
+      ) : null}
 
       <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
         {/* Terminal preview */}

@@ -556,6 +556,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             iterations: Vec::new(),
+            frontmatter_retries: 0,
         }
     }
 
@@ -568,6 +569,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             iterations: Vec::new(),
+            frontmatter_retries: 0,
         }
     }
 
@@ -580,6 +582,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             iterations: Vec::new(),
+            frontmatter_retries: 0,
         }
     }
 
@@ -1731,10 +1734,7 @@ mod tests {
             name: "loop-no-in".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![
-                make_start_node("start"),
-                make_loop_node("loop1", 5),
-            ],
+            nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
             edges: vec![],
             auto_merge_resolver: true,
         };

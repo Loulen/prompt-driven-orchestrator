@@ -190,6 +190,13 @@ pub fn capture(session_name: &str) -> Option<String> {
     }
 }
 
+/// Send keys to a tmux session. Best-effort — does not fail if the session is absent.
+pub fn send_keys(session_name: &str, text: &str) {
+    let _ = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", session_name, text, "Enter"])
+        .output();
+}
+
 /// Kill a tmux session. Best-effort — does not fail if the session is absent.
 pub fn kill(session_name: &str) {
     let _ = std::process::Command::new("tmux")

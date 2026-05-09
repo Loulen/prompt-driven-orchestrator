@@ -2,7 +2,7 @@ import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
-import TriangleHandle from "./TriangleHandle";
+import PortRow from "./PortRow";
 
 interface LoopPort {
   name: string;
@@ -32,16 +32,19 @@ export function LoopEditNode({ data, id }: NodeProps<Node<LoopEditData>>) {
       }`}
       style={{ minWidth: 150, fontSize: "12px" }}
     >
-      {inputs.map((port, i) => (
-        <TriangleHandle
-          key={`in-${port.name}`}
-          id={port.name}
-          kind="input"
-          side={port.side}
-          index={i}
-          total={inputs.length}
-        />
-      ))}
+      <div className="flex flex-col gap-0.5 mb-1">
+        {inputs.map((port, i) => (
+          <PortRow
+            key={`in-${port.name}`}
+            portName={port.name}
+            kind="input"
+            side={port.side}
+            index={i}
+            total={inputs.length}
+            nodeType="loop"
+          />
+        ))}
+      </div>
       <div className="flex items-center gap-2">
         <span className="text-[var(--color-loop-tint,#60a5fa)]" style={{ fontSize: "13px" }}>
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -69,16 +72,19 @@ export function LoopEditNode({ data, id }: NodeProps<Node<LoopEditData>>) {
           ↻ max {data.maxIter}
         </span>
       </div>
-      {outputs.map((port, i) => (
-        <TriangleHandle
-          key={`out-${port.name}`}
-          id={port.name}
-          kind="output"
-          side={port.side}
-          index={i}
-          total={outputs.length}
-        />
-      ))}
+      <div className="mt-1 flex flex-col gap-0.5">
+        {outputs.map((port, i) => (
+          <PortRow
+            key={`out-${port.name}`}
+            portName={port.name}
+            kind="output"
+            side={port.side}
+            index={i}
+            total={outputs.length}
+            nodeType="loop"
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -106,16 +112,19 @@ export function LoopRunNode({ data }: NodeProps<Node<LoopRunData>>) {
       className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
       style={{ minWidth: 150, fontSize: "12px" }}
     >
-      {inputs.map((port, i) => (
-        <TriangleHandle
-          key={`in-${port.name}`}
-          id={port.name}
-          kind="input"
-          side={port.side}
-          index={i}
-          total={inputs.length}
-        />
-      ))}
+      <div className="flex flex-col gap-0.5 mb-1">
+        {inputs.map((port, i) => (
+          <PortRow
+            key={`in-${port.name}`}
+            portName={port.name}
+            kind="input"
+            side={port.side}
+            index={i}
+            total={inputs.length}
+            nodeType="loop"
+          />
+        ))}
+      </div>
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -149,16 +158,19 @@ export function LoopRunNode({ data }: NodeProps<Node<LoopRunData>>) {
           ↻ {data.currentIter}/{data.maxIter}
         </span>
       </div>
-      {outputs.map((port, i) => (
-        <TriangleHandle
-          key={`out-${port.name}`}
-          id={port.name}
-          kind="output"
-          side={port.side}
-          index={i}
-          total={outputs.length}
-        />
-      ))}
+      <div className="mt-1 flex flex-col gap-0.5">
+        {outputs.map((port, i) => (
+          <PortRow
+            key={`out-${port.name}`}
+            portName={port.name}
+            kind="output"
+            side={port.side}
+            index={i}
+            total={outputs.length}
+            nodeType="loop"
+          />
+        ))}
+      </div>
     </div>
   );
 }

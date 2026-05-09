@@ -50,6 +50,7 @@ import { TYPE_LABELS, TYPE_COLORS, STATUS_BORDER, STATUS_BG, STATUS_DOT } from "
 import { computeBodySubgraph } from "../loopBodySubgraph";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
+import PortRow from "./PortRow";
 import { SwitchRunNode } from "./SwitchNode";
 import { LoopRunNode } from "./LoopNode";
 import { ForEachRunNode } from "./ForEachNode";
@@ -88,16 +89,19 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
       className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
       style={{ minWidth: 160, fontSize: "12px" }}
     >
-      {data.inputs.map((port, i) => (
-        <TriangleHandle
-          key={`in-${port.name}`}
-          id={port.name}
-          kind="input"
-          side={port.side}
-          index={i}
-          total={data.inputs.length}
-        />
-      ))}
+      <div className="flex flex-col gap-0.5 mb-1">
+        {data.inputs.map((port, i) => (
+          <PortRow
+            key={`in-${port.name}`}
+            portName={port.name}
+            kind="input"
+            side={port.side}
+            index={i}
+            total={data.inputs.length}
+            description={port.description}
+          />
+        ))}
+      </div>
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -124,16 +128,19 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
         <span>{data.status}</span>
         <span className="font-mono" style={{ fontSize: "9px" }}>{data.nodeId}</span>
       </div>
-      {data.outputs.map((port, i) => (
-        <TriangleHandle
-          key={`out-${port.name}`}
-          id={port.name}
-          kind="output"
-          side={port.side}
-          index={i}
-          total={data.outputs.length}
-        />
-      ))}
+      <div className="mt-1 flex flex-col gap-0.5">
+        {data.outputs.map((port, i) => (
+          <PortRow
+            key={`out-${port.name}`}
+            portName={port.name}
+            kind="output"
+            side={port.side}
+            index={i}
+            total={data.outputs.length}
+            description={port.description}
+          />
+        ))}
+      </div>
     </div>
   );
 }

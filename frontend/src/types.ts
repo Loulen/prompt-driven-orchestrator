@@ -40,6 +40,7 @@ export interface EdgeInfo {
 export interface PortBrief {
   name: string;
   side: PortSide;
+  description?: string | null;
 }
 
 export interface NodeDefInfo {
@@ -159,6 +160,7 @@ export interface PortDef {
   side?: PortSide;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
+  description?: string | null;
 }
 
 export interface FrontmatterFieldDecl {

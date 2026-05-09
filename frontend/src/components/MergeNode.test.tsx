@@ -1,13 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
+import { TooltipProvider } from "./ui/tooltip";
 import { MergeEditNode, MergeRunNode } from "./MergeNode";
 import { useEditStore } from "../stores/editStore";
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus } from "../types";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <ReactFlowProvider>{children}</ReactFlowProvider>;
+  return (
+    <TooltipProvider>
+      <ReactFlowProvider>{children}</ReactFlowProvider>
+    </TooltipProvider>
+  );
 }
 
 const baseMergeEditData = {
@@ -98,6 +103,12 @@ describe("MergeEditNode", () => {
     expect(screen.getByText("mg1")).toBeInTheDocument();
   });
 
+  it("renders labeled rows for ports", () => {
+    render(<MergeEditNode {...editProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-branches")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-merged")).toBeInTheDocument();
+  });
+
   it("shows selected ring when selected", () => {
     useEditStore.setState({
       selection: { kind: "node", id: "mg1" },
@@ -118,6 +129,12 @@ describe("MergeRunNode", () => {
   it("renders 'merge' type badge", () => {
     render(<MergeRunNode {...runProps()} />, { wrapper: Wrapper });
     expect(screen.getByText("merge")).toBeInTheDocument();
+  });
+
+  it("renders labeled rows for ports", () => {
+    render(<MergeRunNode {...runProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-branches")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-merged")).toBeInTheDocument();
   });
 
   it("shows status text", () => {

@@ -4174,6 +4174,7 @@ fn port_brief(p: &pipeline::Port, default_side: &str) -> event_log::PortBrief {
             .side
             .map(|s| s.to_string())
             .unwrap_or_else(|| default_side.into()),
+        description: p.description.clone(),
     }
 }
 

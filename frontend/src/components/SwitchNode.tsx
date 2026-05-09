@@ -1,12 +1,13 @@
 import type { NodeProps, Node } from "@xyflow/react";
-import type { NodeStatus } from "../types";
+import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
+import PortRow from "./PortRow";
 
 interface SwitchBranch {
   name: string;
-  side: string;
+  side: PortSide;
   hasWhen: boolean;
 }
 
@@ -14,7 +15,7 @@ interface SwitchEditData {
   label: string;
   nodeId: string;
   branches: SwitchBranch[];
-  inputSide: string;
+  inputSide: PortSide;
   [key: string]: unknown;
 }
 
@@ -29,13 +30,16 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
       }`}
       style={{ minWidth: 140, fontSize: "12px" }}
     >
-      <TriangleHandle
-        id="in"
-        kind="input"
-        side={data.inputSide as "left" | "right" | "top" | "bottom"}
-        index={0}
-        total={1}
-      />
+      <div className="flex flex-col gap-0.5 mb-1">
+        <PortRow
+          portName="in"
+          kind="input"
+          side={data.inputSide}
+          index={0}
+          total={1}
+          nodeType="switch"
+        />
+      </div>
       <div className="flex items-center gap-2">
         <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--color-switch-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
@@ -51,25 +55,21 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
       </div>
       <div className="mt-1 flex flex-col gap-0.5">
         {data.branches.map((branch, i) => (
-          <div
+          <PortRow
             key={branch.name}
-            className="flex items-center gap-1.5 rounded bg-bg-3 px-1.5 py-0.5"
-            style={{ fontSize: "10px" }}
+            portName={branch.name}
+            kind="output"
+            side={branch.side}
+            index={i}
+            total={data.branches.length}
+            nodeType="switch"
           >
-            <span className="text-fg-3">{branch.name}</span>
             {!branch.hasWhen && branch.name === "default" && (
               <span className="ml-auto rounded bg-fg-4/20 px-1 text-fg-4" style={{ fontSize: "8px" }}>
                 else
               </span>
             )}
-            <TriangleHandle
-              id={branch.name}
-              kind="output"
-              side={branch.side as "left" | "right" | "top" | "bottom"}
-              index={i}
-              total={data.branches.length}
-            />
-          </div>
+          </PortRow>
         ))}
       </div>
     </div>
@@ -81,12 +81,11 @@ interface SwitchRunData {
   nodeId: string;
   status: NodeStatus;
   branches: SwitchBranch[];
-  inputSide: string;
+  inputSide: PortSide;
   activeBranch: string | null;
   iter: number;
   [key: string]: unknown;
 }
-
 
 export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
   const borderColor = STATUS_BORDER[data.status];
@@ -98,13 +97,16 @@ export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
       className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
       style={{ minWidth: 140, fontSize: "12px" }}
     >
-      <TriangleHandle
-        id="in"
-        kind="input"
-        side={data.inputSide as "left" | "right" | "top" | "bottom"}
-        index={0}
-        total={1}
-      />
+      <div className="flex flex-col gap-0.5 mb-1">
+        <PortRow
+          portName="in"
+          kind="input"
+          side={data.inputSide}
+          index={0}
+          total={1}
+          nodeType="switch"
+        />
+      </div>
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -156,7 +158,7 @@ export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
               <TriangleHandle
                 id={branch.name}
                 kind="output"
-                side={branch.side as "left" | "right" | "top" | "bottom"}
+                side={branch.side}
                 index={i}
                 total={data.branches.length}
               />

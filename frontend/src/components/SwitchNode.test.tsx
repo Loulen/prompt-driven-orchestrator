@@ -1,23 +1,28 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
+import { TooltipProvider } from "./ui/tooltip";
 import { SwitchEditNode, SwitchRunNode } from "./SwitchNode";
 import { useEditStore } from "../stores/editStore";
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus } from "../types";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <ReactFlowProvider>{children}</ReactFlowProvider>;
+  return (
+    <TooltipProvider>
+      <ReactFlowProvider>{children}</ReactFlowProvider>
+    </TooltipProvider>
+  );
 }
 
 const baseSwitchEditData = {
   label: "route-requests",
   nodeId: "sw1",
   branches: [
-    { name: "fast", side: "right", hasWhen: true },
-    { name: "default", side: "right", hasWhen: false },
+    { name: "fast", side: "right" as const, hasWhen: true },
+    { name: "default", side: "right" as const, hasWhen: false },
   ],
-  inputSide: "left",
+  inputSide: "left" as const,
 };
 
 const baseSwitchRunData = {
@@ -25,10 +30,10 @@ const baseSwitchRunData = {
   nodeId: "sw1",
   status: "completed" as NodeStatus,
   branches: [
-    { name: "fast", side: "right", hasWhen: true },
-    { name: "default", side: "right", hasWhen: false },
+    { name: "fast", side: "right" as const, hasWhen: true },
+    { name: "default", side: "right" as const, hasWhen: false },
   ],
-  inputSide: "left",
+  inputSide: "left" as const,
   activeBranch: "fast",
   iter: 1,
 };
@@ -100,10 +105,16 @@ describe("SwitchEditNode", () => {
     expect(screen.getByText("switch")).toBeInTheDocument();
   });
 
-  it("renders branch names", () => {
+  it("renders branch names as port labels", () => {
     render(<SwitchEditNode {...editProps()} />, { wrapper: Wrapper });
     expect(screen.getByText("fast")).toBeInTheDocument();
     expect(screen.getByText("default")).toBeInTheDocument();
+  });
+
+  it("renders labeled row for input port 'in'", () => {
+    render(<SwitchEditNode {...editProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-in")).toBeInTheDocument();
+    expect(screen.getByTestId("port-input-in")).toHaveTextContent("in");
   });
 
   it("shows 'else' badge on default branch", () => {
@@ -126,6 +137,11 @@ describe("SwitchRunNode", () => {
   it("renders the node label", () => {
     render(<SwitchRunNode {...runProps()} />, { wrapper: Wrapper });
     expect(screen.getByText("route-requests")).toBeInTheDocument();
+  });
+
+  it("renders labeled row for input port 'in'", () => {
+    render(<SwitchRunNode {...runProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-in")).toBeInTheDocument();
   });
 
   it("highlights the active branch", () => {

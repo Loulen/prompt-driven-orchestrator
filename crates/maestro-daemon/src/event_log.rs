@@ -18,6 +18,8 @@ pub struct EdgeInfo {
 pub struct PortBrief {
     pub name: String,
     pub side: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

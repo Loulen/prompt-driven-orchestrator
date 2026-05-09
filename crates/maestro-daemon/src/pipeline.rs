@@ -69,6 +69,8 @@ pub struct Port {
     pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<serde_yaml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

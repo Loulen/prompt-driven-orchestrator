@@ -1,13 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
+import { TooltipProvider } from "./ui/tooltip";
 import { LoopEditNode, LoopRunNode } from "./LoopNode";
 import { useEditStore } from "../stores/editStore";
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus } from "../types";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <ReactFlowProvider>{children}</ReactFlowProvider>;
+  return (
+    <TooltipProvider>
+      <ReactFlowProvider>{children}</ReactFlowProvider>
+    </TooltipProvider>
+  );
 }
 
 const baseLoopEditData = {
@@ -109,6 +114,14 @@ describe("LoopEditNode", () => {
     expect(badge.textContent).toContain("max 5");
   });
 
+  it("renders labeled rows for all ports", () => {
+    render(<LoopEditNode {...editProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-in")).toBeInTheDocument();
+    expect(screen.getByTestId("port-input-break")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-body")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-done")).toBeInTheDocument();
+  });
+
   it("shows selected ring when selected", () => {
     useEditStore.setState({
       selection: { kind: "node", id: "loop1" },
@@ -130,6 +143,14 @@ describe("LoopRunNode", () => {
     render(<LoopRunNode {...runProps()} />, { wrapper: Wrapper });
     const badge = screen.getByTestId("iter-badge");
     expect(badge.textContent).toContain("2/5");
+  });
+
+  it("renders labeled rows for all ports", () => {
+    render(<LoopRunNode {...runProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("port-input-in")).toBeInTheDocument();
+    expect(screen.getByTestId("port-input-break")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-body")).toBeInTheDocument();
+    expect(screen.getByTestId("port-output-done")).toBeInTheDocument();
   });
 
   it("shows status text", () => {

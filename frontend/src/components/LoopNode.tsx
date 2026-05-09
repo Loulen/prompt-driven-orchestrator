@@ -3,6 +3,7 @@ import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import PortRow from "./PortRow";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 
 interface LoopPort {
   name: string;
@@ -46,19 +47,8 @@ export function LoopEditNode({ data, id }: NodeProps<Node<LoopEditData>>) {
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-[var(--color-loop-tint,#60a5fa)]" style={{ fontSize: "13px" }}>
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 5.5a4.5 4.5 0 1 0-1.3 3.2" />
-            <path d="M11 2.5v3h-3" />
-          </svg>
-        </span>
+        <NodeTypeIcon type="loop" size={14} className="shrink-0 text-[var(--color-loop-tint,#60a5fa)]" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-[var(--color-loop-tint,#60a5fa)] text-[var(--color-loop-tint,#60a5fa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          loop
-        </span>
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
@@ -131,19 +121,8 @@ export function LoopRunNode({ data }: NodeProps<Node<LoopRunData>>) {
             data.status === "running" ? "animate-pulse" : ""
           }`}
         />
-        <span className="text-[var(--color-loop-tint,#60a5fa)]" style={{ fontSize: "13px" }}>
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 5.5a4.5 4.5 0 1 0-1.3 3.2" />
-            <path d="M11 2.5v3h-3" />
-          </svg>
-        </span>
+        <NodeTypeIcon type="loop" size={14} className="shrink-0 text-[var(--color-loop-tint,#60a5fa)]" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-[var(--color-loop-tint,#60a5fa)] text-[var(--color-loop-tint,#60a5fa)] px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          loop
-        </span>
       </div>
       <div className="mt-0.5 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
         <span>{data.status}</span>

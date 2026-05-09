@@ -93,9 +93,9 @@ describe("MergeEditNode", () => {
     expect(screen.getByText("merge-point")).toBeInTheDocument();
   });
 
-  it("renders 'merge' type badge", () => {
+  it("renders merge structural icon", () => {
     render(<MergeEditNode {...editProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("merge")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-merge")).toBeInTheDocument();
   });
 
   it("renders the node id", () => {
@@ -126,9 +126,9 @@ describe("MergeRunNode", () => {
     expect(screen.getByText("merge-point")).toBeInTheDocument();
   });
 
-  it("renders 'merge' type badge", () => {
+  it("renders merge structural icon", () => {
     render(<MergeRunNode {...runProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("merge")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-merge")).toBeInTheDocument();
   });
 
   it("renders labeled rows for ports", () => {

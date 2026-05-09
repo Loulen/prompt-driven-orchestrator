@@ -103,9 +103,9 @@ describe("LoopEditNode", () => {
     expect(screen.getByText("review-loop")).toBeInTheDocument();
   });
 
-  it("renders 'loop' type badge", () => {
+  it("renders loop structural icon", () => {
     render(<LoopEditNode {...editProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("loop")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-loop")).toBeInTheDocument();
   });
 
   it("shows edit-mode iter badge with max N format", () => {
@@ -160,9 +160,9 @@ describe("LoopRunNode", () => {
     expect(screen.getByText("completed")).toBeInTheDocument();
   });
 
-  it("shows 'loop' type badge", () => {
+  it("renders loop structural icon", () => {
     render(<LoopRunNode {...runProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("loop")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-loop")).toBeInTheDocument();
   });
 
   it("iter badge updates with different values", () => {

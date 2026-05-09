@@ -3,6 +3,7 @@ import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
 import PortRow from "./PortRow";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 
 interface MergeEditData {
   label: string;
@@ -34,14 +35,8 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
         />
       </div>
       <div className="flex items-center gap-2">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-acc" />
+        <NodeTypeIcon type="merge" size={14} className="shrink-0 text-acc" />
         <span className="font-medium text-fg">{data.label}</span>
-        <span
-          className="ml-auto rounded border border-acc text-acc px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          merge
-        </span>
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
@@ -96,6 +91,7 @@ export function MergeRunNode({ data }: NodeProps<Node<MergeRunData>>) {
             data.status === "running" ? "animate-pulse" : ""
           }`}
         />
+        <NodeTypeIcon type="merge" size={14} className="shrink-0 text-acc" />
         <span className="font-medium text-fg">{data.label}</span>
         {data.iter > 1 && (
           <span
@@ -105,12 +101,6 @@ export function MergeRunNode({ data }: NodeProps<Node<MergeRunData>>) {
             iter {data.iter}
           </span>
         )}
-        <span
-          className="ml-auto rounded border border-acc text-acc px-1 py-px"
-          style={{ fontSize: "9px", fontWeight: 500, lineHeight: "1.2" }}
-        >
-          merge
-        </span>
       </div>
       <div
         className="mt-0.5 flex items-center gap-2 text-fg-4"

@@ -94,7 +94,7 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("foreach node renders in edit mode with foreach badge", async ({
+test("foreach node renders in edit mode with foreach icon", async ({
   page,
 }) => {
   const consoleErrors: string[] = [];
@@ -116,12 +116,12 @@ test("foreach node renders in edit mode with foreach badge", async ({
   await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
   await page.waitForTimeout(500);
 
-  // Verify the foreach node renders with "foreach" badge
+  // Verify the foreach node renders with its label
   const feNode = page.getByText("per-item").first();
   await expect(feNode).toBeVisible({ timeout: 5_000 });
 
-  // The foreach badge text should be present
-  await expect(page.getByText("foreach").first()).toBeVisible({
+  // The foreach structural icon should be present
+  await expect(page.locator("[data-testid='node-icon-foreach']").first()).toBeVisible({
     timeout: 3_000,
   });
 
@@ -155,8 +155,8 @@ test("foreach toolbar button adds a new foreach node", async ({ page }) => {
   await page.waitForTimeout(500);
 
   // Should now have two foreach nodes visible (the seeded one + the new one)
-  const foreachBadges = page.getByText("foreach");
-  await expect(foreachBadges).toHaveCount(2, { timeout: 3_000 });
+  const foreachIcons = page.locator("[data-testid='node-icon-foreach']");
+  await expect(foreachIcons).toHaveCount(2, { timeout: 3_000 });
 
   expect(consoleErrors).toEqual([]);
 });

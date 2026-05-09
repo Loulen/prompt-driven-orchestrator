@@ -100,9 +100,9 @@ describe("SwitchEditNode", () => {
     expect(screen.getByText("route-requests")).toBeInTheDocument();
   });
 
-  it("renders 'switch' type badge", () => {
+  it("renders switch structural icon", () => {
     render(<SwitchEditNode {...editProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("switch")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-switch")).toBeInTheDocument();
   });
 
   it("renders branch names as port labels", () => {
@@ -166,9 +166,9 @@ describe("SwitchRunNode", () => {
     expect(screen.queryByText(/iter/)).not.toBeInTheDocument();
   });
 
-  it("renders 'switch' type badge", () => {
+  it("renders switch structural icon", () => {
     render(<SwitchRunNode {...runProps()} />, { wrapper: Wrapper });
-    expect(screen.getByText("switch")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-switch")).toBeInTheDocument();
   });
 
   it("shows status text", () => {

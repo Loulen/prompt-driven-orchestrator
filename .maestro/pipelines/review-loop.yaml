@@ -31,7 +31,12 @@ nodes:
     inputs:
       - { name: code, side: left }
     outputs:
-      - { name: review, side: right }
+      - name: review
+        side: right
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, APPROVED, FAIL, NEEDS_WORK]
     view: { x: 500, y: 100 }
   - id: tmkRzihO
     name: switch

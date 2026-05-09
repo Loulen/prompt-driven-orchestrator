@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -204,6 +204,12 @@ pub enum ParseError {
     InvalidYaml(#[from] serde_yaml::Error),
     #[error("missing required field: {0}")]
     MissingField(String),
+    #[error("switch node '{node_id}' output '{port}': when-clause field '{field}' not found in upstream schema")]
+    UndeclaredWhenField {
+        node_id: String,
+        port: String,
+        field: String,
+    },
 }
 
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
@@ -499,10 +505,88 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         ));
     }
 
+    validate_switch_when_clauses(&pipeline)?;
+
     Ok(ParseResult {
         pipeline,
         diagnostics,
     })
+}
+
+fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {
+    let variable_names: HashSet<&str> =
+        pipeline.variables.keys().map(|k| k.as_str()).collect();
+
+    for node in &pipeline.nodes {
+        if node.node_type != NodeType::Switch {
+            continue;
+        }
+        let upstream_schema = resolve_switch_upstream_schema(pipeline, &node.id);
+        for port in &node.outputs {
+            if port.name == "default" {
+                continue;
+            }
+            let when = match &port.when {
+                Some(w) => w,
+                None => continue,
+            };
+            let mapping = match when.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            for (key, _) in mapping {
+                let field_name = match key.as_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(var_name) = field_name.strip_prefix('$') {
+                    if !variable_names.contains(var_name) {
+                        return Err(ParseError::UndeclaredWhenField {
+                            node_id: node.id.clone(),
+                            port: port.name.clone(),
+                            field: field_name.to_string(),
+                        });
+                    }
+                    continue;
+                }
+                match &upstream_schema {
+                    Some(schema) if schema.contains_key(field_name) => {}
+                    _ => {
+                        return Err(ParseError::UndeclaredWhenField {
+                            node_id: node.id.clone(),
+                            port: port.name.clone(),
+                            field: field_name.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Given a pipeline and a switch node ID, resolve the frontmatter schema
+/// declared on the upstream output port connected to the switch's `in` port.
+/// Returns `None` if: the node isn't a switch, no edge connects to `in`,
+/// or the upstream output port has no frontmatter schema.
+pub fn resolve_switch_upstream_schema(
+    pipeline: &PipelineDef,
+    switch_node_id: &str,
+) -> Option<HashMap<String, FrontmatterFieldDecl>> {
+    let node = pipeline.nodes.iter().find(|n| n.id == switch_node_id)?;
+    if node.node_type != NodeType::Switch {
+        return None;
+    }
+    let edge = pipeline
+        .edges
+        .iter()
+        .find(|e| e.target.node == switch_node_id && e.target.port == "in")?;
+    let source_node = pipeline.nodes.iter().find(|n| n.id == edge.source.node)?;
+    let source_port = source_node
+        .outputs
+        .iter()
+        .find(|p| p.name == edge.source.port)?;
+    source_port.frontmatter.clone()
 }
 
 pub fn canonical_prompt_path(pipeline_path: &Path, node_id: &str) -> std::path::PathBuf {
@@ -1486,6 +1570,15 @@ nodes: []
             r#"
 name: switch-test
 nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, APPROVED, FAIL]
   - id: ab000001
     name: verdict-switch
     type: switch
@@ -1496,6 +1589,9 @@ nodes:
         when:
           verdict: { in: [PASS, APPROVED] }
       - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: ab000001, port: in }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1521,6 +1617,15 @@ nodes:
             r#"
 name: switch-no-default
 nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
   - id: ab000001
     name: verdict-switch
     type: switch
@@ -1530,6 +1635,9 @@ nodes:
       - name: pass
         when:
           verdict: { in: [PASS] }
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: ab000001, port: in }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1551,6 +1659,15 @@ nodes:
             r#"
 name: switch-explicit-default
 nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
   - id: ab000001
     name: verdict-switch
     type: switch
@@ -1562,6 +1679,9 @@ nodes:
           verdict: { in: [PASS] }
       - name: default
         side: bottom
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: ab000001, port: in }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1893,6 +2013,337 @@ edges:
         assert!(types.contains(&&NodeType::Start));
         assert!(types.contains(&&NodeType::End));
         assert!(types.contains(&&NodeType::DocOnly));
+    }
+
+    // --- Switch upstream schema resolution tests (issue #64) ---
+
+    #[test]
+    fn resolve_switch_upstream_schema_returns_schema_when_connected() {
+        let yaml = with_start_end(
+            r#"
+name: typed-switch
+nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+          score:
+            type: int
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { eq: PASS }
+      - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let schema = resolve_switch_upstream_schema(&result.pipeline, "gate");
+        assert!(schema.is_some());
+        let schema = schema.unwrap();
+        assert_eq!(schema.len(), 2);
+        assert_eq!(schema["verdict"].field_type, "enum");
+        assert_eq!(
+            schema["verdict"].allowed,
+            Some(vec!["PASS".into(), "FAIL".into()])
+        );
+        assert_eq!(schema["score"].field_type, "int");
+    }
+
+    #[test]
+    fn resolve_switch_upstream_schema_returns_none_when_no_edge() {
+        let yaml = with_start_end(
+            r#"
+name: unconnected-switch
+nodes:
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: default
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let schema = resolve_switch_upstream_schema(&result.pipeline, "gate");
+        assert!(schema.is_none());
+    }
+
+    #[test]
+    fn resolve_switch_upstream_schema_returns_none_when_upstream_has_no_schema() {
+        let yaml = with_start_end(
+            r#"
+name: untyped-switch
+nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let schema = resolve_switch_upstream_schema(&result.pipeline, "gate");
+        assert!(schema.is_none());
+    }
+
+    // --- Switch when-clause validation tests (issue #64) ---
+
+    #[test]
+    fn rejects_switch_when_field_not_in_upstream_schema() {
+        let yaml = with_start_end(
+            r#"
+name: bad-switch-when
+nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          nonexistent_field: { eq: PASS }
+      - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonexistent_field") && msg.contains("not found in upstream schema"),
+            "error should mention undeclared field: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_switch_when_field_with_no_upstream_schema() {
+        let yaml = with_start_end(
+            r#"
+name: untyped-upstream
+nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { eq: PASS }
+      - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("verdict") && msg.contains("not found in upstream schema"),
+            "error should mention missing schema: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_switch_when_field_with_no_upstream_edge() {
+        let yaml = with_start_end(
+            r#"
+name: no-edge
+nodes:
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { eq: PASS }
+      - name: default
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("verdict") && msg.contains("not found in upstream schema"),
+            "error should mention missing upstream: {msg}"
+        );
+    }
+
+    #[test]
+    fn accepts_switch_when_field_matching_upstream_schema() {
+        let yaml = with_start_end(
+            r#"
+name: valid-switch
+nodes:
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+          score:
+            type: int
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { eq: PASS }
+          score: { gte: 7 }
+      - name: default
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: gate, port: in }
+"#,
+        );
+        let result = parse_pipeline(&yaml);
+        assert!(result.is_ok(), "should accept valid schema fields");
+    }
+
+    #[test]
+    fn accepts_switch_when_with_variable_ref() {
+        let yaml = with_start_end(
+            r#"
+name: var-switch
+variables:
+  threshold: 7
+nodes:
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          $threshold: { gte: 5 }
+      - name: default
+"#,
+        );
+        let result = parse_pipeline(&yaml);
+        assert!(result.is_ok(), "should accept $variable references");
+    }
+
+    #[test]
+    fn rejects_switch_when_with_undeclared_variable_ref() {
+        let yaml = with_start_end(
+            r#"
+name: bad-var-switch
+nodes:
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          $nonexistent: { eq: 5 }
+      - name: default
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("$nonexistent"),
+            "error should mention undeclared variable: {msg}"
+        );
+    }
+
+    #[test]
+    fn accepts_switch_with_no_when_clauses() {
+        let yaml = with_start_end(
+            r#"
+name: empty-switch
+nodes:
+  - id: gate
+    name: Gate
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: default
+"#,
+        );
+        let result = parse_pipeline(&yaml);
+        assert!(result.is_ok(), "switch with only default should be valid");
+    }
+
+    #[test]
+    fn resolve_switch_upstream_schema_returns_none_for_non_switch_node() {
+        let yaml = with_start_end(
+            r#"
+name: not-a-switch
+nodes:
+  - id: planner
+    name: Planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let schema = resolve_switch_upstream_schema(&result.pipeline, "planner");
+        assert!(schema.is_none());
     }
 
     // --- ForEach node tests (issue #60) ---

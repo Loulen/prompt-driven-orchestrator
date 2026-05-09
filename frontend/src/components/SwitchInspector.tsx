@@ -1,10 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { Trash2 } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
-import type { PortDef, PortSide } from "../types";
+import type { PortDef, PortSide, PipelineDef, FrontmatterFieldDecl } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import SidePicker from "./SidePicker";
+import { resolveUpstreamSchema } from "../lib/switchSchema";
 
+const EMPTY_PIPELINE: PipelineDef = { name: "", variables: {}, nodes: [], edges: [] };
 const OPERATORS = ["eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in"] as const;
 type Operator = (typeof OPERATORS)[number];
 
@@ -53,6 +55,27 @@ function rowsToWhen(rows: ConditionRow[]): Record<string, unknown> | null {
   return when;
 }
 
+interface FieldSource {
+  name: string;
+  decl: FrontmatterFieldDecl | null;
+}
+
+function useAvailableFields(pipeline: PipelineDef, switchNodeId: string): FieldSource[] {
+  return useMemo(() => {
+    const fields: FieldSource[] = [];
+    const schema = resolveUpstreamSchema(pipeline, switchNodeId);
+    if (schema) {
+      for (const [name, decl] of Object.entries(schema)) {
+        fields.push({ name, decl });
+      }
+    }
+    for (const varName of Object.keys(pipeline.variables)) {
+      fields.push({ name: `$${varName}`, decl: null });
+    }
+    return fields;
+  }, [pipeline, switchNodeId]);
+}
+
 export default function SwitchInspector() {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
@@ -65,9 +88,15 @@ export default function SwitchInspector() {
       ? tab.pipeline.nodes.find((n) => n.id === selection.id) ?? null
       : null;
 
+  const availableFields = useAvailableFields(
+    tab?.pipeline ?? EMPTY_PIPELINE,
+    node?.id ?? "",
+  );
+
   if (!tab || !node || node.type !== "switch") return null;
 
   const branches = node.outputs;
+  const hasSource = availableFields.length > 0;
 
   function updateBranches(newOutputs: PortDef[]) {
     updateNode(node!.id, { outputs: newOutputs });
@@ -171,6 +200,8 @@ export default function SwitchInspector() {
             key={`${branch.name}-${i}`}
             branch={branch}
             isDefault={branch.name === "default"}
+            availableFields={availableFields}
+            hasSource={hasSource}
             onUpdateName={(name) => handleUpdateBranch(i, { name })}
             onUpdateSide={(side) => handleUpdateBranch(i, { side })}
             onDelete={() => handleDeleteBranch(i)}
@@ -191,6 +222,8 @@ export default function SwitchInspector() {
 function BranchRow({
   branch,
   isDefault,
+  availableFields,
+  hasSource,
   onUpdateName,
   onUpdateSide,
   onDelete,
@@ -200,6 +233,8 @@ function BranchRow({
 }: {
   branch: PortDef;
   isDefault: boolean;
+  availableFields: FieldSource[];
+  hasSource: boolean;
   onUpdateName: (name: string) => void;
   onUpdateSide: (side: PortSide) => void;
   onDelete: () => void;
@@ -210,8 +245,10 @@ function BranchRow({
   const rows = whenToRows(branch.when);
 
   const handleAddCondition = useCallback(() => {
-    onUpdateConditions([...rows, { field: "field", op: "eq", value: "" }]);
-  }, [rows, onUpdateConditions]);
+    if (!hasSource) return;
+    const defaultField = availableFields[0]?.name ?? "";
+    onUpdateConditions([...rows, { field: defaultField, op: "eq", value: "" }]);
+  }, [rows, onUpdateConditions, availableFields, hasSource]);
 
   const handleUpdateRow = useCallback(
     (rowIndex: number, updates: Partial<ConditionRow>) => {
@@ -294,47 +331,18 @@ function BranchRow({
       {!isDefault && (
         <div className="mt-1.5 flex flex-col gap-1">
           {rows.map((row, ri) => (
-            <div key={ri} className="flex items-center gap-1" data-testid="condition-row">
-              <input
-                value={row.field}
-                onChange={(e) => handleUpdateRow(ri, { field: e.target.value })}
-                className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
-                style={{ fontSize: "10px" }}
-                placeholder="field"
-              />
-              <select
-                value={row.op}
-                onChange={(e) => handleUpdateRow(ri, { op: e.target.value as Operator })}
-                className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
-                style={{ fontSize: "10px" }}
-                data-testid="op-dropdown"
-              >
-                {OPERATORS.map((op) => (
-                  <option key={op} value={op}>
-                    {op}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={row.value}
-                onChange={(e) => handleUpdateRow(ri, { value: e.target.value })}
-                className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
-                style={{ fontSize: "10px" }}
-                placeholder="value"
-              />
-              <button
-                onClick={() => handleDeleteRow(ri)}
-                className="cursor-pointer text-fg-4 hover:text-st-failed"
-                style={{ fontSize: "10px" }}
-                data-testid="delete-condition"
-              >
-                ×
-              </button>
-            </div>
+            <ConditionRowEditor
+              key={ri}
+              row={row}
+              availableFields={availableFields}
+              onUpdate={(updates) => handleUpdateRow(ri, updates)}
+              onDelete={() => handleDeleteRow(ri)}
+            />
           ))}
           <button
             onClick={handleAddCondition}
-            className="cursor-pointer self-start text-fg-4 hover:text-acc"
+            disabled={!hasSource}
+            className="cursor-pointer self-start text-fg-4 hover:text-acc disabled:cursor-not-allowed disabled:opacity-40"
             style={{ fontSize: "10px" }}
             data-testid="add-condition"
           >
@@ -342,6 +350,87 @@ function BranchRow({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function ConditionRowEditor({
+  row,
+  availableFields,
+  onUpdate,
+  onDelete,
+}: {
+  row: ConditionRow;
+  availableFields: FieldSource[];
+  onUpdate: (updates: Partial<ConditionRow>) => void;
+  onDelete: () => void;
+}) {
+  const selectedField = availableFields.find((f) => f.name === row.field);
+  const isEnum = selectedField?.decl?.type === "enum" && selectedField.decl.allowed;
+
+  return (
+    <div className="flex items-center gap-1" data-testid="condition-row">
+      <select
+        value={row.field}
+        onChange={(e) => onUpdate({ field: e.target.value, value: "" })}
+        className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
+        style={{ fontSize: "10px" }}
+        data-testid="field-dropdown"
+      >
+        {!availableFields.some((f) => f.name === row.field) && (
+          <option value={row.field}>{row.field}</option>
+        )}
+        {availableFields.map((f) => (
+          <option key={f.name} value={f.name}>
+            {f.name}
+          </option>
+        ))}
+      </select>
+      <select
+        value={row.op}
+        onChange={(e) => onUpdate({ op: e.target.value as Operator })}
+        className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
+        style={{ fontSize: "10px" }}
+        data-testid="op-dropdown"
+      >
+        {OPERATORS.map((op) => (
+          <option key={op} value={op}>
+            {op}
+          </option>
+        ))}
+      </select>
+      {isEnum ? (
+        <select
+          value={row.value}
+          onChange={(e) => onUpdate({ value: e.target.value })}
+          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
+          style={{ fontSize: "10px" }}
+          data-testid="value-dropdown"
+        >
+          <option value="">—</option>
+          {selectedField!.decl!.allowed!.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          value={row.value}
+          onChange={(e) => onUpdate({ value: e.target.value })}
+          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
+          style={{ fontSize: "10px" }}
+          placeholder="value"
+        />
+      )}
+      <button
+        onClick={onDelete}
+        className="cursor-pointer text-fg-4 hover:text-st-failed"
+        style={{ fontSize: "10px" }}
+        data-testid="delete-condition"
+      >
+        ×
+      </button>
     </div>
   );
 }

@@ -223,6 +223,34 @@ function edgeReferencesNode(edge: EdgeDef, nodeId: string): boolean {
   return "node" in edge.target && (edge.target as { node: string }).node === nodeId;
 }
 
+function cleanSwitchPredicatesOnDisconnect(tab: OpenPipeline, deletedEdge: EdgeDef): void {
+  if (deletedEdge.target.port !== "in") return;
+  const switchNode = tab.pipeline.nodes.find(
+    (n) => n.id === deletedEdge.target.node && n.type === "switch",
+  );
+  if (!switchNode) return;
+
+  tab.pipeline.nodes = tab.pipeline.nodes.map((n) => {
+    if (n.id !== switchNode.id) return n;
+    return {
+      ...n,
+      outputs: n.outputs.map((port) => {
+        if (port.name === "default" || !port.when) return port;
+        const filtered: Record<string, unknown> = {};
+        for (const [field, pred] of Object.entries(port.when)) {
+          if (field.startsWith("$")) {
+            filtered[field] = pred;
+          }
+        }
+        return {
+          ...port,
+          when: Object.keys(filtered).length > 0 ? filtered : null,
+        };
+      }),
+    };
+  });
+}
+
 export const useEditStore = create<EditState>((set, get) => ({
   pipelines: [],
   openTabs: [],
@@ -382,13 +410,16 @@ export const useEditStore = create<EditState>((set, get) => ({
   deleteEdge: (index: number) => {
     set((s) => ({
       ...mutateActiveTab(s, (tab) => {
-        const removed = tab.pipeline.edges[index];
+        const deletedEdge = tab.pipeline.edges[index];
         tab.pipeline.edges = tab.pipeline.edges.filter((_, i) => i !== index);
-        if (removed && removed.target.port === "in") {
-          const targetNode = tab.pipeline.nodes.find((n) => n.id === removed.target.node);
-          if (targetNode && targetNode.type === "for-each") {
-            targetNode.over = null;
+        if (deletedEdge) {
+          if (deletedEdge.target.port === "in") {
+            const targetNode = tab.pipeline.nodes.find((n) => n.id === deletedEdge.target.node);
+            if (targetNode && targetNode.type === "for-each") {
+              targetNode.over = null;
+            }
           }
+          cleanSwitchPredicatesOnDisconnect(tab, deletedEdge);
         }
       }),
       selection: { kind: "none" as const, id: null },

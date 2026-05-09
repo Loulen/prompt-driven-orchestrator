@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 3b — Pipeline info panel (refs #56, ADR 0004).
+// Layer 3b — Pipeline info panel (refs #56, #69, ADR 0004).
 // Verifies:
 // 1. Clicking the toolbar `i` icon opens the PipelineInfoPanel.
 // 2. The panel shows pipeline metadata (name).
 // 3. During a Run, a terminal element is present for the manager session.
+// 4. Clicking a node in the canvas auto-closes the info panel (#69).
+// 5. YAML tab shows serialized pipeline and updates on canvas mutation (#69).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -107,4 +109,77 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   } catch {
     // ok
   }
+});
+
+test("clicking a node closes the pipeline info panel (#69)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Enter edit mode and open the pipeline
+  await page.locator('[title="Toggle edit mode"]').click();
+  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+
+  // Open the pipeline info panel via toolbar
+  const infoBtn = page.getByTestId("toolbar-info");
+  await expect(infoBtn).toBeVisible({ timeout: 3_000 });
+  await infoBtn.click();
+
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+
+  // Click the "worker" node in the canvas
+  await page.getByText("worker", { exact: true }).first().click();
+
+  // The panel should auto-close
+  await expect(infoPanel).not.toBeVisible({ timeout: 3_000 });
+});
+
+test("YAML tab shows serialized pipeline and updates on mutation (#69)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Enter edit mode and open the pipeline
+  await page.locator('[title="Toggle edit mode"]').click();
+  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+
+  // Open the pipeline info panel
+  const infoBtn = page.getByTestId("toolbar-info");
+  await expect(infoBtn).toBeVisible({ timeout: 3_000 });
+  await infoBtn.click();
+
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+
+  // Click the YAML tab
+  const yamlTab = page.getByTestId("info-tab-yaml");
+  await expect(yamlTab).toBeVisible();
+  await yamlTab.click();
+
+  // Verify YAML content is visible and contains pipeline data
+  const yamlView = page.getByTestId("info-yaml-content");
+  await expect(yamlView).toBeVisible({ timeout: 3_000 });
+  await expect(yamlView).toContainText(PIPELINE_NAME);
+  await expect(yamlView).toContainText("worker");
+
+  // Close the panel so we can add a node
+  await page.getByTestId("info-panel-close").click();
+  await expect(infoPanel).not.toBeVisible();
+
+  // Add a new node via toolbar
+  await page.getByTestId("toolbar-add").click();
+  await page.waitForTimeout(500);
+
+  // Re-open the info panel and check YAML tab reflects the new node
+  await infoBtn.click();
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+  await yamlTab.click();
+  await expect(yamlView).toContainText("node-", { timeout: 3_000 });
 });

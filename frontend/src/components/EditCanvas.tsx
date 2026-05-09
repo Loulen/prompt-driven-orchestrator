@@ -238,9 +238,10 @@ interface EditCanvasProps {
   onLibraryDelete: (name: string) => void;
   infoOpen?: boolean;
   onToggleInfo?: () => void;
+  onCloseInfo?: () => void;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -427,9 +428,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
-        onNodeClick={(_event, node) =>
-          setSelection({ kind: "node", id: node.id })
-        }
+        onNodeClick={(_event, node) => {
+          setSelection({ kind: "node", id: node.id });
+          onCloseInfo?.();
+        }}
         onEdgeClick={(_event, edge) => {
           setSelection({ kind: "node", id: edge.source });
           setScrollToPort(edge.sourceHandle ?? null);

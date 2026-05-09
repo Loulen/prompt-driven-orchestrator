@@ -111,6 +111,15 @@ export default function App() {
     setInfoPanelOpen((prev) => !prev);
   }, []);
 
+  const handleCloseInfo = useCallback(() => {
+    setInfoPanelOpen(false);
+  }, []);
+
+  const handleSelectNodeInRun = useCallback((nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+    if (nodeId) setInfoPanelOpen(false);
+  }, []);
+
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -210,13 +219,14 @@ export default function App() {
                   }}
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}
+                  onCloseInfo={handleCloseInfo}
                 />
               </div>
             ) : showRunDetail ? (
               <div className="flex h-full min-w-0 flex-col">
                 <DagCanvas
                   run={selectedRun}
-                  onSelectNode={setSelectedNodeId}
+                  onSelectNode={handleSelectNodeInRun}
                   selectedNodeId={selectedNodeId}
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}

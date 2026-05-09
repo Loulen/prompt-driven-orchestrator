@@ -28,7 +28,6 @@ export default function TabBar() {
   const closeTab = useEditStore((s) => s.closeTab);
   const save = useEditStore((s) => s.save);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
-  const tabListRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const anyDirty = openTabs.some((t) => t.dirty);
@@ -56,7 +55,6 @@ export default function TabBar() {
   return (
     <div className="flex h-[30px] shrink-0 items-end border-b border-line bg-bg-2">
       <div
-        ref={tabListRef}
         className="flex min-w-0 flex-1 items-end gap-px overflow-x-auto px-1"
         data-testid="tab-list"
         style={{ scrollbarWidth: "thin" }}

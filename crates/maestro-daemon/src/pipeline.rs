@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -510,7 +510,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 }
 
 fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {
-    let variable_names: std::collections::HashSet<&str> =
+    let variable_names: HashSet<&str> =
         pipeline.variables.keys().map(|k| k.as_str()).collect();
 
     for node in &pipeline.nodes {

@@ -6,6 +6,7 @@ import { SectionHead, Field } from "./InspectorPrimitives";
 import SidePicker from "./SidePicker";
 import { resolveUpstreamSchema } from "../lib/switchSchema";
 
+const EMPTY_PIPELINE: PipelineDef = { name: "", variables: {}, nodes: [], edges: [] };
 const OPERATORS = ["eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in"] as const;
 type Operator = (typeof OPERATORS)[number];
 
@@ -88,7 +89,7 @@ export default function SwitchInspector() {
       : null;
 
   const availableFields = useAvailableFields(
-    tab?.pipeline ?? { name: "", variables: {}, nodes: [], edges: [] },
+    tab?.pipeline ?? EMPTY_PIPELINE,
     node?.id ?? "",
   );
 

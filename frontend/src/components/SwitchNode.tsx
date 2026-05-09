@@ -87,7 +87,6 @@ interface SwitchRunData {
   [key: string]: unknown;
 }
 
-
 export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
   const borderColor = STATUS_BORDER[data.status];
   const bgColor = STATUS_BG[data.status];

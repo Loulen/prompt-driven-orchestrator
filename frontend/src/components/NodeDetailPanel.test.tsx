@@ -7,26 +7,29 @@ globalThis.ResizeObserver = class {
   disconnect() {}
 };
 
-const fetchPaneMock = vi.fn().mockResolvedValue({ content: "" });
 const fetchPromptMock = vi.fn().mockResolvedValue("system prompt here");
 const fetchNodeIOMock = vi
   .fn()
   .mockResolvedValue({ inputs: [], outputs: [] });
 
 vi.mock("../api", () => ({
-  fetchPane: (...args: unknown[]) => fetchPaneMock(...args),
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   markNodeDone: vi.fn(),
   attachSession: vi.fn(),
 }));
 
-vi.mock("ansi-to-html", () => ({
-  default: class {
-    toHtml(s: string) {
-      return s;
-    }
-  },
+vi.mock("./TmuxTerminal", () => ({
+  default: ({ session, expanded, onExpand, status }: {
+    session: string;
+    expanded?: boolean;
+    onExpand?: () => void;
+    status?: string;
+  }) => (
+    <div data-testid="tmux-terminal" data-session={session} data-expanded={expanded} data-status={status}>
+      <button data-testid="term-expand" onClick={onExpand}>expand</button>
+    </div>
+  ),
 }));
 
 vi.mock("./ui/resizable", () => ({
@@ -62,9 +65,48 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
 
 describe("NodeDetailPanel", () => {
   beforeEach(() => {
-    fetchPaneMock.mockClear();
     fetchPromptMock.mockClear();
     fetchNodeIOMock.mockClear();
+  });
+
+  describe("TmuxTerminal integration", () => {
+    it("renders TmuxTerminal when node is running", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal).toBeInTheDocument();
+      expect(terminal.getAttribute("data-session")).toBe(
+        "maestro-run-1-test-node-iter-1",
+      );
+    });
+
+    it("does not render TmuxTerminal when node is pending", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+      expect(screen.getByText("Waiting to start...")).toBeInTheDocument();
+    });
+
+    it("passes correct session name with iter", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "running", iter: 3, node_id: "impl" })}
+            runId="run-abc"
+          />
+        </TooltipProvider>,
+      );
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal.getAttribute("data-session")).toBe(
+        "maestro-run-abc-impl-iter-3",
+      );
+    });
   });
 
   describe("IterSelector", () => {
@@ -100,12 +142,8 @@ describe("NodeDetailPanel", () => {
         ],
       });
 
-      // Initial fetches use node.iter (=2)
       await act(async () => {});
-      const initialIters = fetchPaneMock.mock.calls.map((c) => c[2]);
-      expect(initialIters).toContain(2);
 
-      fetchPaneMock.mockClear();
       fetchNodeIOMock.mockClear();
       fetchPromptMock.mockClear();
 
@@ -117,10 +155,7 @@ describe("NodeDetailPanel", () => {
       const option = await screen.findByTestId("iter-option-1");
       fireEvent.click(option);
 
-      // After click, fetches should target iter 1 (regression: was never firing)
       await act(async () => {});
-      const newIters = fetchPaneMock.mock.calls.map((c) => c[2]);
-      expect(newIters).toContain(1);
     });
   });
 
@@ -146,6 +181,30 @@ describe("NodeDetailPanel", () => {
 
       fireEvent.click(toggle);
       expect(screen.queryByText("Loading prompt...")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("polled preview removal", () => {
+    it("does not have a terminal-pane pre element", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(document.querySelector(".terminal-pane")).toBeNull();
+    });
+
+    it("does not import or use fetchPane", () => {
+      // The mock for ../api no longer includes fetchPane — if the component
+      // tried to call it, it would throw. This test verifies the import
+      // was removed successfully.
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      // Just verify it renders without error
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     });
   });
 });

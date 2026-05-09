@@ -1,24 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Terminal,
-  ExternalLink,
   CheckCircle,
   AlertCircle,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
-import { usePinToBottom } from "../hooks/usePinToBottom";
-import Convert from "ansi-to-html";
 import type { IterationInfo, NodeState, NodeStatus } from "../types";
 import {
   markNodeDone,
-  attachSession,
-  fetchPane,
   fetchPrompt,
   fetchNodeIO,
 } from "../api";
 import type { PortIO, FileInfo, MarkNodeDoneResult } from "../api";
-import { Tooltip } from "./ui/tooltip";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -31,6 +24,7 @@ import {
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import TmuxTerminal from "./TmuxTerminal";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
@@ -40,24 +34,14 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
   failed: "Failed",
 };
 
-const ansiConverter = new Convert({
-  fg: "#e6e8eb",
-  bg: "#0f1115",
-  newline: true,
-  escapeXML: true,
-});
-
-const POLL_FAST = 1000;
-const POLL_SLOW = 5000;
-
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
     case "running":
     case "awaiting_user":
-      return POLL_FAST;
+      return 1000;
     case "completed":
     case "failed":
-      return POLL_SLOW;
+      return 5000;
     case "pending":
       return null;
   }
@@ -77,18 +61,16 @@ interface ModalState {
 }
 
 export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: Props) {
-  const [terminalHtml, setTerminalHtml] = useState<string>("");
   const [promptText, setPromptText] = useState<string | null>(null);
   const [inputs, setInputs] = useState<PortIO[]>([]);
   const [outputs, setOutputs] = useState<PortIO[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
   const [missingOutputs, setMissingOutputs] = useState<string[] | null>(null);
+  const [terminalExpanded, setTerminalExpanded] = useState(false);
   const [userSelectedIter, setUserSelectedIter] = useState<{
     nodeId: string;
     iter: number;
   } | null>(null);
-  const terminalRef = useRef<HTMLPreElement>(null);
-  const latestHtmlRef = useRef<string>("");
 
   const selectedIter =
     userSelectedIter?.nodeId === node.node_id
@@ -106,51 +88,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
   const interval = pollInterval(node.status);
   const isStaleIter = selectedIter !== node.iter;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
-
-  const { pinnedToBottom, pinnedRef, handleScroll, scrollToBottom } =
-    usePinToBottom(terminalRef, node.node_id, selectedIter);
-
-  useEffect(() => {
-    latestHtmlRef.current = "";
-
-    if (isStaleIter) {
-      let cancelled = false;
-      fetchPane(runId, node.node_id, selectedIter)
-        .then((resp) => {
-          if (cancelled) return;
-          const html = ansiConverter.toHtml(resp.content);
-          latestHtmlRef.current = html;
-          if (pinnedRef.current) setTerminalHtml(html);
-        })
-        .catch(() => {});
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (interval === null) return;
-
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const resp = await fetchPane(runId, node.node_id, selectedIter);
-        if (cancelled) return;
-        const html = ansiConverter.toHtml(resp.content);
-        latestHtmlRef.current = html;
-        if (pinnedRef.current) setTerminalHtml(html);
-      } catch {
-        // ignore fetch errors during polling
-      }
-    }
-
-    poll();
-    const timer = setInterval(poll, interval);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [interval, node.node_id, selectedIter, runId, isStaleIter, pinnedRef]);
+  const showTerminal = node.status !== "pending";
 
   const shouldFetchPrompt = node.status !== "pending" || isStaleIter;
 
@@ -163,9 +101,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
       .then((text) => {
         if (!cancelled) setPromptText(text);
       })
-      .catch(() => {
-        // prompt file not yet available
-      });
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -212,30 +148,6 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
     };
   }, [interval, node.node_id, selectedIter, runId, isStaleIter]);
 
-  useEffect(() => {
-    if (pinnedToBottom && terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-    }
-  }, [terminalHtml, pinnedToBottom]);
-
-  useEffect(() => {
-    if (
-      pinnedToBottom &&
-      latestHtmlRef.current &&
-      latestHtmlRef.current !== terminalHtml
-    ) {
-      setTerminalHtml(latestHtmlRef.current);
-    }
-  }, [pinnedToBottom, terminalHtml]);
-
-  const handleOpenTerminal = useCallback(async () => {
-    try {
-      await attachSession(sessionName);
-    } catch (e) {
-      console.error("Failed to attach terminal:", e);
-    }
-  }, [sessionName]);
-
   const handleMarkComplete = useCallback(async () => {
     setMissingOutputs(null);
     try {
@@ -247,8 +159,6 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
       console.error("Failed to mark node done:", e);
     }
   }, [runId, node.node_id, selectedIter]);
-
-  const showOpenTerminal = node.status !== "pending";
 
   return (
     <aside className="flex h-full flex-col bg-bg-2">
@@ -298,7 +208,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
             className="text-st-await"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
-            Awaiting user — attach terminal and interact, then mark complete
+            Awaiting user — interact in the terminal below, then mark complete
           </span>
         </div>
       )}
@@ -317,75 +227,46 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
       )}
 
       <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-        {/* Terminal preview */}
-        <ResizablePanel defaultSize={45} minSize="100px" id="terminal">
+        {/* Inline terminal (xterm.js) */}
+        <ResizablePanel
+          defaultSize={terminalExpanded ? 85 : 45}
+          minSize="100px"
+          id="terminal"
+        >
           <div className="flex h-full flex-col overflow-hidden">
-            <div
-              className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
-              style={{ fontSize: "11px" }}
-            >
-              <Terminal size={12} />
-              Terminal Preview
-            </div>
-            <div className="relative min-h-0 flex-1">
-              {terminalHtml ? (
-                <pre
-                  ref={terminalRef}
-                  className="terminal-pane absolute inset-0 overflow-y-auto overflow-x-hidden bg-bg-0 p-2 font-mono text-fg-2"
-                  style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                  onScroll={handleScroll}
-                  dangerouslySetInnerHTML={{ __html: terminalHtml }}
-                />
-              ) : (
-                <pre
-                  ref={terminalRef}
-                  className="terminal-pane absolute inset-0 overflow-y-auto overflow-x-hidden bg-bg-0 p-2 font-mono text-fg-2"
-                  style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                  onScroll={handleScroll}
+            {showTerminal ? (
+              <TmuxTerminal
+                session={sessionName}
+                expanded={terminalExpanded}
+                onExpand={() => setTerminalExpanded((v) => !v)}
+                status={node.status}
+              />
+            ) : (
+              <div className="flex h-full flex-col">
+                <div
+                  className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
+                  style={{ fontSize: "11px" }}
                 >
-                  <span className="text-fg-4">
+                  <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
+                  Terminal
+                </div>
+                <div className="flex flex-1 items-center justify-center bg-bg-0">
+                  <span className="text-fg-4" style={{ fontSize: "11px" }}>
                     {terminalPlaceholder(node)}
                   </span>
-                </pre>
-              )}
-              {!pinnedToBottom && (
-                <button
-                  onClick={scrollToBottom}
-                  className="pin-bottom-chevron absolute bottom-2 right-2 flex h-6 w-6 cursor-pointer items-center justify-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:bg-bg-4 hover:text-fg"
-                  aria-label="Scroll to bottom"
-                >
-                  <ChevronDown size={14} />
-                </button>
-              )}
-            </div>
+                </div>
+              </div>
+            )}
           </div>
         </ResizablePanel>
 
         <ResizableHandle />
 
         {/* Inputs / Outputs / Actions / Prompt */}
-        <ResizablePanel defaultSize={55} minSize="100px" id="details">
+        <ResizablePanel defaultSize={terminalExpanded ? 15 : 55} minSize="100px" id="details">
           <div className="flex h-full flex-col overflow-auto">
             {/* Actions */}
             <div className="flex flex-col gap-1.5 px-3 py-2">
-              {showOpenTerminal && (
-                <Tooltip content="Attach a native OS terminal to this node's tmux session">
-                  <button
-                    onClick={handleOpenTerminal}
-                    className={`flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 transition-colors ${
-                      isArchived
-                        ? "cursor-not-allowed text-fg-4"
-                        : "cursor-pointer text-fg-2 hover:bg-bg-4 hover:text-fg"
-                    }`}
-                    style={{ fontSize: "11.5px" }}
-                    disabled={isArchived}
-                  >
-                    <ExternalLink size={12} />
-                    Open terminal
-                  </button>
-                </Tooltip>
-              )}
-
               {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed") && !isArchived && (
                 <>
                   <button

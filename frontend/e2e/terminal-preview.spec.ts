@@ -3,14 +3,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 3b — Terminal preview polling (#23).
+// Layer 3b — Inline xterm.js terminal (refs #55, ADR 0004).
 // Verifies:
-// 1. Selecting a running node shows non-empty pane content within 2s.
-// 2. Navigating away stops /pane requests.
+// 1. Selecting a running node renders the <TmuxTerminal> component.
+// 2. The terminal connects via WebSocket and shows live status.
+// 3. Typing into the terminal echoes back through the PTY bridge.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
-const PIPELINE_NAME = `e2e-terminal-preview-${process.pid}-${Date.now()}`;
+const PIPELINE_NAME = `e2e-inline-terminal-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
@@ -28,9 +29,8 @@ edges: []
 `;
 
 test.beforeAll(async () => {
-  // Produce real ANSI output so the dangerouslySetInnerHTML branch is exercised
   process.env.MAESTRO_TMUX_CMD_OVERRIDE =
-    "exec sh -c \"printf '\\033[32mhello ansi\\033[0m\\n'; sleep 300\"";
+    'exec sh -c "cat"';
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
@@ -40,7 +40,7 @@ test.afterAll(async () => {
   delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
 });
 
-test("selecting a running node shows terminal preview within 2s", async ({
+test("selecting a running node shows inline xterm terminal", async ({
   page,
   baseURL,
 }) => {
@@ -49,36 +49,47 @@ test("selecting a running node shows terminal preview within 2s", async ({
     timeout: 10_000,
   });
 
-  // Create a run via the API
   const resp = await page.request.post(`${baseURL}/runs`, {
     data: {
       pipeline: PIPELINE_NAME,
-      input: "e2e terminal preview test",
+      input: "e2e inline terminal test",
     },
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
 
-  // Wait for the run to appear in the list and click it
   await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
-
-  // Wait for the DAG to render then click the worker node
   await page.waitForTimeout(500);
   const workerNode = page.getByText("worker", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });
   await workerNode.click();
 
-  // The terminal preview pane should show non-empty content within 2s
-  const terminalPane = page.locator(".terminal-pane");
-  await expect(terminalPane).toBeVisible({ timeout: 3_000 });
+  const terminal = page.getByTestId("tmux-terminal");
+  await expect(terminal).toBeVisible({ timeout: 5_000 });
 
-  // Wait for ANSI-rendered content (dangerouslySetInnerHTML branch exercised)
+  const xtermContainer = page.getByTestId("xterm-container");
+  await expect(xtermContainer.locator("canvas").first()).toBeVisible({
+    timeout: 5_000,
+  });
+
+  await expect(
+    terminal.locator("text=/attached|connected/"),
+  ).toBeVisible({ timeout: 5_000 });
+
+  // Type into the terminal — `cat` echoes back through the PTY bridge
+  await xtermContainer.click();
+  await page.keyboard.type("echo hello\n", { delay: 50 });
+
   await expect(async () => {
-    const html = await terminalPane.innerHTML();
-    expect(html).toContain("hello ansi");
+    const text = await page.evaluate(() => {
+      const rows = document.querySelector(
+        '[data-testid="xterm-container"] .xterm-rows',
+      );
+      return rows?.textContent ?? "";
+    });
+    expect(text).toContain("hello");
   }).toPass({ timeout: 5_000 });
 
-  // Cleanup: kill the tmux session
   const sessionName = `maestro-${run_id}-worker-iter-1`;
   const { execSync } = await import("node:child_process");
   try {
@@ -88,52 +99,36 @@ test("selecting a running node shows terminal preview within 2s", async ({
   }
 });
 
-test("navigating away stops pane polling", async ({ page, baseURL }) => {
+test("terminal toolbar shows expand and detach buttons", async ({
+  page,
+  baseURL,
+}) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
-  // Create a run via the API
   const resp = await page.request.post(`${baseURL}/runs`, {
     data: {
       pipeline: PIPELINE_NAME,
-      input: "e2e stop-polling test",
+      input: "e2e toolbar test",
     },
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
 
-  // Select the run and node
   await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
   await page.waitForTimeout(500);
   const workerNode = page.getByText("worker", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });
   await workerNode.click();
 
-  // Confirm at least one /pane request fires
-  await page.waitForRequest((req) => req.url().includes("/pane"), {
-    timeout: 3_000,
-  });
+  const terminal = page.getByTestId("tmux-terminal");
+  await expect(terminal).toBeVisible({ timeout: 5_000 });
 
-  // Switch to Edit mode (deselects the node)
-  await page.locator('[title="Toggle edit mode"]').click();
+  await expect(page.getByTestId("term-expand")).toBeVisible();
+  await expect(page.getByTestId("term-detach")).toBeVisible();
 
-  // After switching away, no further /pane requests should fire within 3s
-  let extraPaneRequest = false;
-  const listener = (req: { url: () => string }) => {
-    if (req.url().includes("/pane")) {
-      extraPaneRequest = true;
-    }
-  };
-  page.on("request", listener);
-
-  await page.waitForTimeout(3_000);
-  page.off("request", listener);
-
-  expect(extraPaneRequest).toBe(false);
-
-  // Cleanup
   const sessionName = `maestro-${run_id}-worker-iter-1`;
   const { execSync } = await import("node:child_process");
   try {

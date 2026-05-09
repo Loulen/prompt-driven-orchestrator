@@ -11,6 +11,7 @@ mod pipeline;
 pub mod pipeline_migrator;
 mod pipeline_watcher;
 mod prompt_augmenter;
+mod pty_bridge;
 mod scheduler;
 mod scheduler_dispatcher;
 mod switch_router;
@@ -368,6 +369,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(save_run_pipeline),
         )
         .route("/runs/{run_id}/commands", post(run_command))
+        .route(
+            "/sessions/{session_id}/pty",
+            get(pty_bridge::session_pty_handler),
+        )
         .route("/sessions/{session_id}/attach", post(session_attach))
         .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         .route("/library", get(list_library))

@@ -31,11 +31,12 @@ uuid.workspace = true
 chrono.workspace = true
 notify.workspace = true
 notify-debouncer-mini.workspace = true
+portable-pty.workspace = true
+futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.26"
-futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 pretty_assertions.workspace = true
 insta.workspace = true

@@ -1,4 +1,5 @@
 import { Plus, Repeat, GitBranch } from "lucide-react";
+import { ForEachIcon } from "./ForEachNode";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -37,6 +38,16 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
           className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
         >
           <Repeat size={14} />
+        </button>
+      </Tooltip>
+
+      <Tooltip content="ForEach node">
+        <button
+          data-testid="toolbar-foreach"
+          onClick={() => onAddNode("for-each")}
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+        >
+          <ForEachIcon />
         </button>
       </Tooltip>
 

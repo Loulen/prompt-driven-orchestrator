@@ -26,6 +26,7 @@ pub enum NodeType {
     End,
     Switch,
     Loop,
+    ForEach,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -226,6 +227,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         "end",
         "switch",
         "loop",
+        "for-each",
     ];
 
     if let Some(nodes) = raw
@@ -343,6 +345,29 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     if !output_names.contains(name) {
                         return Err(ParseError::MissingField(format!(
                             "loop node '{}' must have output '{}'",
+                            node.id, name
+                        )));
+                    }
+                }
+            }
+            NodeType::ForEach => {
+                let expected_inputs = ["in", "break"];
+                let expected_outputs = ["body", "done"];
+                let input_names: Vec<&str> = node.inputs.iter().map(|p| p.name.as_str()).collect();
+                let output_names: Vec<&str> =
+                    node.outputs.iter().map(|p| p.name.as_str()).collect();
+                for name in &expected_inputs {
+                    if !input_names.contains(name) {
+                        return Err(ParseError::MissingField(format!(
+                            "foreach node '{}' must have input '{}'",
+                            node.id, name
+                        )));
+                    }
+                }
+                for name in &expected_outputs {
+                    if !output_names.contains(name) {
+                        return Err(ParseError::MissingField(format!(
+                            "foreach node '{}' must have output '{}'",
                             node.id, name
                         )));
                     }
@@ -1775,5 +1800,85 @@ edges:
         assert!(types.contains(&&NodeType::Start));
         assert!(types.contains(&&NodeType::End));
         assert!(types.contains(&&NodeType::DocOnly));
+    }
+
+    // --- ForEach node tests (issue #60) ---
+
+    #[test]
+    fn parses_foreach_node() {
+        let yaml = with_start_end(
+            r#"
+name: foreach-test
+nodes:
+  - id: ab000001
+    name: per-issue
+    type: for-each
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let fe = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(fe.node_type, NodeType::ForEach);
+        assert_eq!(fe.inputs.len(), 2);
+        assert_eq!(fe.outputs.len(), 2);
+        assert!(fe.max_iter.is_none());
+    }
+
+    #[test]
+    fn foreach_node_rejects_missing_break_input() {
+        let yaml = with_start_end(
+            r#"
+name: bad-foreach
+nodes:
+  - id: ab000001
+    name: bad
+    type: for-each
+    inputs:
+      - name: in
+    outputs:
+      - name: body
+      - name: done
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must have input 'break'"),
+            "error should mention break: {msg}"
+        );
+    }
+
+    #[test]
+    fn foreach_node_rejects_missing_body_output() {
+        let yaml = with_start_end(
+            r#"
+name: bad-foreach
+nodes:
+  - id: ab000001
+    name: bad
+    type: for-each
+    inputs:
+      - name: in
+      - name: break
+    outputs:
+      - name: done
+"#,
+        );
+        let err = parse_pipeline(&yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must have output 'body'"),
+            "error should mention body: {msg}"
+        );
     }
 }

@@ -52,6 +52,7 @@ import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchRunNode } from "./SwitchNode";
 import { LoopRunNode } from "./LoopNode";
+import { ForEachRunNode } from "./ForEachNode";
 
 
 const RUN_STATUS_DOTS: Record<RunStatus, string> = {
@@ -282,6 +283,7 @@ const nodeTypes = {
   mergeResolver: MergeResolverNode,
   switchRun: SwitchRunNode,
   loopRun: LoopRunNode,
+  forEachRun: ForEachRunNode,
   loopBodyOutline: LoopBodyOutlineNode,
 };
 
@@ -364,6 +366,29 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
             status,
             maxIter: loopState?.max_iter ?? 5,
             currentIter: loopState?.current_iter ?? 0,
+            ports: [
+              ...def.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
+              ...def.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
+            ],
+          },
+          selected: def.id === selectedNodeId,
+        };
+      }
+
+      if (def.node_type === "for-each") {
+        const feState = run.foreach_states?.[def.id];
+        return {
+          id: def.id,
+          type: "forEachRun",
+          position: {
+            x: (def.view_x ?? 200) + START_NODE_OFFSET_X,
+            y: def.view_y ?? 80 + i * 140,
+          },
+          data: {
+            label: def.name ?? def.id,
+            nodeId: def.id,
+            status,
+            totalItems: feState?.total_items ?? 0,
             ports: [
               ...def.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
               ...def.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
@@ -519,6 +544,42 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
         width: maxX - minX,
         height: maxY - minY,
         loopLabel: loopDef.name ?? loopDef.id,
+      },
+      selectable: false,
+      draggable: false,
+      zIndex: -1,
+    });
+  }
+
+  const forEachDefs = nodeDefs.filter((d) => d.node_type === "for-each");
+  for (const feDef of forEachDefs) {
+    const feState = run.foreach_states?.[feDef.id];
+    if (feState?.done) continue;
+    if (!feState || feState.total_items < 1) continue;
+
+    const bodyNodeIds = computeBodySubgraph(edgeInfos, nodeDefs, feDef.id);
+    if (bodyNodeIds.size === 0) continue;
+
+    const bodyNodes = allNodes.filter((n) => bodyNodeIds.has(n.id));
+    if (bodyNodes.length === 0) continue;
+
+    const NODE_W = 180;
+    const NODE_H = 70;
+    const PAD = 20;
+
+    const minX = Math.min(...bodyNodes.map((n) => n.position.x)) - PAD;
+    const minY = Math.min(...bodyNodes.map((n) => n.position.y)) - PAD;
+    const maxX = Math.max(...bodyNodes.map((n) => n.position.x)) + NODE_W + PAD;
+    const maxY = Math.max(...bodyNodes.map((n) => n.position.y)) + NODE_H + PAD;
+
+    allNodes.push({
+      id: `__foreach_body_${feDef.id}__`,
+      type: "loopBodyOutline",
+      position: { x: minX, y: minY },
+      data: {
+        width: maxX - minX,
+        height: maxY - minY,
+        loopLabel: feDef.name ?? feDef.id,
       },
       selectable: false,
       draggable: false,

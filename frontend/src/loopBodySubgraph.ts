@@ -19,7 +19,7 @@ export function computeBodySubgraph(
     if (current === loopNodeId) continue;
 
     const currentDef = nodeDefs.find((n) => n.id === current);
-    if (currentDef?.node_type === "loop") {
+    if (currentDef?.node_type === "loop" || currentDef?.node_type === "for-each") {
       body.add(current);
       continue;
     }

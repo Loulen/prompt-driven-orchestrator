@@ -35,6 +35,20 @@ pub enum SchedulerAction {
     LoopDone {
         loop_node_id: String,
     },
+    ForEachStarted {
+        foreach_node_id: String,
+        total_items: i64,
+        items: Vec<serde_yaml::Value>,
+    },
+    ForEachEmpty {
+        foreach_node_id: String,
+    },
+    ForEachBreakReceived {
+        foreach_node_id: String,
+    },
+    ForEachDone {
+        foreach_node_id: String,
+    },
 }
 
 /// Bootstraps Loop nodes whose `in` port is fed by a Start node (or a node
@@ -117,6 +131,7 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
         if node.node_type == NodeType::Start
             || node.node_type == NodeType::End
             || node.node_type == NodeType::Loop
+            || node.node_type == NodeType::ForEach
         {
             continue;
         }
@@ -239,6 +254,7 @@ pub fn evaluate_outgoing_edges_with_context(
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
+            let is_foreach_target = target_node.is_some_and(|n| n.node_type == NodeType::ForEach);
 
             if is_loop_target {
                 let loop_actions = handle_loop_input(
@@ -249,6 +265,15 @@ pub fn evaluate_outgoing_edges_with_context(
                     resolved_vars,
                 );
                 actions.extend(loop_actions);
+            } else if is_foreach_target {
+                let foreach_actions = handle_foreach_input(
+                    pipeline,
+                    run_state,
+                    target_id,
+                    &edge.target.port,
+                    frontmatter_fields,
+                );
+                actions.extend(foreach_actions);
             } else {
                 let all_upstream_done =
                     check_all_upstream_completed(pipeline, run_state, target_id, completed_node_id);
@@ -425,6 +450,152 @@ pub fn evaluate_loop_body_completion(
                 actions.push(SchedulerAction::Spawn {
                     node_id: edge.target.node.clone(),
                     iter: next_iter,
+                });
+            }
+        }
+    }
+
+    actions
+}
+
+fn handle_foreach_input(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    foreach_node_id: &str,
+    target_port: &str,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    if !pipeline.nodes.iter().any(|n| n.id == foreach_node_id) {
+        return actions;
+    }
+
+    match target_port {
+        "in" => {
+            if run_state.foreach_states.contains_key(foreach_node_id) {
+                return actions;
+            }
+
+            let items = frontmatter_fields
+                .get("items")
+                .and_then(|v| v.as_sequence())
+                .cloned()
+                .unwrap_or_default();
+
+            let total = items.len() as i64;
+
+            if total == 0 {
+                actions.push(SchedulerAction::ForEachEmpty {
+                    foreach_node_id: foreach_node_id.to_string(),
+                });
+                actions.push(SchedulerAction::ForEachDone {
+                    foreach_node_id: foreach_node_id.to_string(),
+                });
+                for edge in &pipeline.edges {
+                    if edge.source.node == foreach_node_id && edge.source.port == "done" {
+                        let end_node_id = pipeline
+                            .nodes
+                            .iter()
+                            .find(|n| n.node_type == NodeType::End)
+                            .map(|n| n.id.as_str());
+                        if end_node_id == Some(edge.target.node.as_str()) {
+                            actions.push(SchedulerAction::Complete);
+                        } else {
+                            actions.push(SchedulerAction::Spawn {
+                                node_id: edge.target.node.clone(),
+                                iter: 1,
+                            });
+                        }
+                    }
+                }
+                return actions;
+            }
+
+            actions.push(SchedulerAction::ForEachStarted {
+                foreach_node_id: foreach_node_id.to_string(),
+                total_items: total,
+                items: items.clone(),
+            });
+
+            for i in 1..=total {
+                for edge in &pipeline.edges {
+                    if edge.source.node == foreach_node_id && edge.source.port == "body" {
+                        actions.push(SchedulerAction::Spawn {
+                            node_id: edge.target.node.clone(),
+                            iter: i,
+                        });
+                    }
+                }
+            }
+        }
+        "break" => {
+            actions.push(SchedulerAction::ForEachBreakReceived {
+                foreach_node_id: foreach_node_id.to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    actions
+}
+
+pub fn evaluate_foreach_body_completion(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    foreach_node_id: &str,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    let foreach_node = match pipeline.nodes.iter().find(|n| n.id == foreach_node_id) {
+        Some(n) if n.node_type == NodeType::ForEach => n,
+        _ => return actions,
+    };
+
+    let foreach_state = match run_state.foreach_states.get(foreach_node_id) {
+        Some(fs) if !fs.done => fs,
+        _ => return actions,
+    };
+
+    let body_nodes = match loop_body_resolver::compute_body_subgraph(pipeline, foreach_node_id) {
+        Ok(nodes) => nodes,
+        Err(_) => return actions,
+    };
+
+    let total = foreach_state.total_items;
+
+    let all_iters_done = (1..=total).all(|i| {
+        body_nodes.iter().all(|node_id| {
+            run_state.nodes.get(node_id).is_some_and(|n| {
+                n.iterations
+                    .iter()
+                    .any(|it| it.iter == i && it.status == NodeStatus::Completed)
+            })
+        })
+    });
+
+    if !all_iters_done {
+        return actions;
+    }
+
+    actions.push(SchedulerAction::ForEachDone {
+        foreach_node_id: foreach_node_id.to_string(),
+    });
+
+    for edge in &pipeline.edges {
+        if edge.source.node == foreach_node.id && edge.source.port == "done" {
+            let end_node_id = pipeline
+                .nodes
+                .iter()
+                .find(|n| n.node_type == NodeType::End)
+                .map(|n| n.id.as_str());
+
+            if end_node_id == Some(edge.target.node.as_str()) {
+                actions.push(SchedulerAction::Complete);
+            } else {
+                actions.push(SchedulerAction::Spawn {
+                    node_id: edge.target.node.clone(),
+                    iter: 1,
                 });
             }
         }
@@ -1806,5 +1977,354 @@ mod tests {
             node_id: "b".into(),
             iter: 1,
         }));
+    }
+
+    // --- ForEach dispatch ---
+
+    fn make_foreach_node(id: &str) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::ForEach,
+            inputs: vec![
+                Port {
+                    name: "in".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                },
+                Port {
+                    name: "break".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                },
+            ],
+            outputs: vec![
+                Port {
+                    name: "body".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                },
+                Port {
+                    name: "done".into(),
+                    repeated: false,
+                    side: None,
+                    frontmatter: None,
+                    when: None,
+                },
+            ],
+            interactive: false,
+            view: None,
+            max_iter: None,
+        }
+    }
+
+    #[test]
+    fn foreach_empty_list_fires_done_immediately() {
+        let pipeline = PipelineDef {
+            name: "foreach-empty".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["in"], &["out"]),
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "fe1", "in"),
+                make_edge("fe1", "body", "worker", "in"),
+                make_edge("fe1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let frontmatter = HashMap::new();
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &frontmatter,
+        );
+
+        assert!(actions.contains(&SchedulerAction::ForEachEmpty {
+            foreach_node_id: "fe1".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::ForEachDone {
+            foreach_node_id: "fe1".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "worker")
+            ),
+            "empty list should not spawn body nodes"
+        );
+    }
+
+    #[test]
+    fn foreach_list_of_3_spawns_3_body_iterations() {
+        let pipeline = PipelineDef {
+            name: "foreach-3".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["in"], &["out"]),
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "fe1", "in"),
+                make_edge("fe1", "body", "worker", "in"),
+                make_edge("worker", "out", "fe1", "done"),
+                make_edge("fe1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let mut frontmatter = HashMap::new();
+        frontmatter.insert(
+            "items".into(),
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("alpha".into()),
+                serde_yaml::Value::String("beta".into()),
+                serde_yaml::Value::String("gamma".into()),
+            ]),
+        );
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &frontmatter,
+        );
+
+        assert!(actions.contains(&SchedulerAction::ForEachStarted {
+            foreach_node_id: "fe1".into(),
+            total_items: 3,
+            items: vec![
+                serde_yaml::Value::String("alpha".into()),
+                serde_yaml::Value::String("beta".into()),
+                serde_yaml::Value::String("gamma".into()),
+            ],
+        }));
+
+        for i in 1..=3 {
+            assert!(
+                actions.contains(&SchedulerAction::Spawn {
+                    node_id: "worker".into(),
+                    iter: i,
+                }),
+                "should spawn worker iter {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn foreach_break_mid_iteration() {
+        let pipeline = PipelineDef {
+            name: "foreach-break".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["in"], &["out"]),
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "fe1", "in"),
+                make_edge("fe1", "body", "worker", "in"),
+                make_edge("worker", "out", "fe1", "break"),
+                make_edge("fe1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.foreach_states.insert(
+            "fe1".into(),
+            crate::event_log::ForEachState {
+                foreach_node_id: "fe1".into(),
+                total_items: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), completed_node("worker"));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "worker",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(actions.contains(&SchedulerAction::ForEachBreakReceived {
+            foreach_node_id: "fe1".into(),
+        }));
+    }
+
+    #[test]
+    fn foreach_body_completion_fires_done() {
+        let pipeline = PipelineDef {
+            name: "foreach-done".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("fe1", "body", "worker", "in"),
+                make_edge("worker", "out", "fe1", "done"),
+                make_edge("fe1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state.foreach_states.insert(
+            "fe1".into(),
+            crate::event_log::ForEachState {
+                foreach_node_id: "fe1".into(),
+                total_items: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut worker_state = completed_node("worker");
+        worker_state.iter = 3;
+        worker_state.iterations = vec![
+            crate::event_log::IterationInfo {
+                iter: 1,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            },
+            crate::event_log::IterationInfo {
+                iter: 2,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            },
+            crate::event_log::IterationInfo {
+                iter: 3,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            },
+        ];
+        state.nodes.insert("worker".into(), worker_state);
+
+        let actions = evaluate_foreach_body_completion(&pipeline, &state, "fe1");
+
+        assert!(actions.contains(&SchedulerAction::ForEachDone {
+            foreach_node_id: "fe1".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn foreach_body_not_complete_no_done() {
+        let pipeline = PipelineDef {
+            name: "foreach-partial".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("fe1", "body", "worker", "in"),
+                make_edge("worker", "out", "fe1", "done"),
+                make_edge("fe1", "done", "end", "result"),
+            ],
+            auto_merge_resolver: true,
+        };
+
+        let mut state = empty_run_state();
+        state.foreach_states.insert(
+            "fe1".into(),
+            crate::event_log::ForEachState {
+                foreach_node_id: "fe1".into(),
+                total_items: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut worker_state = completed_node("worker");
+        worker_state.iter = 2;
+        worker_state.iterations = vec![
+            crate::event_log::IterationInfo {
+                iter: 1,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            },
+            crate::event_log::IterationInfo {
+                iter: 2,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            },
+        ];
+        state.nodes.insert("worker".into(), worker_state);
+
+        let actions = evaluate_foreach_body_completion(&pipeline, &state, "fe1");
+        assert!(
+            actions.is_empty(),
+            "should not fire done with only 2 of 3 complete"
+        );
+    }
+
+    #[test]
+    fn foreach_node_skipped_by_ready_nodes() {
+        let pipeline = PipelineDef {
+            name: "foreach-skip".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_foreach_node("fe1"),
+                make_node("worker", &["in"], &["out"]),
+            ],
+            edges: vec![make_edge("fe1", "body", "worker", "in")],
+            auto_merge_resolver: true,
+        };
+
+        let state = empty_run_state();
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"fe1".to_string()),
+            "ForEach should not appear in ready_nodes"
+        );
     }
 }

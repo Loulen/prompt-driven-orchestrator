@@ -15,6 +15,7 @@ import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
 import SwitchInspector from "./components/SwitchInspector";
 import LoopInspector from "./components/LoopInspector";
+import ForEachInspector from "./components/ForEachInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -228,7 +229,10 @@ export default function App() {
                 {selection.kind === "node" && editNodeType === "loop" && (
                   <LoopInspector />
                 )}
-                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && (
+                {selection.kind === "node" && editNodeType === "for-each" && (
+                  <ForEachInspector />
+                )}
+                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && editNodeType !== "for-each" && (
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}

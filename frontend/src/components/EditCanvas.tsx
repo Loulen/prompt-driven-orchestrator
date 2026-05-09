@@ -20,6 +20,7 @@ import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
+import { ForEachEditNode } from "./ForEachNode";
 import EditToolbar from "./EditToolbar";
 
 interface EditNodeData {
@@ -90,12 +91,13 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode };
+const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, foreach: ForEachEditNode };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
   "switch": "switch",
   "loop": "loop",
+  "for-each": "foreach",
 };
 
 function deriveEditNodes(pipeline: PipelineDef): Node[] {
@@ -132,6 +134,24 @@ function deriveEditNodes(pipeline: PipelineDef): Node[] {
           label: n.name ?? n.id,
           nodeId: n.id,
           maxIter: n.max_iter ?? 5,
+          ports: [
+            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
+            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
+          ],
+        },
+      };
+    }
+    if (n.type === "for-each") {
+      return {
+        id: n.id,
+        type: "foreach",
+        position: {
+          x: n.view?.x ?? 200,
+          y: n.view?.y ?? 80 + i * 140,
+        },
+        data: {
+          label: n.name ?? n.id,
+          nodeId: n.id,
           ports: [
             ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
             ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
@@ -310,34 +330,39 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
     const id = generateNodeId();
     const name = DEFAULT_NODE_NAMES[type] ?? "node";
 
-    const newNode: NodeDef = type === "loop"
-      ? {
-          id,
-          name,
-          type,
-          inputs: [
-            { name: "in", repeated: false, side: "left" },
-            { name: "break", repeated: false, side: "left" },
-          ],
-          outputs: [
-            { name: "body", repeated: false, side: "right" },
-            { name: "done", repeated: false, side: "right" },
-          ],
-          interactive: false,
-          view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
-          max_iter: 5,
-        }
-      : {
-          id,
-          name,
-          type,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: type === "switch"
-            ? [{ name: "default", repeated: false, side: "right" }]
-            : [{ name: "out", repeated: false, side: "right" }],
-          interactive: false,
-          view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
-        };
+    const view = { x: 200, y: 80 + pipeline.nodes.length * 140 };
+    let newNode: NodeDef;
+
+    if (type === "loop" || type === "for-each") {
+      newNode = {
+        id,
+        name,
+        type,
+        inputs: [
+          { name: "in", repeated: false, side: "left" },
+          { name: "break", repeated: false, side: "left" },
+        ],
+        outputs: [
+          { name: "body", repeated: false, side: "right" },
+          { name: "done", repeated: false, side: "right" },
+        ],
+        interactive: false,
+        view,
+        ...(type === "loop" ? { max_iter: 5 } : {}),
+      };
+    } else {
+      newNode = {
+        id,
+        name,
+        type,
+        inputs: [{ name: "in", repeated: false, side: "left" }],
+        outputs: type === "switch"
+          ? [{ name: "default", repeated: false, side: "right" }]
+          : [{ name: "out", repeated: false, side: "right" }],
+        interactive: false,
+        view,
+      };
+    }
     addNodeToStore(newNode);
   };
 

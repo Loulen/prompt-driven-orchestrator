@@ -19,7 +19,10 @@ pub fn compute_body_subgraph(
     pipeline
         .nodes
         .iter()
-        .find(|n| n.id == loop_node_id && n.node_type == NodeType::Loop)
+        .find(|n| {
+            n.id == loop_node_id
+                && (n.node_type == NodeType::Loop || n.node_type == NodeType::ForEach)
+        })
         .ok_or_else(|| BodyResolutionError::LoopNotFound(loop_node_id.to_string()))?;
 
     let body_targets: Vec<&str> = pipeline
@@ -43,7 +46,9 @@ pub fn compute_body_subgraph(
 
         let current_node = pipeline.nodes.iter().find(|n| n.id == current);
         if let Some(cn) = current_node {
-            if cn.node_type == NodeType::Loop && cn.id != loop_node_id {
+            if (cn.node_type == NodeType::Loop || cn.node_type == NodeType::ForEach)
+                && cn.id != loop_node_id
+            {
                 body.insert(current.to_string());
                 continue;
             }

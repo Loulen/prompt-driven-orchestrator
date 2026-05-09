@@ -14,6 +14,12 @@ pub struct OutputDeclaration {
     pub path: PathBuf,
 }
 
+pub struct ForEachContext {
+    pub current_item: String,
+    pub current_iter: i64,
+    pub total: i64,
+}
+
 pub struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
@@ -24,6 +30,7 @@ pub struct AugmentContext<'a> {
     pub variables: &'a HashMap<String, serde_yaml::Value>,
     #[allow(dead_code)]
     pub daemon_url: &'a str,
+    pub foreach_context: Option<ForEachContext>,
 }
 
 pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
@@ -203,6 +210,18 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
+    // ForEach context
+    if let Some(ref fe) = ctx.foreach_context {
+        preamble.push_str("## ForEach Context\n\n");
+        preamble.push_str(&format!(
+            "This node is running as part of a ForEach iteration ({} of {}).\n",
+            fe.current_iter, fe.total
+        ));
+        preamble.push_str(&format!("- `current_item`: {}\n", fe.current_item));
+        preamble.push_str(&format!("- `current_iter`: {}\n", fe.current_iter));
+        preamble.push_str(&format!("- `total`: {}\n\n", fe.total));
+    }
+
     preamble
 }
 
@@ -359,6 +378,7 @@ mod tests {
             artifacts_dir: Path::new("/repo/.maestro/artifacts"),
             variables,
             daemon_url: "http://localhost:5172",
+            foreach_context: None,
         }
     }
 

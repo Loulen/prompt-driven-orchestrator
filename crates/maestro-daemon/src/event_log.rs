@@ -50,6 +50,10 @@ pub enum EventKind {
     LoopMaxReached,
     LoopDone,
     FrontmatterRetryPending,
+    ForEachStarted,
+    ForEachEmpty,
+    ForEachBreakReceived,
+    ForEachDone,
     PipelineModified,
     RunCompleted,
     RunFailed,
@@ -156,6 +160,14 @@ pub struct LoopState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForEachState {
+    pub foreach_node_id: String,
+    pub total_items: i64,
+    pub break_received: bool,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
     pub status: RunStatus,
@@ -176,6 +188,8 @@ pub struct RunState {
     pub merge_resolver: Option<MergeResolverInfo>,
     #[serde(default)]
     pub loop_states: HashMap<String, LoopState>,
+    #[serde(default)]
+    pub foreach_states: HashMap<String, ForEachState>,
 }
 
 impl RunState {
@@ -194,6 +208,7 @@ impl RunState {
             end_node: None,
             merge_resolver: None,
             loop_states: HashMap::new(),
+            foreach_states: HashMap::new(),
         }
     }
 }
@@ -428,6 +443,67 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                     {
                         if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
                             ls.done = true;
+                        }
+                    }
+                }
+            }
+            EventKind::ForEachStarted => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(foreach_node_id) =
+                        payload.get("foreach_node_id").and_then(|v| v.as_str())
+                    {
+                        let total_items = payload
+                            .get("total_items")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        state
+                            .foreach_states
+                            .entry(foreach_node_id.to_string())
+                            .or_insert_with(|| ForEachState {
+                                foreach_node_id: foreach_node_id.to_string(),
+                                total_items,
+                                break_received: false,
+                                done: false,
+                            });
+                    }
+                }
+            }
+            EventKind::ForEachEmpty => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(foreach_node_id) =
+                        payload.get("foreach_node_id").and_then(|v| v.as_str())
+                    {
+                        let fs = state
+                            .foreach_states
+                            .entry(foreach_node_id.to_string())
+                            .or_insert_with(|| ForEachState {
+                                foreach_node_id: foreach_node_id.to_string(),
+                                total_items: 0,
+                                break_received: false,
+                                done: false,
+                            });
+                        fs.done = true;
+                    }
+                }
+            }
+            EventKind::ForEachBreakReceived => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(foreach_node_id) =
+                        payload.get("foreach_node_id").and_then(|v| v.as_str())
+                    {
+                        if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
+                            fs.break_received = true;
+                        }
+                    }
+                }
+            }
+            EventKind::ForEachDone => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(foreach_node_id) =
+                        payload.get("foreach_node_id").and_then(|v| v.as_str())
+                    {
+                        if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
+                            fs.done = true;
                         }
                     }
                 }
@@ -1642,5 +1718,111 @@ mod tests {
             state.merge_resolver.is_none(),
             "no resolver should be present when auto_merge_resolver is false"
         );
+    }
+
+    // --- ForEach integration tests ---
+
+    #[test]
+    fn foreach_full_lifecycle_3_items() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "foreach-test", "input": "go" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("upstream"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("upstream"), Some(1)),
+            make_event_with_payload(
+                EventKind::ForEachStarted,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1", "total_items": 3 }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(2)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(3)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(2)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(3)),
+            make_event_with_payload(
+                EventKind::ForEachDone,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1" }),
+            ),
+            make_event(EventKind::RunCompleted, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Completed);
+
+        let fe_state = &state.foreach_states["fe1"];
+        assert_eq!(fe_state.total_items, 3);
+        assert!(fe_state.done);
+        assert!(!fe_state.break_received);
+
+        let worker = &state.nodes["worker"];
+        assert_eq!(worker.iter, 3);
+        assert_eq!(worker.iterations.len(), 3);
+        for it in &worker.iterations {
+            assert_eq!(it.status, NodeStatus::Completed);
+        }
+    }
+
+    #[test]
+    fn foreach_empty_list_completes_immediately() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "foreach-empty" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("upstream"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("upstream"), Some(1)),
+            make_event_with_payload(
+                EventKind::ForEachEmpty,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1" }),
+            ),
+            make_event_with_payload(
+                EventKind::ForEachDone,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1" }),
+            ),
+            make_event(EventKind::RunCompleted, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Completed);
+
+        let fe_state = &state.foreach_states["fe1"];
+        assert!(fe_state.done);
+        assert_eq!(fe_state.total_items, 0);
+    }
+
+    #[test]
+    fn foreach_break_received_sets_flag() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "foreach-break" }),
+            ),
+            make_event_with_payload(
+                EventKind::ForEachStarted,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1", "total_items": 3 }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event_with_payload(
+                EventKind::ForEachBreakReceived,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe1" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        let fe_state = &state.foreach_states["fe1"];
+        assert!(fe_state.break_received);
+        assert!(!fe_state.done);
     }
 }

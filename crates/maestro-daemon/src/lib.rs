@@ -523,6 +523,61 @@ async fn emit_loop_action(state: &AppState, run_id: &str, action: &scheduler::Sc
     }
 }
 
+async fn emit_foreach_action(state: &AppState, run_id: &str, action: &scheduler::SchedulerAction) {
+    match action {
+        scheduler::SchedulerAction::ForEachStarted {
+            foreach_node_id,
+            total_items,
+            ..
+        } => {
+            emit_run_event(
+                state,
+                run_id,
+                event_log::EventKind::ForEachStarted,
+                Some(serde_json::json!({
+                    "foreach_node_id": foreach_node_id,
+                    "total_items": total_items,
+                })),
+            )
+            .await;
+        }
+        scheduler::SchedulerAction::ForEachEmpty { foreach_node_id } => {
+            emit_run_event(
+                state,
+                run_id,
+                event_log::EventKind::ForEachEmpty,
+                Some(serde_json::json!({
+                    "foreach_node_id": foreach_node_id,
+                })),
+            )
+            .await;
+        }
+        scheduler::SchedulerAction::ForEachBreakReceived { foreach_node_id } => {
+            emit_run_event(
+                state,
+                run_id,
+                event_log::EventKind::ForEachBreakReceived,
+                Some(serde_json::json!({
+                    "foreach_node_id": foreach_node_id,
+                })),
+            )
+            .await;
+        }
+        scheduler::SchedulerAction::ForEachDone { foreach_node_id } => {
+            emit_run_event(
+                state,
+                run_id,
+                event_log::EventKind::ForEachDone,
+                Some(serde_json::json!({
+                    "foreach_node_id": foreach_node_id,
+                })),
+            )
+            .await;
+        }
+        _ => {}
+    }
+}
+
 async fn load_events(db: &sqlx::SqlitePool, run_id: &str) -> Result<Vec<event_log::Event>> {
     let rows = sqlx::query_as::<_, EventRow>(
         "SELECT id, run_id, ts, kind, node_id, iter, payload FROM events WHERE run_id = ? ORDER BY id",
@@ -1029,6 +1084,76 @@ struct SpawnContext<'a> {
     resolved_vars: &'a HashMap<String, serde_yaml::Value>,
 }
 
+fn deposit_foreach_items(
+    artifacts_dir: &std::path::Path,
+    foreach_node_id: &str,
+    items: &[serde_yaml::Value],
+) {
+    for (i, item) in items.iter().enumerate() {
+        let iter_num = (i + 1) as i64;
+        let item_dir = artifacts_dir
+            .join(foreach_node_id)
+            .join(format!("iter-{iter_num}"));
+        let _ = std::fs::create_dir_all(&item_dir);
+        let item_str = serde_yaml::to_string(item).unwrap_or_else(|_| format!("{item:?}"));
+        let content = format!(
+            "---\nitem: {}\niter: {}\ntotal: {}\n---\n\n{}",
+            item_str.trim(),
+            iter_num,
+            items.len(),
+            item_str.trim()
+        );
+        let _ = std::fs::write(item_dir.join("_item.md"), content);
+    }
+}
+
+fn find_foreach_context(
+    spawn_ctx: &SpawnContext<'_>,
+    node_id: &str,
+    iter: i64,
+) -> Option<prompt_augmenter::ForEachContext> {
+    for edge in &spawn_ctx.pipeline.edges {
+        if edge.target.node != *node_id || edge.source.port != "body" {
+            continue;
+        }
+        let source = &edge.source.node;
+        let is_foreach = spawn_ctx
+            .pipeline
+            .nodes
+            .iter()
+            .any(|n| n.id == *source && n.node_type == pipeline::NodeType::ForEach);
+        if !is_foreach {
+            continue;
+        }
+        let item_path = spawn_ctx
+            .artifacts_dir
+            .join(source.as_str())
+            .join(format!("iter-{iter}"))
+            .join("_item.md");
+        let item_content = std::fs::read_to_string(&item_path).unwrap_or_default();
+        let total_path = spawn_ctx.artifacts_dir.join(source.as_str());
+        let total = std::fs::read_dir(&total_path)
+            .map(|entries| {
+                entries
+                    .filter(|e| e.as_ref().is_ok_and(|e| e.path().is_dir()))
+                    .count()
+            })
+            .unwrap_or(0) as i64;
+        let current_item = item_content
+            .split("---")
+            .nth(2)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Some(prompt_augmenter::ForEachContext {
+            current_item,
+            current_iter: iter,
+            total,
+        });
+    }
+    None
+}
+
 async fn spawn_node(
     state: &AppState,
     spawn_ctx: &SpawnContext<'_>,
@@ -1039,6 +1164,8 @@ async fn spawn_node(
     let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
 
+    let foreach_context = find_foreach_context(spawn_ctx, &node.id, iter);
+
     let aug_ctx = prompt_augmenter::AugmentContext {
         pipeline: spawn_ctx.pipeline,
         node,
@@ -1047,6 +1174,7 @@ async fn spawn_node(
         artifacts_dir: spawn_ctx.artifacts_dir,
         variables: spawn_ctx.resolved_vars,
         daemon_url: &format!("http://localhost:{}", state.port),
+        foreach_context,
     };
 
     let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -1083,6 +1211,7 @@ async fn spawn_node(
                 pipeline::NodeType::End => "end",
                 pipeline::NodeType::Switch => "switch",
                 pipeline::NodeType::Loop => "loop",
+                pipeline::NodeType::ForEach => "for-each",
             },
         })),
     };
@@ -1220,6 +1349,19 @@ async fn handle_node_completion(
             | scheduler::SchedulerAction::LoopDone { .. } => {
                 emit_loop_action(state, run_id, action).await;
             }
+            scheduler::SchedulerAction::ForEachStarted {
+                foreach_node_id,
+                items,
+                ..
+            } => {
+                emit_foreach_action(state, run_id, action).await;
+                deposit_foreach_items(&artifacts_dir, foreach_node_id, items);
+            }
+            scheduler::SchedulerAction::ForEachEmpty { .. }
+            | scheduler::SchedulerAction::ForEachBreakReceived { .. }
+            | scheduler::SchedulerAction::ForEachDone { .. } => {
+                emit_foreach_action(state, run_id, action).await;
+            }
         }
     }
 
@@ -1264,6 +1406,33 @@ async fn handle_node_completion(
                     return;
                 }
                 _ => emit_loop_action(state, run_id, action).await,
+            }
+        }
+    }
+
+    // Check foreach body completion for all foreach nodes
+    for foreach_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == pipeline::NodeType::ForEach)
+    {
+        let foreach_actions = scheduler::evaluate_foreach_body_completion(
+            &pipeline,
+            &fresh_run_state,
+            &foreach_node.id,
+        );
+        for action in &foreach_actions {
+            match action {
+                scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                    if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                    }
+                }
+                scheduler::SchedulerAction::Complete => {
+                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                    return;
+                }
+                _ => emit_foreach_action(state, run_id, action).await,
             }
         }
     }
@@ -3397,6 +3566,19 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                 | scheduler::SchedulerAction::LoopDone { .. } => {
                     emit_loop_action(state, run_id, action).await;
                 }
+                scheduler::SchedulerAction::ForEachStarted {
+                    foreach_node_id,
+                    items,
+                    ..
+                } => {
+                    emit_foreach_action(state, run_id, action).await;
+                    deposit_foreach_items(&artifacts_dir, foreach_node_id, items);
+                }
+                scheduler::SchedulerAction::ForEachEmpty { .. }
+                | scheduler::SchedulerAction::ForEachBreakReceived { .. }
+                | scheduler::SchedulerAction::ForEachDone { .. } => {
+                    emit_foreach_action(state, run_id, action).await;
+                }
             }
         }
     }
@@ -3461,6 +3643,44 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                     return;
                 }
                 _ => emit_loop_action(state, run_id, action).await,
+            }
+        }
+    }
+
+    // Check foreach body completion for all foreach nodes
+    for foreach_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == pipeline::NodeType::ForEach)
+    {
+        let foreach_actions = scheduler::evaluate_foreach_body_completion(
+            &pipeline,
+            &fresh_run_state,
+            &foreach_node.id,
+        );
+        for action in &foreach_actions {
+            match action {
+                scheduler::SchedulerAction::Spawn { node_id, iter } => {
+                    let already_active =
+                        fresh_run_state
+                            .nodes
+                            .get(node_id.as_str())
+                            .is_some_and(|n| {
+                                n.iter >= *iter
+                                    && (n.status == event_log::NodeStatus::Running
+                                        || n.status == event_log::NodeStatus::Completed)
+                            });
+                    if !already_active {
+                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                            spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        }
+                    }
+                }
+                scheduler::SchedulerAction::Complete => {
+                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                    return;
+                }
+                _ => emit_foreach_action(state, run_id, action).await,
             }
         }
     }
@@ -3973,6 +4193,7 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
             pipeline::NodeType::End => "end".into(),
             pipeline::NodeType::Switch => "switch".into(),
             pipeline::NodeType::Loop => "loop".into(),
+            pipeline::NodeType::ForEach => "for-each".into(),
         },
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
@@ -7600,9 +7821,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn library_full_flow() {
-        use std::sync::Mutex as StdMutex;
-        static LIB_TEST_LOCK: StdMutex<()> = StdMutex::new(());
-        let _guard = LIB_TEST_LOCK.lock().unwrap();
+        let _guard = crate::library_store::HOME_TEST_LOCK.lock().unwrap();
 
         let tmp = std::env::temp_dir().join(format!("maestro-lib-http-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -7792,12 +8011,7 @@ edges: []
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn library_save_works_without_pipeline_on_disk() {
-        // Regression: POST /library used to read the source pipeline YAML
-        // from disk, forcing the UI to save the pipeline before adding a
-        // node to the library. The endpoint now takes the node spec inline.
-        use std::sync::Mutex as StdMutex;
-        static LIB_TEST_LOCK: StdMutex<()> = StdMutex::new(());
-        let _guard = LIB_TEST_LOCK.lock().unwrap();
+        let _guard = crate::library_store::HOME_TEST_LOCK.lock().unwrap();
 
         let tmp = std::env::temp_dir().join(format!("maestro-lib-nopipe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);

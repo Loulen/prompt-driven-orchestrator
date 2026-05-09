@@ -1,6 +1,6 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "halted" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed";
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop" | "for-each";
 
 export interface RunListEntry {
   run_id: string;
@@ -88,6 +88,13 @@ export interface LoopStateInfo {
   done: boolean;
 }
 
+export interface ForEachStateInfo {
+  foreach_node_id: string;
+  total_items: number;
+  break_received: boolean;
+  done: boolean;
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -102,6 +109,7 @@ export interface RunState {
   end_node: EndNodeInfo | null;
   merge_resolver: MergeResolverInfo | null;
   loop_states?: Record<string, LoopStateInfo>;
+  foreach_states?: Record<string, ForEachStateInfo>;
 }
 
 export interface DaemonEvent {

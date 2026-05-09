@@ -58,6 +58,7 @@ beforeEach(() => {
           edges: [],
         },
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },

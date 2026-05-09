@@ -43,6 +43,7 @@ function seedTabWithPipeline(pipeline: PipelineDef) {
         scope: "repo",
         pipeline,
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },

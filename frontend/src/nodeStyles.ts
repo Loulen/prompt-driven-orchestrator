@@ -7,6 +7,7 @@ export const TYPE_LABELS: Record<NodeType, string> = {
   "end": "end",
   "switch": "switch",
   "loop": "loop",
+  "merge": "merge",
 };
 
 export const TYPE_COLORS: Record<NodeType, string> = {
@@ -16,6 +17,7 @@ export const TYPE_COLORS: Record<NodeType, string> = {
   "end": "border-st-blocked text-st-blocked",
   "switch": "border-st-pending text-fg-3",
   "loop": "border-st-pending text-fg-3",
+  "merge": "border-acc text-acc",
 };
 
 export const STATUS_BORDER: Record<NodeStatus, string> = {

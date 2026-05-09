@@ -49,6 +49,7 @@ pub enum EventKind {
     LoopBreakReceived,
     LoopMaxReached,
     LoopDone,
+    PipelineLint,
     PipelineModified,
     RunCompleted,
     RunFailed,
@@ -455,6 +456,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                             .map(String::from);
                     }
                 }
+            }
+            EventKind::PipelineLint => {
+                // Informational — records lint diagnostics for the pipeline
             }
             EventKind::PipelineModified => {
                 // The run-scoped pipeline changed on disk. Node_defs/edges are
@@ -1590,7 +1594,7 @@ mod tests {
         assert_eq!(state.status, RunStatus::Failed);
         assert!(
             state.merge_resolver.is_none(),
-            "no resolver should be present when auto_merge_resolver is false"
+            "no resolver should be present when merge is handled by Merge node"
         );
     }
 }

@@ -52,6 +52,7 @@ import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchRunNode } from "./SwitchNode";
 import { LoopRunNode } from "./LoopNode";
+import { MergeRunNode } from "./MergeNode";
 
 
 const RUN_STATUS_DOTS: Record<RunStatus, string> = {
@@ -280,6 +281,7 @@ const nodeTypes = {
   end: EndNode,
   start: StartNode,
   mergeResolver: MergeResolverNode,
+  mergeRun: MergeRunNode,
   switchRun: SwitchRunNode,
   loopRun: LoopRunNode,
   loopBodyOutline: LoopBodyOutlineNode,
@@ -369,6 +371,26 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
               ...def.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as import("../types").PortSide })),
               ...def.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as import("../types").PortSide })),
             ],
+          },
+          selected: def.id === selectedNodeId,
+        };
+      }
+
+      if (def.node_type === "merge") {
+        return {
+          id: def.id,
+          type: "mergeRun",
+          position: {
+            x: (def.view_x ?? 200) + START_NODE_OFFSET_X,
+            y: def.view_y ?? 80 + i * 140,
+          },
+          data: {
+            label: def.name ?? def.id,
+            nodeId: def.id,
+            status,
+            iter,
+            inputSide: def.inputs[0]?.side ?? "left",
+            outputSide: def.outputs[0]?.side ?? "right",
           },
           selected: def.id === selectedNodeId,
         };

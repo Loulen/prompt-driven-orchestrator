@@ -286,7 +286,6 @@ mod tests {
                 },
                 reason: None,
             }],
-            auto_merge_resolver: true,
         }
     }
 
@@ -429,7 +428,6 @@ mod tests {
                 },
                 reason: None,
             }],
-            auto_merge_resolver: true,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 4);
@@ -542,7 +540,6 @@ mod tests {
                     reason: None,
                 },
             ],
-            auto_merge_resolver: true,
         };
 
         for dir_name in ["a", "b"] {

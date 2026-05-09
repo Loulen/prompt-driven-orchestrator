@@ -43,7 +43,6 @@ function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
           name: "p1",
           version: "1.0",
           variables: {},
-          auto_merge_resolver: true,
           nodes: [
             {
               id: "rv1",
@@ -58,6 +57,7 @@ function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
           edges: [],
         },
         prompts: { rv1: prompt },
+        diagnostics: [],
         dirty,
         externalDirty: false,
       },

@@ -20,6 +20,7 @@ import { TYPE_LABELS, TYPE_COLORS } from "../nodeStyles";
 import TriangleHandle from "./TriangleHandle";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
+import { MergeEditNode } from "./MergeNode";
 import EditToolbar from "./EditToolbar";
 
 interface EditNodeData {
@@ -90,12 +91,13 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode };
+const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, merge: MergeEditNode };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
   "switch": "switch",
   "loop": "loop",
+  "merge": "merge",
 };
 
 function deriveEditNodes(pipeline: PipelineDef): Node[] {
@@ -117,6 +119,22 @@ function deriveEditNodes(pipeline: PipelineDef): Node[] {
             hasWhen: p.when != null,
           })),
           inputSide: n.inputs[0]?.side ?? "left",
+        },
+      };
+    }
+    if (n.type === "merge") {
+      return {
+        id: n.id,
+        type: "merge",
+        position: {
+          x: n.view?.x ?? 200,
+          y: n.view?.y ?? 80 + i * 140,
+        },
+        data: {
+          label: n.name ?? n.id,
+          nodeId: n.id,
+          inputSide: n.inputs[0]?.side ?? "left",
+          outputSide: n.outputs[0]?.side ?? "right",
         },
       };
     }
@@ -310,7 +328,17 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete }: EditCanvasProps) {
     const id = generateNodeId();
     const name = DEFAULT_NODE_NAMES[type] ?? "node";
 
-    const newNode: NodeDef = type === "loop"
+    const newNode: NodeDef = type === "merge"
+      ? {
+          id,
+          name,
+          type,
+          inputs: [{ name: "branches", repeated: true, side: "left" }],
+          outputs: [{ name: "merged", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 80 + pipeline.nodes.length * 140 },
+        }
+      : type === "loop"
       ? {
           id,
           name,

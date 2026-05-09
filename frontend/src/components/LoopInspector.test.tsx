@@ -42,6 +42,7 @@ function setStoreState(node: NodeDef) {
         scope: "repo",
         pipeline,
         prompts: {},
+        diagnostics: [],
         dirty: false,
         externalDirty: false,
       },

@@ -186,7 +186,6 @@ mod tests {
             variables: HashMap::new(),
             nodes,
             edges,
-            auto_merge_resolver: true,
         }
     }
 

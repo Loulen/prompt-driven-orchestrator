@@ -70,7 +70,7 @@ describe("SidePicker retrofit in NodeInspector PortRow", () => {
     const pipeline = makePipeline(node);
     useEditStore.setState({
       openTabs: [
-        { id: "tab1", scope: "repo", pipeline, prompts: {}, dirty: false, externalDirty: false },
+        { id: "tab1", scope: "repo", pipeline, prompts: {}, diagnostics: [], dirty: false, externalDirty: false },
       ],
       activeTabId: "tab1",
       selection: { kind: "node", id: "n1" },

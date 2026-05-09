@@ -600,7 +600,6 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
-            auto_merge_resolver: true,
         };
 
         let state = empty_run_state();
@@ -623,7 +622,6 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -645,7 +643,6 @@ mod tests {
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -671,7 +668,6 @@ mod tests {
                 make_edge("planner", "plan", "impl-a", "plan"),
                 make_edge("planner", "plan", "impl-b", "plan"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -698,7 +694,6 @@ mod tests {
                 make_edge("impl-a", "summary", "merger", "summary-a"),
                 make_edge("impl-b", "summary", "merger", "summary-b"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -734,7 +729,6 @@ mod tests {
                 make_edge("b", "out", "d", "in-b"),
                 make_edge("c", "out", "d", "in-c"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -756,7 +750,6 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -780,7 +773,6 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -811,7 +803,6 @@ mod tests {
                 "review",
                 "Blocked after {iter} iterations on {node-id}",
             )],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -849,7 +840,6 @@ mod tests {
                 },
                 reason: None,
             }],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -874,7 +864,6 @@ mod tests {
                 make_node("reviewer", &["code"], &["review"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -910,7 +899,6 @@ mod tests {
                 make_edge("a", "out", "b", "in"),
                 make_edge("a", "out", "c", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -939,7 +927,6 @@ mod tests {
                 make_end_node(),
             ],
             edges: vec![make_end_edge("reviewer", "review", "Run halted")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1018,7 +1005,6 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1064,7 +1050,6 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1108,7 +1093,6 @@ mod tests {
                 make_node("downstream", &["in"], &["out"]),
             ],
             edges: vec![make_edge("sw", "pass", "downstream", "in")],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1200,7 +1184,6 @@ mod tests {
                 make_edge("entry", "out", "loop1", "in"),
                 make_edge("loop1", "body", "worker", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let state = empty_run_state();
@@ -1224,7 +1207,6 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1261,7 +1243,6 @@ mod tests {
                 make_edge("impl", "out", "sw", "in"),
                 make_edge("sw", "pass", "loop1", "break"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1293,7 +1274,6 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("sw", "default", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1348,7 +1328,6 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1396,7 +1375,6 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "downstream", "in"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1456,7 +1434,6 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1531,7 +1508,6 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1579,7 +1555,6 @@ mod tests {
                 make_edge("impl", "out", "reviewer", "in"),
                 make_edge("reviewer", "review", "loop1", "break"),
             ],
-            auto_merge_resolver: true,
         };
 
         let mut state = empty_run_state();
@@ -1643,7 +1618,6 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
         let state = empty_run_state();
 
@@ -1677,7 +1651,6 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
         let state = empty_run_state();
 
@@ -1706,7 +1679,6 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -1736,7 +1708,6 @@ mod tests {
                 make_loop_node("loop1", 5),
             ],
             edges: vec![],
-            auto_merge_resolver: true,
         };
         let state = empty_run_state();
 
@@ -1760,7 +1731,6 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
-            auto_merge_resolver: true,
         };
         let mut state = empty_run_state();
         state
@@ -1789,7 +1759,6 @@ mod tests {
                 make_edge("loop1", "body", "a", "in"),
                 make_edge("loop1", "body", "b", "in"),
             ],
-            auto_merge_resolver: true,
         };
         let state = empty_run_state();
 

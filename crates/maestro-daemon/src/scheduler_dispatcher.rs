@@ -111,7 +111,6 @@ mod tests {
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            auto_merge_resolver: true,
         };
 
         // First call: planner is ready (entry node, no state yet)

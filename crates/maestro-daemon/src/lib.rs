@@ -5,6 +5,7 @@ mod event_log;
 mod frontmatter_parser;
 pub mod library_store;
 mod loop_body_resolver;
+mod merge_action;
 mod node_io_resolver;
 mod outputs_validator;
 mod pipeline;
@@ -994,7 +995,9 @@ async fn spawn_node(
 
     let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
-    let working_dir = if node.node_type == pipeline::NodeType::CodeMutating {
+    let working_dir = if node.node_type == pipeline::NodeType::CodeMutating
+        || node.node_type == pipeline::NodeType::Merge
+    {
         let sub_wt_dir = sub_worktree_path(&state.repo_root, run_id, &node.id, 1);
         let sub_branch = sub_worktree_branch(run_id, &node.id, 1);
         let pipeline_branch = format!("maestro/run-{run_id}");
@@ -1026,6 +1029,7 @@ async fn spawn_node(
                 pipeline::NodeType::End => "end",
                 pipeline::NodeType::Switch => "switch",
                 pipeline::NodeType::Loop => "loop",
+                pipeline::NodeType::Merge => "merge",
             },
         })),
     };
@@ -2328,18 +2332,10 @@ async fn node_done(
         return handle_merge_resolver_done(&state, &run_id, &worktree_dir, &pre_run_state).await;
     }
 
-    let auto_merge_resolver = {
-        let pipeline_path =
-            resolve_run_pipeline_path(&state.repo_root, &run_id, &pre_run_state.pipeline_name);
-        std::fs::read_to_string(&pipeline_path)
-            .ok()
-            .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
-            .map(|pr| pr.pipeline.auto_merge_resolver)
-            .unwrap_or(true)
-    };
+    let keep_conflict = false;
 
     match find_node_type(&pre_run_state, &node_id) {
-        Some("code-mutating") => {
+        Some("code-mutating") | Some("merge") => {
             let sub_wt_dir = sub_worktree_path(&state.repo_root, &run_id, &node_id, iter);
             let sub_branch = sub_worktree_branch(&run_id, &node_id, iter);
 
@@ -2350,7 +2346,7 @@ async fn node_done(
                 &sub_branch,
                 &node_id,
                 iter,
-                auto_merge_resolver,
+                keep_conflict,
             ) {
                 Ok(r) => r,
                 Err(e) => {
@@ -2389,7 +2385,7 @@ async fn node_done(
                     };
                     let _ = append_event(&state, &run_failed).await;
 
-                    warn!("Merge conflict for node {node_id} in run {run_id} (auto_merge_resolver disabled)");
+                    warn!("Merge conflict for node {node_id} in run {run_id}");
                     return (
                         StatusCode::OK,
                         Json(serde_json::json!({ "status": "merge_conflict" })),
@@ -3765,6 +3761,7 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
             pipeline::NodeType::End => "end".into(),
             pipeline::NodeType::Switch => "switch".into(),
             pipeline::NodeType::Loop => "loop".into(),
+            pipeline::NodeType::Merge => "merge".into(),
         },
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
@@ -7121,7 +7118,6 @@ mod tests {
                 },
                 reason: None,
             }],
-            auto_merge_resolver: true,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -7163,7 +7159,6 @@ mod tests {
                 },
                 reason: None,
             }],
-            auto_merge_resolver: true,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");

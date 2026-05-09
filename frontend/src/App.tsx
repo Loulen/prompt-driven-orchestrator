@@ -16,7 +16,9 @@ import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
 import SwitchInspector from "./components/SwitchInspector";
 import LoopInspector from "./components/LoopInspector";
+import MergeInspector from "./components/MergeInspector";
 import PipelineInspector from "./components/PipelineInspector";
+import LintBanner from "./components/LintBanner";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -259,7 +261,10 @@ export default function App() {
                 {selection.kind === "node" && editNodeType === "loop" && (
                   <LoopInspector />
                 )}
-                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && (
+                {selection.kind === "node" && editNodeType === "merge" && (
+                  <MergeInspector />
+                )}
+                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && editNodeType !== "merge" && (
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}

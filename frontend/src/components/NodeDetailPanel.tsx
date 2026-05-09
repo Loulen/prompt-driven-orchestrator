@@ -109,7 +109,9 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
   }, [runId, node.node_id, selectedIter, shouldFetchPrompt]);
 
   useEffect(() => {
-    if (isStaleIter) {
+    const oneShot = isStaleIter || (interval === null && node.status === "pending");
+
+    if (oneShot) {
       let cancelled = false;
       fetchNodeIO(runId, node.node_id, selectedIter)
         .then((io) => {
@@ -146,7 +148,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
       cancelled = true;
       clearInterval(timer);
     };
-  }, [interval, node.node_id, selectedIter, runId, isStaleIter]);
+  }, [interval, node.node_id, selectedIter, runId, isStaleIter, node.status]);
 
   const handleMarkComplete = useCallback(async () => {
     setMissingOutputs(null);
@@ -289,7 +291,7 @@ export default function NodeDetailPanel({ node, runId, isArchived, nodeName }: P
                 status={node.status}
               />
             ) : (
-              <div className="flex h-full flex-col">
+              <div className="flex h-full flex-col" data-testid="pending-placeholder">
                 <div
                   className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
                   style={{ fontSize: "11px" }}
@@ -670,7 +672,7 @@ function FrontmatterKV({ field, value }: { field: string; value: unknown }) {
 function terminalPlaceholder(node: NodeState): string {
   switch (node.status) {
     case "pending":
-      return "Waiting to start...";
+      return "en attente d’activation";
     case "completed":
       return "Session ended.";
     case "failed":

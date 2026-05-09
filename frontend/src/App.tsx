@@ -21,6 +21,8 @@ import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
+import InspectorTabs from "./components/InspectorTabs";
+import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useEditStore } from "./stores/editStore";
 import {
@@ -106,6 +108,46 @@ export default function App() {
 
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
+
+  const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
+    useInspectorTab(editActiveTabId, selectedRun?.status ?? null, isEditingRun);
+
+  const runNode =
+    selection.kind === "node" && selection.id && selectedRun
+      ? selectedRun.nodes[selection.id] ?? null
+      : null;
+
+  function inspectorTabContent() {
+    if (inspectorTab === "run") {
+      if (isEditingRun && selectedRun && runNode) {
+        return (
+          <NodeDetailPanel
+            node={runNode}
+            runId={selectedRun.run_id}
+            isArchived={isArchived}
+            nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          />
+        );
+      }
+      if (isEditingRun && selectedRun) {
+        return <RunTabPlaceholder nodeId={selection.id} />;
+      }
+      return <NoRunPlaceholder />;
+    }
+
+    switch (editNodeType) {
+      case "switch": return <SwitchInspector />;
+      case "loop": return <LoopInspector />;
+      case "for-each": return <ForEachInspector />;
+      case "merge": return <MergeInspector />;
+      default: return (
+        <NodeInspector
+          libraryEntries={libraryEntries}
+          onLibraryChanged={refreshLibrary}
+        />
+      );
+    }
+  }
 
   const handleToggleInfo = useCallback(() => {
     setInfoPanelOpen((prev) => !prev);
@@ -242,24 +284,16 @@ export default function App() {
               />
             ) : hasEditTab ? (
               <>
-                {selection.kind === "node" && editNodeType === "switch" && (
-                  <SwitchInspector />
-                )}
-                {selection.kind === "node" && editNodeType === "loop" && (
-                  <LoopInspector />
-                )}
-                {selection.kind === "node" && editNodeType === "for-each" && (
-                  <ForEachInspector />
-                )}
-                {selection.kind === "node" && editNodeType === "merge" && (
-                  <MergeInspector />
-                )}
-                {selection.kind === "node" && editNodeType !== "switch" && editNodeType !== "loop" && editNodeType !== "for-each" && editNodeType !== "merge" && (
+                {selection.kind === "node" && editNodeType != null && editNodeType !== "start" && editNodeType !== "end" ? (
+                  <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
+                    {inspectorTabContent()}
+                  </InspectorTabs>
+                ) : selection.kind === "node" ? (
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
                   />
-                )}
+                ) : null}
                 {selection.kind === "none" && isEditingRun && selectedRun && (
                   <RunInfoSidebar run={selectedRun} />
                 )}
@@ -352,6 +386,46 @@ function RunInfoSidebar({ run }: { run: RunState }) {
         </div>
         <div className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
           Editing run-scoped pipeline &middot; changes sync to template
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function RunTabPlaceholder({ nodeId }: { nodeId: string | null }) {
+  return (
+    <aside
+      className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4"
+      style={{ fontSize: "12px" }}
+      data-testid="pending-placeholder"
+    >
+      <div className="px-6 text-center">
+        <div className="font-medium text-fg-3">
+          <em>en attente d&apos;activation</em>
+        </div>
+        {nodeId && (
+          <div className="mt-1 font-mono" style={{ fontSize: "10px" }}>
+            {nodeId}
+          </div>
+        )}
+        <div className="mt-2 text-fg-4" style={{ fontSize: "11px" }}>
+          This node is waiting for upstream dependencies to complete.
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function NoRunPlaceholder() {
+  return (
+    <aside
+      className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4"
+      style={{ fontSize: "12px" }}
+    >
+      <div className="px-6 text-center">
+        <div className="font-medium text-fg-3">No active run</div>
+        <div className="mt-1">
+          Launch a run to see execution state in this tab.
         </div>
       </div>
     </aside>

@@ -197,6 +197,184 @@ body {
   --color-primary-foreground: #1a0f00;
 }
 
+/* Switch branch card — S1 AND rail (refs docs/design/project/winners.css §7) */
+.sb-card {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.sb-card .sb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg-3);
+}
+.sb-card .sb-grip {
+  color: var(--color-fg-4);
+  cursor: grab;
+}
+.sb-card .sb-name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+.sb-card .sb-name:focus {
+  outline: none;
+  background: var(--color-bg-1);
+  border-color: var(--color-st-await);
+  box-shadow: 0 0 0 1px var(--color-st-await);
+}
+.sb-card .sb-del {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-fg-4);
+  cursor: pointer;
+}
+.sb-card .sb-del:hover {
+  color: var(--color-st-failed);
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.30);
+}
+.sb-card .sb-body {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--color-line);
+}
+.sb-card .sb-conds {
+  position: relative;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sb-card .sb-conds::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  bottom: 4px;
+  width: 1.5px;
+  background: var(--color-line-strong);
+}
+.sb-card .sb-conds.multi::after {
+  content: "AND";
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  transform: translateY(-50%) rotate(-90deg);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--color-fg-4);
+  background: var(--color-bg-2);
+  padding: 2px 4px;
+}
+.sb-card .sb-conds.single::before,
+.sb-card .sb-conds.single::after {
+  display: none;
+}
+.sb-cond {
+  display: grid;
+  grid-template-columns: 1fr 70px 1fr 22px;
+  gap: 4px;
+  align-items: center;
+}
+.sb-cond .sb-input,
+.sb-cond .sb-select {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 4px;
+  color: var(--color-fg);
+  padding: 5px 8px;
+}
+.sb-cond .sb-input:focus,
+.sb-cond .sb-select:focus {
+  outline: none;
+  border-color: var(--color-st-await);
+  box-shadow: 0 0 0 1px var(--color-st-await);
+}
+.sb-cond .sb-x {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-fg-4);
+  cursor: pointer;
+}
+.sb-add-cond {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--color-line-strong);
+  background: transparent;
+  color: var(--color-fg-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.sb-add-cond:hover {
+  color: var(--color-acc);
+  border-color: var(--color-acc-border);
+}
+.sb-add-cond:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.sb-default {
+  border-style: dashed;
+  background: var(--color-bg-1);
+}
+.sb-default .sb-head {
+  background: transparent;
+}
+.sb-default .sb-name {
+  font-style: italic;
+  color: var(--color-fg-3);
+}
+.sb-default .sb-pin {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-line-strong);
+  color: var(--color-fg-3);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.sb-default .sb-body {
+  padding: 8px 12px 10px;
+  font-size: 11.5px;
+  color: var(--color-fg-3);
+  font-family: var(--font-mono);
+}
+
 .artifact-markdown {
   font-family: var(--font-sans);
   font-size: 12px;

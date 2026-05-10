@@ -1,0 +1,45 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - complementary [ref=e14]:
+        - generic [ref=e15]:
+          - button [ref=e16] [cursor=pointer]:
+            - img [ref=e17]
+          - text: Runs
+          - button "New Run" [ref=e19] [cursor=pointer]:
+            - img [ref=e20]
+            - text: New Run
+        - generic [ref=e22]: No runs yet
+        - generic [ref=e23]:
+          - button [ref=e24] [cursor=pointer]:
+            - img [ref=e25]
+          - text: Library
+          - button "New pipeline" [ref=e27] [cursor=pointer]:
+            - img [ref=e28]
+        - generic [ref=e29]:
+          - button "review-loop 7 nodes repo" [ref=e30] [cursor=pointer]:
+            - generic [ref=e31]:
+              - generic [ref=e32]: review-loop
+              - generic [ref=e34]: 7 nodes
+            - generic [ref=e35]: repo
+          - button "simple-bugfix 9 nodes repo" [ref=e36] [cursor=pointer]:
+            - generic [ref=e37]:
+              - generic [ref=e38]: simple-bugfix
+              - generic [ref=e40]: 9 nodes
+            - generic [ref=e41]: repo
+          - button "planner 3 nodes" [ref=e42] [cursor=pointer]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: planner
+              - generic [ref=e46]: 3 nodes
+            - button "Delete pipeline" [ref=e47]:
+              - img [ref=e48]
+      - separator [ref=e51]
+      - generic [ref=e54]: Select a run or open a pipeline to get started
+      - separator [ref=e55]
+  - contentinfo [ref=e58]:
+    - generic [ref=e59]: "Daemon: disconnected"
+    - generic [ref=e61]: v0.1.0

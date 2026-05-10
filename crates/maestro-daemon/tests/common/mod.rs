@@ -53,6 +53,13 @@ impl TestDaemon {
         self.tempdir.path()
     }
 
+    /// Tmux socket scoped to this daemon (`tmux -L <name>`). Tests that
+    /// spawn or inspect tmux sessions out-of-band must use this socket so
+    /// they hit the same tmux server the daemon talks to.
+    pub fn tmux_socket(&self) -> String {
+        maestro_daemon::tmux_session_manager::tmux_socket_name(self.addr.port())
+    }
+
     /// Open a WebSocket connection to `/ws`. Returns the connected stream so the
     /// test can read the initial `{"type":"ready"}` and any subsequent events.
     pub async fn connect_ws(&self) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {

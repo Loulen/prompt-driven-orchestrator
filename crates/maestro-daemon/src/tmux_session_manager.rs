@@ -14,6 +14,32 @@ use tracing::info;
 /// Used by integration tests to spawn `sleep 60` instead of claude.
 pub const TMUX_CMD_OVERRIDE_ENV: &str = "MAESTRO_TMUX_CMD_OVERRIDE";
 
+/// Compute the per-daemon tmux socket name (`tmux -L <name>`) for a daemon
+/// listening on `daemon_port`.
+///
+/// Each daemon scopes its tmux state to a private socket so that orphan
+/// sweeps and `list` calls only see *its own* sessions. Two daemons running
+/// on different ports therefore can't observe — or kill — each other's
+/// sessions, even when both run as the same user on the same host.
+///
+/// This eliminates the failure mode where a sub-claude transitively spawns
+/// its own `maestro daemon` (e.g. for an end-to-end test from a Tester
+/// node): the new daemon's boot-time `sweep_orphans` runs against an empty
+/// event log and would otherwise call `tmux kill-session` on every
+/// `maestro-*` session it finds on the system-default socket — collapsing
+/// the parent daemon's running pipelines.
+pub fn tmux_socket_name(daemon_port: u16) -> String {
+    format!("maestro-{daemon_port}")
+}
+
+/// Build a `Command` for `tmux -L <socket>`. Use this everywhere we shell
+/// out — never `Command::new("tmux")` directly.
+fn tmux(socket: &str) -> std::process::Command {
+    let mut c = std::process::Command::new("tmux");
+    c.args(["-L", socket]);
+    c
+}
+
 /// Env var that overrides the reaper TTL (seconds). Default: 3600 (1 h).
 pub const REAPER_TTL_SECS_ENV: &str = "MAESTRO_REAPER_TTL_SECS";
 
@@ -51,6 +77,15 @@ fn sh_single_quote(s: &str) -> String {
 /// Wrap a tail command with Maestro env exports and an `exec bash -c` trampoline.
 ///
 /// Both `exec`s collapse the shell so claude becomes the session leader.
+///
+/// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is exported to suppress the
+/// claude-code remote-bridge / CCR feature. Without it, a sub-claude spawned
+/// here registers a worker session with api.anthropic.com that gets superseded
+/// (HTTP 409 epoch mismatch) the moment any other claude code instance under
+/// the same OAuth account makes an API call — at which point the backend
+/// pushes `end_session`, claude tears down, opens `/dev/tty` (ENXIO inside the
+/// tmux pane), writes `~/.claude.json`, and force-exits via `kill(getpid(),
+/// SIGKILL)`. That's the "Tester dies silently 20–60 s in" bug.
 fn wrap_with_env(
     run_id: &str,
     node_id: &str,
@@ -63,6 +98,7 @@ fn wrap_with_env(
          export MAESTRO_NODE_ID={node_id_q} && \
          export MAESTRO_NODE_ITER={iter_q} && \
          export MAESTRO_DAEMON_URL={daemon_url_q} && \
+         export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 && \
          {tail_cmd}",
         run_id_q = sh_single_quote(run_id),
         node_id_q = sh_single_quote(node_id),
@@ -131,8 +167,9 @@ pub fn spawn(
     std::fs::write(&prompt_path, prompt)?;
 
     let script = build_tmux_script(run_id, node_id, iter, daemon_port, &prompt_path);
+    let socket = tmux_socket_name(daemon_port);
 
-    let output = std::process::Command::new("tmux")
+    let output = tmux(&socket)
         .args(["new-session", "-d", "-s", session_name, "-c"])
         .arg(working_dir)
         .arg(&script)
@@ -158,8 +195,9 @@ pub fn resume(
     daemon_port: u16,
 ) -> Result<()> {
     let script = build_resume_script(run_id, node_id, iter, daemon_port);
+    let socket = tmux_socket_name(daemon_port);
 
-    let output = std::process::Command::new("tmux")
+    let output = tmux(&socket)
         .args(["new-session", "-d", "-s", session_name, "-c"])
         .arg(working_dir)
         .arg(&script)
@@ -177,8 +215,8 @@ pub fn resume(
 
 /// Capture the visible pane content (with ANSI escapes) for a session.
 /// Returns `None` if the session doesn't exist or capture fails.
-pub fn capture(session_name: &str) -> Option<String> {
-    let output = std::process::Command::new("tmux")
+pub fn capture(socket: &str, session_name: &str) -> Option<String> {
+    let output = tmux(socket)
         .args(["capture-pane", "-pe", "-S", "-1000", "-t", session_name])
         .output()
         .ok()?;
@@ -191,35 +229,32 @@ pub fn capture(session_name: &str) -> Option<String> {
 }
 
 /// Send keys to a tmux session. Best-effort — does not fail if the session is absent.
-pub fn send_keys(session_name: &str, text: &str) {
-    let _ = std::process::Command::new("tmux")
+pub fn send_keys(socket: &str, session_name: &str, text: &str) {
+    let _ = tmux(socket)
         .args(["send-keys", "-t", session_name, text, "Enter"])
         .output();
 }
 
 /// Kill a tmux session. Best-effort — does not fail if the session is absent.
-pub fn kill(session_name: &str) {
-    let _ = std::process::Command::new("tmux")
+pub fn kill(socket: &str, session_name: &str) {
+    let _ = tmux(socket)
         .args(["kill-session", "-t", session_name])
         .output();
 }
 
 /// Check whether a tmux session exists.
-pub fn session_exists(session_name: &str) -> bool {
-    std::process::Command::new("tmux")
+pub fn session_exists(socket: &str, session_name: &str) -> bool {
+    tmux(socket)
         .args(["has-session", "-t", session_name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-/// List all tmux sessions whose name starts with `maestro-`.
+/// List all tmux sessions whose name starts with `maestro-`, on the given socket.
 /// Returns a set of session names.
-pub fn list_maestro_sessions() -> HashSet<String> {
-    let output = match std::process::Command::new("tmux")
-        .args(["ls", "-F", "#{session_name}"])
-        .output()
-    {
+pub fn list_maestro_sessions(socket: &str) -> HashSet<String> {
+    let output = match tmux(socket).args(["ls", "-F", "#{session_name}"]).output() {
         Ok(o) if o.status.success() => o,
         _ => return HashSet::new(),
     };
@@ -325,15 +360,18 @@ pub fn reaper_interval() -> Duration {
 
 /// Sweep orphan tmux sessions at daemon boot.
 ///
+/// Scans only the daemon's private socket — never the system-default
+/// socket — so we can never reach into another daemon's tmux state.
+///
 /// An orphan is a `maestro-*` session whose corresponding run is:
 /// - archived
 /// - absent from the event log
 /// - a NodeRun that completed more than `ttl` ago
-pub fn sweep_orphans<F>(lookup: F, ttl: Duration)
+pub fn sweep_orphans<F>(socket: &str, lookup: F, ttl: Duration)
 where
     F: Fn(&str, &str, i64) -> Option<NodeRunInfo>,
 {
-    let sessions = list_maestro_sessions();
+    let sessions = list_maestro_sessions(socket);
     let now = chrono::Utc::now();
 
     for session_name in &sessions {
@@ -341,7 +379,7 @@ where
             Some(p) => p,
             None => {
                 info!("Orphan sweep: killing unrecognised session {session_name}");
-                kill(session_name);
+                kill(socket, session_name);
                 continue;
             }
         };
@@ -353,11 +391,11 @@ where
                 match info {
                     None => {
                         info!("Orphan sweep: killing manager session for absent run {run_id}");
-                        kill(session_name);
+                        kill(socket, session_name);
                     }
                     Some(info) if info.is_archived => {
                         info!("Orphan sweep: killing manager session for archived run {run_id}");
-                        kill(session_name);
+                        kill(socket, session_name);
                     }
                     _ => {}
                 }
@@ -371,11 +409,11 @@ where
                 match info {
                     None => {
                         info!("Orphan sweep: killing session for absent run {run_id}/{node_id}");
-                        kill(session_name);
+                        kill(socket, session_name);
                     }
                     Some(info) if info.is_archived => {
                         info!("Orphan sweep: killing session for archived run {run_id}/{node_id}");
-                        kill(session_name);
+                        kill(socket, session_name);
                     }
                     Some(NodeRunInfo {
                         completed_at: Some(completed),
@@ -389,7 +427,7 @@ where
                                 "Orphan sweep: killing stale session {session_name} (completed {}s ago)",
                                 age.num_seconds()
                             );
-                            kill(session_name);
+                            kill(socket, session_name);
                         }
                     }
                     _ => {} // still running or not yet completed
@@ -483,6 +521,7 @@ mod tests {
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("MAESTRO_RUN_ID"));
+        assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
 
         std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
         let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);

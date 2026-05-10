@@ -21,17 +21,17 @@ fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
-fn create_tmux_session(name: &str, cmd: &str) {
+fn create_tmux_session(socket: &str, name: &str, cmd: &str) {
     let status = std::process::Command::new("tmux")
-        .args(["new-session", "-d", "-s", name, cmd])
+        .args(["-L", socket, "new-session", "-d", "-s", name, cmd])
         .status()
         .expect("failed to run tmux");
     assert!(status.success(), "tmux new-session should succeed");
 }
 
-fn kill_tmux_session(name: &str) {
+fn kill_tmux_session(socket: &str, name: &str) {
     let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", name])
+        .args(["-L", socket, "kill-session", "-t", name])
         .status();
 }
 
@@ -47,10 +47,15 @@ async fn manager_pty_ws_roundtrip() {
     let run_id = "test-run-mgr-56";
     let session_name = format!("maestro-mgr-{run_id}");
 
-    kill_tmux_session(&session_name);
-    create_tmux_session(&session_name, "cat");
-
+    // Daemon must come up first so we know which socket to seed the
+    // manager session on. With the per-daemon socket isolation
+    // (post-#86), the daemon's PTY bridge attaches via `tmux -L
+    // maestro-<port>` — `default` is a different tmux server.
     let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+
+    kill_tmux_session(&socket, &session_name);
+    create_tmux_session(&socket, &session_name, "cat");
 
     let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -91,5 +96,5 @@ async fn manager_pty_ws_roundtrip() {
     );
 
     let _ = ws.close(None).await;
-    kill_tmux_session(&session_name);
+    kill_tmux_session(&socket, &session_name);
 }

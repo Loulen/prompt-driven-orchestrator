@@ -75,10 +75,11 @@ pub(crate) async fn session_pty_handler(
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
 
-    ws.on_upgrade(move |socket| handle_pty_ws(socket, session_id))
+    let tmux_socket = state.tmux_socket();
+    ws.on_upgrade(move |socket| handle_pty_ws(socket, tmux_socket, session_id))
 }
 
-async fn handle_pty_ws(socket: WebSocket, session_id: String) {
+async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: String) {
     info!("PTY WebSocket opened for session {session_id}");
 
     let pty_system = native_pty_system();
@@ -98,7 +99,9 @@ async fn handle_pty_ws(socket: WebSocket, session_id: String) {
     };
 
     let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(["attach", "-t", &session_id]);
+    // Pin the attach to the daemon's private socket so we don't accidentally
+    // reach into another maestro daemon's tmux state on the same host.
+    cmd.args(["-L", tmux_socket.as_str(), "attach", "-t", &session_id]);
 
     let _child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,

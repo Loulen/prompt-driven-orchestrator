@@ -91,6 +91,14 @@ struct AppState {
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
 }
 
+impl AppState {
+    /// Tmux socket name (`-L <name>`) scoped to this daemon's port.
+    /// Every tmux call from this daemon goes through this socket.
+    fn tmux_socket(&self) -> String {
+        tmux_session_manager::tmux_socket_name(self.port)
+    }
+}
+
 /// TTL during which a recorded self-write suppresses watcher broadcasts.
 /// Larger than the debouncer interval (1s) with margin for filesystem latency.
 pub(crate) const SELF_WRITE_TTL: Duration = Duration::from_secs(2);
@@ -299,7 +307,36 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         recent_writes,
     });
 
-    if let Err(e) = run_orphan_sweep(&state.db, tmux_session_manager::reaper_ttl()).await {
+    // The orphan sweep — and every other tmux call this daemon makes —
+    // is scoped to its own private socket (`maestro-<port>`) so we can
+    // never reach into another daemon's tmux state on the same host.
+    //
+    // If we detect that we were spawned from inside a Maestro pipeline
+    // (sub-claude context exports `MAESTRO_NODE_ID` via wrap_with_env),
+    // or the operator set `MAESTRO_DAEMON_NO_CLEANUP=1`, suppress every
+    // cleanup pathway. A Tester or Implementer that accidentally runs
+    // `maestro daemon` then can't trigger reaper-based kills, even on
+    // its own socket. The daemon still serves HTTP and accepts
+    // explicit `cleanup_run` calls — only the *automatic* sweeps go away.
+    let nested_daemon = std::env::var("MAESTRO_NODE_ID").is_ok()
+        || std::env::var("MAESTRO_DAEMON_NO_CLEANUP")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+
+    if nested_daemon {
+        warn!(
+            "Maestro daemon launched from a sub-claude context \
+             (MAESTRO_NODE_ID or MAESTRO_DAEMON_NO_CLEANUP set) — \
+             skipping boot-time orphan sweep and periodic reaper. \
+             This daemon will not auto-reap any tmux sessions."
+        );
+    } else if let Err(e) = run_orphan_sweep(
+        &state.db,
+        &state.tmux_socket(),
+        tmux_session_manager::reaper_ttl(),
+    )
+    .await
+    {
         warn!("Orphan sweep at boot failed: {e}");
     }
 
@@ -307,19 +344,25 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
 
     info!("Maestro daemon listening on http://{bound_addr}");
 
-    // Spawn reaper background task
-    let reaper_state = state.clone();
-    let _reaper_handle = tokio::spawn(async move {
-        let interval = tmux_session_manager::reaper_interval();
-        let ttl = tmux_session_manager::reaper_ttl();
-        let mut tick = time::interval(interval);
-        loop {
-            tick.tick().await;
-            if let Err(e) = run_orphan_sweep(&reaper_state.db, ttl).await {
-                warn!("Reaper sweep failed: {e}");
+    // Spawn reaper background task — unless we're a nested daemon, in
+    // which case we stay completely passive on tmux state.
+    let _reaper_handle = if nested_daemon {
+        None
+    } else {
+        let reaper_state = state.clone();
+        Some(tokio::spawn(async move {
+            let interval = tmux_session_manager::reaper_interval();
+            let ttl = tmux_session_manager::reaper_ttl();
+            let socket = reaper_state.tmux_socket();
+            let mut tick = time::interval(interval);
+            loop {
+                tick.tick().await;
+                if let Err(e) = run_orphan_sweep(&reaper_state.db, &socket, ttl).await {
+                    warn!("Reaper sweep failed: {e}");
+                }
             }
-        }
-    });
+        }))
+    };
 
     // Background task: process run-scoped pipeline modifications
     let mod_state = state.clone();
@@ -342,7 +385,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
 }
 
 pub async fn run_daemon(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let repo_root = std::env::current_dir().context("failed to determine current directory")?;
     let handle = serve(addr, repo_root).await?;
     handle.task.await.context("daemon task join error")?
@@ -2140,7 +2183,11 @@ fn sync_run_pipeline_to_template(
 
 // --- Orphan sweep / reaper ---
 
-async fn run_orphan_sweep(db: &sqlx::SqlitePool, ttl: Duration) -> Result<()> {
+async fn run_orphan_sweep(
+    db: &sqlx::SqlitePool,
+    socket: &str,
+    ttl: Duration,
+) -> Result<()> {
     let run_ids = load_all_run_ids(db).await?;
     let mut run_states: HashMap<String, event_log::RunState> = HashMap::new();
 
@@ -2152,6 +2199,7 @@ async fn run_orphan_sweep(db: &sqlx::SqlitePool, ttl: Duration) -> Result<()> {
     }
 
     tmux_session_manager::sweep_orphans(
+        socket,
         |run_id, node_id, _iter| {
             let run_state = run_states.get(run_id)?;
             let is_archived = run_state.status == event_log::RunStatus::Archived;
@@ -2225,8 +2273,9 @@ async fn node_pane(
 
     let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
     let is_latest_iter = node_state.iter == iter;
+    let socket = state.tmux_socket();
 
-    if let Some(content) = tmux_session_manager::capture(&session_name) {
+    if let Some(content) = tmux_session_manager::capture(&socket, &session_name) {
         return Json(PaneResponse {
             content,
             session_name,
@@ -2268,7 +2317,7 @@ async fn node_pane(
             // Give the resumed session a moment to initialize
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            let content = tmux_session_manager::capture(&session_name)
+            let content = tmux_session_manager::capture(&socket, &session_name)
                 .unwrap_or_else(|| "Connecting...".to_string());
 
             return Json(PaneResponse {
@@ -3236,7 +3285,7 @@ async fn run_command(
             let iter = req.iter.unwrap_or(1);
 
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
-            tmux_session_manager::kill(&session_name);
+            tmux_session_manager::kill(&state.tmux_socket(), &session_name);
 
             let fail_event = event_log::Event {
                 id: None,
@@ -3286,7 +3335,7 @@ async fn run_command(
 
             // Kill existing session
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
-            tmux_session_manager::kill(&session_name);
+            tmux_session_manager::kill(&state.tmux_socket(), &session_name);
 
             let cmd_event = event_log::Event {
                 id: None,
@@ -3763,10 +3812,13 @@ struct AttachResponse {
     terminal: String,
 }
 
-async fn session_attach(AxumPath(session_id): AxumPath<String>) -> Response {
+async fn session_attach(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Response {
     let terminal = detect_terminal();
 
-    match spawn_terminal_attach(&terminal, &session_id) {
+    match spawn_terminal_attach(&terminal, &state.tmux_socket(), &session_id) {
         Ok(()) => {
             info!("Attached terminal {terminal} to session {session_id}");
             (
@@ -3787,10 +3839,14 @@ async fn session_attach(AxumPath(session_id): AxumPath<String>) -> Response {
     }
 }
 
-async fn manager_attach(AxumPath(run_id): AxumPath<String>) -> Response {
+async fn manager_attach(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
     let session_name = tmux_session_manager::manager_session_name(&run_id);
+    let socket = state.tmux_socket();
 
-    if !tmux_session_manager::session_exists(&session_name) {
+    if !tmux_session_manager::session_exists(&socket, &session_name) {
         return (
             StatusCode::NOT_FOUND,
             Json(
@@ -3801,7 +3857,7 @@ async fn manager_attach(AxumPath(run_id): AxumPath<String>) -> Response {
     }
 
     let terminal = detect_terminal();
-    match spawn_terminal_attach(&terminal, &session_name) {
+    match spawn_terminal_attach(&terminal, &socket, &session_name) {
         Ok(()) => {
             info!("Attached terminal {terminal} to manager session {session_name}");
             (
@@ -3870,14 +3926,17 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn spawn_terminal_attach(terminal: &str, session_name: &str) -> Result<()> {
+fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Result<()> {
     let parts: Vec<&str> = terminal.split_whitespace().collect();
     let (cmd, prefix_args) = parts
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("empty terminal command"))?;
 
     let escaped_name = shell_escape(session_name);
-    let tmux_cmd = format!("tmux attach -t {escaped_name}");
+    let escaped_socket = shell_escape(socket);
+    // Always attach via the daemon's private socket so the user's terminal
+    // pop-out reaches the right tmux server, even when other daemons run.
+    let tmux_cmd = format!("tmux -L {escaped_socket} attach -t {escaped_name}");
 
     let mut command = std::process::Command::new(cmd);
     command.args(prefix_args);
@@ -3901,7 +3960,7 @@ fn spawn_terminal_attach(terminal: &str, session_name: &str) -> Result<()> {
         "open" => {
             // macOS: open -a Terminal <script>
             // We create a temp script that attaches
-            let script = format!("#!/bin/bash\ntmux attach -t {escaped_name}\n");
+            let script = format!("#!/bin/bash\n{tmux_cmd}\n");
             let script_path =
                 std::env::temp_dir().join(format!("maestro-attach-{session_name}.sh"));
             std::fs::write(&script_path, &script)?;
@@ -3942,13 +4001,14 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         return (StatusCode::CONFLICT, "run is already archived").into_response();
     }
 
+    let socket = state.tmux_socket();
     for node in run_state.nodes.values() {
         let session_name =
             tmux_session_manager::node_session_name(run_id, &node.node_id, node.iter);
-        tmux_session_manager::kill(&session_name);
+        tmux_session_manager::kill(&socket, &session_name);
     }
     let mgr_session = tmux_session_manager::manager_session_name(run_id);
-    tmux_session_manager::kill(&mgr_session);
+    tmux_session_manager::kill(&socket, &mgr_session);
 
     let run_dir = state.repo_root.join(".maestro").join("runs").join(run_id);
 
@@ -4358,7 +4418,7 @@ async fn check_output_validation_with_retry(
             } else {
                 let msg = outputs_validator::corrective_message(&violations);
                 let session_name = tmux_session_manager::node_session_name(run_id, node_id, iter);
-                tmux_session_manager::send_keys(&session_name, &msg);
+                tmux_session_manager::send_keys(&state.tmux_socket(), &session_name, &msg);
 
                 let retry_event = event_log::Event {
                     id: None,

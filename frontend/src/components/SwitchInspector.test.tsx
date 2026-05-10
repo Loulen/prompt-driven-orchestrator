@@ -98,10 +98,10 @@ describe("SwitchInspector", () => {
     expect(screen.getByTestId("branch-editor-default")).toBeInTheDocument();
   });
 
-  it("shows 'else' badge on default branch", () => {
+  it("shows 'fallback' pin on default branch", () => {
     setStoreState(makeSwitchNode());
     render(<SwitchInspector />);
-    expect(screen.getByText("else")).toBeInTheDocument();
+    expect(screen.getByText("fallback")).toBeInTheDocument();
   });
 
   it("adds a new branch before default", () => {
@@ -428,6 +428,148 @@ describe("Edge disconnection clears frontmatter predicates (issue #64)", () => {
     const gate = state.openTabs[0].pipeline.nodes.find((n) => n.id === "gate")!;
     const passBranch = gate.outputs.find((o) => o.name === "pass")!;
     expect(passBranch.when).toBeNull();
+  });
+});
+
+describe("S1 AND-rail layout (issue #92)", () => {
+  beforeEach(() => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "none", id: null },
+    });
+  });
+
+  it("renders non-default branches as sb-card with header and body", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const branchEl = screen.getByTestId("branch-editor-yes");
+    expect(branchEl.classList.contains("sb-card")).toBe(true);
+    expect(branchEl.querySelector(".sb-head")).toBeInTheDocument();
+    expect(branchEl.querySelector(".sb-body")).toBeInTheDocument();
+  });
+
+  it("multi-condition branch shows sb-conds.multi (rail + AND label)", () => {
+    const node = makeSwitchNode({
+      outputs: [
+        {
+          name: "multi",
+          repeated: false,
+          side: "right",
+          when: { status: { eq: "ok" }, score: { gte: 5 } },
+        },
+        { name: "default", repeated: false, side: "right" },
+      ],
+    });
+    setStoreState(node);
+    render(<SwitchInspector />);
+    const branchEl = screen.getByTestId("branch-editor-multi");
+    const conds = branchEl.querySelector(".sb-conds");
+    expect(conds).toBeInTheDocument();
+    expect(conds!.classList.contains("multi")).toBe(true);
+  });
+
+  it("single-condition branch shows sb-conds.single (no rail)", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const branchEl = screen.getByTestId("branch-editor-yes");
+    const conds = branchEl.querySelector(".sb-conds");
+    expect(conds).toBeInTheDocument();
+    expect(conds!.classList.contains("single")).toBe(true);
+  });
+
+  it("zero-condition branch has no sb-conds container", () => {
+    const node = makeSwitchNode({
+      outputs: [
+        { name: "empty", repeated: false, side: "right" },
+        { name: "default", repeated: false, side: "right" },
+      ],
+    });
+    setStoreState(node);
+    render(<SwitchInspector />);
+    const branchEl = screen.getByTestId("branch-editor-empty");
+    expect(branchEl.querySelector(".sb-conds")).toBeNull();
+  });
+
+  it("reorder controls are icon buttons, not typographic arrows", () => {
+    const node = makeSwitchNode({
+      outputs: [
+        { name: "first", repeated: false, side: "right", when: { a: { eq: 1 } } },
+        { name: "second", repeated: false, side: "right", when: { b: { eq: 2 } } },
+        { name: "default", repeated: false, side: "right" },
+      ],
+    });
+    setStoreState(node);
+    render(<SwitchInspector />);
+    const moveUpBtns = screen.getAllByTitle("Move up");
+    const moveDownBtns = screen.getAllByTitle("Move down");
+    expect(moveUpBtns.length).toBeGreaterThan(0);
+    expect(moveDownBtns.length).toBeGreaterThan(0);
+    for (const btn of [...moveUpBtns, ...moveDownBtns]) {
+      expect(btn.querySelector("svg")).toBeInTheDocument();
+      expect(btn.textContent).not.toMatch(/[▲▼]/);
+    }
+  });
+
+  it("+ Add condition is a styled button", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const addBtn = screen.getByTestId("add-condition");
+    expect(addBtn.tagName).toBe("BUTTON");
+    expect(addBtn.classList.contains("sb-add-cond")).toBe(true);
+  });
+
+  it("default branch renders with sb-default class and fallback pin", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const defaultEl = screen.getByTestId("branch-editor-default");
+    expect(defaultEl.classList.contains("sb-card")).toBe(true);
+    expect(defaultEl.classList.contains("sb-default")).toBe(true);
+    expect(defaultEl.querySelector(".sb-pin")).toBeInTheDocument();
+    expect(defaultEl.querySelector(".sb-pin")!.textContent).toBe("fallback");
+  });
+
+  it("default branch name is italic", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const defaultEl = screen.getByTestId("branch-editor-default");
+    const nameEl = defaultEl.querySelector(".sb-name");
+    expect(nameEl).toBeInTheDocument();
+  });
+
+  it("default branch has no reorder controls", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const defaultEl = screen.getByTestId("branch-editor-default");
+    expect(defaultEl.querySelector('[title="Move up"]')).toBeNull();
+    expect(defaultEl.querySelector('[title="Move down"]')).toBeNull();
+  });
+
+  it("default branch has no delete button", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const defaultEl = screen.getByTestId("branch-editor-default");
+    expect(defaultEl.querySelector('[title="Delete branch"]')).toBeNull();
+  });
+
+  it("help paragraph is removed", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    expect(screen.queryByText(/All conditions in a branch are AND/)).not.toBeInTheDocument();
+  });
+
+  it("non-default branch header contains drag grip", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const branchEl = screen.getByTestId("branch-editor-yes");
+    expect(branchEl.querySelector(".sb-grip")).toBeInTheDocument();
+  });
+
+  it("condition rows use sb-cond class with grid layout", () => {
+    setStoreState(makeSwitchNode());
+    render(<SwitchInspector />);
+    const condRow = screen.getByTestId("condition-row");
+    expect(condRow.classList.contains("sb-cond")).toBe(true);
   });
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, GripVertical, ChevronUp, ChevronDown, X, Plus } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { PortDef, PortSide, PipelineDef, FrontmatterFieldDecl } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
@@ -191,12 +191,9 @@ export default function SwitchInspector() {
 
         {/* Branches */}
         <SectionHead title="Branches" count={branches.length} onAdd={handleAddBranch} />
-        <p className="text-fg-4" style={{ fontSize: "10px" }}>
-          All conditions in a branch are AND'd. For OR, use <code className="text-fg-3">in [...]</code> or add another branch with the same target.
-        </p>
 
         {branches.map((branch, i) => (
-          <BranchRow
+          <BranchCard
             key={`${branch.name}-${i}`}
             branch={branch}
             isDefault={branch.name === "default"}
@@ -219,7 +216,7 @@ export default function SwitchInspector() {
   );
 }
 
-function BranchRow({
+function BranchCard({
   branch,
   isDefault,
   availableFields,
@@ -265,91 +262,79 @@ function BranchRow({
     [rows, onUpdateConditions],
   );
 
+  if (isDefault) {
+    return (
+      <div
+        data-testid={`branch-editor-${branch.name}`}
+        className="sb-card sb-default"
+      >
+        <div className="sb-head">
+          <span className="sb-name">default</span>
+          <span className="sb-pin">fallback</span>
+        </div>
+        <div className="sb-body">taken when no other branch matches</div>
+      </div>
+    );
+  }
+
+  let condsClass: string | null = null;
+  if (rows.length === 1) condsClass = "single";
+  else if (rows.length > 1) condsClass = "multi";
+
   return (
     <div
       data-testid={`branch-editor-${branch.name}`}
-      className="rounded border border-line-soft bg-bg-3 p-2"
+      className="sb-card"
     >
-      <div className="flex items-center gap-1.5">
-        {!isDefault && (
-          <div className="flex flex-col">
-            {onMoveUp && (
-              <button
-                onClick={onMoveUp}
-                className="cursor-pointer text-fg-4 hover:text-fg-3"
-                style={{ fontSize: "8px", lineHeight: 1 }}
-                title="Move up"
-              >
-                ▲
-              </button>
-            )}
-            {onMoveDown && (
-              <button
-                onClick={onMoveDown}
-                className="cursor-pointer text-fg-4 hover:text-fg-3"
-                style={{ fontSize: "8px", lineHeight: 1 }}
-                title="Move down"
-              >
-                ▼
-              </button>
-            )}
-          </div>
-        )}
-        {isDefault ? (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="font-medium text-fg-3" style={{ fontSize: "11px" }}>
-              default
-            </span>
-            <span
-              className="rounded bg-fg-4/20 px-1 text-fg-4"
-              style={{ fontSize: "8px" }}
-            >
-              else
-            </span>
-          </div>
-        ) : (
-          <input
-            value={branch.name}
-            onChange={(e) => onUpdateName(e.target.value)}
-            className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-2 py-0.5 text-fg outline-none focus:border-acc"
-            style={{ fontSize: "11px" }}
-            placeholder="branch name"
-          />
-        )}
-        <SidePicker value={branch.side ?? "right"} onChange={onUpdateSide} />
-        {!isDefault && (
-          <button
-            onClick={onDelete}
-            className="cursor-pointer text-fg-4 hover:text-st-failed"
-            title="Delete branch"
-          >
-            <Trash2 size={12} />
+      <div className="sb-head">
+        <span className="sb-grip"><GripVertical size={14} /></span>
+        {onMoveUp && (
+          <button onClick={onMoveUp} className="sb-icon-btn" title="Move up">
+            <ChevronUp size={14} />
           </button>
         )}
+        {onMoveDown && (
+          <button onClick={onMoveDown} className="sb-icon-btn" title="Move down">
+            <ChevronDown size={14} />
+          </button>
+        )}
+        <input
+          className="sb-name"
+          value={branch.name}
+          onChange={(e) => onUpdateName(e.target.value)}
+          placeholder="branch name"
+          spellCheck={false}
+        />
+        <SidePicker value={branch.side ?? "right"} onChange={onUpdateSide} />
+        <button onClick={onDelete} className="sb-icon-btn" title="Delete branch">
+          <Trash2 size={14} />
+        </button>
       </div>
 
-      {!isDefault && (
-        <div className="mt-1.5 flex flex-col gap-1">
-          {rows.map((row, ri) => (
-            <ConditionRowEditor
-              key={ri}
-              row={row}
-              availableFields={availableFields}
-              onUpdate={(updates) => handleUpdateRow(ri, updates)}
-              onDelete={() => handleDeleteRow(ri)}
-            />
-          ))}
-          <button
-            onClick={handleAddCondition}
-            disabled={!hasSource}
-            className="cursor-pointer self-start text-fg-4 hover:text-acc disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ fontSize: "10px" }}
-            data-testid="add-condition"
-          >
-            + Add condition
-          </button>
-        </div>
-      )}
+      <div className="sb-body">
+        {condsClass && (
+          <div className={`sb-conds ${condsClass}`}>
+            {rows.map((row, ri) => (
+              <ConditionRowEditor
+                key={ri}
+                row={row}
+                availableFields={availableFields}
+                onUpdate={(updates) => handleUpdateRow(ri, updates)}
+                onDelete={() => handleDeleteRow(ri)}
+              />
+            ))}
+          </div>
+        )}
+        <button
+          onClick={handleAddCondition}
+          disabled={!hasSource}
+          className="sb-add-cond"
+          data-testid="add-condition"
+        >
+          <Plus size={12} />
+          Add condition
+        </button>
+      </div>
     </div>
   );
 }
@@ -369,12 +354,11 @@ function ConditionRowEditor({
   const isEnum = selectedField?.decl?.type === "enum" && selectedField.decl.allowed;
 
   return (
-    <div className="flex items-center gap-1" data-testid="condition-row">
+    <div className="sb-cond" data-testid="condition-row">
       <select
         value={row.field}
         onChange={(e) => onUpdate({ field: e.target.value, value: "" })}
-        className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
-        style={{ fontSize: "10px" }}
+        className="sb-select"
         data-testid="field-dropdown"
       >
         {!availableFields.some((f) => f.name === row.field) && (
@@ -389,8 +373,7 @@ function ConditionRowEditor({
       <select
         value={row.op}
         onChange={(e) => onUpdate({ op: e.target.value as Operator })}
-        className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
-        style={{ fontSize: "10px" }}
+        className="sb-select"
         data-testid="op-dropdown"
       >
         {OPERATORS.map((op) => (
@@ -403,8 +386,7 @@ function ConditionRowEditor({
         <select
           value={row.value}
           onChange={(e) => onUpdate({ value: e.target.value })}
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
-          style={{ fontSize: "10px" }}
+          className="sb-select"
           data-testid="value-dropdown"
         >
           <option value="">—</option>
@@ -418,18 +400,16 @@ function ConditionRowEditor({
         <input
           value={row.value}
           onChange={(e) => onUpdate({ value: e.target.value })}
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg outline-none focus:border-acc"
-          style={{ fontSize: "10px" }}
+          className="sb-input"
           placeholder="value"
         />
       )}
       <button
         onClick={onDelete}
-        className="cursor-pointer text-fg-4 hover:text-st-failed"
-        style={{ fontSize: "10px" }}
+        className="sb-x"
         data-testid="delete-condition"
       >
-        ×
+        <X size={12} />
       </button>
     </div>
   );

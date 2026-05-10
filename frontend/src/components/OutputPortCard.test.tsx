@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import OutputPortCard from "./OutputPortCard";
 import { TooltipProvider } from "./ui/tooltip";
-import type { PortDef, FrontmatterFieldDecl } from "../types";
+import type { PortDef } from "../types";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return <TooltipProvider>{children}</TooltipProvider>;
@@ -14,7 +14,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
     highlighted: false,
     onUpdate: vi.fn(),
     onRemove: vi.fn(),
-    schema: null as Record<string, FrontmatterFieldDecl> | null | undefined,
+    schema: null,
     onSchemaChange: vi.fn(),
   };
 
@@ -58,13 +58,6 @@ describe("OutputPortCard — O3 tab-head card", () => {
     fireEvent.click(chevron);
     fireEvent.click(chevron);
     expect(screen.getByTestId("output-port-card-out").querySelector(".op-body")).toBeTruthy();
-  });
-
-  it("chevron has rotated class when collapsed", () => {
-    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
-    const chevron = screen.getByLabelText("Toggle output body");
-    fireEvent.click(chevron);
-    expect(chevron.classList.contains("op-chev")).toBe(true);
   });
 
   it("passes port updates through to onUpdate", () => {

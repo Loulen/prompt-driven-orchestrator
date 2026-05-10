@@ -46,12 +46,13 @@ export function withUpdatedNodeView(
 }
 import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
-import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { STATUS_BORDER, STATUS_DOT } from "../nodeStyles";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { computeBodySubgraph } from "../loopBodySubgraph";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import TriangleHandle from "./TriangleHandle";
 import PortRow from "./PortRow";
+import { NodeCard } from "./NodeCard";
 import { SwitchRunNode } from "./SwitchNode";
 import { LoopRunNode } from "./LoopNode";
 import { ForEachRunNode } from "./ForEachNode";
@@ -78,16 +79,11 @@ interface PipelineNodeData {
   [key: string]: unknown;
 }
 
-function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
-  const borderColor = STATUS_BORDER[data.status];
-  const bgColor = STATUS_BG[data.status];
+function PipelineNode({ data, selected }: NodeProps<Node<PipelineNodeData>>) {
   const dotColor = STATUS_DOT[data.status];
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
-      style={{ minWidth: 160, fontSize: "12px" }}
-    >
+    <NodeCard status={data.status} selected={selected} style={{ minWidth: 160, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         {data.inputs.map((port, i) => (
           <PortRow
@@ -136,7 +132,7 @@ function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
           />
         ))}
       </div>
-    </div>
+    </NodeCard>
   );
 }
 

@@ -1,7 +1,7 @@
 import type { NodeStatus } from "./types";
 
 export const STATUS_BORDER: Record<NodeStatus, string> = {
-  pending: "border-st-pending",
+  pending: "border-line-strong",
   running: "border-st-running",
   awaiting_user: "border-st-await",
   completed: "border-st-done",
@@ -22,4 +22,8 @@ export const STATUS_DOT: Record<NodeStatus, string> = {
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
   failed: "bg-st-failed",
+};
+
+export const SELECTION_RING_STYLE = {
+  boxShadow: "0 0 0 2px var(--color-bg-1), 0 0 0 3.5px var(--color-acc)",
 };

@@ -18,6 +18,7 @@ import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
+import { NodeCard } from "./NodeCard";
 import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
 import { ForEachEditNode } from "./ForEachNode";
@@ -45,12 +46,7 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
     : "text-fg-3";
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] border-st-pending bg-bg-4 px-3 py-2 ${
-        isSelected ? "ring-1 ring-acc" : ""
-      }`}
-      style={{ minWidth: 160, fontSize: "12px" }}
-    >
+    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         {data.inputs.map((port, i) => (
           <PortRow
@@ -93,7 +89,7 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
           />
         ))}
       </div>
-    </div>
+    </NodeCard>
   );
 }
 

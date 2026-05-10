@@ -1,7 +1,8 @@
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
-import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { STATUS_DOT } from "../nodeStyles";
+import { NodeCard } from "./NodeCard";
 import TriangleHandle from "./TriangleHandle";
 import PortRow from "./PortRow";
 import { NodeTypeIcon } from "./NodeTypeIcon";
@@ -25,12 +26,7 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
   const isSelected = selection.kind === "node" && selection.id === id;
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] border-[var(--color-switch-tint,#a78bfa)] bg-bg-4 px-3 py-2 ${
-        isSelected ? "ring-1 ring-acc" : ""
-      }`}
-      style={{ minWidth: 140, fontSize: "12px" }}
-    >
+    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         <PortRow
           portName="in"
@@ -67,7 +63,7 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
           </PortRow>
         ))}
       </div>
-    </div>
+    </NodeCard>
   );
 }
 
@@ -82,16 +78,11 @@ interface SwitchRunData {
   [key: string]: unknown;
 }
 
-export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
-  const borderColor = STATUS_BORDER[data.status];
-  const bgColor = STATUS_BG[data.status];
+export function SwitchRunNode({ data, selected }: NodeProps<Node<SwitchRunData>>) {
   const dotColor = STATUS_DOT[data.status];
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
-      style={{ minWidth: 140, fontSize: "12px" }}
-    >
+    <NodeCard status={data.status} selected={selected} style={{ minWidth: 140, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         <PortRow
           portName="in"
@@ -156,6 +147,6 @@ export function SwitchRunNode({ data }: NodeProps<Node<SwitchRunData>>) {
           );
         })}
       </div>
-    </div>
+    </NodeCard>
   );
 }

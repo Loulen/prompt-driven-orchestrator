@@ -1,7 +1,8 @@
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
-import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { STATUS_DOT } from "../nodeStyles";
+import { NodeCard } from "./NodeCard";
 import PortRow from "./PortRow";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 
@@ -18,12 +19,7 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
   const isSelected = selection.kind === "node" && selection.id === id;
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] border-acc bg-bg-4 px-3 py-2 ${
-        isSelected ? "ring-1 ring-acc" : ""
-      }`}
-      style={{ minWidth: 140, fontSize: "12px" }}
-    >
+    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         <PortRow
           portName="branches"
@@ -51,7 +47,7 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
           nodeType="merge"
         />
       </div>
-    </div>
+    </NodeCard>
   );
 }
 
@@ -65,16 +61,11 @@ interface MergeRunData {
   [key: string]: unknown;
 }
 
-export function MergeRunNode({ data }: NodeProps<Node<MergeRunData>>) {
-  const borderColor = STATUS_BORDER[data.status];
-  const bgColor = STATUS_BG[data.status];
+export function MergeRunNode({ data, selected }: NodeProps<Node<MergeRunData>>) {
   const dotColor = STATUS_DOT[data.status];
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
-      style={{ minWidth: 140, fontSize: "12px" }}
-    >
+    <NodeCard status={data.status} selected={selected} style={{ minWidth: 140, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         <PortRow
           portName="branches"
@@ -121,6 +112,6 @@ export function MergeRunNode({ data }: NodeProps<Node<MergeRunData>>) {
           nodeType="merge"
         />
       </div>
-    </div>
+    </NodeCard>
   );
 }

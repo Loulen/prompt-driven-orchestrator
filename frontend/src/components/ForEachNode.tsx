@@ -1,7 +1,8 @@
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus, PortSide } from "../types";
 import { useEditStore } from "../stores/editStore";
-import { STATUS_BORDER, STATUS_BG, STATUS_DOT } from "../nodeStyles";
+import { STATUS_DOT } from "../nodeStyles";
+import { NodeCard } from "./NodeCard";
 import PortRow from "./PortRow";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 
@@ -38,12 +39,7 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
   const outputs = data.ports.filter((p) => p.kind === "output");
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] border-[var(--color-foreach-tint,#a78bfa)] bg-bg-4 px-3 py-2 ${
-        isSelected ? "ring-1 ring-acc" : ""
-      }`}
-      style={{ minWidth: 150, fontSize: "12px" }}
-    >
+    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 150, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         {inputs.map((port, i) => (
           <PortRow
@@ -77,7 +73,7 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
           />
         ))}
       </div>
-    </div>
+    </NodeCard>
   );
 }
 
@@ -90,19 +86,14 @@ interface ForEachRunData {
   [key: string]: unknown;
 }
 
-export function ForEachRunNode({ data }: NodeProps<Node<ForEachRunData>>) {
-  const borderColor = STATUS_BORDER[data.status];
-  const bgColor = STATUS_BG[data.status];
+export function ForEachRunNode({ data, selected }: NodeProps<Node<ForEachRunData>>) {
   const dotColor = STATUS_DOT[data.status];
 
   const inputs = data.ports.filter((p) => p.kind === "input");
   const outputs = data.ports.filter((p) => p.kind === "output");
 
   return (
-    <div
-      className={`rounded-md border-l-[3px] ${borderColor} ${bgColor} px-3 py-2`}
-      style={{ minWidth: 150, fontSize: "12px" }}
-    >
+    <NodeCard status={data.status} selected={selected} style={{ minWidth: 150, fontSize: "12px" }}>
       <div className="flex flex-col gap-0.5 mb-1">
         {inputs.map((port, i) => (
           <PortRow
@@ -151,6 +142,6 @@ export function ForEachRunNode({ data }: NodeProps<Node<ForEachRunData>>) {
           />
         ))}
       </div>
-    </div>
+    </NodeCard>
   );
 }

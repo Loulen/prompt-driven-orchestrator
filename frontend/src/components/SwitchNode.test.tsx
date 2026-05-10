@@ -129,7 +129,8 @@ describe("SwitchEditNode", () => {
     const { container } = render(<SwitchEditNode {...editProps()} />, {
       wrapper: Wrapper,
     });
-    expect(container.firstElementChild?.className).toContain("ring-1");
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.style.boxShadow).toContain("var(--color-acc)");
   });
 });
 

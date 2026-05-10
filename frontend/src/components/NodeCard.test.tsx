@@ -4,8 +4,6 @@ import { NodeCard } from "./NodeCard";
 import type { NodeStatus } from "../types";
 
 describe("NodeCard", () => {
-  const statuses: NodeStatus[] = ["pending", "running", "awaiting_user", "completed", "failed"];
-
   it("renders with 4-side border (no border-l-[3px])", () => {
     const { container } = render(
       <NodeCard status="running"><span>child</span></NodeCard>,
@@ -15,22 +13,17 @@ describe("NodeCard", () => {
     expect(card.className).not.toContain("border-l-[3px]");
   });
 
-  it.each(statuses)("status %s applies the correct border class", (status) => {
+  it.each<[NodeStatus, string]>([
+    ["pending", "border-line-strong"],
+    ["running", "border-st-running"],
+    ["awaiting_user", "border-st-await"],
+    ["completed", "border-st-done"],
+    ["failed", "border-st-failed"],
+  ])("status %s applies border class %s", (status, expectedClass) => {
     const { container } = render(
       <NodeCard status={status}><span>child</span></NodeCard>,
     );
-    const card = container.firstElementChild!;
-    if (status === "pending") {
-      expect(card.className).toContain("border-line-strong");
-    } else if (status === "running") {
-      expect(card.className).toContain("border-st-running");
-    } else if (status === "awaiting_user") {
-      expect(card.className).toContain("border-st-await");
-    } else if (status === "completed") {
-      expect(card.className).toContain("border-st-done");
-    } else if (status === "failed") {
-      expect(card.className).toContain("border-st-failed");
-    }
+    expect(container.firstElementChild!.className).toContain(expectedClass);
   });
 
   it("pending renders without a status-colored cadre", () => {

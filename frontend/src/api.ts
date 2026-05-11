@@ -366,11 +366,12 @@ export async function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {
 export async function saveLibraryPipeline(
   name: string,
   yaml: string,
+  prompts: Record<string, string> = {},
 ): Promise<{ id: string }> {
   const resp = await fetch(`${BASE}/library/pipelines`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, yaml }),
+    body: JSON.stringify({ name, yaml, prompts }),
   });
   if (!resp.ok) throw new Error(`POST /library/pipelines failed: ${resp.status}`);
   return resp.json();

@@ -31,6 +31,9 @@ export default function PipelineStar({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
+  const tabPrompts = useEditStore(
+    (s) => s.openTabs.find((t) => t.id === tabId)?.prompts,
+  );
 
   useEffect(() => {
     if (!popoverOpen) return;
@@ -46,7 +49,7 @@ export default function PipelineStar({
   async function handleSaveToLibrary() {
     try {
       const yaml = serializePipeline(pipeline);
-      await saveLibraryPipeline(pipeline.name, yaml);
+      await saveLibraryPipeline(pipeline.name, yaml, tabPrompts ?? {});
       onLibraryChanged();
     } catch {
       // ignore

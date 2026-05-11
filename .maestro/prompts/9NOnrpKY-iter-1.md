@@ -4,12 +4,12 @@ You are node `9NOnrpKY` in pipeline `simple-bugfix`, iteration 1.
 
 ## Inputs
 
-- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-112650-20d97ec/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
-- `steps`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-112650-20d97ec/worktree/.maestro/artifacts/9LvO3oid/iter-1/how_to_reproduce.md`
+- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-141703-24e96ec/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
+- `steps`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-141703-24e96ec/worktree/.maestro/artifacts/9LvO3oid/iter-1/how_to_reproduce.md`
 
 ## Outputs
 
-- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-112650-20d97ec/worktree/.maestro/artifacts/9NOnrpKY/iter-1/out.md`
+- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-141703-24e96ec/worktree/.maestro/artifacts/9NOnrpKY/iter-1/out.md`
   Required YAML frontmatter:
   - `Verdict`: enum (allowed: Pass, Fail, Minor_changes)
 

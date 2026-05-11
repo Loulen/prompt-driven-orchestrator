@@ -406,7 +406,7 @@ export default function App() {
             {infoPanelOpen ? (
               <PipelineInfoPanel
                 key={infoPanelInitialTab ?? "default"}
-                run={selectedRun}
+                run={isEditingRun ? selectedRun : null}
                 pipeline={editTab?.pipeline ?? null}
                 libraryPipelines={libraryPipelines}
                 onLibraryChanged={refreshLibraryPipelines}

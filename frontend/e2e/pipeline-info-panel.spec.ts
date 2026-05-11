@@ -183,3 +183,63 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await yamlTab.click();
   await expect(yamlView).toContainText("node-", { timeout: 3_000 });
 });
+
+test("library tab after a run: panel shows template, not the previous run", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Step 1 — create + select a run so selectedRun is populated.
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    data: { pipeline: PIPELINE_NAME, input: "library-tab regression" },
+  });
+  expect(resp.status()).toBe(201);
+  const { run_id } = await resp.json();
+
+  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+
+  // Sanity — open info panel on the run tab and confirm run metadata is shown.
+  const infoBtn = page.getByTestId("toolbar-info");
+  await expect(infoBtn).toBeVisible({ timeout: 3_000 });
+  await infoBtn.click();
+
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+  await expect(infoPanel).toContainText(`run ${run_id.slice(-8)}`);
+  await expect(page.getByTestId("info-tab-manager")).toBeVisible();
+
+  // Close the panel before switching tabs.
+  await page.getByTestId("info-panel-close").click();
+  await expect(infoPanel).not.toBeVisible();
+
+  // Step 2 — switch to a library template tab (any non-run scope).
+  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+
+  // Step 3 — open the info panel on the library tab.
+  await infoBtn.click();
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+
+  // Regression checks: no leakage of the previous run into the panel.
+  await expect(infoPanel).toContainText("template ·");
+  await expect(infoPanel).not.toContainText(`run ${run_id.slice(-8)}`);
+  await expect(page.getByTestId("info-tab-manager")).toHaveCount(0);
+
+  // Cleanup tmux sessions
+  const { execSync } = await import("node:child_process");
+  for (const session of [
+    `maestro-${run_id}-worker-iter-1`,
+    `maestro-mgr-${run_id}`,
+  ]) {
+    try {
+      execSync(`tmux kill-session -t ${session}`, { stdio: "ignore" });
+    } catch {
+      // ok
+    }
+  }
+});

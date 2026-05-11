@@ -9,11 +9,12 @@ interface Props {
   onAddNode: (type: NodeType) => void;
   libraryEntries: LibraryEntry[];
   onLibraryDelete: (name: string) => void;
+  getDropPosition?: () => { x: number; y: number };
   infoOpen?: boolean;
   onToggleInfo?: () => void;
 }
 
-export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete, infoOpen, onToggleInfo }: Props) {
+export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo }: Props) {
   return (
     <div
       className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-bg-2/90 p-1 backdrop-blur-sm shadow-lg"
@@ -31,7 +32,7 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
 
       <span className="mx-0.5 h-4 w-px bg-line" />
 
-      <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} />
+      <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} getDropPosition={getDropPosition} />
 
       <Tooltip content="Loop node">
         <button

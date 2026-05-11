@@ -4,6 +4,7 @@ import {
   Background,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type Edge,
   type NodeProps,
@@ -172,6 +173,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     edgeIndex?: number;
   } | null>(null);
   const reactFlowRef = useRef<HTMLDivElement>(null);
+  const reactFlow = useReactFlow();
   const [isDraggingEdge, setIsDraggingEdge] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const dragHighlightNodeId = isDraggingEdge ? hoveredNodeId : null;
@@ -297,11 +299,51 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     );
   }
 
+  const computeDropPosition = (): { x: number; y: number } => {
+    const wrapper = reactFlowRef.current;
+    // Approximate default node-card footprint; nodes auto-size around this.
+    const APPROX_W = 180;
+    const APPROX_H = 80;
+    let cx: number;
+    let cy: number;
+    if (wrapper) {
+      const rect = wrapper.getBoundingClientRect();
+      const flow = reactFlow.screenToFlowPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+      cx = flow.x;
+      cy = flow.y;
+    } else {
+      cx = 200;
+      cy = 200;
+    }
+    let x = Math.round(cx - APPROX_W / 2);
+    let y = Math.round(cy - APPROX_H / 2);
+    // Nudge to avoid stacking new nodes on top of existing ones at the same spot.
+    const existing = pipeline?.nodes ?? [];
+    const THRESHOLD = 30;
+    let guard = 0;
+    while (
+      guard++ < 20 &&
+      existing.some(
+        (n) =>
+          n.view != null &&
+          Math.abs(n.view.x - x) < THRESHOLD &&
+          Math.abs(n.view.y - y) < THRESHOLD,
+      )
+    ) {
+      x += 40;
+      y += 40;
+    }
+    return { x, y };
+  };
+
   const handleAddNode = (type: NodeType) => {
     const id = generateNodeId();
     const name = DEFAULT_NODE_NAMES[type] ?? "node";
 
-    const view = { x: 200, y: 80 + pipeline.nodes.length * 140 };
+    const view = computeDropPosition();
     let newNode: NodeDef;
     switch (type) {
       case "merge":
@@ -360,6 +402,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         onAddNode={handleAddNode}
         libraryEntries={libraryEntries}
         onLibraryDelete={onLibraryDelete}
+        getDropPosition={computeDropPosition}
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
       />

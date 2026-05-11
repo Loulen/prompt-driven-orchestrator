@@ -15,9 +15,11 @@ const TYPE_ICONS: Record<string, string> = {
 export default function LibraryDropdown({
   entries,
   onDelete,
+  getDropPosition,
 }: {
   entries: LibraryEntry[];
   onDelete: (name: string) => void;
+  getDropPosition?: () => { x: number; y: number };
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -44,6 +46,7 @@ export default function LibraryDropdown({
     try {
       const result = await instantiateFromLibrary(name);
       const newId = generateNodeId();
+      const view = getDropPosition?.() ?? { x: 200, y: 200 };
       const node: NodeDef = {
         id: newId,
         name: result.spec.name,
@@ -51,7 +54,7 @@ export default function LibraryDropdown({
         inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
-        view: { x: 200, y: 200 },
+        view,
       };
       addNode(node);
       updatePrompt(newId, result.prompt);

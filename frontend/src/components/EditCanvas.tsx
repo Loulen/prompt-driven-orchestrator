@@ -12,8 +12,9 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeDef, NodeType, PipelineDef, PortBrief, PortSide } from "../types";
+import type { NodeDef, NodeStatus, NodeType, PipelineDef, PortBrief, RunState } from "../types";
 import type { LibraryEntry } from "../api";
+import { deriveEditNodes } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
@@ -35,6 +36,7 @@ interface EditNodeData {
   inputs: PortBrief[];
   outputs: PortBrief[];
   interactive: boolean;
+  status: NodeStatus;
   [key: string]: unknown;
 }
 
@@ -48,7 +50,7 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
     : "text-fg-3";
 
   return (
-    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
+    <NodeCard status={data.status} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
       {data.inputs.map((port, i) => (
         <PortRow
           key={`in-${port.name}`}
@@ -102,100 +104,6 @@ const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "merge": "merge",
 };
 
-function deriveEditNodes(pipeline: PipelineDef): Node[] {
-  return pipeline.nodes.map((n, i) => {
-    if (n.type === "switch") {
-      return {
-        id: n.id,
-        type: "switch",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          branches: n.outputs.map((p) => ({
-            name: p.name,
-            side: p.side ?? "right",
-            hasWhen: p.when != null,
-          })),
-          inputSide: n.inputs[0]?.side ?? "left",
-        },
-      };
-    }
-    if (n.type === "merge") {
-      return {
-        id: n.id,
-        type: "merge",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          inputSide: n.inputs[0]?.side ?? "left",
-          outputSide: n.outputs[0]?.side ?? "right",
-        },
-      };
-    }
-    if (n.type === "loop") {
-      return {
-        id: n.id,
-        type: "loop",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          maxIter: n.max_iter ?? 5,
-          ports: [
-            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as PortSide })),
-            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as PortSide })),
-          ],
-        },
-      };
-    }
-    if (n.type === "for-each") {
-      return {
-        id: n.id,
-        type: "foreach",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          ports: [
-            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as PortSide })),
-            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as PortSide })),
-          ],
-        },
-      };
-    }
-    return {
-      id: n.id,
-      type: "edit",
-      position: {
-        x: n.view?.x ?? 200,
-        y: n.view?.y ?? 80 + i * 140,
-      },
-      data: {
-        label: n.name ?? n.id,
-        nodeId: n.id,
-        nodeType: n.type,
-        inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
-        outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
-        interactive: n.interactive,
-      },
-    };
-  });
-}
-
 function deriveEditEdges(pipeline: PipelineDef): Edge[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
@@ -238,9 +146,10 @@ interface EditCanvasProps {
   infoOpen?: boolean;
   onToggleInfo?: () => void;
   onCloseInfo?: () => void;
+  runState?: RunState | null;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, runState }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -269,9 +178,15 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
+  // Only apply live run status when the active tab is the run-scoped tab
+  // matching the currently loaded RunState — otherwise (template pipelines,
+  // or a different run) every node stays "pending".
+  const activeRunState =
+    tab?.runId && runState && tab.runId === runState.run_id ? runState : null;
+
   const derivedNodes = useMemo(
-    () => (pipeline ? deriveEditNodes(pipeline) : []),
-    [pipeline],
+    () => (pipeline ? deriveEditNodes(pipeline, activeRunState) : []),
+    [pipeline, activeRunState],
   );
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),

@@ -17,6 +17,7 @@ interface ForEachEditData {
   label: string;
   nodeId: string;
   ports: ForEachPort[];
+  status?: NodeStatus;
   [key: string]: unknown;
 }
 
@@ -41,7 +42,7 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
   const outputs = data.ports.filter((p) => p.kind === "output");
 
   return (
-    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 150, fontSize: "12px" }}>
+    <NodeCard status={data.status ?? "pending"} selected={isSelected} style={{ minWidth: 150, fontSize: "12px" }}>
       {inputs.map((port, i) => (
         <PortRow
           key={`in-${port.name}`}

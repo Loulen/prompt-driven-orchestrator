@@ -12,6 +12,7 @@ interface MergeEditData {
   nodeId: string;
   inputSide: PortSide;
   outputSide: PortSide;
+  status?: NodeStatus;
   [key: string]: unknown;
 }
 
@@ -21,7 +22,7 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
   const isDropTarget = useIsDropTarget(id);
 
   return (
-    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
+    <NodeCard status={data.status ?? "pending"} selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
       <PortRow
         portName="branches"
         kind="input"

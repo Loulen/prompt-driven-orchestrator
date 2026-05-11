@@ -1,0 +1,29 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - complementary [ref=e14]:
+        - generic [ref=e15]:
+          - button [ref=e16] [cursor=pointer]:
+            - img [ref=e17]
+          - text: Runs
+          - button "New Run" [ref=e19] [cursor=pointer]:
+            - img [ref=e20]
+            - text: New Run
+        - generic [ref=e22]: No runs yet
+        - generic [ref=e23]:
+          - button [ref=e24] [cursor=pointer]:
+            - img [ref=e25]
+          - text: Library
+          - button "New pipeline" [ref=e27] [cursor=pointer]:
+            - img [ref=e28]
+        - generic [ref=e30]: No pipelines found
+      - separator [ref=e31]
+      - generic [ref=e34]: Select a run or open a pipeline to get started
+      - separator [ref=e35]
+  - contentinfo [ref=e38]:
+    - generic [ref=e39]: "Daemon: reconnecting…"
+    - generic [ref=e41]: v0.1.0

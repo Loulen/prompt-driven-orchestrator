@@ -19,6 +19,7 @@ interface SwitchEditData {
   nodeId: string;
   branches: SwitchBranch[];
   inputSide: PortSide;
+  status?: NodeStatus;
   [key: string]: unknown;
 }
 
@@ -28,7 +29,7 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
   const isDropTarget = useIsDropTarget(id);
 
   return (
-    <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
+    <NodeCard status={data.status ?? "pending"} selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
       <PortRow
         portName="in"
         kind="input"

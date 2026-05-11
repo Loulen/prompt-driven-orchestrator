@@ -289,6 +289,7 @@ export default function App() {
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
+                  runState={selectedRun}
                 />
               </div>
             ) : showRunDetail ? (

@@ -4,11 +4,11 @@ You are node `mWllKR47` in pipeline `simple-bugfix`, iteration 1.
 
 ## Inputs
 
-- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260510-054214-d067310/worktree/.maestro/artifacts/HmuRVQBx/iter-1/done.md`
+- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-082850-1b808c4/worktree/.maestro/artifacts/HmuRVQBx/iter-1/done.md`
 
 ## Outputs
 
-- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260510-054214-d067310/worktree/.maestro/artifacts/mWllKR47/iter-1/out.md`
+- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-082850-1b808c4/worktree/.maestro/artifacts/mWllKR47/iter-1/out.md`
 
 ## Completion
 

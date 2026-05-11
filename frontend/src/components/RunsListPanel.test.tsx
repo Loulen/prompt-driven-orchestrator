@@ -58,8 +58,8 @@ describe("RunsListPanel Library section", () => {
 
   it("renders starred pipeline template entries", () => {
     const pipelines: LibraryPipelineEntry[] = [
-      { id: "review-pipeline", name: "Review Pipeline", node_count: 5, modified: null },
-      { id: "deploy-pipeline", name: "Deploy Pipeline", node_count: 3, modified: null },
+      { id: "review-pipeline", name: "Review Pipeline", node_count: 5, modified: null, yaml: "" },
+      { id: "deploy-pipeline", name: "Deploy Pipeline", node_count: 3, modified: null, yaml: "" },
     ];
     renderPanel({ libraryPipelines: pipelines });
 

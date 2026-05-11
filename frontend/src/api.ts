@@ -354,6 +354,7 @@ export interface LibraryPipelineEntry {
   name: string;
   node_count: number;
   modified: string | null;
+  yaml: string;
 }
 
 export async function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {

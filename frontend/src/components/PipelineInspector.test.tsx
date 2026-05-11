@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import PipelineInspector from "./PipelineInspector";
-import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
@@ -14,9 +13,6 @@ vi.mock("../api", () => ({
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
-
-const mockSaveLib = vi.mocked(saveLibraryPipeline);
-const mockDeleteLib = vi.mocked(deleteLibraryPipeline);
 
 function seedTab() {
   useEditStore.setState({
@@ -79,48 +75,26 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("PipelineInspector star button", () => {
-  it("shows unfilled star when pipeline is not in library", () => {
+describe("PipelineInspector", () => {
+  // Inline star buttons were removed from PipelineInspector — the canvas-level
+  // PipelineStar is now the single source of truth (see PipelineStar.tsx).
+  it("renders identity and does not show any inline star", () => {
     seedTab();
     renderInspector([]);
 
-    const star = screen.getByTitle("Star as template");
-    expect(star).toBeInTheDocument();
+    expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument();
+    expect(screen.queryByTitle("Star as template")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Remove from library")).not.toBeInTheDocument();
   });
 
-  it("calls saveLibraryPipeline when star is clicked on unstarred pipeline", () => {
-    seedTab();
-    renderInspector([]);
-
-    fireEvent.click(screen.getByTitle("Star as template"));
-
-    expect(mockSaveLib).toHaveBeenCalledTimes(1);
-    const [name, yaml] = mockSaveLib.mock.calls[0];
-    expect(name).toBe("My Pipeline");
-    expect(yaml).toContain("name: My Pipeline");
-  });
-
-  it("shows filled star when pipeline is in library", () => {
+  it("does not show an inline star even when the pipeline is in the library", () => {
     seedTab();
     const starred: LibraryPipelineEntry[] = [
-      { id: "my-pipeline", name: "My Pipeline", node_count: 2, modified: null },
+      { id: "my-pipeline", name: "My Pipeline", node_count: 2, modified: null, yaml: "" },
     ];
     renderInspector(starred);
 
-    const star = screen.getByTitle("Remove from library");
-    expect(star).toBeInTheDocument();
-  });
-
-  it("calls deleteLibraryPipeline when star is clicked on starred pipeline", () => {
-    seedTab();
-    const starred: LibraryPipelineEntry[] = [
-      { id: "my-pipeline", name: "My Pipeline", node_count: 2, modified: null },
-    ];
-    renderInspector(starred);
-
-    fireEvent.click(screen.getByTitle("Remove from library"));
-
-    expect(mockDeleteLib).toHaveBeenCalledTimes(1);
-    expect(mockDeleteLib).toHaveBeenCalledWith("my-pipeline");
+    expect(screen.queryByTitle("Star as template")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Remove from library")).not.toBeInTheDocument();
   });
 });

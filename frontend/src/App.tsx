@@ -11,7 +11,10 @@ import DagCanvas from "./components/DagCanvas";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
 import ConflictModal from "./components/ConflictModal";
+import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
+import { computePipelineSyncState } from "./hooks/useLibraryPipelines";
+import { serializePipeline } from "./stores/editStore";
 import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
@@ -106,7 +109,16 @@ export default function App() {
   const editSave = useEditStore((s) => s.save);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
+  const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
+
+  // Track which library-YAML version we've already prompted about for a given
+  // run-scoped tab. Re-prompting only when the library changes again avoids
+  // nagging the user every time they switch back to the same run tab.
+  const promptedLibraryYamlRef = useRef<Map<string, string>>(new Map());
+  const [pipelineChangedPrompt, setPipelineChangedPrompt] = useState<
+    { tabId: string; libraryYaml: string; pipelineName: string } | null
+  >(null);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
   const editNodeType = editTab && selection.kind === "node" && selection.id
@@ -224,6 +236,48 @@ export default function App() {
     });
   }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines]);
 
+  // Detect: active tab is a run, library has the same pipeline name, and
+  // the library YAML diverges from the run snapshot. Show the modal once per
+  // (tabId, library-yaml) pair so re-entering an unchanged run is silent.
+  useEffect(() => {
+    if (!editTab || !editTab.runId) return;
+    const libEntry = libraryPipelines.find((lp) => lp.name === editTab.pipeline.name);
+    if (!libEntry) return;
+    const { state } = computePipelineSyncState(
+      serializePipeline(editTab.pipeline),
+      [libEntry],
+      editTab.pipeline.name,
+    );
+    if (state !== "diverged") return;
+    const last = promptedLibraryYamlRef.current.get(editTab.id);
+    if (last === libEntry.yaml) return;
+    setPipelineChangedPrompt({
+      tabId: editTab.id,
+      libraryYaml: libEntry.yaml,
+      pipelineName: editTab.pipeline.name,
+    });
+  }, [editTab, libraryPipelines]);
+
+  const handlePipelineChangedKeep = useCallback(() => {
+    if (!pipelineChangedPrompt) return;
+    promptedLibraryYamlRef.current.set(
+      pipelineChangedPrompt.tabId,
+      pipelineChangedPrompt.libraryYaml,
+    );
+    setPipelineChangedPrompt(null);
+  }, [pipelineChangedPrompt]);
+
+  const handlePipelineChangedReload = useCallback(async () => {
+    if (!pipelineChangedPrompt) return;
+    promptedLibraryYamlRef.current.set(
+      pipelineChangedPrompt.tabId,
+      pipelineChangedPrompt.libraryYaml,
+    );
+    const { tabId, libraryYaml } = pipelineChangedPrompt;
+    setPipelineChangedPrompt(null);
+    await reloadFromLibrary(tabId, libraryYaml);
+  }, [pipelineChangedPrompt, reloadFromLibrary]);
+
   const selectedNode =
     selectedNodeId && selectedRun
       ? selectedRun.nodes[selectedNodeId] ?? null
@@ -281,11 +335,13 @@ export default function App() {
                 <TabBar />
                 <EditCanvas
                   libraryEntries={libraryEntries}
+                  libraryPipelines={libraryPipelines}
                   onLibraryDelete={async (name) => {
                     const { deleteFromLibrary: delLib } = await import("./api");
                     await delLib(name);
                     refreshLibrary();
                   }}
+                  onLibraryPipelinesChanged={refreshLibraryPipelines}
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
@@ -406,6 +462,12 @@ export default function App() {
         onTake={() => {
           if (conflictTab) resolveConflict(conflictTab.id, "take");
         }}
+      />
+      <PipelineChangedModal
+        open={pipelineChangedPrompt != null}
+        pipelineName={pipelineChangedPrompt?.pipelineName ?? ""}
+        onKeep={handlePipelineChangedKeep}
+        onReload={handlePipelineChangedReload}
       />
       <SaveErrorModal
         open={saveErrorTab != null}

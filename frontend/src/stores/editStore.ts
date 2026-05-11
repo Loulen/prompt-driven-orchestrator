@@ -84,6 +84,11 @@ interface EditState {
   // Hot-reload
   reloadPipeline: (id: string) => Promise<void>;
   resolveConflict: (id: string, resolution: "keep" | "take") => void;
+
+  // Library pipeline sync — overwrite this tab's pipeline with the library
+  // YAML and re-fetch the parsed form. Used by the "Reload changes" action
+  // when a run's snapshot has diverged from its library template.
+  reloadFromLibrary: (tabId: string, libraryYaml: string) => Promise<void>;
 }
 
 export function serializePipeline(p: PipelineDef): string {
@@ -573,5 +578,59 @@ export const useEditStore = create<EditState>((set, get) => ({
         };
       }),
     }));
+  },
+
+  reloadFromLibrary: async (tabId: string, libraryYaml: string) => {
+    const tab = get().openTabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    try {
+      if (tab.runId) {
+        await saveRunPipeline(tab.runId, libraryYaml, tab.prompts);
+        const detail = await fetchRunPipeline(tab.runId);
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  pipeline: detail.pipeline,
+                  prompts: detail.prompts,
+                  diagnostics: detail.diagnostics ?? [],
+                  dirty: false,
+                  saveError: undefined,
+                }
+              : t,
+          ),
+          lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
+        }));
+      } else {
+        await savePipeline(tabId, libraryYaml, tab.prompts);
+        const detail = await fetchPipeline(tabId);
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  pipeline: detail.pipeline,
+                  prompts: detail.prompts,
+                  diagnostics: detail.diagnostics ?? [],
+                  dirty: false,
+                  saveError: undefined,
+                }
+              : t,
+          ),
+          lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
+        }));
+      }
+    } catch (err: unknown) {
+      const raw = err as Record<string, unknown> | null;
+      const message =
+        typeof raw?.message === "string" ? raw.message : "Reload failed";
+      const line = typeof raw?.line === "number" ? raw.line : undefined;
+      set((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === tabId ? { ...t, saveError: { message, line } } : t,
+        ),
+      }));
+    }
   },
 }));

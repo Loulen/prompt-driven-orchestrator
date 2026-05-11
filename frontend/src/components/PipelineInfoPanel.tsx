@@ -1,9 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Star, Info, Terminal, X, FileText, Code } from "lucide-react";
-import { Tooltip } from "./ui/tooltip";
+import { Info, Terminal, X, FileText, Code } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
-import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { serializePipeline } from "../stores/editStore";
@@ -33,8 +31,8 @@ const STATUS_DOT: Record<string, string> = {
 export default function PipelineInfoPanel({
   run,
   pipeline,
-  libraryPipelines,
-  onLibraryChanged,
+  libraryPipelines: _libraryPipelines,
+  onLibraryChanged: _onLibraryChanged,
   onClose,
   initialTab,
   scrollToLine,
@@ -43,9 +41,6 @@ export default function PipelineInfoPanel({
   const variables = pipeline?.variables ?? {};
   const variableEntries = Object.entries(variables);
   const managerSession = run ? `maestro-mgr-${run.run_id}` : null;
-
-  const starredEntry = libraryPipelines.find((lp) => lp.name === pipelineName);
-  const isStarred = !!starredEntry;
 
   const hasManager = !!managerSession;
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "info");
@@ -105,9 +100,6 @@ export default function PipelineInfoPanel({
           pipeline={pipeline}
           pipelineName={pipelineName}
           variables={variableEntries}
-          isStarred={isStarred}
-          starredId={starredEntry?.id ?? null}
-          onLibraryChanged={onLibraryChanged}
         />
       )}
 
@@ -148,17 +140,11 @@ function InfoTab({
   pipeline,
   pipelineName,
   variables,
-  isStarred,
-  starredId,
-  onLibraryChanged,
 }: {
   run: RunState | null;
   pipeline: PipelineDef | null;
   pipelineName: string;
   variables: [string, { default: unknown }][];
-  isStarred: boolean;
-  starredId: string | null;
-  onLibraryChanged: () => void;
 }) {
   return (
     <>
@@ -180,13 +166,6 @@ function InfoTab({
               {run ? `run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}` : `template · ${pipeline?.version ?? "v1"}`}
             </div>
           </div>
-          <InfoPanelStarButton
-            isStarred={isStarred}
-            starredId={starredId}
-            pipelineName={pipelineName}
-            pipeline={pipeline}
-            onLibraryChanged={onLibraryChanged}
-          />
         </div>
 
         {variables.length > 0 && (
@@ -346,60 +325,6 @@ function highlightValue(value: string): React.ReactNode {
   }
 
   return <>{leading}<span className="text-fg-2">{trimmed}</span></>;
-}
-
-function InfoPanelStarButton({
-  isStarred,
-  starredId,
-  pipelineName,
-  pipeline,
-  onLibraryChanged,
-}: {
-  isStarred: boolean;
-  starredId: string | null;
-  pipelineName: string;
-  pipeline: PipelineDef | null;
-  onLibraryChanged: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-
-  async function handleToggle() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      if (isStarred && starredId) {
-        await deleteLibraryPipeline(starredId);
-      } else if (pipeline) {
-        const yaml = serializePipeline(pipeline);
-        await saveLibraryPipeline(pipelineName, yaml);
-      }
-      onLibraryChanged();
-    } catch {
-      // ignore — endpoint may not be available yet (#58)
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const tooltip = isStarred ? "Remove from library" : "Star as template";
-
-  return (
-    <Tooltip content={tooltip}>
-      <button
-        onClick={handleToggle}
-        disabled={busy}
-        className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded transition-colors hover:bg-bg-3 disabled:opacity-50"
-        data-testid="info-panel-star"
-      >
-        <Star
-          size={14}
-          className={
-            isStarred ? "fill-acc text-acc" : "fill-none text-fg-4"
-          }
-        />
-      </button>
-    </Tooltip>
-  );
 }
 
 function formatVariableValue(value: unknown): string {

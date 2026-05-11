@@ -13,7 +13,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { NodeDef, NodeStatus, NodeType, PipelineDef, PortBrief, RunState } from "../types";
-import type { LibraryEntry } from "../api";
+import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { deriveEditNodes } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
@@ -28,6 +28,8 @@ import EditToolbar from "./EditToolbar";
 import LintBanner from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
+import PipelineStar from "./PipelineStar";
+import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
 
 interface EditNodeData {
   label: string;
@@ -142,14 +144,16 @@ function deriveEditEdges(pipeline: PipelineDef): Edge[] {
 
 interface EditCanvasProps {
   libraryEntries: LibraryEntry[];
+  libraryPipelines: LibraryPipelineEntry[];
   onLibraryDelete: (name: string) => void;
+  onLibraryPipelinesChanged: () => void;
   infoOpen?: boolean;
   onToggleInfo?: () => void;
   onCloseInfo?: () => void;
   runState?: RunState | null;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, runState }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, runState }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -183,6 +187,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // or a different run) every node stays "pending".
   const activeRunState =
     tab?.runId && runState && tab.runId === runState.run_id ? runState : null;
+
+  const pipelineSync = usePipelineLibraryState(pipeline ?? null, libraryPipelines);
 
   const derivedNodes = useMemo(
     () => (pipeline ? deriveEditNodes(pipeline, activeRunState) : []),
@@ -357,6 +363,20 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
       />
+      {pipeline && tab && (
+        <div
+          className="absolute right-3 top-2 z-10"
+          data-testid="canvas-pipeline-star-container"
+        >
+          <PipelineStar
+            tabId={tab.id}
+            pipeline={pipeline}
+            syncState={pipelineSync.state}
+            libraryEntry={pipelineSync.entry}
+            onLibraryChanged={onLibraryPipelinesChanged}
+          />
+        </div>
+      )}
       {diagnostics.length > 0 && (
         <div className="absolute left-0 right-0 top-10 z-10">
           <LintBanner diagnostics={diagnostics} />

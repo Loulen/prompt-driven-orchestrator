@@ -232,6 +232,7 @@ pub mod pipelines {
         pub name: String,
         pub node_count: usize,
         pub modified: Option<String>,
+        pub yaml: String,
     }
 
     pub fn list() -> Vec<PipelineLibraryEntry> {
@@ -271,6 +272,7 @@ pub mod pipelines {
                 name: parsed.pipeline.name.clone(),
                 node_count: parsed.pipeline.nodes.len(),
                 modified,
+                yaml: contents,
             });
         }
         entries.sort_by_key(|a| a.name.to_lowercase());
@@ -588,6 +590,7 @@ mod tests {
             assert_eq!(all[0].id, "review-pipeline");
             assert_eq!(all[0].name, "Review Pipeline");
             assert_eq!(all[0].node_count, 3);
+            assert_eq!(all[0].yaml, yaml);
 
             let got = pipelines::get_yaml("review-pipeline").unwrap();
             assert_eq!(got, yaml);

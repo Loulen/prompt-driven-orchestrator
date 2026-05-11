@@ -1057,10 +1057,12 @@ async fn list_library_pipelines() -> Response {
 struct SaveLibraryPipelineRequest {
     name: String,
     yaml: String,
+    #[serde(default)]
+    prompts: HashMap<String, String>,
 }
 
 async fn save_library_pipeline(Json(req): Json<SaveLibraryPipelineRequest>) -> Response {
-    match library_store::pipelines::save(&req.name, &req.yaml) {
+    match library_store::pipelines::save(&req.name, &req.yaml, &req.prompts) {
         Ok(id) => {
             let entry_list = library_store::pipelines::list();
             let entry = entry_list.into_iter().find(|e| e.id == id);

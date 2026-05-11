@@ -94,6 +94,33 @@ describe("PipelineStar", () => {
     expect(yaml).toContain("name: My Pipeline");
   });
 
+  it("forwards the current tab's node prompts so library entries can spawn live runs", () => {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "p1",
+          scope: "repo",
+          pipeline: PIPELINE,
+          prompts: { start: "Kick things off.", end: "Wrap things up." },
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "p1",
+    });
+
+    renderStar({ syncState: "outline", libraryEntry: null });
+    fireEvent.click(screen.getByTestId("pipeline-star"));
+
+    expect(mockSaveLib).toHaveBeenCalledTimes(1);
+    const [, , prompts] = mockSaveLib.mock.calls[0];
+    expect(prompts).toEqual({
+      start: "Kick things off.",
+      end: "Wrap things up.",
+    });
+  });
+
   it("synced state: click opens popover with Remove option only", () => {
     renderStar({ syncState: "synced", libraryEntry: libEntry() });
 

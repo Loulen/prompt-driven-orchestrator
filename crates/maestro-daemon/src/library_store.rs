@@ -198,6 +198,7 @@ pub fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
 }
 
 pub mod pipelines {
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     use serde::{Deserialize, Serialize};
@@ -295,7 +296,11 @@ pub mod pipelines {
         }
     }
 
-    pub fn save(name: &str, yaml: &str) -> Result<String, String> {
+    pub fn save(
+        name: &str,
+        yaml: &str,
+        prompts: &HashMap<String, String>,
+    ) -> Result<String, String> {
         let dir = pipelines_dir().ok_or("HOME not set")?;
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("failed to create library pipelines dir: {e}"))?;
@@ -305,14 +310,37 @@ pub mod pipelines {
         let id = slugify(name);
         let path = dir.join(format!("{id}.yaml"));
         std::fs::write(&path, yaml).map_err(|e| format!("write error: {e}"))?;
+
+        let prompts_dir = dir.join(format!("{id}.prompts"));
+        // Drop a stale prompts dir wholesale so renamed/removed nodes don't leave files
+        // behind that would spawn dead role prompts on next run.
+        if prompts_dir.exists() {
+            std::fs::remove_dir_all(&prompts_dir)
+                .map_err(|e| format!("failed to clear prompts dir: {e}"))?;
+        }
+        if !prompts.is_empty() {
+            std::fs::create_dir_all(&prompts_dir)
+                .map_err(|e| format!("failed to create prompts dir: {e}"))?;
+            for (node_id, content) in prompts {
+                let prompt_path = prompts_dir.join(format!("{node_id}.md"));
+                std::fs::write(&prompt_path, content)
+                    .map_err(|e| format!("failed to write prompt {node_id}: {e}"))?;
+            }
+        }
+
         Ok(id)
     }
 
     pub fn delete(id: &str) -> Result<bool, String> {
         let dir = pipelines_dir().ok_or("HOME not set")?;
         let path = dir.join(format!("{id}.yaml"));
+        let prompts_dir = dir.join(format!("{id}.prompts"));
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| format!("delete error: {e}"))?;
+            if prompts_dir.exists() {
+                std::fs::remove_dir_all(&prompts_dir)
+                    .map_err(|e| format!("delete prompts error: {e}"))?;
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -582,7 +610,7 @@ mod tests {
     fn pipeline_library_crud_round_trip() {
         with_temp_home(|| {
             let yaml = sample_pipeline_yaml("Review Pipeline");
-            let id = pipelines::save("Review Pipeline", &yaml).unwrap();
+            let id = pipelines::save("Review Pipeline", &yaml, &HashMap::new()).unwrap();
             assert_eq!(id, "review-pipeline");
 
             let all = pipelines::list();
@@ -614,7 +642,7 @@ mod tests {
     #[test]
     fn pipeline_library_save_invalid_yaml_errors() {
         with_temp_home(|| {
-            let result = pipelines::save("Bad", "not: valid: yaml: [[[");
+            let result = pipelines::save("Bad", "not: valid: yaml: [[[", &HashMap::new());
             assert!(result.is_err());
         });
     }
@@ -624,8 +652,8 @@ mod tests {
         with_temp_home(|| {
             let yaml1 = sample_pipeline_yaml("My Pipeline");
             let yaml2 = sample_pipeline_yaml("My Pipeline v2");
-            pipelines::save("My Pipeline", &yaml1).unwrap();
-            pipelines::save("My Pipeline", &yaml2).unwrap();
+            pipelines::save("My Pipeline", &yaml1, &HashMap::new()).unwrap();
+            pipelines::save("My Pipeline", &yaml2, &HashMap::new()).unwrap();
 
             let got = pipelines::get_yaml("my-pipeline").unwrap();
             assert!(got.contains("My Pipeline v2"));
@@ -638,7 +666,7 @@ mod tests {
         with_temp_home(|| {
             for name in ["Zebra Pipeline", "Alpha Pipeline", "middle pipeline"] {
                 let yaml = sample_pipeline_yaml(name);
-                pipelines::save(name, &yaml).unwrap();
+                pipelines::save(name, &yaml, &HashMap::new()).unwrap();
             }
 
             let names: Vec<String> = pipelines::list().into_iter().map(|e| e.name).collect();
@@ -657,7 +685,7 @@ mod tests {
             save(&entry).unwrap();
 
             let yaml = sample_pipeline_yaml("My Pipeline");
-            pipelines::save("My Pipeline", &yaml).unwrap();
+            pipelines::save("My Pipeline", &yaml, &HashMap::new()).unwrap();
 
             assert_eq!(list().len(), 1);
             assert_eq!(list()[0].name, "Worker");
@@ -807,7 +835,7 @@ mod tests {
     fn pipeline_library_get_path() {
         with_temp_home(|| {
             let yaml = sample_pipeline_yaml("Test Path");
-            pipelines::save("Test Path", &yaml).unwrap();
+            pipelines::save("Test Path", &yaml, &HashMap::new()).unwrap();
 
             let path = pipelines::get_path("test-path").unwrap();
             assert!(path.exists());
@@ -817,6 +845,73 @@ mod tests {
                 .contains("library/pipelines/test-path.yaml"));
 
             assert!(pipelines::get_path("nonexistent").is_none());
+        });
+    }
+
+    #[test]
+    fn pipeline_library_save_writes_prompts_dir() {
+        with_temp_home(|| {
+            let yaml = sample_pipeline_yaml("Promptful");
+            let mut prompts = HashMap::new();
+            prompts.insert("planner".to_string(), "You are a planner.".to_string());
+            prompts.insert("end".to_string(), "Wrap up.".to_string());
+
+            let id = pipelines::save("Promptful", &yaml, &prompts).unwrap();
+            assert_eq!(id, "promptful");
+
+            let dir = library_dir().unwrap().join("pipelines");
+            let prompts_dir = dir.join("promptful.prompts");
+            assert!(prompts_dir.is_dir());
+            assert_eq!(
+                std::fs::read_to_string(prompts_dir.join("planner.md")).unwrap(),
+                "You are a planner."
+            );
+            assert_eq!(
+                std::fs::read_to_string(prompts_dir.join("end.md")).unwrap(),
+                "Wrap up."
+            );
+        });
+    }
+
+    #[test]
+    fn pipeline_library_save_replaces_prompts_dir() {
+        with_temp_home(|| {
+            let yaml = sample_pipeline_yaml("Promptful");
+            let mut p1 = HashMap::new();
+            p1.insert("planner".to_string(), "v1".to_string());
+            p1.insert("ghost".to_string(), "removed-soon".to_string());
+            pipelines::save("Promptful", &yaml, &p1).unwrap();
+
+            let mut p2 = HashMap::new();
+            p2.insert("planner".to_string(), "v2".to_string());
+            pipelines::save("Promptful", &yaml, &p2).unwrap();
+
+            let dir = library_dir().unwrap().join("pipelines");
+            let prompts_dir = dir.join("promptful.prompts");
+            assert_eq!(
+                std::fs::read_to_string(prompts_dir.join("planner.md")).unwrap(),
+                "v2"
+            );
+            // The node removed from the second save must not linger on disk; otherwise it
+            // would still be materialised into future run worktrees as a dead prompt file.
+            assert!(!prompts_dir.join("ghost.md").exists());
+        });
+    }
+
+    #[test]
+    fn pipeline_library_delete_removes_prompts_dir() {
+        with_temp_home(|| {
+            let yaml = sample_pipeline_yaml("Promptful");
+            let mut prompts = HashMap::new();
+            prompts.insert("planner".to_string(), "p".to_string());
+            pipelines::save("Promptful", &yaml, &prompts).unwrap();
+
+            let dir = library_dir().unwrap().join("pipelines");
+            assert!(dir.join("promptful.prompts").is_dir());
+
+            assert!(pipelines::delete("promptful").unwrap());
+            assert!(!dir.join("promptful.yaml").exists());
+            assert!(!dir.join("promptful.prompts").exists());
         });
     }
 }

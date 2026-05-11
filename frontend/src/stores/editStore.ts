@@ -5,7 +5,16 @@ import type {
   NodeDef,
   EdgeDef,
 } from "../types";
-import { fetchPipeline, fetchPipelines, savePipeline, fetchRunPipeline, saveRunPipeline, deletePipeline as apiDeletePipeline } from "../api";
+import type { LibraryPipelineScope } from "../api";
+import {
+  fetchPipeline,
+  fetchPipelines,
+  savePipeline,
+  fetchRunPipeline,
+  saveRunPipeline,
+  deletePipeline as apiDeletePipeline,
+  saveLibraryPipeline,
+} from "../api";
 import { generateNodeId } from "../lib/nanoid";
 
 export type SelectionKind = "node" | "none";
@@ -37,6 +46,13 @@ export interface OpenPipeline {
   runId?: string;
   conflict?: ConflictData;
   saveError?: SaveErrorData;
+  // Stable id of the library entry this tab is mirroring. Locked once known
+  // (either by name-matching at open time or by the response of `Save to
+  // library`). Renaming the pipeline does NOT clear this — it's the whole
+  // point of tracking it: a renamed-then-saved pipeline stays the same library
+  // entry on disk.
+  libraryId?: string | null;
+  libraryScope?: LibraryPipelineScope | null;
 }
 
 interface EditState {
@@ -89,6 +105,16 @@ interface EditState {
   // YAML and re-fetch the parsed form. Used by the "Reload changes" action
   // when a run's snapshot has diverged from its library template.
   reloadFromLibrary: (tabId: string, libraryYaml: string) => Promise<void>;
+
+  // Library binding — record that a tab corresponds to a library entry. Locking
+  // happens once (the first time a name match is found, OR right after a star
+  // click that creates the entry). After that, renames on the canvas no longer
+  // detach the star.
+  setLibraryBinding: (
+    tabId: string,
+    libraryId: string | null,
+    libraryScope: LibraryPipelineScope | null,
+  ) => void;
 }
 
 export function serializePipeline(p: PipelineDef): string {
@@ -298,6 +324,8 @@ export const useEditStore = create<EditState>((set, get) => ({
         diagnostics: detail.diagnostics ?? [],
         dirty: false,
         externalDirty: false,
+        libraryId: null,
+        libraryScope: null,
       };
       set((s) => ({
         openTabs: [...s.openTabs, tab],
@@ -327,6 +355,8 @@ export const useEditStore = create<EditState>((set, get) => ({
         dirty: false,
         externalDirty: false,
         runId,
+        libraryId: null,
+        libraryScope: null,
       };
       set((s) => ({
         openTabs: [...s.openTabs, tab],
@@ -481,6 +511,26 @@ export const useEditStore = create<EditState>((set, get) => ({
       } else {
         await savePipeline(id, yaml, tab.prompts);
       }
+      // Mirror the save into the library entry when this tab is starred, so
+      // renames-then-Save propagate to the library file (without orphaning the
+      // previous entry under the old slug — `libraryId` keeps the file stable).
+      if (tab.libraryId) {
+        try {
+          await saveLibraryPipeline(
+            tab.pipeline.name,
+            yaml,
+            tab.prompts,
+            {
+              id: tab.libraryId,
+              ...(tab.libraryScope ? { scope: tab.libraryScope } : {}),
+            },
+          );
+        } catch {
+          // Non-fatal: the primary pipeline write succeeded. The library entry
+          // will diverge until the next manual sync, but the user's primary
+          // edit is safe on disk.
+        }
+      }
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
@@ -577,6 +627,14 @@ export const useEditStore = create<EditState>((set, get) => ({
           conflict: undefined,
         };
       }),
+    }));
+  },
+
+  setLibraryBinding: (tabId, libraryId, libraryScope) => {
+    set((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === tabId ? { ...t, libraryId, libraryScope } : t,
+      ),
     }));
   },
 

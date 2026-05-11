@@ -20,12 +20,18 @@ export function normalizePipelineYaml(yaml: string): string {
     .join("\n");
 }
 
+/// Look up a library entry first by stable id (preferred — survives renames),
+/// then by name as a fallback for the first time a tab encounters its library
+/// twin. Callers should lock-in the resolved id on the tab so future renames
+/// don't fall back to the (now-mismatching) name path.
 export function computePipelineSyncState(
   pipelineYaml: string,
   entries: LibraryPipelineEntry[],
   pipelineName: string,
+  libraryId?: string | null,
 ): { state: PipelineLibrarySyncState; entry: LibraryPipelineEntry | null } {
-  const entry = entries.find((e) => e.name === pipelineName) ?? null;
+  const byId = libraryId ? entries.find((e) => e.id === libraryId) ?? null : null;
+  const entry = byId ?? entries.find((e) => e.name === pipelineName) ?? null;
   if (!entry) return { state: "outline", entry: null };
   if (normalizePipelineYaml(pipelineYaml) === normalizePipelineYaml(entry.yaml)) {
     return { state: "synced", entry };
@@ -36,12 +42,13 @@ export function computePipelineSyncState(
 export function usePipelineLibraryState(
   pipeline: PipelineDef | null,
   entries: LibraryPipelineEntry[],
+  libraryId?: string | null,
 ): { state: PipelineLibrarySyncState; entry: LibraryPipelineEntry | null } {
   return useMemo(() => {
     if (!pipeline) return { state: "outline", entry: null };
     const yaml = serializePipeline(pipeline);
-    return computePipelineSyncState(yaml, entries, pipeline.name);
-  }, [pipeline, entries]);
+    return computePipelineSyncState(yaml, entries, pipeline.name, libraryId);
+  }, [pipeline, entries, libraryId]);
 }
 
 export function useLibraryPipelines() {

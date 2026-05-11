@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Star, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import type { RunListEntry, RunStatus, PipelineListEntry, PipelineScope } from "../types";
-import { cleanupRun, createPipeline, forgetRun } from "../api";
+import type { LibraryPipelineEntry } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, forgetRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
@@ -26,6 +27,8 @@ interface Props {
   selectedRunId: string | null;
   onSelectRun: (runId: string) => void;
   onNewRun: () => void;
+  libraryPipelines: LibraryPipelineEntry[];
+  onLibraryPipelinesChanged: () => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -33,6 +36,8 @@ export default function UnifiedLeftPanel({
   selectedRunId,
   onSelectRun,
   onNewRun,
+  libraryPipelines,
+  onLibraryPipelinesChanged,
 }: Props) {
   const [confirmCleanup, setConfirmCleanup] = useState<
     { runId: string; status: RunStatus } | null
@@ -206,7 +211,7 @@ export default function UnifiedLeftPanel({
 
       {libraryExpanded && (
         <div className="flex-1 overflow-y-auto">
-          {pipelines.length === 0 && (
+          {pipelines.length === 0 && libraryPipelines.length === 0 && (
             <div
               className="px-3 py-4 text-center text-fg-4"
               style={{ fontSize: "11px" }}
@@ -217,6 +222,11 @@ export default function UnifiedLeftPanel({
           {pipelines.map((p) => {
             const badge = SCOPE_BADGE[p.scope];
             const isSelected = p.id === activeTabId;
+            // A pipeline counts as "starred" when a library entry exists with
+            // the same name. This is the visible link the user expects when
+            // they click the canvas star: their pipeline gets a star badge
+            // here, confirming the action had effect.
+            const starred = libraryPipelines.some((lp) => lp.name === p.name);
             return (
               <button
                 key={`${p.scope}-${p.id}`}
@@ -227,7 +237,16 @@ export default function UnifiedLeftPanel({
                 style={{ fontSize: "11.5px" }}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">{p.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    {starred && (
+                      <Star
+                        size={10}
+                        className="shrink-0 fill-acc text-acc"
+                        data-testid="left-panel-star"
+                      />
+                    )}
+                    <span className="truncate font-medium">{p.name}</span>
+                  </div>
                   <div
                     className="mt-0.5 flex items-center gap-1.5 text-fg-4"
                     style={{ fontSize: "10px" }}
@@ -258,6 +277,61 @@ export default function UnifiedLeftPanel({
               </button>
             );
           })}
+          {/* Library-only entries (no matching name in /pipelines). These
+              previously only showed up in the New Run dropdown — surfacing
+              them here means starring a brand-new pipeline yields a visible
+              entry in the sidebar, matching the user's mental model that
+              starred == in the library. */}
+          {libraryPipelines
+            .filter((lp) => !pipelines.some((p) => p.name === lp.name))
+            .map((lp) => (
+              <div
+                key={`lib-only-${lp.scope}-${lp.id}`}
+                className="group flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left text-fg-2 transition-colors hover:bg-bg-3/50"
+                style={{ fontSize: "11.5px" }}
+                data-testid="library-only-entry"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <Star
+                      size={10}
+                      className="shrink-0 fill-acc text-acc"
+                      data-testid="left-panel-star"
+                    />
+                    <span className="truncate font-medium">{lp.name}</span>
+                  </div>
+                  <div
+                    className="mt-0.5 flex items-center gap-1.5 text-fg-4"
+                    style={{ fontSize: "10px" }}
+                  >
+                    <span>{lp.node_count} nodes</span>
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 rounded border px-1 py-px group-hover:hidden ${SCOPE_BADGE[lp.scope].cls}`}
+                  style={{ fontSize: "9px", fontWeight: 500 }}
+                >
+                  {SCOPE_BADGE[lp.scope].label}
+                </span>
+                <span
+                  className="hidden shrink-0 group-hover:inline-flex"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      await deleteLibraryPipeline(lp.id);
+                      onLibraryPipelinesChanged();
+                    } catch { /* ignore */ }
+                  }}
+                  role="button"
+                  title="Remove from library"
+                >
+                  <Trash2
+                    size={14}
+                    className="text-fg-4 transition-colors hover:text-st-failed"
+                  />
+                </span>
+              </div>
+            ))}
         </div>
       )}
 

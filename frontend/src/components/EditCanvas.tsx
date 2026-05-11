@@ -190,7 +190,23 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const activeRunState =
     tab?.runId && runState && tab.runId === runState.run_id ? runState : null;
 
-  const pipelineSync = usePipelineLibraryState(pipeline ?? null, libraryPipelines);
+  const pipelineSync = usePipelineLibraryState(
+    pipeline ?? null,
+    libraryPipelines,
+    tab?.libraryId ?? null,
+  );
+  const setLibraryBinding = useEditStore((s) => s.setLibraryBinding);
+
+  // Lock the library binding once we've identified a match by name. This makes
+  // future renames non-destructive: even though `pipelineSync.entry` will keep
+  // resolving via libraryId, the canvas-side name can drift freely until the
+  // user saves, at which point the library file is updated in place.
+  useEffect(() => {
+    if (!tab) return;
+    if (tab.libraryId) return;
+    if (!pipelineSync.entry) return;
+    setLibraryBinding(tab.id, pipelineSync.entry.id, pipelineSync.entry.scope);
+  }, [tab, pipelineSync.entry, setLibraryBinding]);
 
   const derivedNodes = useMemo(
     () => (pipeline ? deriveEditNodes(pipeline, activeRunState) : []),

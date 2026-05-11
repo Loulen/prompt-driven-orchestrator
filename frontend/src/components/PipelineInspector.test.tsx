@@ -8,13 +8,13 @@ import { TooltipProvider } from "./ui/tooltip";
 vi.mock("../api", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
-  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline" }),
+  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
 
-function seedTab() {
+function seedTab(libraryBinding?: { id: string | null; scope: "repo" | "user" | null }) {
   useEditStore.setState({
     openTabs: [
       {
@@ -53,6 +53,8 @@ function seedTab() {
         diagnostics: [],
         dirty: false,
         externalDirty: false,
+        libraryId: libraryBinding?.id ?? null,
+        libraryScope: libraryBinding?.scope ?? null,
       },
     ],
     activeTabId: "p1",
@@ -88,13 +90,36 @@ describe("PipelineInspector", () => {
   });
 
   it("does not show an inline star even when the pipeline is in the library", () => {
-    seedTab();
+    seedTab({ id: "my-pipeline", scope: "repo" });
     const starred: LibraryPipelineEntry[] = [
-      { id: "my-pipeline", name: "My Pipeline", node_count: 2, modified: null, yaml: "" },
+      { id: "my-pipeline", name: "My Pipeline", scope: "repo", node_count: 2, modified: null, yaml: "" },
     ];
     renderInspector(starred);
 
     expect(screen.queryByTitle("Star as template")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Remove from library")).not.toBeInTheDocument();
+  });
+
+  it("shows a scope toggle only when the pipeline is in the library", () => {
+    seedTab();
+    const { rerender } = renderInspector([]);
+    expect(screen.queryByTestId("pipeline-inspector-scope")).not.toBeInTheDocument();
+
+    seedTab({ id: "my-pipeline", scope: "repo" });
+    rerender(
+      <TooltipProvider>
+        <PipelineInspector
+          libraryPipelines={[
+            { id: "my-pipeline", name: "My Pipeline", scope: "repo", node_count: 2, modified: null, yaml: "" },
+          ]}
+          onLibraryChanged={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("pipeline-inspector-scope")).toBeInTheDocument();
+    // The currently-selected scope renders with the acc-coloured outline; the
+    // other option is still visible so the user can flip.
+    expect(screen.getByTestId("pipeline-inspector-scope-repo")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-inspector-scope-user")).toBeInTheDocument();
   });
 });

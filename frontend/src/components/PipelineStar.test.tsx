@@ -10,7 +10,7 @@ import { TooltipProvider } from "./ui/tooltip";
 vi.mock("../api", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
-  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline" }),
+  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
   savePipeline: vi.fn().mockResolvedValue(undefined),
@@ -54,18 +54,19 @@ const PIPELINE: PipelineDef = {
 };
 
 function libEntry(yaml = ""): LibraryPipelineEntry {
-  return { id: "my-pipeline", name: "My Pipeline", node_count: 2, modified: null, yaml };
+  return { id: "my-pipeline", name: "My Pipeline", scope: "repo", node_count: 2, modified: null, yaml };
 }
 
 function renderStar(props: {
   syncState: "outline" | "synced" | "diverged";
   libraryEntry: LibraryPipelineEntry | null;
+  pipeline?: PipelineDef;
 }) {
   return render(
     <TooltipProvider>
       <PipelineStar
         tabId="p1"
-        pipeline={PIPELINE}
+        pipeline={props.pipeline ?? PIPELINE}
         syncState={props.syncState}
         libraryEntry={props.libraryEntry}
         onLibraryChanged={() => {}}
@@ -80,7 +81,7 @@ beforeEach(() => {
 });
 
 describe("PipelineStar", () => {
-  it("outline state: click saves to library directly without popover", () => {
+  it("outline state: click saves to library directly without popover, defaults to repo scope", () => {
     renderStar({ syncState: "outline", libraryEntry: null });
 
     expect(screen.queryByTestId("pipeline-star-popover")).not.toBeInTheDocument();
@@ -89,9 +90,14 @@ describe("PipelineStar", () => {
     fireEvent.click(screen.getByTestId("pipeline-star"));
 
     expect(mockSaveLib).toHaveBeenCalledTimes(1);
-    const [name, yaml] = mockSaveLib.mock.calls[0];
+    const [name, yaml, , options] = mockSaveLib.mock.calls[0];
     expect(name).toBe("My Pipeline");
     expect(yaml).toContain("name: My Pipeline");
+    // Default scope for fresh stars is repo — the user is in a concrete repo
+    // so the most useful default is to commit the template there.
+    expect(options?.scope).toBe("repo");
+    // No libraryId yet — fresh star.
+    expect(options?.id).toBeUndefined();
   });
 
   it("forwards the current tab's node prompts so library entries can spawn live runs", () => {
@@ -105,6 +111,8 @@ describe("PipelineStar", () => {
           diagnostics: [],
           dirty: false,
           externalDirty: false,
+          libraryId: null,
+          libraryScope: null,
         },
       ],
       activeTabId: "p1",
@@ -160,9 +168,49 @@ describe("PipelineStar", () => {
     fireEvent.click(screen.getByText("Update library entry"));
 
     expect(mockSaveLib).toHaveBeenCalledTimes(1);
-    const [name, yaml] = mockSaveLib.mock.calls[0];
+    const [name, yaml, , options] = mockSaveLib.mock.calls[0];
     expect(name).toBe("My Pipeline");
     expect(yaml).toContain("name: My Pipeline");
     expect(yaml).not.toBe("stale yaml");
+    // Updating a known library entry must include its id, otherwise the
+    // daemon would derive a new slug from `name` and orphan the old file.
+    expect(options?.id).toBe("my-pipeline");
+    expect(options?.scope).toBe("repo");
+  });
+
+  it("rename + update: still saves under the locked libraryId, not the new name's slug", () => {
+    // Tab has already locked onto library id "my-pipeline"; the on-canvas name
+    // has been renamed to "Renamed Pipeline". A diverged-state Update Library
+    // entry must keep using the locked id so the file is overwritten in place
+    // rather than producing a second `renamed-pipeline.yaml`.
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "p1",
+          scope: "repo",
+          pipeline: { ...PIPELINE, name: "Renamed Pipeline" },
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          libraryId: "my-pipeline",
+          libraryScope: "repo",
+        },
+      ],
+      activeTabId: "p1",
+    });
+
+    renderStar({
+      syncState: "diverged",
+      libraryEntry: libEntry("stale yaml"),
+      pipeline: { ...PIPELINE, name: "Renamed Pipeline" },
+    });
+    fireEvent.click(screen.getByTestId("pipeline-star"));
+    fireEvent.click(screen.getByText("Update library entry"));
+
+    expect(mockSaveLib).toHaveBeenCalledTimes(1);
+    const [name, , , options] = mockSaveLib.mock.calls[0];
+    expect(name).toBe("Renamed Pipeline");
+    expect(options?.id).toBe("my-pipeline");
   });
 });

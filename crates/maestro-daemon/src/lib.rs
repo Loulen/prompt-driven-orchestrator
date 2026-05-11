@@ -1049,8 +1049,8 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
 
 // --- Library pipeline endpoints ---
 
-async fn list_library_pipelines() -> Response {
-    Json(library_store::pipelines::list()).into_response()
+async fn list_library_pipelines(State(state): State<Arc<AppState>>) -> Response {
+    Json(library_store::pipelines::list(&state.repo_root)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1059,16 +1059,41 @@ struct SaveLibraryPipelineRequest {
     yaml: String,
     #[serde(default)]
     prompts: HashMap<String, String>,
+    /// When set, save in-place at this id even if `name` differs (rename path).
+    #[serde(default)]
+    id: Option<String>,
+    /// Defaults to `"repo"` when starring fresh — the user is working in a
+    /// concrete repo so the most useful default is to keep the template with it.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
-async fn save_library_pipeline(Json(req): Json<SaveLibraryPipelineRequest>) -> Response {
-    match library_store::pipelines::save(&req.name, &req.yaml, &req.prompts) {
+async fn save_library_pipeline(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SaveLibraryPipelineRequest>,
+) -> Response {
+    let scope_str = req.scope.as_deref().unwrap_or("repo");
+    let Some(scope) = library_store::pipelines::Scope::parse(scope_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("unknown scope: {scope_str}") })),
+        )
+            .into_response();
+    };
+    match library_store::pipelines::save(
+        &state.repo_root,
+        req.id.as_deref(),
+        &req.name,
+        &req.yaml,
+        &req.prompts,
+        scope,
+    ) {
         Ok(id) => {
-            let entry_list = library_store::pipelines::list();
+            let entry_list = library_store::pipelines::list(&state.repo_root);
             let entry = entry_list.into_iter().find(|e| e.id == id);
             (
                 StatusCode::CREATED,
-                Json(serde_json::json!({ "id": id, "entry": entry })),
+                Json(serde_json::json!({ "id": id, "scope": scope.as_str(), "entry": entry })),
             )
                 .into_response()
         }
@@ -1080,8 +1105,11 @@ async fn save_library_pipeline(Json(req): Json<SaveLibraryPipelineRequest>) -> R
     }
 }
 
-async fn delete_library_pipeline(AxumPath(id): AxumPath<String>) -> Response {
-    match library_store::pipelines::delete(&id) {
+async fn delete_library_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match library_store::pipelines::delete(&state.repo_root, &id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "pipeline template not found").into_response(),
         Err(e) => (
@@ -1702,9 +1730,9 @@ async fn create_run(
     Json(req): Json<CreateRunRequest>,
 ) -> Response {
     let (yaml, pipeline_path) = if let Some(ref lib_id) = req.pipeline_id {
-        match library_store::pipelines::get_yaml(lib_id) {
+        match library_store::pipelines::get_yaml(&state.repo_root, lib_id) {
             Some(y) => {
-                let path = library_store::pipelines::get_path(lib_id)
+                let path = library_store::pipelines::get_path(&state.repo_root, lib_id)
                     .unwrap_or_else(|| resolve_pipeline_path(&state.repo_root, &req.pipeline));
                 (y, path)
             }

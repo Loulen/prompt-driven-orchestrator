@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Star } from "lucide-react";
 import type { PipelineDef } from "../types";
-import type { LibraryPipelineEntry } from "../api";
+import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import { serializePipeline, useEditStore } from "../stores/editStore";
 import type { PipelineLibrarySyncState } from "../hooks/useLibraryPipelines";
@@ -21,6 +21,12 @@ interface Props {
   onLibraryChanged: () => void;
 }
 
+// When the user clicks the outline star for the very first time, default the
+// new library entry to repo scope. The user works inside a concrete repo and
+// almost always wants the template to follow it; user-scope is the explicit
+// override available from the Pipeline Inspector.
+const DEFAULT_NEW_STAR_SCOPE: LibraryPipelineScope = "repo";
+
 export default function PipelineStar({
   tabId,
   pipeline,
@@ -31,9 +37,11 @@ export default function PipelineStar({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
-  const tabPrompts = useEditStore(
-    (s) => s.openTabs.find((t) => t.id === tabId)?.prompts,
-  );
+  const setLibraryBinding = useEditStore((s) => s.setLibraryBinding);
+  const tab = useEditStore((s) => s.openTabs.find((t) => t.id === tabId));
+  const tabPrompts = tab?.prompts;
+  const libraryId = tab?.libraryId ?? libraryEntry?.id ?? null;
+  const libraryScope = tab?.libraryScope ?? libraryEntry?.scope ?? null;
 
   useEffect(() => {
     if (!popoverOpen) return;
@@ -49,7 +57,19 @@ export default function PipelineStar({
   async function handleSaveToLibrary() {
     try {
       const yaml = serializePipeline(pipeline);
-      await saveLibraryPipeline(pipeline.name, yaml, tabPrompts ?? {});
+      const scope: LibraryPipelineScope = libraryScope ?? DEFAULT_NEW_STAR_SCOPE;
+      const result = await saveLibraryPipeline(
+        pipeline.name,
+        yaml,
+        tabPrompts ?? {},
+        {
+          ...(libraryId ? { id: libraryId } : {}),
+          scope,
+        },
+      );
+      // Lock the resulting id+scope to this tab so future renames don't fall
+      // back to slug(name) and orphan the entry we just wrote.
+      setLibraryBinding(tabId, result.id, result.scope);
       onLibraryChanged();
     } catch {
       // ignore
@@ -80,9 +100,12 @@ export default function PipelineStar({
   }
 
   async function handleRemoveFromLibrary() {
-    if (!libraryEntry) return;
+    if (!libraryEntry && !libraryId) return;
+    const idToDelete = libraryEntry?.id ?? libraryId;
+    if (!idToDelete) return;
     try {
-      await deleteLibraryPipeline(libraryEntry.id);
+      await deleteLibraryPipeline(idToDelete);
+      setLibraryBinding(tabId, null, null);
       onLibraryChanged();
       setPopoverOpen(false);
     } catch {

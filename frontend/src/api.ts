@@ -349,9 +349,12 @@ export async function deletePipeline(id: string): Promise<void> {
 
 // --- Library Pipelines API ---
 
+export type LibraryPipelineScope = "repo" | "user";
+
 export interface LibraryPipelineEntry {
   id: string;
   name: string;
+  scope: LibraryPipelineScope;
   node_count: number;
   modified: string | null;
   yaml: string;
@@ -363,15 +366,30 @@ export async function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {
   return resp.json();
 }
 
+export interface SaveLibraryPipelineOptions {
+  /// When set, save in-place at this id even if `name` changed. Required for
+  /// rename-in-place: without it the daemon falls back to slug(name), which
+  /// would orphan the previous entry.
+  id?: string;
+  scope?: LibraryPipelineScope;
+}
+
 export async function saveLibraryPipeline(
   name: string,
   yaml: string,
   prompts: Record<string, string> = {},
-): Promise<{ id: string }> {
+  options: SaveLibraryPipelineOptions = {},
+): Promise<{ id: string; scope: LibraryPipelineScope }> {
   const resp = await fetch(`${BASE}/library/pipelines`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, yaml, prompts }),
+    body: JSON.stringify({
+      name,
+      yaml,
+      prompts,
+      ...(options.id ? { id: options.id } : {}),
+      ...(options.scope ? { scope: options.scope } : {}),
+    }),
   });
   if (!resp.ok) throw new Error(`POST /library/pipelines failed: ${resp.status}`);
   return resp.json();

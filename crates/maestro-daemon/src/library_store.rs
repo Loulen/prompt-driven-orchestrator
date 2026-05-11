@@ -199,17 +199,54 @@ pub fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
 
 pub mod pipelines {
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use serde::{Deserialize, Serialize};
 
-    fn pipelines_dir() -> Option<PathBuf> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Scope {
+        Repo,
+        User,
+    }
+
+    impl Scope {
+        pub fn parse(s: &str) -> Option<Scope> {
+            match s {
+                "repo" => Some(Scope::Repo),
+                "user" => Some(Scope::User),
+                _ => None,
+            }
+        }
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Scope::Repo => "repo",
+                Scope::User => "user",
+            }
+        }
+    }
+
+    pub fn user_pipelines_dir() -> Option<PathBuf> {
         std::env::var_os("HOME").map(|h| {
             PathBuf::from(h)
                 .join(".maestro")
                 .join("library")
                 .join("pipelines")
         })
+    }
+
+    pub fn repo_pipelines_dir(repo_root: &Path) -> PathBuf {
+        repo_root
+            .join(".maestro")
+            .join("library")
+            .join("pipelines")
+    }
+
+    fn scope_dir(repo_root: &Path, scope: Scope) -> Option<PathBuf> {
+        match scope {
+            Scope::Repo => Some(repo_pipelines_dir(repo_root)),
+            Scope::User => user_pipelines_dir(),
+        }
     }
 
     fn slugify(name: &str) -> String {
@@ -231,16 +268,14 @@ pub mod pipelines {
     pub struct PipelineLibraryEntry {
         pub id: String,
         pub name: String,
+        pub scope: Scope,
         pub node_count: usize,
         pub modified: Option<String>,
         pub yaml: String,
     }
 
-    pub fn list() -> Vec<PipelineLibraryEntry> {
-        let Some(dir) = pipelines_dir() else {
-            return Vec::new();
-        };
-        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+    fn list_scope(dir: &Path, scope: Scope) -> Vec<PipelineLibraryEntry> {
+        let Ok(read_dir) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
         let mut entries = Vec::new();
@@ -271,47 +306,106 @@ pub mod pipelines {
             entries.push(PipelineLibraryEntry {
                 id,
                 name: parsed.pipeline.name.clone(),
+                scope,
                 node_count: parsed.pipeline.nodes.len(),
                 modified,
                 yaml: contents,
             });
         }
+        entries
+    }
+
+    pub fn list(repo_root: &Path) -> Vec<PipelineLibraryEntry> {
+        let mut entries: Vec<PipelineLibraryEntry> = Vec::new();
+        entries.extend(list_scope(&repo_pipelines_dir(repo_root), Scope::Repo));
+        if let Some(user_dir) = user_pipelines_dir() {
+            entries.extend(list_scope(&user_dir, Scope::User));
+        }
         entries.sort_by_key(|a| a.name.to_lowercase());
         entries
     }
 
-    pub fn get_yaml(id: &str) -> Option<String> {
-        let dir = pipelines_dir()?;
-        let path = dir.join(format!("{id}.yaml"));
+    fn locate(repo_root: &Path, id: &str) -> Option<(PathBuf, Scope)> {
+        let repo_path = repo_pipelines_dir(repo_root).join(format!("{id}.yaml"));
+        if repo_path.exists() {
+            return Some((repo_path, Scope::Repo));
+        }
+        if let Some(user_dir) = user_pipelines_dir() {
+            let user_path = user_dir.join(format!("{id}.yaml"));
+            if user_path.exists() {
+                return Some((user_path, Scope::User));
+            }
+        }
+        None
+    }
+
+    pub fn get_yaml(repo_root: &Path, id: &str) -> Option<String> {
+        let (path, _) = locate(repo_root, id)?;
         std::fs::read_to_string(&path).ok()
     }
 
-    pub fn get_path(id: &str) -> Option<PathBuf> {
-        let dir = pipelines_dir()?;
-        let path = dir.join(format!("{id}.yaml"));
-        if path.exists() {
-            Some(path)
-        } else {
-            None
-        }
+    pub fn get_path(repo_root: &Path, id: &str) -> Option<PathBuf> {
+        locate(repo_root, id).map(|(p, _)| p)
     }
 
+    pub fn get_scope(repo_root: &Path, id: &str) -> Option<Scope> {
+        locate(repo_root, id).map(|(_, s)| s)
+    }
+
+    /// Save a library pipeline, supporting rename-in-place.
+    ///
+    /// - If `id` is `Some`, the file at `<id>.yaml` is overwritten in place even if `name`
+    ///   has changed — this is the rename path that prevents orphaned entries.
+    /// - If `id` is `None`, a new id is derived from `name` and a fresh file is created
+    ///   (with a numeric suffix on slug collision).
+    /// - `scope` picks the on-disk directory. If `id` resolves to an existing file in
+    ///   a *different* scope, the file is moved to the requested scope.
     pub fn save(
+        repo_root: &Path,
+        id: Option<&str>,
         name: &str,
         yaml: &str,
         prompts: &HashMap<String, String>,
+        scope: Scope,
     ) -> Result<String, String> {
-        let dir = pipelines_dir().ok_or("HOME not set")?;
-        std::fs::create_dir_all(&dir)
+        let target_dir = scope_dir(repo_root, scope).ok_or("HOME not set")?;
+        std::fs::create_dir_all(&target_dir)
             .map_err(|e| format!("failed to create library pipelines dir: {e}"))?;
 
         crate::pipeline::parse_pipeline(yaml).map_err(|e| format!("invalid pipeline YAML: {e}"))?;
 
-        let id = slugify(name);
-        let path = dir.join(format!("{id}.yaml"));
+        let final_id: String = if let Some(existing) = id {
+            // Rename-in-place: preserve the existing file's stem regardless of `name`.
+            // If the existing file is in a different scope, remove the old artefacts after
+            // writing the new ones so the entry effectively migrates between dirs.
+            let existing_id = existing.to_string();
+            if let Some((old_path, old_scope)) = locate(repo_root, &existing_id) {
+                if old_scope != scope {
+                    let _ = std::fs::remove_file(&old_path);
+                    let old_prompts = old_path.with_extension("prompts");
+                    if old_prompts.exists() {
+                        let _ = std::fs::remove_dir_all(&old_prompts);
+                    }
+                }
+            }
+            existing_id
+        } else {
+            // Fresh save: derive slug from name, with collision suffix across both scopes
+            // so that starring "foo" doesn't trample a user-scope "foo" or vice-versa.
+            let base = slugify(name);
+            let mut candidate = base.clone();
+            let mut suffix = 2u32;
+            while locate(repo_root, &candidate).is_some() {
+                candidate = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            candidate
+        };
+
+        let path = target_dir.join(format!("{final_id}.yaml"));
         std::fs::write(&path, yaml).map_err(|e| format!("write error: {e}"))?;
 
-        let prompts_dir = dir.join(format!("{id}.prompts"));
+        let prompts_dir = target_dir.join(format!("{final_id}.prompts"));
         // Drop a stale prompts dir wholesale so renamed/removed nodes don't leave files
         // behind that would spawn dead role prompts on next run.
         if prompts_dir.exists() {
@@ -328,23 +422,20 @@ pub mod pipelines {
             }
         }
 
-        Ok(id)
+        Ok(final_id)
     }
 
-    pub fn delete(id: &str) -> Result<bool, String> {
-        let dir = pipelines_dir().ok_or("HOME not set")?;
-        let path = dir.join(format!("{id}.yaml"));
-        let prompts_dir = dir.join(format!("{id}.prompts"));
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| format!("delete error: {e}"))?;
-            if prompts_dir.exists() {
-                std::fs::remove_dir_all(&prompts_dir)
-                    .map_err(|e| format!("delete prompts error: {e}"))?;
-            }
-            Ok(true)
-        } else {
-            Ok(false)
+    pub fn delete(repo_root: &Path, id: &str) -> Result<bool, String> {
+        let Some((path, _)) = locate(repo_root, id) else {
+            return Ok(false);
+        };
+        let prompts_dir = path.with_extension("prompts");
+        std::fs::remove_file(&path).map_err(|e| format!("delete error: {e}"))?;
+        if prompts_dir.exists() {
+            std::fs::remove_dir_all(&prompts_dir)
+                .map_err(|e| format!("delete prompts error: {e}"))?;
         }
+        Ok(true)
     }
 }
 
@@ -370,6 +461,16 @@ mod tests {
             std::env::set_var("HOME", p);
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Like `with_temp_home` but also provides an isolated repo root for the
+    /// repo-scoped library tests. The repo root lives under the temp HOME.
+    fn with_temp_repo<F: FnOnce(&std::path::Path)>(f: F) {
+        with_temp_home(|| {
+            let repo = std::env::var("HOME").map(PathBuf::from).unwrap().join("repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            f(&repo);
+        });
     }
 
     fn make_node(name: &str) -> pipeline::NodeDef {
@@ -608,68 +709,142 @@ mod tests {
 
     #[test]
     fn pipeline_library_crud_round_trip() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let yaml = sample_pipeline_yaml("Review Pipeline");
-            let id = pipelines::save("Review Pipeline", &yaml, &HashMap::new()).unwrap();
+            let id = pipelines::save(
+                repo,
+                None,
+                "Review Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
             assert_eq!(id, "review-pipeline");
 
-            let all = pipelines::list();
+            let all = pipelines::list(repo);
             assert_eq!(all.len(), 1);
             assert_eq!(all[0].id, "review-pipeline");
             assert_eq!(all[0].name, "Review Pipeline");
+            assert_eq!(all[0].scope, pipelines::Scope::Repo);
             assert_eq!(all[0].node_count, 3);
             assert_eq!(all[0].yaml, yaml);
 
-            let got = pipelines::get_yaml("review-pipeline").unwrap();
+            let got = pipelines::get_yaml(repo, "review-pipeline").unwrap();
             assert_eq!(got, yaml);
 
-            let deleted = pipelines::delete("review-pipeline").unwrap();
+            let deleted = pipelines::delete(repo, "review-pipeline").unwrap();
             assert!(deleted);
 
-            assert!(pipelines::get_yaml("review-pipeline").is_none());
-            assert!(pipelines::list().is_empty());
+            assert!(pipelines::get_yaml(repo, "review-pipeline").is_none());
+            assert!(pipelines::list(repo).is_empty());
         });
     }
 
     #[test]
     fn pipeline_library_delete_nonexistent() {
-        with_temp_home(|| {
-            let result = pipelines::delete("ghost").unwrap();
+        with_temp_repo(|repo| {
+            let result = pipelines::delete(repo, "ghost").unwrap();
             assert!(!result);
         });
     }
 
     #[test]
     fn pipeline_library_save_invalid_yaml_errors() {
-        with_temp_home(|| {
-            let result = pipelines::save("Bad", "not: valid: yaml: [[[", &HashMap::new());
+        with_temp_repo(|repo| {
+            let result = pipelines::save(
+                repo,
+                None,
+                "Bad",
+                "not: valid: yaml: [[[",
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            );
             assert!(result.is_err());
         });
     }
 
     #[test]
-    fn pipeline_library_overwrite() {
-        with_temp_home(|| {
+    fn pipeline_library_overwrite_by_id() {
+        with_temp_repo(|repo| {
             let yaml1 = sample_pipeline_yaml("My Pipeline");
             let yaml2 = sample_pipeline_yaml("My Pipeline v2");
-            pipelines::save("My Pipeline", &yaml1, &HashMap::new()).unwrap();
-            pipelines::save("My Pipeline", &yaml2, &HashMap::new()).unwrap();
+            let id = pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml1,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+            // Second save with the same id must rewrite the same file in place,
+            // not create a duplicate or migrate to a different slug.
+            pipelines::save(
+                repo,
+                Some(&id),
+                "My Pipeline v2",
+                &yaml2,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
-            let got = pipelines::get_yaml("my-pipeline").unwrap();
+            let got = pipelines::get_yaml(repo, &id).unwrap();
             assert!(got.contains("My Pipeline v2"));
-            assert_eq!(pipelines::list().len(), 1);
+            assert_eq!(pipelines::list(repo).len(), 1);
+            // id remains stable across rename.
+            assert_eq!(pipelines::list(repo)[0].id, id);
+            assert_eq!(pipelines::list(repo)[0].name, "My Pipeline v2");
+        });
+    }
+
+    #[test]
+    fn pipeline_library_save_without_id_avoids_collisions() {
+        with_temp_repo(|repo| {
+            let yaml = sample_pipeline_yaml("My Pipeline");
+            let id1 = pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+            let id2 = pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+            // No id given + slug taken → numeric suffix, not silent overwrite.
+            assert_eq!(id1, "my-pipeline");
+            assert_eq!(id2, "my-pipeline-2");
+            assert_eq!(pipelines::list(repo).len(), 2);
         });
     }
 
     #[test]
     fn pipeline_library_sorted_alphabetically() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             for name in ["Zebra Pipeline", "Alpha Pipeline", "middle pipeline"] {
                 let yaml = sample_pipeline_yaml(name);
-                pipelines::save(name, &yaml, &HashMap::new()).unwrap();
+                pipelines::save(
+                    repo,
+                    None,
+                    name,
+                    &yaml,
+                    &HashMap::new(),
+                    pipelines::Scope::Repo,
+                )
+                .unwrap();
             }
 
-            let names: Vec<String> = pipelines::list().into_iter().map(|e| e.name).collect();
+            let names: Vec<String> = pipelines::list(repo).into_iter().map(|e| e.name).collect();
             assert_eq!(
                 names,
                 vec!["Alpha Pipeline", "middle pipeline", "Zebra Pipeline"]
@@ -679,18 +854,104 @@ mod tests {
 
     #[test]
     fn pipeline_library_does_not_affect_node_library() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let node = make_node("Worker");
             let entry = entry_from_node(&node, "node prompt");
             save(&entry).unwrap();
 
             let yaml = sample_pipeline_yaml("My Pipeline");
-            pipelines::save("My Pipeline", &yaml, &HashMap::new()).unwrap();
+            pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
             assert_eq!(list().len(), 1);
             assert_eq!(list()[0].name, "Worker");
-            assert_eq!(pipelines::list().len(), 1);
-            assert_eq!(pipelines::list()[0].name, "My Pipeline");
+            assert_eq!(pipelines::list(repo).len(), 1);
+            assert_eq!(pipelines::list(repo)[0].name, "My Pipeline");
+        });
+    }
+
+    #[test]
+    fn pipeline_library_scope_split() {
+        with_temp_repo(|repo| {
+            let yaml = sample_pipeline_yaml("My Pipeline");
+            pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+            pipelines::save(
+                repo,
+                None,
+                "Other Pipeline",
+                &sample_pipeline_yaml("Other Pipeline"),
+                &HashMap::new(),
+                pipelines::Scope::User,
+            )
+            .unwrap();
+
+            let all = pipelines::list(repo);
+            assert_eq!(all.len(), 2);
+            let repo_entry = all.iter().find(|e| e.name == "My Pipeline").unwrap();
+            assert_eq!(repo_entry.scope, pipelines::Scope::Repo);
+            let user_entry = all.iter().find(|e| e.name == "Other Pipeline").unwrap();
+            assert_eq!(user_entry.scope, pipelines::Scope::User);
+
+            // Files live in distinct on-disk locations.
+            assert!(pipelines::repo_pipelines_dir(repo)
+                .join("my-pipeline.yaml")
+                .exists());
+            assert!(pipelines::user_pipelines_dir()
+                .unwrap()
+                .join("other-pipeline.yaml")
+                .exists());
+        });
+    }
+
+    #[test]
+    fn pipeline_library_save_migrates_scope_when_id_known() {
+        with_temp_repo(|repo| {
+            let yaml = sample_pipeline_yaml("Mover");
+            let id = pipelines::save(
+                repo,
+                None,
+                "Mover",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+            // Switch scope while keeping the same id: file moves repo → user.
+            let new_id = pipelines::save(
+                repo,
+                Some(&id),
+                "Mover",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::User,
+            )
+            .unwrap();
+            assert_eq!(new_id, id);
+            assert!(!pipelines::repo_pipelines_dir(repo)
+                .join(format!("{id}.yaml"))
+                .exists());
+            assert!(pipelines::user_pipelines_dir()
+                .unwrap()
+                .join(format!("{id}.yaml"))
+                .exists());
+            let all = pipelines::list(repo);
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].scope, pipelines::Scope::User);
         });
     }
 
@@ -833,34 +1094,49 @@ mod tests {
 
     #[test]
     fn pipeline_library_get_path() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let yaml = sample_pipeline_yaml("Test Path");
-            pipelines::save("Test Path", &yaml, &HashMap::new()).unwrap();
+            pipelines::save(
+                repo,
+                None,
+                "Test Path",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
-            let path = pipelines::get_path("test-path").unwrap();
+            let path = pipelines::get_path(repo, "test-path").unwrap();
             assert!(path.exists());
             assert!(path
                 .to_str()
                 .unwrap()
                 .contains("library/pipelines/test-path.yaml"));
 
-            assert!(pipelines::get_path("nonexistent").is_none());
+            assert!(pipelines::get_path(repo, "nonexistent").is_none());
         });
     }
 
     #[test]
     fn pipeline_library_save_writes_prompts_dir() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let yaml = sample_pipeline_yaml("Promptful");
             let mut prompts = HashMap::new();
             prompts.insert("planner".to_string(), "You are a planner.".to_string());
             prompts.insert("end".to_string(), "Wrap up.".to_string());
 
-            let id = pipelines::save("Promptful", &yaml, &prompts).unwrap();
+            let id = pipelines::save(
+                repo,
+                None,
+                "Promptful",
+                &yaml,
+                &prompts,
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
             assert_eq!(id, "promptful");
 
-            let dir = library_dir().unwrap().join("pipelines");
-            let prompts_dir = dir.join("promptful.prompts");
+            let prompts_dir = pipelines::repo_pipelines_dir(repo).join("promptful.prompts");
             assert!(prompts_dir.is_dir());
             assert_eq!(
                 std::fs::read_to_string(prompts_dir.join("planner.md")).unwrap(),
@@ -875,19 +1151,34 @@ mod tests {
 
     #[test]
     fn pipeline_library_save_replaces_prompts_dir() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let yaml = sample_pipeline_yaml("Promptful");
             let mut p1 = HashMap::new();
             p1.insert("planner".to_string(), "v1".to_string());
             p1.insert("ghost".to_string(), "removed-soon".to_string());
-            pipelines::save("Promptful", &yaml, &p1).unwrap();
+            let id = pipelines::save(
+                repo,
+                None,
+                "Promptful",
+                &yaml,
+                &p1,
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
             let mut p2 = HashMap::new();
             p2.insert("planner".to_string(), "v2".to_string());
-            pipelines::save("Promptful", &yaml, &p2).unwrap();
+            pipelines::save(
+                repo,
+                Some(&id),
+                "Promptful",
+                &yaml,
+                &p2,
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
-            let dir = library_dir().unwrap().join("pipelines");
-            let prompts_dir = dir.join("promptful.prompts");
+            let prompts_dir = pipelines::repo_pipelines_dir(repo).join("promptful.prompts");
             assert_eq!(
                 std::fs::read_to_string(prompts_dir.join("planner.md")).unwrap(),
                 "v2"
@@ -900,16 +1191,24 @@ mod tests {
 
     #[test]
     fn pipeline_library_delete_removes_prompts_dir() {
-        with_temp_home(|| {
+        with_temp_repo(|repo| {
             let yaml = sample_pipeline_yaml("Promptful");
             let mut prompts = HashMap::new();
             prompts.insert("planner".to_string(), "p".to_string());
-            pipelines::save("Promptful", &yaml, &prompts).unwrap();
+            pipelines::save(
+                repo,
+                None,
+                "Promptful",
+                &yaml,
+                &prompts,
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
 
-            let dir = library_dir().unwrap().join("pipelines");
+            let dir = pipelines::repo_pipelines_dir(repo);
             assert!(dir.join("promptful.prompts").is_dir());
 
-            assert!(pipelines::delete("promptful").unwrap());
+            assert!(pipelines::delete(repo, "promptful").unwrap());
             assert!(!dir.join("promptful.yaml").exists());
             assert!(!dir.join("promptful.prompts").exists());
         });

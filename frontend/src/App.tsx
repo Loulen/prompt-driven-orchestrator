@@ -359,6 +359,8 @@ export default function App() {
               selectedRunId={selectedRunId}
               onSelectRun={handleSelectRun}
               onNewRun={() => setNewRunModalOpen(true)}
+              libraryPipelines={libraryPipelines}
+              onLibraryPipelinesChanged={refreshLibraryPipelines}
             />
           </ResizablePanel>
 

@@ -34,7 +34,7 @@ function renderModal(libraryPipelines: LibraryPipelineEntry[] = []) {
 describe("NewRunModal with library pipelines", () => {
   it("shows starred templates in the dropdown when library pipelines exist", () => {
     const pipelines: LibraryPipelineEntry[] = [
-      { id: "review", name: "Review Pipeline", node_count: 5, modified: null, yaml: "" },
+      { id: "review", name: "Review Pipeline", scope: "repo", node_count: 5, modified: null, yaml: "" },
     ];
     renderModal(pipelines);
 
@@ -55,7 +55,7 @@ describe("NewRunModal with library pipelines", () => {
 
   it("pre-selects the first library pipeline when available", () => {
     const pipelines: LibraryPipelineEntry[] = [
-      { id: "deploy", name: "Deploy Pipeline", node_count: 3, modified: null, yaml: "" },
+      { id: "deploy", name: "Deploy Pipeline", scope: "repo", node_count: 3, modified: null, yaml: "" },
     ];
     renderModal(pipelines);
 

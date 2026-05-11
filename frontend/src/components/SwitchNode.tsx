@@ -29,17 +29,15 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
 
   return (
     <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        <PortRow
-          portName="in"
-          kind="input"
-          side={data.inputSide}
-          index={0}
-          total={1}
-          nodeType="switch"
-          isDrop={isDropTarget}
-        />
-      </div>
+      <PortRow
+        portName="in"
+        kind="input"
+        side={data.inputSide}
+        index={0}
+        total={1}
+        nodeType="switch"
+        isDrop={isDropTarget}
+      />
       <div className="flex items-center gap-2">
         <NodeTypeIcon type="switch" size={14} className="shrink-0 text-[var(--color-switch-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
@@ -47,25 +45,23 @@ export function SwitchEditNode({ data, id }: NodeProps<Node<SwitchEditData>>) {
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {data.branches.map((branch, i) => (
-          <PortRow
-            key={branch.name}
-            portName={branch.name}
-            kind="output"
-            side={branch.side}
-            index={i}
-            total={data.branches.length}
-            nodeType="switch"
-          >
-            {!branch.hasWhen && branch.name === "default" && (
-              <span className="ml-auto rounded bg-fg-4/20 px-1 text-fg-4" style={{ fontSize: "8px" }}>
-                else
-              </span>
-            )}
-          </PortRow>
-        ))}
-      </div>
+      {data.branches.map((branch, i) => (
+        <PortRow
+          key={branch.name}
+          portName={branch.name}
+          kind="output"
+          side={branch.side}
+          index={i}
+          total={data.branches.length}
+          nodeType="switch"
+        >
+          {!branch.hasWhen && branch.name === "default" && (
+            <span className="ml-auto rounded bg-fg-4/20 px-1 text-fg-4" style={{ fontSize: "8px" }}>
+              else
+            </span>
+          )}
+        </PortRow>
+      ))}
     </NodeCard>
   );
 }
@@ -86,16 +82,14 @@ export function SwitchRunNode({ data, selected }: NodeProps<Node<SwitchRunData>>
 
   return (
     <NodeCard status={data.status} selected={selected} style={{ minWidth: 140, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        <PortRow
-          portName="in"
-          kind="input"
-          side={data.inputSide}
-          index={0}
-          total={1}
-          nodeType="switch"
-        />
-      </div>
+      <PortRow
+        portName="in"
+        kind="input"
+        side={data.inputSide}
+        index={0}
+        total={1}
+        nodeType="switch"
+      />
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${

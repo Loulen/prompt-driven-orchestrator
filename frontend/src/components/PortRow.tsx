@@ -35,7 +35,7 @@ export default function PortRow({
     <Tooltip content={tooltipContent} side={side === "right" ? "right" : "left"}>
       <div
         data-testid={`port-${kind}-${portName}`}
-        style={{ fontSize: "10px", minHeight: 18 }}
+        style={{ fontSize: "10px" }}
       >
         {children}
         <PortPill

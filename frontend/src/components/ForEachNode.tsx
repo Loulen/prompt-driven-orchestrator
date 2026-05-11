@@ -42,20 +42,18 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
 
   return (
     <NodeCard status="pending" selected={isSelected} style={{ minWidth: 150, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={inputs.length}
-            nodeType="for-each"
-            isDrop={isDropTarget}
-          />
-        ))}
-      </div>
+      {inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={inputs.length}
+          nodeType="for-each"
+          isDrop={isDropTarget}
+        />
+      ))}
       <div className="flex items-center gap-2">
         <NodeTypeIcon type="for-each" size={14} className="shrink-0 text-[var(--color-foreach-tint,#a78bfa)]" />
         <span className="font-medium text-fg">{data.label}</span>
@@ -63,19 +61,17 @@ export function ForEachEditNode({ data, id }: NodeProps<Node<ForEachEditData>>) 
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={outputs.length}
-            nodeType="for-each"
-          />
-        ))}
-      </div>
+      {outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={outputs.length}
+          nodeType="for-each"
+        />
+      ))}
     </NodeCard>
   );
 }
@@ -97,19 +93,17 @@ export function ForEachRunNode({ data, selected }: NodeProps<Node<ForEachRunData
 
   return (
     <NodeCard status={data.status} selected={selected} style={{ minWidth: 150, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={inputs.length}
-            nodeType="for-each"
-          />
-        ))}
-      </div>
+      {inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={inputs.length}
+          nodeType="for-each"
+        />
+      ))}
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -132,19 +126,17 @@ export function ForEachRunNode({ data, selected }: NodeProps<Node<ForEachRunData
           {data.totalItems} items
         </span>
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={outputs.length}
-            nodeType="for-each"
-          />
-        ))}
-      </div>
+      {outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={outputs.length}
+          nodeType="for-each"
+        />
+      ))}
     </NodeCard>
   );
 }

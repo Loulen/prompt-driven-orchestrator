@@ -31,20 +31,18 @@ export function LoopEditNode({ data, id }: NodeProps<Node<LoopEditData>>) {
 
   return (
     <NodeCard status="pending" selected={isSelected} style={{ minWidth: 150, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={inputs.length}
-            nodeType="loop"
-            isDrop={isDropTarget}
-          />
-        ))}
-      </div>
+      {inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={inputs.length}
+          nodeType="loop"
+          isDrop={isDropTarget}
+        />
+      ))}
       <div className="flex items-center gap-2">
         <NodeTypeIcon type="loop" size={14} className="shrink-0 text-[var(--color-loop-tint,#60a5fa)]" />
         <span className="font-medium text-fg">{data.label}</span>
@@ -61,19 +59,17 @@ export function LoopEditNode({ data, id }: NodeProps<Node<LoopEditData>>) {
           ↻ max {data.maxIter}
         </span>
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={outputs.length}
-            nodeType="loop"
-          />
-        ))}
-      </div>
+      {outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={outputs.length}
+          nodeType="loop"
+        />
+      ))}
     </NodeCard>
   );
 }
@@ -96,19 +92,17 @@ export function LoopRunNode({ data, selected }: NodeProps<Node<LoopRunData>>) {
 
   return (
     <NodeCard status={data.status} selected={selected} style={{ minWidth: 150, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={inputs.length}
-            nodeType="loop"
-          />
-        ))}
-      </div>
+      {inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={inputs.length}
+          nodeType="loop"
+        />
+      ))}
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -131,19 +125,17 @@ export function LoopRunNode({ data, selected }: NodeProps<Node<LoopRunData>>) {
           ↻ {data.currentIter}/{data.maxIter}
         </span>
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={outputs.length}
-            nodeType="loop"
-          />
-        ))}
-      </div>
+      {outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={outputs.length}
+          nodeType="loop"
+        />
+      ))}
     </NodeCard>
   );
 }

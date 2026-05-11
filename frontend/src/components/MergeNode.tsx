@@ -22,17 +22,15 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
 
   return (
     <NodeCard status="pending" selected={isSelected} style={{ minWidth: 140, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        <PortRow
-          portName="branches"
-          kind="input"
-          side={data.inputSide}
-          index={0}
-          total={1}
-          nodeType="merge"
-          isDrop={isDropTarget}
-        />
-      </div>
+      <PortRow
+        portName="branches"
+        kind="input"
+        side={data.inputSide}
+        index={0}
+        total={1}
+        nodeType="merge"
+        isDrop={isDropTarget}
+      />
       <div className="flex items-center gap-2">
         <NodeTypeIcon type="merge" size={14} className="shrink-0 text-acc" />
         <span className="font-medium text-fg">{data.label}</span>
@@ -40,16 +38,14 @@ export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        <PortRow
-          portName="merged"
-          kind="output"
-          side={data.outputSide}
-          index={0}
-          total={1}
-          nodeType="merge"
-        />
-      </div>
+      <PortRow
+        portName="merged"
+        kind="output"
+        side={data.outputSide}
+        index={0}
+        total={1}
+        nodeType="merge"
+      />
     </NodeCard>
   );
 }
@@ -69,16 +65,14 @@ export function MergeRunNode({ data, selected }: NodeProps<Node<MergeRunData>>) 
 
   return (
     <NodeCard status={data.status} selected={selected} style={{ minWidth: 140, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        <PortRow
-          portName="branches"
-          kind="input"
-          side={data.inputSide}
-          index={0}
-          total={1}
-          nodeType="merge"
-        />
-      </div>
+      <PortRow
+        portName="branches"
+        kind="input"
+        side={data.inputSide}
+        index={0}
+        total={1}
+        nodeType="merge"
+      />
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -105,16 +99,14 @@ export function MergeRunNode({ data, selected }: NodeProps<Node<MergeRunData>>) 
           {data.nodeId}
         </span>
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        <PortRow
-          portName="merged"
-          kind="output"
-          side={data.outputSide}
-          index={0}
-          total={1}
-          nodeType="merge"
-        />
-      </div>
+      <PortRow
+        portName="merged"
+        kind="output"
+        side={data.outputSide}
+        index={0}
+        total={1}
+        nodeType="merge"
+      />
     </NodeCard>
   );
 }

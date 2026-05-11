@@ -84,19 +84,17 @@ function PipelineNode({ data, selected }: NodeProps<Node<PipelineNodeData>>) {
 
   return (
     <NodeCard status={data.status} selected={selected} style={{ minWidth: 160, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {data.inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={data.inputs.length}
-            description={port.description}
-          />
-        ))}
-      </div>
+      {data.inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={data.inputs.length}
+          description={port.description}
+        />
+      ))}
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor} ${
@@ -119,19 +117,17 @@ function PipelineNode({ data, selected }: NodeProps<Node<PipelineNodeData>>) {
         <span>{data.status}</span>
         <span className="font-mono" style={{ fontSize: "9px" }}>{data.nodeId}</span>
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {data.outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={data.outputs.length}
-            description={port.description}
-          />
-        ))}
-      </div>
+      {data.outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={data.outputs.length}
+          description={port.description}
+        />
+      ))}
     </NodeCard>
   );
 }

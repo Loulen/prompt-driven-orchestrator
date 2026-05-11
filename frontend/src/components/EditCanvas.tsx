@@ -49,20 +49,18 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
 
   return (
     <NodeCard status="pending" selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
-      <div className="flex flex-col gap-0.5 mb-1">
-        {data.inputs.map((port, i) => (
-          <PortRow
-            key={`in-${port.name}`}
-            portName={port.name}
-            kind="input"
-            side={port.side}
-            index={i}
-            total={data.inputs.length}
-            description={port.description}
-            isDrop={isDropTarget}
-          />
-        ))}
-      </div>
+      {data.inputs.map((port, i) => (
+        <PortRow
+          key={`in-${port.name}`}
+          portName={port.name}
+          kind="input"
+          side={port.side}
+          index={i}
+          total={data.inputs.length}
+          description={port.description}
+          isDrop={isDropTarget}
+        />
+      ))}
       <div className="flex items-center gap-2">
         <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
@@ -79,19 +77,17 @@ function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {data.outputs.map((port, i) => (
-          <PortRow
-            key={`out-${port.name}`}
-            portName={port.name}
-            kind="output"
-            side={port.side}
-            index={i}
-            total={data.outputs.length}
-            description={port.description}
-          />
-        ))}
-      </div>
+      {data.outputs.map((port, i) => (
+        <PortRow
+          key={`out-${port.name}`}
+          portName={port.name}
+          kind="output"
+          side={port.side}
+          index={i}
+          total={data.outputs.length}
+          description={port.description}
+        />
+      ))}
     </NodeCard>
   );
 }

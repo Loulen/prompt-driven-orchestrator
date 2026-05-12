@@ -4,12 +4,12 @@ You are node `KHFCO0US` in pipeline `simple-bugfix`, iteration 1.
 
 ## Inputs
 
-- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/HmuRVQBx/iter-1/body.md`
-- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/_input.md`
+- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/HmuRVQBx/iter-1/body.md`
+- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/_input.md`
 
 ## Outputs
 
-- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
+- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
 
 ## Completion
 

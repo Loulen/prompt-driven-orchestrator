@@ -110,6 +110,7 @@ export default function App() {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openRunPipeline = useEditStore((s) => s.openRunPipeline);
+  const closeRunPipeline = useEditStore((s) => s.closeRunPipeline);
   const selection = useEditStore((s) => s.selection);
   const setSelection = useEditStore((s) => s.setSelection);
   const openTabs = useEditStore((s) => s.openTabs);
@@ -264,12 +265,18 @@ export default function App() {
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
-      } else {
-        refreshRuns();
-        refreshRun();
+        return;
       }
+      // The run's on-disk worktree (and pipeline.yaml) is deleted on archive,
+      // so any open tab for that run is now backed by nothing. Prune it before
+      // the next flushPendingSaves tries to PUT into a 404.
+      if (msg.type === "event" && msg.event?.kind === "run_archived") {
+        closeRunPipeline(msg.event.run_id);
+      }
+      refreshRuns();
+      refreshRun();
     });
-  }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines]);
+  }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines, closeRunPipeline]);
 
   // Detect: active tab is a run, library has the same pipeline name, and
   // the library YAML diverges from the run snapshot. Show the modal once per

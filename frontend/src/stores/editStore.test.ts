@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
-import { savePipeline, fetchPipeline } from "../api";
+import { savePipeline, fetchPipeline, saveRunPipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 vi.mock("../api", () => ({
@@ -34,6 +34,7 @@ vi.mock("../api", () => ({
 }));
 
 const mockSavePipeline = vi.mocked(savePipeline);
+const mockSaveRunPipeline = vi.mocked(saveRunPipeline);
 
 function makePipeline(
   nodes: NodeDef[] = [],
@@ -533,6 +534,70 @@ describe("save error storage", () => {
     expect(tab?.saveError).toBeDefined();
     expect(tab?.saveError?.message).toBe("write failed: permission denied");
     expect(tab?.saveError?.line).toBeUndefined();
+  });
+
+  it("silently closes a run-scoped tab when the daemon returns 404", async () => {
+    const tabId = "__run__archived-run-id";
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: tabId,
+          scope: "run",
+          pipeline: { name: "test", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: true,
+          externalDirty: false,
+          runId: "archived-run-id",
+        },
+      ],
+      activeTabId: tabId,
+      selection: { kind: "none", id: null },
+      lastSavedAt: { [tabId]: 123 },
+    });
+    mockSaveRunPipeline.mockImplementationOnce(() =>
+      Promise.reject({
+        message: "PUT /runs/archived-run-id/pipeline failed: 404",
+        status: 404,
+      }),
+    );
+
+    await useEditStore.getState().save(tabId);
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.find((t) => t.id === tabId)).toBeUndefined();
+    expect(state.activeTabId).toBeNull();
+    expect(state.lastSavedAt[tabId]).toBeUndefined();
+  });
+
+  it("still surfaces non-404 errors for run-scoped tabs", async () => {
+    const tabId = "__run__live-run-id";
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: tabId,
+          scope: "run",
+          pipeline: { name: "test", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: true,
+          externalDirty: false,
+          runId: "live-run-id",
+        },
+      ],
+      activeTabId: tabId,
+      selection: { kind: "none", id: null },
+      lastSavedAt: {},
+    });
+    mockSaveRunPipeline.mockImplementationOnce(() =>
+      Promise.reject({ message: "boom", status: 500 }),
+    );
+
+    await useEditStore.getState().save(tabId);
+
+    const tab = useEditStore.getState().openTabs.find((t) => t.id === tabId);
+    expect(tab).toBeDefined();
+    expect(tab?.saveError?.message).toBe("boom");
   });
 });
 

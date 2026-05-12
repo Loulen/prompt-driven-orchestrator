@@ -1,0 +1,458 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - text: Maestro
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - complementary [ref=e14]:
+        - generic [ref=e15]:
+          - button [ref=e16] [cursor=pointer]:
+            - img [ref=e17]
+          - text: Runs
+          - button "New Run" [ref=e19] [cursor=pointer]:
+            - img [ref=e20]
+            - text: New Run
+        - generic [ref=e21]:
+          - button "simple-bugfix 20260512-142255-4361" [ref=e71] [cursor=pointer]:
+            - generic [ref=e73]:
+              - generic [ref=e74]: simple-bugfix
+              - generic [ref=e75]: 20260512-142255-4361
+          - button "simple-bugfix 20260512-142200-ffe4" [active] [ref=e76] [cursor=pointer]:
+            - generic [ref=e78]:
+              - generic [ref=e79]: simple-bugfix
+              - generic [ref=e80]: 20260512-142200-ffe4
+            - button "Cleanup run" [ref=e648]:
+              - img [ref=e649]
+          - button "simple-bugfix 20260512-141328-8366" [ref=e81] [cursor=pointer]:
+            - generic [ref=e83]:
+              - generic [ref=e84]: simple-bugfix
+              - generic [ref=e85]: 20260512-141328-8366
+          - button "simple-bugfix 20260512-140959-aa72" [ref=e86] [cursor=pointer]:
+            - generic [ref=e88]:
+              - generic [ref=e89]: simple-bugfix
+              - generic [ref=e90]: 20260512-140959-aa72
+          - button "Ideas 20260511-172537-2e44" [ref=e91] [cursor=pointer]:
+            - generic [ref=e93]:
+              - generic [ref=e94]: Ideas
+              - generic [ref=e95]: 20260511-172537-2e44
+          - button "simple-bugfix 20260511-162244-25e6" [ref=e96] [cursor=pointer]:
+            - generic [ref=e98]:
+              - generic [ref=e99]: simple-bugfix
+              - generic [ref=e100]: 20260511-162244-25e6
+          - button "simple-bugfix 20260511-162151-0d1c" [ref=e101] [cursor=pointer]:
+            - generic [ref=e103]:
+              - generic [ref=e104]: simple-bugfix
+              - generic [ref=e105]: 20260511-162151-0d1c
+          - button "Ideas 20260511-161848-a256" [ref=e106] [cursor=pointer]:
+            - generic [ref=e108]:
+              - generic [ref=e109]: Ideas
+              - generic [ref=e110]: 20260511-161848-a256
+          - button "simple-bugfix 20260511-151154-71c2" [ref=e111] [cursor=pointer]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: simple-bugfix
+              - generic [ref=e115]: 20260511-151154-71c2
+          - button "Ideas 20260511-151022-6bdc" [ref=e116] [cursor=pointer]:
+            - generic [ref=e118]:
+              - generic [ref=e119]: Ideas
+              - generic [ref=e120]: 20260511-151022-6bdc
+          - button "simple-bugfix 20260511-150548-0f72" [ref=e121] [cursor=pointer]:
+            - generic [ref=e123]:
+              - generic [ref=e124]: simple-bugfix
+              - generic [ref=e125]: 20260511-150548-0f72
+          - button "simple-bugfix 20260511-141703-24e9" [ref=e126] [cursor=pointer]:
+            - generic [ref=e128]:
+              - generic [ref=e129]: simple-bugfix
+              - generic [ref=e130]: 20260511-141703-24e9
+          - button "Ideas 20260511-141516-74d8" [ref=e131] [cursor=pointer]:
+            - generic [ref=e133]:
+              - generic [ref=e134]: Ideas
+              - generic [ref=e135]: 20260511-141516-74d8
+          - button "simple-bugfix 20260511-141453-85d9" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]:
+              - generic [ref=e139]: simple-bugfix
+              - generic [ref=e140]: 20260511-141453-85d9
+          - button "simple-bugfix 20260511-112650-20d9" [ref=e141] [cursor=pointer]:
+            - generic [ref=e143]:
+              - generic [ref=e144]: simple-bugfix
+              - generic [ref=e145]: 20260511-112650-20d9
+          - button "simple-bugfix 20260511-082850-1b80" [ref=e146] [cursor=pointer]:
+            - generic [ref=e148]:
+              - generic [ref=e149]: simple-bugfix
+              - generic [ref=e150]: 20260511-082850-1b80
+          - button "simple-bugfix 20260511-082623-d3c5" [ref=e151] [cursor=pointer]:
+            - generic [ref=e153]:
+              - generic [ref=e154]: simple-bugfix
+              - generic [ref=e155]: 20260511-082623-d3c5
+          - button "simple-bugfix 20260511-073023-ba23" [ref=e156] [cursor=pointer]:
+            - generic [ref=e158]:
+              - generic [ref=e159]: simple-bugfix
+              - generic [ref=e160]: 20260511-073023-ba23
+          - button "simple-bugfix 20260511-050041-0c29" [ref=e161] [cursor=pointer]:
+            - generic [ref=e163]:
+              - generic [ref=e164]: simple-bugfix
+              - generic [ref=e165]: 20260511-050041-0c29
+          - button "simple-bugfix 20260510-125218-4628" [ref=e166] [cursor=pointer]:
+            - generic [ref=e168]:
+              - generic [ref=e169]: simple-bugfix
+              - generic [ref=e170]: 20260510-125218-4628
+          - button "simple-bugfix 20260510-054214-d067" [ref=e171] [cursor=pointer]:
+            - generic [ref=e173]:
+              - generic [ref=e174]: simple-bugfix
+              - generic [ref=e175]: 20260510-054214-d067
+          - button "simple-bugfix 20260510-054151-b4fe" [ref=e176] [cursor=pointer]:
+            - generic [ref=e178]:
+              - generic [ref=e179]: simple-bugfix
+              - generic [ref=e180]: 20260510-054151-b4fe
+          - button "simple-bugfix 20260509-221336-fb82" [ref=e181] [cursor=pointer]:
+            - generic [ref=e183]:
+              - generic [ref=e184]: simple-bugfix
+              - generic [ref=e185]: 20260509-221336-fb82
+          - button "simple-bugfix 20260509-221041-a59b" [ref=e186] [cursor=pointer]:
+            - generic [ref=e188]:
+              - generic [ref=e189]: simple-bugfix
+              - generic [ref=e190]: 20260509-221041-a59b
+          - button "simple-bugfix 20260509-220831-1395" [ref=e191] [cursor=pointer]:
+            - generic [ref=e193]:
+              - generic [ref=e194]: simple-bugfix
+              - generic [ref=e195]: 20260509-220831-1395
+          - button "simple-bugfix 20260509-213544-353c" [ref=e196] [cursor=pointer]:
+            - generic [ref=e198]:
+              - generic [ref=e199]: simple-bugfix
+              - generic [ref=e200]: 20260509-213544-353c
+          - button "planner 20260509-205827-a2ee" [ref=e201] [cursor=pointer]:
+            - generic [ref=e203]:
+              - generic [ref=e204]: planner
+              - generic [ref=e205]: 20260509-205827-a2ee
+          - button "my-pipe 20260509-205759-b19e" [ref=e206] [cursor=pointer]:
+            - generic [ref=e208]:
+              - generic [ref=e209]: my-pipe
+              - generic [ref=e210]: 20260509-205759-b19e
+          - button "planner 20260509-204608-409f" [ref=e211] [cursor=pointer]:
+            - generic [ref=e213]:
+              - generic [ref=e214]: planner
+              - generic [ref=e215]: 20260509-204608-409f
+          - button "planner 20260509-204532-ba30" [ref=e216] [cursor=pointer]:
+            - generic [ref=e218]:
+              - generic [ref=e219]: planner
+              - generic [ref=e220]: 20260509-204532-ba30
+          - button "planner 20260509-204228-d881" [ref=e221] [cursor=pointer]:
+            - generic [ref=e223]:
+              - generic [ref=e224]: planner
+              - generic [ref=e225]: 20260509-204228-d881
+          - button "planner 20260509-194723-8e99" [ref=e226] [cursor=pointer]:
+            - generic [ref=e228]:
+              - generic [ref=e229]: planner
+              - generic [ref=e230]: 20260509-194723-8e99
+          - button "merge-demo 20260509-131752-d70f" [ref=e231] [cursor=pointer]:
+            - generic [ref=e233]:
+              - generic [ref=e234]: merge-demo
+              - generic [ref=e235]: 20260509-131752-d70f
+          - button "review-loop-scenario 20260508-191156-fdaa" [ref=e236] [cursor=pointer]:
+            - generic [ref=e238]:
+              - generic [ref=e239]: review-loop-scenario
+              - generic [ref=e240]: 20260508-191156-fdaa
+          - button "review-loop-scenario 20260508-173834-b33f" [ref=e241] [cursor=pointer]:
+            - generic [ref=e243]:
+              - generic [ref=e244]: review-loop-scenario
+              - generic [ref=e245]: 20260508-173834-b33f
+          - button "review-loop-scenario 20260508-173701-4012" [ref=e246] [cursor=pointer]:
+            - generic [ref=e248]:
+              - generic [ref=e249]: review-loop-scenario
+              - generic [ref=e250]: 20260508-173701-4012
+          - button "review-loop-scenario 20260508-171518-72b3" [ref=e251] [cursor=pointer]:
+            - generic [ref=e253]:
+              - generic [ref=e254]: review-loop-scenario
+              - generic [ref=e255]: 20260508-171518-72b3
+          - button "review-loop-scenario 20260508-170830-0b40" [ref=e256] [cursor=pointer]:
+            - generic [ref=e258]:
+              - generic [ref=e259]: review-loop-scenario
+              - generic [ref=e260]: 20260508-170830-0b40
+          - button "run-minimal-scenario 20260508-170618-d720" [ref=e261] [cursor=pointer]:
+            - generic [ref=e263]:
+              - generic [ref=e264]: run-minimal-scenario
+              - generic [ref=e265]: 20260508-170618-d720
+          - button "review-loop 20260508-163401-a176" [ref=e266] [cursor=pointer]:
+            - generic [ref=e268]:
+              - generic [ref=e269]: review-loop
+              - generic [ref=e270]: 20260508-163401-a176
+          - button "run-minimal-scenario 20260508-162735-d079" [ref=e271] [cursor=pointer]:
+            - generic [ref=e273]:
+              - generic [ref=e274]: run-minimal-scenario
+              - generic [ref=e275]: 20260508-162735-d079
+          - button "review-loop 20260508-160415-0778" [ref=e276] [cursor=pointer]:
+            - generic [ref=e278]:
+              - generic [ref=e279]: review-loop
+              - generic [ref=e280]: 20260508-160415-0778
+          - button "test 20260508-101752-9fad" [ref=e281] [cursor=pointer]:
+            - generic [ref=e283]:
+              - generic [ref=e284]: test
+              - generic [ref=e285]: 20260508-101752-9fad
+          - button "test 20260508-075140-569f" [ref=e286] [cursor=pointer]:
+            - generic [ref=e288]:
+              - generic [ref=e289]: test
+              - generic [ref=e290]: 20260508-075140-569f
+          - button "run-minimal-scenario 20260508-071051-33db" [ref=e291] [cursor=pointer]:
+            - generic [ref=e293]:
+              - generic [ref=e294]: run-minimal-scenario
+              - generic [ref=e295]: 20260508-071051-33db
+          - button "run-minimal-scenario 20260508-065035-b443" [ref=e296] [cursor=pointer]:
+            - generic [ref=e298]:
+              - generic [ref=e299]: run-minimal-scenario
+              - generic [ref=e300]: 20260508-065035-b443
+          - button "plan-implement-loop 20260507-083415-716a" [ref=e301] [cursor=pointer]:
+            - generic [ref=e303]:
+              - generic [ref=e304]: plan-implement-loop
+              - generic [ref=e305]: 20260507-083415-716a
+          - button "review-loop 20260507-075446-6dc9" [ref=e306] [cursor=pointer]:
+            - generic [ref=e308]:
+              - generic [ref=e309]: review-loop
+              - generic [ref=e310]: 20260507-075446-6dc9
+          - button "run-minimal-scenario 20260507-074349-c79a" [ref=e311] [cursor=pointer]:
+            - generic [ref=e313]:
+              - generic [ref=e314]: run-minimal-scenario
+              - generic [ref=e315]: 20260507-074349-c79a
+          - button "review-loop 20260507-072811-e320" [ref=e316] [cursor=pointer]:
+            - generic [ref=e318]:
+              - generic [ref=e319]: review-loop
+              - generic [ref=e320]: 20260507-072811-e320
+          - button "review-loop 20260506-184042-4f45" [ref=e321] [cursor=pointer]:
+            - generic [ref=e323]:
+              - generic [ref=e324]: review-loop
+              - generic [ref=e325]: 20260506-184042-4f45
+          - button "run-minimal-scenario 20260506-182924-a956" [ref=e326] [cursor=pointer]:
+            - generic [ref=e328]:
+              - generic [ref=e329]: run-minimal-scenario
+              - generic [ref=e330]: 20260506-182924-a956
+          - button "run-minimal-scenario 20260506-182403-ad75" [ref=e331] [cursor=pointer]:
+            - generic [ref=e333]:
+              - generic [ref=e334]: run-minimal-scenario
+              - generic [ref=e335]: 20260506-182403-ad75
+          - button "review-loop 20260506-131005-b1b6" [ref=e336] [cursor=pointer]:
+            - generic [ref=e338]:
+              - generic [ref=e339]: review-loop
+              - generic [ref=e340]: 20260506-131005-b1b6
+        - generic [ref=e23]:
+          - button [ref=e24] [cursor=pointer]:
+            - img [ref=e25]
+          - text: Library
+          - button "New pipeline" [ref=e27] [cursor=pointer]:
+            - img [ref=e28]
+        - generic [ref=e29]:
+          - button "review-loop 7 nodes repo" [ref=e30] [cursor=pointer]:
+            - generic [ref=e31]:
+              - generic [ref=e33]: review-loop
+              - generic [ref=e35]: 7 nodes
+            - generic [ref=e36]: repo
+          - button "simple-bugfix 9 nodes repo" [ref=e37] [cursor=pointer]:
+            - generic [ref=e38]:
+              - generic [ref=e39]:
+                - img [ref=e40]
+                - generic [ref=e42]: simple-bugfix
+              - generic [ref=e44]: 9 nodes
+            - generic [ref=e45]: repo
+          - button "planner 3 nodes repo" [ref=e46] [cursor=pointer]:
+            - generic [ref=e47]:
+              - generic [ref=e49]: planner
+              - generic [ref=e51]: 3 nodes
+            - generic [ref=e52]: repo
+          - button "Ideas 3 nodes user" [ref=e53] [cursor=pointer]:
+            - generic [ref=e54]:
+              - generic [ref=e56]: Ideas
+              - generic [ref=e58]: 3 nodes
+            - generic [ref=e59]: user
+      - separator [ref=e60]
+      - generic [ref=e63]:
+        - generic [ref=e652]:
+          - button "__run__20260512-142200-ffe4454.yaml" [ref=e654] [cursor=pointer]:
+            - generic [ref=e655]: __run__20260512-142200-ffe4454.yaml
+          - button "Save" [disabled] [ref=e657] [cursor=pointer]:
+            - img [ref=e658]
+            - text: Save
+        - generic [ref=e662]:
+          - generic [ref=e663]:
+            - button [ref=e664] [cursor=pointer]:
+              - img [ref=e665]
+            - button [ref=e668]:
+              - img [ref=e669]
+            - button [ref=e671] [cursor=pointer]:
+              - img [ref=e672]
+            - button [ref=e677] [cursor=pointer]:
+              - img [ref=e678]
+            - button [ref=e685] [cursor=pointer]:
+              - img [ref=e686]
+            - button [ref=e690] [cursor=pointer]:
+              - img [ref=e691]
+            - button [ref=e696] [cursor=pointer]:
+              - img [ref=e697]
+          - button "In your library — synced" [ref=e701]:
+            - img [ref=e703]
+          - application [ref=e705]:
+            - generic [ref=e707]:
+              - generic:
+                - generic:
+                  - img
+                  - img:
+                    - group "Edge from 9LvO3oid to 2iLjeGm3" [ref=e708] [cursor=pointer]
+                  - img:
+                    - group "Edge from 2iLjeGm3 to end" [ref=e711] [cursor=pointer]
+                  - img:
+                    - group "Edge from 2iLjeGm3 to HmuRVQBx" [ref=e714] [cursor=pointer]
+                  - img:
+                    - group "Edge from HmuRVQBx to KHFCO0US" [ref=e717] [cursor=pointer]
+                  - img:
+                    - group "Edge from KHFCO0US to 9NOnrpKY" [ref=e720] [cursor=pointer]
+                  - img:
+                    - group "Edge from 9NOnrpKY to SsL64qkw" [ref=e723] [cursor=pointer]
+                  - img:
+                    - group "Edge from SsL64qkw to HmuRVQBx" [ref=e726] [cursor=pointer]
+                  - img:
+                    - group "Edge from start to 9LvO3oid" [ref=e729] [cursor=pointer]
+                  - img:
+                    - group "Edge from HmuRVQBx to mWllKR47" [ref=e732] [cursor=pointer]
+                  - img:
+                    - group "Edge from mWllKR47 to end" [ref=e735] [cursor=pointer]
+                  - img:
+                    - group "Edge from 9LvO3oid to 9NOnrpKY" [ref=e738] [cursor=pointer]
+                  - img:
+                    - group "Edge from start to KHFCO0US" [ref=e741] [cursor=pointer]
+                - generic:
+                  - group [ref=e744]:
+                    - generic [ref=e745]:
+                      - generic [ref=e746]:
+                        - img [ref=e747]
+                        - generic [ref=e749]: Start
+                      - generic [ref=e750]: start
+                      - generic [ref=e751]:
+                        - img [ref=e753]
+                        - generic [ref=e755]: user_prompt
+                  - group [ref=e756]:
+                    - generic [ref=e757]:
+                      - generic [ref=e758]:
+                        - img [ref=e760]
+                        - generic [ref=e762]: result
+                      - generic [ref=e763]:
+                        - img [ref=e764]
+                        - generic [ref=e766]: End
+                      - generic [ref=e767]: end
+                  - group [ref=e768]:
+                    - generic [ref=e769]:
+                      - generic [ref=e770]:
+                        - img [ref=e772]
+                        - generic [ref=e774]: in
+                      - generic [ref=e775]:
+                        - img [ref=e776]
+                        - generic [ref=e779]: Debugger
+                        - img [ref=e781]
+                      - generic [ref=e784]: 9LvO3oid
+                      - generic [ref=e785]:
+                        - img [ref=e787]
+                        - generic [ref=e789]: out
+                      - generic [ref=e790]:
+                        - img [ref=e792]
+                        - generic [ref=e794]: how_to_reproduce
+                  - group [ref=e795]:
+                    - generic [ref=e796]:
+                      - generic [ref=e797]:
+                        - img [ref=e799]
+                        - generic [ref=e801]: in
+                      - generic [ref=e802]:
+                        - img [ref=e803]
+                        - generic [ref=e807]: switch
+                      - generic [ref=e808]: 2iLjeGm3
+                      - generic [ref=e809]:
+                        - img [ref=e811]
+                        - generic [ref=e813]: its a bug
+                      - generic [ref=e814]:
+                        - text: else
+                        - generic [ref=e815]:
+                          - img [ref=e817]
+                          - generic [ref=e819]: default
+                  - group [ref=e820]:
+                    - generic [ref=e821]:
+                      - generic [ref=e822]:
+                        - img [ref=e824]
+                        - generic [ref=e826]: in
+                      - generic [ref=e827]:
+                        - img [ref=e828]
+                        - generic [ref=e831]: implementer
+                        - img [ref=e833]
+                      - generic [ref=e836]: KHFCO0US
+                      - generic [ref=e837]:
+                        - img [ref=e839]
+                        - generic [ref=e841]: out
+                  - group [ref=e842]:
+                    - generic [ref=e843]:
+                      - generic [ref=e844]:
+                        - img [ref=e846]
+                        - generic [ref=e848]: in
+                      - generic [ref=e849]:
+                        - img [ref=e851]
+                        - generic [ref=e853]: break
+                      - generic [ref=e854]:
+                        - img [ref=e855]
+                        - generic [ref=e860]: loop
+                      - generic [ref=e861]: HmuRVQBx
+                      - generic [ref=e863]: ↻ max 5
+                      - generic [ref=e864]:
+                        - img [ref=e866]
+                        - generic [ref=e868]: body
+                      - generic [ref=e869]:
+                        - img [ref=e871]
+                        - generic [ref=e873]: done
+                  - group [ref=e874]:
+                    - generic [ref=e875]:
+                      - generic [ref=e876]:
+                        - img [ref=e878]
+                        - generic [ref=e880]: in
+                      - generic [ref=e881]:
+                        - img [ref=e883]
+                        - generic [ref=e885]: steps
+                      - generic [ref=e886]:
+                        - img [ref=e887]
+                        - generic [ref=e890]: Tester
+                        - img [ref=e892]
+                      - generic [ref=e895]: 9NOnrpKY
+                      - generic [ref=e896]:
+                        - img [ref=e898]
+                        - generic [ref=e900]: out
+                  - group [ref=e901]:
+                    - generic [ref=e902]:
+                      - generic [ref=e903]:
+                        - img [ref=e905]
+                        - generic [ref=e907]: in
+                      - generic [ref=e908]:
+                        - img [ref=e909]
+                        - generic [ref=e913]: switch
+                      - generic [ref=e914]: SsL64qkw
+                      - generic [ref=e915]:
+                        - img [ref=e917]
+                        - generic [ref=e919]: branch
+                      - generic [ref=e920]:
+                        - text: else
+                        - generic [ref=e921]:
+                          - img [ref=e923]
+                          - generic [ref=e925]: default
+                  - group [ref=e926]:
+                    - generic [ref=e927]:
+                      - generic [ref=e928]:
+                        - img [ref=e930]
+                        - generic [ref=e932]: in
+                      - generic [ref=e933]:
+                        - img [ref=e934]
+                        - generic [ref=e937]: implementer
+                        - img [ref=e939]
+                      - generic [ref=e942]: mWllKR47
+                      - generic [ref=e943]:
+                        - img [ref=e945]
+                        - generic [ref=e947]: out
+            - img
+      - separator [ref=e64]
+      - complementary [ref=e949]:
+        - generic [ref=e950]:
+          - generic [ref=e951]: simple-bugfix
+          - generic [ref=e952]: 20260512-142200-ffe4454
+          - generic [ref=e953]: Editing run-scoped pipeline · changes sync to template
+  - contentinfo [ref=e67]:
+    - generic [ref=e68]: "Daemon: connected"
+    - generic [ref=e70]: v0.1.0

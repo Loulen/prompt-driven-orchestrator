@@ -539,6 +539,27 @@ export const useEditStore = create<EditState>((set, get) => ({
       }));
     } catch (err: unknown) {
       const raw = err as Record<string, unknown> | null;
+      const status = typeof raw?.status === "number" ? raw.status : undefined;
+      // A 404 on a run-scoped PUT means the run was archived (its pipeline.yaml
+      // was deleted) while this tab was still open and dirty. There's nothing
+      // left to save into — silently close the tab rather than surfacing a
+      // confusing save-error modal that the user would associate with whatever
+      // action triggered the flush (e.g. Launch new run).
+      if (status === 404 && tab.runId) {
+        set((s) => {
+          const tabs = s.openTabs.filter((t) => t.id !== id);
+          const lastSavedAt = { ...s.lastSavedAt };
+          delete lastSavedAt[id];
+          let activeTabId = s.activeTabId;
+          let selection = s.selection;
+          if (s.activeTabId === id) {
+            activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
+            selection = { kind: "none" as const, id: null };
+          }
+          return { openTabs: tabs, activeTabId, selection, lastSavedAt };
+        });
+        return;
+      }
       const message =
         typeof raw?.message === "string" ? raw.message : "Save failed";
       const line =

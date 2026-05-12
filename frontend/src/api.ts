@@ -6,6 +6,7 @@ async function throwStructuredSaveError(resp: Response, fallback: string): Promi
   const body = await resp.json().catch(() => null);
   const err: Record<string, unknown> = {
     message: body?.message ?? body?.error ?? fallback,
+    status: resp.status,
   };
   if (typeof body?.line === "number") err.line = body.line;
   throw err;

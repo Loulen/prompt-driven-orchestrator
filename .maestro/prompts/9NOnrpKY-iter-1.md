@@ -4,12 +4,12 @@ You are node `9NOnrpKY` in pipeline `simple-bugfix`, iteration 1.
 
 ## Inputs
 
-- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
-- `steps`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/9LvO3oid/iter-1/how_to_reproduce.md`
+- `in`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/KHFCO0US/iter-1/out.md`
+- `steps`: read `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/9LvO3oid/iter-1/how_to_reproduce.md`
 
 ## Outputs
 
-- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260511-162244-25e636a/worktree/.maestro/artifacts/9NOnrpKY/iter-1/out.md`
+- `out`: write to `/home/llenoir/Documents/perso/Maestro/.maestro/runs/20260512-142255-43614a3/worktree/.maestro/artifacts/9NOnrpKY/iter-1/out.md`
   Required YAML frontmatter:
   - `Verdict`: enum (allowed: Pass, Fail, Minor_changes)
 
@@ -42,6 +42,8 @@ Treat any compile error as a failure.
 
 Follow the reproduction steps written by the Debugger upstream and verify
 the bug no longer happens in the running app:
+
+The Visual ID is the center of your role, if it cannot be done for some reason then ask for user interaction.
 
 - Start (or attach to) the dev server: `npm run dev` from `frontend/`. The
   user's daemon is already running on port 5172 and serves the API; the

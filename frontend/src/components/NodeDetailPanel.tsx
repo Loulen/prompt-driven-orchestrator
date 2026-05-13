@@ -377,26 +377,38 @@ export default function NodeDetailPanel({
           </div>
         );
 
-        if (terminalExpanded) {
-          return (
-            <div
-              className="flex min-h-0 flex-1 flex-col"
-              data-testid="terminal-fullsize"
+        // Keep `TmuxTerminal` mounted across the fullscreen toggle: render
+        // the same `<ResizablePanelGroup>` parent in both modes and only
+        // conditionally render the details panel + handle. React's reconciler
+        // matches the terminal panel at position 0 in both renders, so the
+        // WebSocket and xterm instance survive the toggle. Conditional panels
+        // with stable `id` + `order` props are the documented pattern for
+        // react-resizable-panels.
+        return (
+          <ResizablePanelGroup
+            orientation="vertical"
+            className="min-h-0 flex-1"
+            data-testid={terminalExpanded ? "terminal-fullsize" : undefined}
+          >
+            <ResizablePanel
+              id="terminal"
+              defaultSize={terminalExpanded ? 100 : 45}
+              minSize="100px"
             >
               {terminalPane}
-            </div>
-          );
-        }
-
-        return (
-          <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-            <ResizablePanel defaultSize={45} minSize="100px" id="terminal">
-              {terminalPane}
             </ResizablePanel>
-            <ResizableHandle />
-            <ResizablePanel defaultSize={55} minSize="100px" id="details">
-              {detailsPane}
-            </ResizablePanel>
+            {!terminalExpanded && (
+              <>
+                <ResizableHandle />
+                <ResizablePanel
+                  id="details"
+                  defaultSize={55}
+                  minSize="100px"
+                >
+                  {detailsPane}
+                </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         );
       })()}

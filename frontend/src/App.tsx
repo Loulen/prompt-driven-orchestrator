@@ -149,26 +149,30 @@ export default function App() {
       ? selectedRun.nodes[selection.id] ?? null
       : null;
 
-  function inspectorTabContent() {
-    if (inspectorTab === "run") {
-      if (isEditingRun && selectedRun && runNode) {
-        return (
-          <NodeDetailPanel
-            key={runNode.node_id}
-            node={runNode}
-            runId={selectedRun.run_id}
-            isArchived={isArchived}
-            nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
-            initialTerminalExpanded={isAutoSelected}
-          />
-        );
-      }
-      if (isEditingRun && selectedRun) {
-        return <RunTabPlaceholder nodeId={selection.id} />;
-      }
-      return <NoRunPlaceholder />;
+  // Both inspector panes are always rendered (with the inactive one hidden
+  // via the `hidden` attribute) so that switching tabs does not unmount the
+  // Run pane's `<NodeDetailPanel>` — which would tear the tmux WebSocket
+  // down and reattach, pushing terminal content upward on every flip.
+  function inspectorRunPane() {
+    if (isEditingRun && selectedRun && runNode) {
+      return (
+        <NodeDetailPanel
+          key={runNode.node_id}
+          node={runNode}
+          runId={selectedRun.run_id}
+          isArchived={isArchived}
+          nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          initialTerminalExpanded={isAutoSelected}
+        />
+      );
     }
+    if (isEditingRun && selectedRun) {
+      return <RunTabPlaceholder nodeId={selection.id} />;
+    }
+    return <NoRunPlaceholder />;
+  }
 
+  function inspectorEditPane() {
     switch (editNodeType) {
       case "switch": return <SwitchInspector />;
       case "loop": return <LoopInspector />;
@@ -427,7 +431,12 @@ export default function App() {
               <>
                 {selection.kind === "node" && editNodeType != null && editNodeType !== "start" && editNodeType !== "end" ? (
                   <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
-                    {inspectorTabContent()}
+                    <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
+                      {inspectorRunPane()}
+                    </div>
+                    <div hidden={inspectorTab !== "edit"} className="h-full" data-testid="inspector-pane-edit">
+                      {inspectorEditPane()}
+                    </div>
                   </InspectorTabs>
                 ) : selection.kind === "node" && editNodeType === "start" && isEditingRun && selectedRun?.start_node && selection.id ? (
                   <StartInspector

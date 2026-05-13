@@ -59,10 +59,18 @@ class MockWebSocket {
 vi.stubGlobal("WebSocket", MockWebSocket);
 
 // Use vi.hoisted to create mocks that are accessible in vi.mock factories
-const { mockTerminalCalls, mockTerminalInstances } = vi.hoisted(() => {
+const { mockTerminalCalls, mockTerminalInstances, proposeDimensionsImpl } = vi.hoisted(() => {
   const calls: unknown[][] = [];
   const instances: MockTerminal[] = [];
-  return { mockTerminalCalls: calls, mockTerminalInstances: instances };
+  // Mutable holder so tests can override what FitAddon.proposeDimensions returns.
+  const impl: { current: () => { cols: number; rows: number } | undefined } = {
+    current: () => ({ cols: 80, rows: 24 }),
+  };
+  return {
+    mockTerminalCalls: calls,
+    mockTerminalInstances: instances,
+    proposeDimensionsImpl: impl,
+  };
 });
 
 interface MockTerminal {
@@ -106,7 +114,7 @@ vi.mock("@xterm/addon-fit", () => ({
   FitAddon: function FitAddon() {
     return {
       fit: vi.fn(),
-      proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+      proposeDimensions: vi.fn(() => proposeDimensionsImpl.current()),
     };
   },
 }));
@@ -132,6 +140,7 @@ describe("TmuxTerminal", () => {
     wsInstances.length = 0;
     mockTerminalCalls.length = 0;
     mockTerminalInstances.length = 0;
+    proposeDimensionsImpl.current = () => ({ cols: 80, rows: 24 });
   });
 
   afterEach(() => {
@@ -196,6 +205,47 @@ describe("TmuxTerminal", () => {
       return false;
     });
     expect(resizeMsgs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Regression: FitAddon.proposeDimensions() can momentarily return zero
+  // (e.g. while the container is still animating in). The daemon rejected
+  // any cols/rows=0 resize and historically wrote the JSON text into the
+  // PTY as user keystrokes, polluting the focused input. The frontend must
+  // not even send these in the first place.
+  it("does not send a resize message when proposeDimensions returns zero cols", async () => {
+    proposeDimensionsImpl.current = () => ({ cols: 0, rows: 24 });
+    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const ws = wsInstances[0];
+    const resizeMsgs = ws.sent.filter(
+      (s) => typeof s === "string" && s.includes("\"resize\""),
+    );
+    expect(resizeMsgs).toHaveLength(0);
+  });
+
+  it("does not send a resize message when proposeDimensions returns zero rows", async () => {
+    proposeDimensionsImpl.current = () => ({ cols: 80, rows: 0 });
+    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const ws = wsInstances[0];
+    const resizeMsgs = ws.sent.filter(
+      (s) => typeof s === "string" && s.includes("\"resize\""),
+    );
+    expect(resizeMsgs).toHaveLength(0);
+  });
+
+  it("does not send a resize message when proposeDimensions returns undefined", async () => {
+    proposeDimensionsImpl.current = () => undefined;
+    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const ws = wsInstances[0];
+    const resizeMsgs = ws.sent.filter(
+      (s) => typeof s === "string" && s.includes("\"resize\""),
+    );
+    expect(resizeMsgs).toHaveLength(0);
   });
 
   it("initializes xterm.js Terminal with correct theme", () => {

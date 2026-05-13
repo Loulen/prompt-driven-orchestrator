@@ -14,6 +14,23 @@ interface Props {
   status?: string;
 }
 
+// Send a resize message to the daemon, but only if the dimensions are valid.
+// FitAddon.proposeDimensions() can momentarily return 0-rows/0-cols during
+// a transient layout pass (container attached but not yet measured). The
+// daemon's resize decoder rejects zero values, and historically would treat
+// the rejected JSON as user input — injecting stray characters into whatever
+// has focus in tmux. Guarding here closes that hole at the source.
+function sendResize(ws: WebSocket, fitAddon: FitAddon): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  const dims = fitAddon.proposeDimensions();
+  if (!dims) return;
+  if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+  if (dims.cols <= 0 || dims.rows <= 0) return;
+  ws.send(
+    JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+  );
+}
+
 export default function TmuxTerminal({
   session,
   expanded = false,
@@ -89,13 +106,7 @@ export default function TmuxTerminal({
 
     ws.addEventListener("open", () => {
       setConnected(true);
-      // Send initial resize
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        ws.send(
-          JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
-        );
-      }
+      sendResize(ws, fitAddon);
     });
 
     ws.addEventListener("message", (event) => {
@@ -160,18 +171,7 @@ export default function TmuxTerminal({
     // Resize observer
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows,
-            }),
-          );
-        }
-      }
+      sendResize(ws, fitAddon);
     });
     resizeObserver.observe(container);
 

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useEffect } from "react";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -12,6 +13,12 @@ const fetchNodeIOMock = vi
   .fn()
   .mockResolvedValue({ inputs: [], outputs: [] });
 
+// Test-visible counters for the mocked TmuxTerminal lifecycle. Used by the
+// "WebSocket survives fullscreen toggle" regression test to assert React
+// does not remount the terminal subtree when the user toggles fullscreen.
+const tmuxMountCount = { current: 0 };
+const tmuxUnmountCount = { current: 0 };
+
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
@@ -19,23 +26,37 @@ vi.mock("../api", () => ({
   attachSession: vi.fn(),
 }));
 
-vi.mock("./TmuxTerminal", () => ({
-  default: ({ session, expanded, onExpand, status }: {
-    session: string;
-    expanded?: boolean;
-    onExpand?: () => void;
-    status?: string;
-  }) => (
+function MockTmuxTerminal({ session, expanded, onExpand, status }: {
+  session: string;
+  expanded?: boolean;
+  onExpand?: () => void;
+  status?: string;
+}) {
+  useEffect(() => {
+    tmuxMountCount.current += 1;
+    return () => {
+      tmuxUnmountCount.current += 1;
+    };
+  }, []);
+  return (
     <div data-testid="tmux-terminal" data-session={session} data-expanded={expanded} data-status={status}>
       <button data-testid="term-expand" onClick={onExpand}>expand</button>
     </div>
-  ),
+  );
+}
+
+vi.mock("./TmuxTerminal", () => ({
+  default: MockTmuxTerminal,
 }));
 
 vi.mock("./ui/resizable", () => ({
-  ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
+  ResizablePanelGroup: ({
+    children,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    [key: string]: unknown;
+  }) => <div {...rest}>{children}</div>,
   ResizablePanel: ({ children }: { children: React.ReactNode }) => (
     <div>{children}</div>
   ),
@@ -67,6 +88,8 @@ describe("NodeDetailPanel", () => {
   beforeEach(() => {
     fetchPromptMock.mockClear();
     fetchNodeIOMock.mockClear();
+    tmuxMountCount.current = 0;
+    tmuxUnmountCount.current = 0;
   });
 
   describe("TmuxTerminal integration", () => {
@@ -193,6 +216,41 @@ describe("NodeDetailPanel", () => {
 
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+    });
+
+    // Regression: toggling fullscreen used to swap a `<div>` wrapper for a
+    // `<ResizablePanelGroup>` wrapper at the same JSX position, which made
+    // React unmount + remount `TmuxTerminal`. The remount tore the WebSocket
+    // down, spawned a fresh tmux client, and pushed Claude Code's prompt up
+    // by a line on every toggle.
+    it("does not remount TmuxTerminal when the user toggles fullscreen", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      const firstNode = screen.getByTestId("tmux-terminal");
+
+      // Expand
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
+
+      // Collapse
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
+
+      // Expand again
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
     });
   });
 

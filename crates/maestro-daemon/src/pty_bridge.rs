@@ -180,10 +180,17 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
                             warn!("PTY resize failed: {e}");
                         }
                     } else {
-                        // Text that isn't a control message — treat as input
-                        if pty_writer.write_all(text.as_bytes()).is_err() {
-                            break;
-                        }
+                        // Unknown / malformed control frames must NEVER be
+                        // written to the PTY as user input — that would inject
+                        // stray characters into whatever has the focus inside
+                        // tmux (Claude Code's prompt, an editor, etc.). User
+                        // keystrokes always travel as Binary frames; Text
+                        // frames are reserved for our JSON control protocol.
+                        warn!(
+                            "Ignoring unrecognized text frame on PTY socket \
+                             ({} bytes)",
+                            text.len()
+                        );
                     }
                 }
                 Message::Close(_) => break,

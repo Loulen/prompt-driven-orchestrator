@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { Info, Terminal, X, FileText, Code } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
+import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { serializePipeline } from "../stores/editStore";
@@ -185,6 +186,8 @@ function InfoTab({
           </div>
         )}
       </div>
+
+      <DiffSection run={run} />
 
       <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
         <SectionHead title="Description" />

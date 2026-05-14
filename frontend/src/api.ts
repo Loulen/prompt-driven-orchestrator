@@ -397,6 +397,22 @@ export async function saveLibraryPipeline(
   return resp.json();
 }
 
+// --- Diff API (refs #116) ---
+
+export async function fetchRunDiff(runId: string): Promise<string> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/diff`);
+  if (!resp.ok) throw new Error(`GET /runs/${runId}/diff failed: ${resp.status}`);
+  return resp.text();
+}
+
+export async function fetchNodeDiff(runId: string, nodeId: string): Promise<string> {
+  const resp = await fetch(
+    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/diff`,
+  );
+  if (!resp.ok) throw new Error(`GET /runs/${runId}/nodes/${nodeId}/diff failed: ${resp.status}`);
+  return resp.text();
+}
+
 export async function deleteLibraryPipeline(id: string): Promise<void> {
   const resp = await fetch(`${BASE}/library/pipelines/${encodeURIComponent(id)}`, {
     method: "DELETE",

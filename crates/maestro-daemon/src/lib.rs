@@ -413,6 +413,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
         .route("/runs/{run_id}/nodes/{node_id}/prompt", get(node_prompt))
         .route("/runs/{run_id}/nodes/{node_id}/io", get(node_io))
+        .route("/runs/{run_id}/diff", get(run_diff))
+        .route("/runs/{run_id}/nodes/{node_id}/diff", get(node_diff))
         .route("/runs/{run_id}/artifact", get(artifact))
         .route("/runs/{run_id}/pipeline", get(get_run_pipeline))
         .route(
@@ -1975,6 +1977,89 @@ async fn get_run_events(
     };
 
     Json(events).into_response()
+}
+
+// --- Diff endpoints (refs #116) ---
+
+async fn run_diff(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    if event_log::project(&events).is_none() {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    }
+
+    let pipeline_branch = format!("maestro/run-{run_id}");
+    let output = match std::process::Command::new("git")
+        .args(["diff", "HEAD", &pipeline_branch])
+        .current_dir(&state.repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {e}"))
+                .into_response();
+        }
+    };
+
+    let diff = String::from_utf8_lossy(&output.stdout);
+    (StatusCode::OK, diff.into_owned()).into_response()
+}
+
+async fn node_diff(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+) -> Response {
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+    };
+
+    let node = match run_state.nodes.get(&node_id) {
+        Some(n) => n,
+        None => return (StatusCode::NOT_FOUND, "node not found").into_response(),
+    };
+
+    let pipeline_branch = format!("maestro/run-{run_id}");
+    let sub_branch = sub_worktree_branch(&run_id, &node_id, node.iter);
+
+    let output = match std::process::Command::new("git")
+        .args(["diff", &pipeline_branch, &sub_branch])
+        .current_dir(&state.repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {e}"))
+                .into_response();
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("unknown revision") || stderr.contains("not a git repository") {
+            return (StatusCode::NOT_FOUND, "node branch not found").into_response();
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {stderr}"))
+            .into_response();
+    }
+
+    let diff = String::from_utf8_lossy(&output.stdout);
+    (StatusCode::OK, diff.into_owned()).into_response()
 }
 
 // --- Run-scoped pipeline modification handler ---
@@ -8428,5 +8513,210 @@ edges: []
             std::env::set_var("HOME", p);
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // --- Diff endpoint tests (refs #116) ---
+
+    #[tokio::test]
+    async fn run_diff_returns_404_for_nonexistent_run() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/no-such-run/diff")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn node_diff_returns_404_for_nonexistent_run() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runs/no-such-run/nodes/impl-1/diff")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn run_diff_returns_empty_diff_when_no_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-empty";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.is_empty() || body.trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_diff_returns_aggregate_diff_with_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-agg";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        // Make a change on the pipeline branch
+        std::fs::write(wt_dir.join("new_file.rs"), "fn hello() {}\n").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&wt_dir)
+                .output()
+                .unwrap()
+        };
+        run(&["add", "new_file.rs"]);
+        run(&["commit", "-m", "add new_file"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("new_file.rs"), "diff should mention new_file.rs");
+        assert!(body.contains("fn hello()"), "diff should contain the added content");
+    }
+
+    #[tokio::test]
+    async fn node_diff_returns_per_node_diff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-node";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        // Create a sub-worktree for impl-1
+        let sub_wt_dir = sub_worktree_path(repo, run_id, "impl-1", 1);
+        let sub_branch = sub_worktree_branch(run_id, "impl-1", 1);
+        create_sub_worktree(repo, &sub_wt_dir, &sub_branch, &pipeline_branch).unwrap();
+
+        // Make a change in the sub-worktree
+        std::fs::write(sub_wt_dir.join("node_file.rs"), "fn node_work() {}\n").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&sub_wt_dir)
+                .output()
+                .unwrap()
+        };
+        run(&["add", "node_file.rs"]);
+        run(&["commit", "-m", "node impl"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/nodes/impl-1/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("node_file.rs"), "diff should mention node_file.rs");
+        assert!(body.contains("fn node_work()"), "diff should contain the node's changes");
+    }
+
+    #[tokio::test]
+    async fn node_diff_returns_404_for_nonexistent_node() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-no-node";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("maestro/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/nodes/nonexistent/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

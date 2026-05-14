@@ -62,6 +62,7 @@ pub enum EventKind {
     RunFailed,
     RunHalted,
     RunArchived,
+    RunRenamed,
     CommandIssued,
 }
 
@@ -175,6 +176,8 @@ pub struct RunState {
     pub run_id: String,
     pub status: RunStatus,
     pub pipeline_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub input: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -201,6 +204,7 @@ impl RunState {
             run_id,
             status: RunStatus::Running,
             pipeline_name,
+            name: None,
             input: None,
             started_at: None,
             completed_at: None,
@@ -273,6 +277,11 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 if let Some(ref payload) = event.payload {
                     if let Some(name) = payload.get("pipeline_name").and_then(|v| v.as_str()) {
                         state.pipeline_name = name.to_string();
+                    }
+                    if let Some(run_name) = payload.get("name").and_then(|v| v.as_str()) {
+                        if !run_name.is_empty() {
+                            state.name = Some(run_name.to_string());
+                        }
                     }
                     if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
                         state.input = Some(input.to_string());
@@ -596,6 +605,17 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                         port.status = "received".to_string();
                         port.reason = reason.clone();
                         port.fired_at = Some(event.ts.clone());
+                    }
+                }
+            }
+            EventKind::RunRenamed => {
+                if let Some(ref payload) = event.payload {
+                    if let Some(new_name) = payload.get("name").and_then(|v| v.as_str()) {
+                        if new_name.is_empty() {
+                            state.name = None;
+                        } else {
+                            state.name = Some(new_name.to_string());
+                        }
                     }
                 }
             }
@@ -1831,5 +1851,121 @@ mod tests {
         let fe_state = &state.foreach_states["fe1"];
         assert!(fe_state.break_received);
         assert!(!fe_state.done);
+    }
+
+    // --- Run display name tests (issue #115) ---
+
+    #[test]
+    fn run_started_with_name_sets_display_name() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "name": "My Feature Run"
+            }),
+        )];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.name.as_deref(), Some("My Feature Run"));
+        assert_eq!(state.pipeline_name, "test-pipe");
+    }
+
+    #[test]
+    fn run_started_without_name_has_none() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff"
+            }),
+        )];
+
+        let state = project(&events).unwrap();
+        assert!(state.name.is_none());
+    }
+
+    #[test]
+    fn run_started_with_empty_name_has_none() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "name": ""
+            }),
+        )];
+
+        let state = project(&events).unwrap();
+        assert!(state.name.is_none());
+    }
+
+    #[test]
+    fn run_renamed_updates_display_name() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "test-pipe",
+                    "input": "do stuff"
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::RunRenamed,
+                None,
+                serde_json::json!({ "name": "Better Name" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.name.as_deref(), Some("Better Name"));
+    }
+
+    #[test]
+    fn run_renamed_overwrites_previous_name() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "test-pipe",
+                    "name": "First Name"
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::RunRenamed,
+                None,
+                serde_json::json!({ "name": "Second Name" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.name.as_deref(), Some("Second Name"));
+    }
+
+    #[test]
+    fn run_renamed_to_empty_clears_name() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "test-pipe",
+                    "name": "Had a Name"
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::RunRenamed,
+                None,
+                serde_json::json!({ "name": "" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert!(state.name.is_none());
     }
 }

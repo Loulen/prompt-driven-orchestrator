@@ -162,6 +162,7 @@ export interface CreateRunRequest {
   input: string;
   variables: Record<string, unknown>;
   pipeline_id?: string;
+  name?: string;
 }
 
 export interface CreateRunResponse {
@@ -183,6 +184,15 @@ export async function cleanupRun(runId: string): Promise<void> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind: "cleanup_run" }),
+  });
+  if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+}
+
+export async function renameRun(runId: string, name: string): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "rename_run", name }),
   });
   if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
 }

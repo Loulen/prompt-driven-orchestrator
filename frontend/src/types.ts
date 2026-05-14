@@ -7,6 +7,7 @@ export interface RunListEntry {
   pipeline_name: string;
   status: RunStatus;
   started_at: string | null;
+  name?: string | null;
 }
 
 export interface IterationInfo {
@@ -100,6 +101,7 @@ export interface RunState {
   run_id: string;
   status: RunStatus;
   pipeline_name: string;
+  name?: string | null;
   input: string | null;
   started_at: string | null;
   completed_at: string | null;

@@ -127,6 +127,8 @@ struct CreateRunRequest {
     variables: HashMap<String, serde_yaml::Value>,
     #[serde(default)]
     pipeline_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -140,6 +142,8 @@ struct RunListEntry {
     pipeline_name: String,
     status: event_log::RunStatus,
     started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -174,6 +178,8 @@ struct RunCommandRequest {
     path: Option<String>,
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -403,10 +409,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines", post(create_pipeline))
         .route("/runs", post(create_run))
         .route("/runs", get(list_runs))
-        .route(
-            "/runs/{run_id}",
-            get(get_run).delete(forget_run),
-        )
+        .route("/runs/{run_id}", get(get_run).delete(forget_run))
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
@@ -1799,6 +1802,11 @@ async fn create_run(
     if let Some(vars) = variables_json {
         run_payload["variables"] = vars;
     }
+    if let Some(ref name) = req.name {
+        if !name.is_empty() {
+            run_payload["name"] = serde_json::json!(name);
+        }
+    }
 
     let run_started = event_log::Event {
         id: None,
@@ -1936,6 +1944,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 pipeline_name: run_state.pipeline_name,
                 status: run_state.status,
                 started_at: run_state.started_at,
+                name: run_state.name,
             });
         }
     }
@@ -2218,11 +2227,7 @@ fn sync_run_pipeline_to_template(
 
 // --- Orphan sweep / reaper ---
 
-async fn run_orphan_sweep(
-    db: &sqlx::SqlitePool,
-    socket: &str,
-    ttl: Duration,
-) -> Result<()> {
+async fn run_orphan_sweep(db: &sqlx::SqlitePool, socket: &str, ttl: Duration) -> Result<()> {
     let run_ids = load_all_run_ids(db).await?;
     let mut run_states: HashMap<String, event_log::RunState> = HashMap::new();
 
@@ -3518,6 +3523,24 @@ async fn run_command(
             }
 
             info!("inject_artifact: {path} in run {run_id}");
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "rename_run" => {
+            let new_name = req.name.unwrap_or_default();
+            let rename_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunRenamed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "name": new_name })),
+            };
+            if let Err(e) = append_event(&state, &rename_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            info!("rename_run: run {run_id} renamed to {:?}", new_name);
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         "cleanup_run" => cleanup_run(&state, &run_id).await,
@@ -5284,6 +5307,156 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- Run display name tests (issue #115) ---
+
+    #[tokio::test]
+    async fn rename_run_updates_display_name() {
+        let state = test_state().await;
+        let run_id = "rename-test";
+        seed_completed_run(&state, run_id).await;
+
+        // Rename the run
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "rename_run", "name": "My Feature"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Verify GET /runs/:id returns the name
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["name"], "My Feature");
+    }
+
+    #[tokio::test]
+    async fn rename_run_appears_in_list() {
+        let state = test_state().await;
+        let run_id = "rename-list-test";
+        seed_completed_run(&state, run_id).await;
+
+        // Rename the run
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "rename_run", "name": "Listed Name"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Verify GET /runs returns the name
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let entry = body.iter().find(|r| r["run_id"] == run_id).unwrap();
+        assert_eq!(entry["name"], "Listed Name");
+    }
+
+    #[tokio::test]
+    async fn run_without_name_has_null_name_in_list() {
+        let state = test_state().await;
+        let run_id = "no-name-test";
+        seed_completed_run(&state, run_id).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let entry = body.iter().find(|r| r["run_id"] == run_id).unwrap();
+        assert!(entry.get("name").is_none() || entry["name"].is_null());
+    }
+
+    #[tokio::test]
+    async fn create_run_with_name() {
+        let state = test_state().await;
+        let run_id = "named-create";
+
+        // Seed a run with a name in the RunStarted payload
+        let event = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "hello",
+                "name": "Named Run"
+            })),
+        };
+        append_event(&state, &event).await.unwrap();
+
+        // Verify GET /runs/:id returns the name
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["name"], "Named Run");
     }
 
     #[tokio::test]

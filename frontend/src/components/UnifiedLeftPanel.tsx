@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { Plus, Star, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Pencil, Plus, Star, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import type { RunListEntry, RunStatus, PipelineListEntry, PipelineScope } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, forgetRun } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, forgetRun, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
@@ -45,6 +45,9 @@ export default function UnifiedLeftPanel({
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
   const [runsExpanded, setRunsExpanded] = useState(true);
   const [libraryExpanded, setLibraryExpanded] = useState(true);
+  const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
@@ -75,6 +78,28 @@ export default function UnifiedLeftPanel({
       // event-driven refresh will pick up state change
     }
     setConfirmForget(null);
+  }
+
+  function startRename(run: RunListEntry) {
+    setRenamingRunId(run.run_id);
+    setRenameValue(run.name ?? "");
+    setTimeout(() => renameInputRef.current?.focus(), 0);
+  }
+
+  async function commitRename() {
+    if (!renamingRunId) return;
+    try {
+      await renameRun(renamingRunId, renameValue.trim());
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+    setRenamingRunId(null);
+    setRenameValue("");
+  }
+
+  function cancelRename() {
+    setRenamingRunId(null);
+    setRenameValue("");
   }
 
   async function handleConfirmDelete() {
@@ -126,6 +151,8 @@ export default function UnifiedLeftPanel({
             const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
             const isArchived = run.status === "archived";
             const canCleanup = !isArchived;
+            const displayLabel = run.name || null;
+            const isRenaming = renamingRunId === run.run_id;
 
             return (
               <button
@@ -144,14 +171,48 @@ export default function UnifiedLeftPanel({
                   }`}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">{run.pipeline_name}</div>
+                  {isRenaming ? (
+                    <input
+                      ref={renameInputRef}
+                      className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
+                      style={{ fontSize: "11.5px" }}
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={() => commitRename()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") cancelRename();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      data-testid="rename-input"
+                    />
+                  ) : (
+                    <div className="truncate font-medium" data-testid="run-display-label">
+                      {displayLabel ?? run.run_id.slice(0, 20)}
+                    </div>
+                  )}
                   <div
                     className="truncate font-mono text-fg-4"
                     style={{ fontSize: "10px" }}
+                    data-testid="run-pipeline-name"
                   >
-                    {run.run_id.slice(0, 20)}
+                    {run.pipeline_name}
                   </div>
                 </div>
+                {!isRenaming && (
+                  <span
+                    role="button"
+                    title="Rename run"
+                    className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startRename(run);
+                    }}
+                    data-testid="rename-button"
+                  >
+                    <Pencil size={12} />
+                  </span>
+                )}
                 {canCleanup && (
                   <span
                     role="button"

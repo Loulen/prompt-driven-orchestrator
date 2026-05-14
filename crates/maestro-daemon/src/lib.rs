@@ -1268,24 +1268,12 @@ async fn spawn_node(
 
     let foreach_context = find_foreach_context(spawn_ctx, &node.id, iter);
 
-    let aug_ctx = prompt_augmenter::AugmentContext {
-        pipeline: spawn_ctx.pipeline,
-        node,
-        run_id,
-        iter,
-        artifacts_dir: spawn_ctx.artifacts_dir,
-        variables: spawn_ctx.resolved_vars,
-        daemon_url: &format!("http://localhost:{}", state.port),
-        foreach_context,
-    };
+    let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
+        || node.node_type == pipeline::NodeType::Merge;
 
-    let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
-
-    let working_dir = if node.node_type == pipeline::NodeType::CodeMutating
-        || node.node_type == pipeline::NodeType::Merge
-    {
-        let sub_wt_dir = sub_worktree_path(&state.repo_root, run_id, &node.id, 1);
-        let sub_branch = sub_worktree_branch(run_id, &node.id, 1);
+    let working_dir = if has_sub_worktree {
+        let sub_wt_dir = sub_worktree_path(&state.repo_root, run_id, &node.id, iter);
+        let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
         let pipeline_branch = format!("maestro/run-{run_id}");
 
         if let Err(e) =
@@ -1298,6 +1286,20 @@ async fn spawn_node(
     } else {
         spawn_ctx.worktree_dir.to_path_buf()
     };
+
+    let aug_ctx = prompt_augmenter::AugmentContext {
+        pipeline: spawn_ctx.pipeline,
+        node,
+        run_id,
+        iter,
+        artifacts_dir: spawn_ctx.artifacts_dir,
+        variables: spawn_ctx.resolved_vars,
+        daemon_url: &format!("http://localhost:{}", state.port),
+        foreach_context,
+        source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+    };
+
+    let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
     let node_started = event_log::Event {
         id: None,

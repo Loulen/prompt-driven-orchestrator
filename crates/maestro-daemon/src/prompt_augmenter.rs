@@ -31,6 +31,10 @@ pub struct AugmentContext<'a> {
     #[allow(dead_code)]
     pub daemon_url: &'a str,
     pub foreach_context: Option<ForEachContext>,
+    /// For code-mutating / merge nodes: the per-iteration sub-worktree the
+    /// agent must edit in. Set to `None` for nodes that run directly in the
+    /// pipeline worktree (doc-only, switch, loop, etc.).
+    pub source_worktree_dir: Option<&'a Path>,
 }
 
 pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
@@ -172,6 +176,26 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
             }
         }
         preamble.push('\n');
+    }
+
+    // Source code edits (only for nodes that get a per-iteration sub-worktree)
+    if let Some(sub_wt) = ctx.source_worktree_dir {
+        preamble.push_str("## Source code edits\n\n");
+        preamble.push_str(&format!(
+            "Your working directory `{}` is a **dedicated git worktree** of \
+             the project, on its own branch. Make **all** source code edits \
+             there — do not `cd` elsewhere to edit files. Read with relative \
+             paths or paths under this directory.\n\n\
+             The input/output artefact paths above live in the *pipeline \
+             worktree* (a different directory, shared with other nodes). \
+             Treat those paths as read-only/write-only for artefacts; never \
+             edit source code there.\n\n\
+             When you run `maestro complete`, your committed changes are \
+             automatically merged from this sub-worktree back into the \
+             pipeline worktree. Edits made outside this directory will be \
+             silently dropped from the merge.\n\n",
+            sub_wt.display()
+        ));
     }
 
     // CLI commands
@@ -381,6 +405,7 @@ mod tests {
             variables,
             daemon_url: "http://localhost:5172",
             foreach_context: None,
+            source_worktree_dir: None,
         }
     }
 

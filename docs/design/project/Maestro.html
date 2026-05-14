@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="styles.css"/>
 <link rel="stylesheet" href="styles-v2.css"/>
 <link rel="stylesheet" href="winners.css"/>
+<link rel="stylesheet" href="styles-v3.css"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -39,6 +40,7 @@
 <script type="text/babel" src="loop-node.jsx"></script>
 <script type="text/babel" src="screens.jsx"></script>
 <script type="text/babel" src="screens-v2.jsx"></script>
+<script type="text/babel" src="screens-v3.jsx"></script>
 <script type="text/babel" src="spotlights.jsx"></script>
 
 <script type="text/babel" data-presets="env,react">
@@ -72,6 +74,50 @@ function MaestroApp() {
   return (
     <>
       <DesignCanvas minScale={0.05} maxScale={2}>
+        <DCSection id="v3A" title="Happy path A — Run lifecycle intervention" subtitle="Per-node Play/Retry/Stop · stopped · stale · paused run states">
+          <DCArtboard id="v3-a1" label="01 · Run · running node · lifecycle controls" width={ART_W} height={ART_H}>
+            <ScreenV3_A1/>
+          </DCArtboard>
+          <DCArtboard id="v3-a2" label="02 · Run · paused · Resume highlighted" width={ART_W} height={ART_H}>
+            <ScreenV3_A2/>
+          </DCArtboard>
+          <DCArtboard id="v3-a3" label="03 · Run · stopped node · downstream cascade" width={ART_W} height={ART_H}>
+            <ScreenV3_A3/>
+          </DCArtboard>
+          <DCArtboard id="v3-a4" label="04 · Run · stale node · agent idle banner" width={ART_W} height={ART_H}>
+            <ScreenV3_A4/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="v3B" title="Happy path B — Launch a new run on a different repo" subtitle="Multi-section New Run modal · repo + branch · two-group pipeline picker · image upload · labeled run rows">
+          <DCArtboard id="v3-b5" label="05 · New Run · repo + branch + pipeline groups" width={ART_W} height={ART_H}>
+            <ScreenV3_B5/>
+          </DCArtboard>
+          <DCArtboard id="v3-b6" label="06 · New Run · image upload with thumbnails" width={ART_W} height={ART_H}>
+            <ScreenV3_B6/>
+          </DCArtboard>
+          <DCArtboard id="v3-b7" label="07 · Left panel · run rows with display labels" width={ART_W} height={ART_H}>
+            <ScreenV3_B7/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="v3C" title="Happy path C — Diffs and image outputs during a run" subtitle="Aggregate diff viewer · image gallery + lightbox · markdown with inline images">
+          <DCArtboard id="v3-c8" label="08 · Pipeline info · aggregate run diff" width={ART_W} height={ART_H}>
+            <ScreenV3_C8/>
+          </DCArtboard>
+          <DCArtboard id="v3-c9" label="09 · Node detail · image_list output gallery" width={ART_W} height={ART_H}>
+            <ScreenV3_C9/>
+          </DCArtboard>
+          <DCArtboard id="v3-c10" label="10 · Markdown viewer · inline images" width={ART_W} height={ART_H}>
+            <ScreenV3_C10/>
+          </DCArtboard>
+        </DCSection>
+        <DCSection id="v3S" title="Component spotlight" subtitle="Output port type selector · library pipeline drift indicator">
+          <DCArtboard id="v3-s11" label="11 · Spotlight · output port type selector" width={ART_W} height={ART_H}>
+            <ScreenV3_S11/>
+          </DCArtboard>
+          <DCArtboard id="v3-s12" label="12 · Spotlight · library pipeline drift indicator" width={ART_W} height={ART_H}>
+            <ScreenV3_S12/>
+          </DCArtboard>
+        </DCSection>
         <DCSection id="happyA" title="Happy path A — Monitor and intervene during a Run" subtitle="Inline xterm.js, fused panel, edit-during-run, frontmatter retry exhausted">
           <DCArtboard id="a1-run-default" label="01 · Run · node terminal at default height" width={ART_W} height={ART_H}>
             <ScreenA1/>

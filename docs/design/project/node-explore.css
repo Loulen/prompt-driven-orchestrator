@@ -1,0 +1,821 @@
+/* Node Component Exploration — isolated component sheets
+   Themable through CSS vars at the hypothesis-wrapper level so a stroke width
+   / halo offset / motion duration is a one-line swap.
+*/
+
+:root{
+  --sheet-pad: 56px;
+  --sheet-gap: 80px;
+  --cell-bg: var(--bg-2);
+  --cell-line: var(--line);
+  --col-gap: 18px;
+  --row-gap: 14px;
+}
+
+body{
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-1);
+}
+
+.expl-doc{
+  padding: 40px var(--sheet-pad) 120px;
+  max-width: 1860px;
+  margin: 0 auto;
+}
+
+/* ============================================================ */
+/* Document head                                                */
+/* ============================================================ */
+.expl-head{
+  display: flex; align-items: baseline; gap: 18px;
+  padding: 6px 0 28px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 40px;
+}
+.expl-head .eyebrow{
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--fg-4);
+  text-transform: uppercase;
+}
+.expl-head h1{
+  font-size: 22px; font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.expl-head .sub{
+  color: var(--fg-3);
+  font-size: 13px;
+  margin-left: auto;
+  max-width: 540px;
+  text-align: right;
+}
+
+/* ============================================================ */
+/* Sheet                                                         */
+/* ============================================================ */
+.sheet{
+  margin-bottom: var(--sheet-gap);
+}
+.sheet-head{
+  display: flex; align-items: baseline; gap: 14px;
+  margin-bottom: 6px;
+}
+.sheet-num{
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+  letter-spacing: 0.16em;
+}
+.sheet-title{
+  font-size: 17px; font-weight: 600;
+  letter-spacing: -0.005em;
+  margin: 0;
+}
+.sheet-desc{
+  font-size: 12.5px;
+  color: var(--fg-3);
+  max-width: 820px;
+  margin: 4px 0 22px;
+  line-height: 1.55;
+}
+.sheet-rule{
+  height: 1px; background: var(--line);
+  margin-bottom: 28px;
+}
+
+/* ============================================================ */
+/* Sheet 1 — matrix                                              */
+/* ============================================================ */
+.matrix{
+  display: grid;
+  grid-template-columns: 120px repeat(5, 1fr);
+  gap: var(--row-gap) var(--col-gap);
+  align-items: stretch;
+}
+.matrix .corner{}
+.matrix .col-head{
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.matrix .col-tag{
+  font-family: var(--font-mono);
+  font-size: 10px; letter-spacing: 0.16em;
+  color: var(--fg-4);
+  text-transform: uppercase;
+}
+.matrix .col-name{
+  font-size: 13px; font-weight: 600;
+  color: var(--fg);
+  letter-spacing: -0.005em;
+}
+.matrix .col-cap{
+  font-size: 11.5px; color: var(--fg-3);
+  line-height: 1.45;
+}
+.matrix .row-head{
+  display: flex; flex-direction: column; gap: 2px;
+  justify-content: center;
+  padding: 12px 6px;
+}
+.matrix .row-tag{
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--fg-4);
+  text-transform: uppercase;
+}
+.matrix .row-name{
+  font-size: 12.5px; font-weight: 500;
+  color: var(--fg-2);
+  letter-spacing: -0.005em;
+}
+.matrix .row-cap{
+  font-size: 11px; color: var(--fg-4);
+  line-height: 1.45; margin-top: 1px;
+}
+
+.cell{
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  min-height: 120px;
+  display: grid; place-items: center;
+  padding: 22px;
+  position: relative;
+}
+
+/* Strip of special-node coverage under each hypothesis */
+.specials-strip{
+  margin-top: 36px;
+  border-top: 1px dashed var(--line);
+  padding-top: 26px;
+}
+.specials-strip .strip-head{
+  display: flex; align-items: baseline; gap: 12px;
+  margin-bottom: 14px;
+}
+.specials-strip .strip-head .h-tag{
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.specials-strip .strip-head h4{
+  margin: 0; font-size: 13px; font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.specials-strip .strip-head .strip-cap{
+  font-size: 11.5px; color: var(--fg-3);
+}
+.specials-grid{
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+}
+.specials-grid .cell{ min-height: 200px; }
+
+/* ============================================================ */
+/* Node card — shared baseline                                   */
+/* ============================================================ */
+.nc{
+  --nc-w: 200px;
+  --nc-pad-x: 12px;
+  --nc-pad-y: 11px;
+  --nc-radius: 8px;
+  --nc-cadre-w: 1.5px;
+  --nc-halo-w: 1.5px;
+  --nc-halo-gap: 3px;
+  --nc-sel: var(--acc);
+  --nc-sel-soft: rgba(16,185,129,0.45);
+  --nc-stroke: var(--st-pending);
+
+  position: relative;
+  width: var(--nc-w);
+  min-height: 64px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--nc-radius);
+  padding: var(--nc-pad-y) var(--nc-pad-x);
+  display: flex; flex-direction: column; gap: 4px;
+  user-select: none;
+  font-size: 12px;
+  isolation: isolate;
+}
+.nc-head{
+  display: flex; align-items: center; gap: 8px;
+}
+.nc-icon{
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border-radius: 4px;
+  background: var(--bg-3);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.nc-icon svg{ display: block; }
+.nc-name{
+  font-size: 12.5px; font-weight: 600; color: var(--fg);
+  letter-spacing: -0.005em;
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nc-nid{
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  letter-spacing: 0;
+  margin-top: 1px;
+}
+.nc-meta{
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px;
+}
+.nc-meta .nc-status-line{
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+}
+
+/* Status color resolution */
+.nc[data-status="pending"]       { --nc-stroke: var(--st-pending); }
+.nc[data-status="running"]       { --nc-stroke: var(--st-running); }
+.nc[data-status="awaiting_user"] { --nc-stroke: var(--st-await); }
+.nc[data-status="completed"]     { --nc-stroke: var(--st-done); }
+.nc[data-status="failed"]        { --nc-stroke: var(--st-failed); }
+
+/* ============================================================ */
+/* Hypothesis H1 — Solid stroke                                 */
+/*   Flat conventional border, motion-free. Reads as a tag.     */
+/* ============================================================ */
+.h1 .nc{
+  --nc-cadre-w: 1.5px;
+}
+.h1 .nc[data-status]:not([data-status="pending"]){
+  border-color: var(--nc-stroke);
+  border-width: var(--nc-cadre-w);
+}
+.h1 .nc[data-status="running"]::after,
+.h1 .nc[data-status="awaiting_user"]::after,
+.h1 .nc[data-status="completed"]::after,
+.h1 .nc[data-status="failed"]::after{
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: calc(var(--nc-radius) + 1px);
+  border: 1px solid color-mix(in srgb, var(--nc-stroke) 18%, transparent);
+  pointer-events: none;
+}
+.h1 .nc.is-selected{
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 3.5px var(--nc-sel);
+}
+
+/* ============================================================ */
+/* Hypothesis H2 — Glow ring                                    */
+/*   Thin border + soft outer glow. Atmospheric.                */
+/* ============================================================ */
+.h2 .nc{
+  --nc-cadre-w: 1px;
+  --nc-glow: 14px;
+}
+.h2 .nc[data-status]:not([data-status="pending"]){
+  border-color: var(--nc-stroke);
+  border-width: var(--nc-cadre-w);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--nc-stroke) 70%, transparent),
+    0 0 var(--nc-glow) 0 color-mix(in srgb, var(--nc-stroke) 38%, transparent),
+    0 6px 16px rgba(0,0,0,0.25);
+}
+.h2 .nc.is-selected{
+  box-shadow:
+    0 0 0 1px var(--nc-stroke),
+    0 0 var(--nc-glow) 0 color-mix(in srgb, var(--nc-stroke) 38%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--nc-sel) 30%, transparent),
+    0 0 0 5px var(--nc-sel);
+}
+
+/* ============================================================ */
+/* Hypothesis H3 — Breathing pulse                              */
+/*   Border + an outer ring that breathes for `running` only.   */
+/* ============================================================ */
+.h3 .nc{ --nc-cadre-w: 1.5px; }
+.h3 .nc[data-status]:not([data-status="pending"]){
+  border-color: var(--nc-stroke);
+  border-width: var(--nc-cadre-w);
+}
+.h3 .nc[data-status="running"]::before{
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: calc(var(--nc-radius) + 4px);
+  border: 1.5px solid var(--nc-stroke);
+  opacity: 0.55;
+  animation: nc-breath 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes nc-breath{
+  0%, 100% { opacity: 0; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(1.012); }
+}
+.h3 .nc.is-selected{
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 3.5px var(--nc-sel);
+}
+
+/* ============================================================ */
+/* Hypothesis H4 — Gap-offset double ring                       */
+/*   Outer ring sits a few px outside the card. Crisp, posters. */
+/* ============================================================ */
+.h4 .nc{
+  --nc-cadre-w: 1px;
+  --nc-halo-gap: 3px;
+  --nc-halo-w: 1.5px;
+}
+.h4 .nc[data-status]:not([data-status="pending"]){
+  border-color: var(--line-strong);
+  box-shadow:
+    0 0 0 var(--nc-halo-gap) var(--bg-1),
+    0 0 0 calc(var(--nc-halo-gap) + var(--nc-halo-w)) var(--nc-stroke);
+}
+.h4 .nc.is-selected{
+  box-shadow:
+    0 0 0 var(--nc-halo-gap) var(--bg-1),
+    0 0 0 calc(var(--nc-halo-gap) + var(--nc-halo-w)) var(--nc-stroke),
+    0 0 0 calc(var(--nc-halo-gap) + var(--nc-halo-w) + 2px) var(--bg-1),
+    0 0 0 calc(var(--nc-halo-gap) + var(--nc-halo-w) + 3.5px) var(--nc-sel);
+}
+/* pending in H4 — no shadow, default border */
+
+/* ============================================================ */
+/* Hypothesis H5 — Marching dash                                */
+/*   Dashed cadre. Running marches; others stand still.         */
+/* ============================================================ */
+.h5 .nc{
+  --nc-cadre-w: 1.5px;
+}
+.h5 .nc[data-status]:not([data-status="pending"]){
+  border: none;
+  padding: calc(var(--nc-pad-y) + 1px) calc(var(--nc-pad-x) + 1px);
+}
+.h5 .nc[data-status]:not([data-status="pending"])::after{
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--nc-radius);
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--nc-stroke) 0 8px,
+      transparent 8px 14px
+    ) top/100% var(--nc-cadre-w) no-repeat,
+    repeating-linear-gradient(
+      90deg,
+      var(--nc-stroke) 0 8px,
+      transparent 8px 14px
+    ) bottom/100% var(--nc-cadre-w) no-repeat,
+    repeating-linear-gradient(
+      0deg,
+      var(--nc-stroke) 0 8px,
+      transparent 8px 14px
+    ) left/var(--nc-cadre-w) 100% no-repeat,
+    repeating-linear-gradient(
+      0deg,
+      var(--nc-stroke) 0 8px,
+      transparent 8px 14px
+    ) right/var(--nc-cadre-w) 100% no-repeat;
+}
+.h5 .nc[data-status="running"]::after{
+  animation: nc-march 1.2s linear infinite;
+}
+@keyframes nc-march{
+  to { background-position: 14px top, -14px bottom, left 14px, right -14px; }
+}
+.h5 .nc.is-selected{
+  outline: 1.5px solid var(--nc-sel);
+  outline-offset: 3px;
+}
+
+/* ============================================================ */
+/* Failed-state dominant overlay (per hypothesis)               */
+/* ============================================================ */
+.nc-fail-badge{
+  position: absolute;
+  top: -7px; right: -7px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--st-failed);
+  color: #1a0608;
+  display: grid; place-items: center;
+  font-weight: 700;
+  border: 2px solid var(--bg-1);
+  z-index: 2;
+  box-shadow: 0 2px 6px rgba(239,68,68,0.40);
+}
+.nc-fail-badge svg{ width: 10px; height: 10px; }
+
+/* a faint diagonal stripe overlay used by H2/H4 to amp failed */
+.nc-fail-tint{
+  position: absolute; inset: 0;
+  border-radius: var(--nc-radius);
+  background:
+    linear-gradient(135deg, transparent 0 60%,
+      rgba(239,68,68,0.10) 60% 78%,
+      transparent 78%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ============================================================ */
+/* Port row — geometry shared                                    */
+/*   The card uses .nc and ports sit on its 4 sides as absolute  */
+/*   pieces. The hit-target is the whole label+chevron surface   */
+/*   plus an invisible tolerance halo.                           */
+/* ============================================================ */
+.port{
+  position: absolute;
+  pointer-events: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-2);
+  letter-spacing: 0.005em;
+  display: inline-flex; align-items: center; gap: 5px;
+  z-index: 2;
+}
+.port .chev{
+  width: 8px; height: 8px;
+  display: grid; place-items: center;
+  color: var(--nc-stroke, var(--fg-3));
+}
+.port .chev svg{ display: block; }
+
+/* tolerance halo — invisible by default, painted in "debug" cells */
+.port .halo{
+  position: absolute;
+  inset: -6px -8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* valid drop-target state — hover-driven highlight */
+.port.is-drop-target{
+  color: var(--fg);
+}
+.port.is-drop-target .chev{ color: var(--acc); }
+
+/* debug halo cell */
+.port.debug .halo{
+  border: 1px dashed rgba(16,185,129,0.65);
+  background: rgba(16,185,129,0.07);
+}
+
+/* side anchors — defaults; hypothesis overrides may move them */
+.port.side-left   { left: 0;   top: 50%; transform: translate(-50%, -50%); }
+.port.side-right  { left: 100%;top: 50%; transform: translate(-50%, -50%); }
+.port.side-top    { left: 50%; top: 0;   transform: translate(-50%, -50%); }
+.port.side-bottom { left: 50%; top: 100%;transform: translate(-50%, -50%); }
+
+/* For sides where text reads vertically we keep it horizontal but
+   place the chevron on the appropriate edge. */
+.port.side-left  { flex-direction: row; }
+.port.side-right { flex-direction: row-reverse; }
+.port.side-top    { flex-direction: row; }
+.port.side-bottom { flex-direction: row; }
+
+/* ============================================================ */
+/* Port hypothesis P1 — Chevron tab on edge, label inside       */
+/*   Tiny geometric tab pokes outward; label aligned inside.    */
+/* ============================================================ */
+.p1 .port .chev{
+  width: 12px; height: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  color: var(--fg-3);
+}
+.p1 .port.is-drop-target .chev{
+  background: var(--acc-bg);
+  border-color: var(--acc-border);
+  color: var(--acc);
+}
+.p1 .port.side-left   { left: -6px; transform: translateY(-50%); top: 50%; }
+.p1 .port.side-right  { left: auto; right: -6px; transform: translateY(-50%); top: 50%; }
+.p1 .port.side-top    { top: -6px; left: 50%; transform: translateX(-50%); flex-direction: column-reverse; }
+.p1 .port.side-bottom { top: auto; bottom: -6px; left: 50%; transform: translateX(-50%); flex-direction: column; }
+
+/* ============================================================ */
+/* Port hypothesis P2 — Capsule pill                            */
+/*   Full pill (chevron+label), straddles the card edge.        */
+/* ============================================================ */
+.p2 .port{
+  height: 18px; padding: 0 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--fg-2);
+}
+.p2 .port .chev{ color: var(--fg-3); }
+.p2 .port.is-drop-target{
+  background: var(--acc-bg);
+  border-color: var(--acc-border);
+  color: var(--acc);
+}
+.p2 .port.is-drop-target .chev{ color: var(--acc); }
+.p2 .port.side-left   { left: 0; transform: translate(-50%, -50%); top: 50%; }
+.p2 .port.side-right  { left: 100%; transform: translate(-50%, -50%); top: 50%; }
+.p2 .port.side-top    { top: 0; left: 50%; transform: translate(-50%, -50%); }
+.p2 .port.side-bottom { top: 100%; left: 50%; transform: translate(-50%, -50%); }
+
+/* ============================================================ */
+/* Port hypothesis P3 — Inset row, chevron flush                */
+/*   Row sits INSIDE the card; chevron extends to the edge      */
+/* ============================================================ */
+.p3 .port{
+  background: transparent;
+  color: var(--fg-2);
+}
+.p3 .port .chev{
+  width: 10px; height: 10px;
+  color: var(--fg-3);
+}
+.p3 .port.is-drop-target .chev{ color: var(--acc); }
+.p3 .port.is-drop-target{ color: var(--fg); }
+.p3 .port.side-left   { left: 8px; transform: translateY(-50%); top: 50%; }
+.p3 .port.side-right  { left: auto; right: 8px; transform: translateY(-50%); top: 50%; }
+.p3 .port.side-top    { top: 6px; left: 50%; transform: translateX(-50%); flex-direction: column-reverse; gap: 2px;}
+.p3 .port.side-bottom { top: auto; bottom: 6px; left: 50%; transform: translateX(-50%); flex-direction: column; gap: 2px;}
+
+/* ============================================================ */
+/* Port hypothesis P4 — Bare label, edge tick                   */
+/*   No pill at all; just text + a 2px tick on the card edge.   */
+/* ============================================================ */
+.p4 .port{ color: var(--fg-3); }
+.p4 .port .chev{
+  width: 6px; height: 14px;
+  background: var(--line-strong);
+  border-radius: 1px;
+  color: transparent;
+}
+.p4 .port .chev svg{ display: none; }
+.p4 .port.is-drop-target .chev{ background: var(--acc); }
+.p4 .port.is-drop-target{ color: var(--fg); }
+.p4 .port.side-left   { left: 1px; transform: translateY(-50%); top: 50%; }
+.p4 .port.side-right  { left: auto; right: 1px; transform: translateY(-50%); top: 50%; }
+.p4 .port.side-top    { top: 1px;  left: 50%; transform: translateX(-50%); flex-direction: column-reverse; }
+.p4 .port.side-bottom { top: auto; bottom: 1px; left: 50%; transform: translateX(-50%); flex-direction: column; }
+.p4 .port.side-top .chev,
+.p4 .port.side-bottom .chev{ width: 14px; height: 6px; }
+
+/* Carve a notch direction with a small chevron arrow drawn on top of the tick — kept subtle */
+.p4 .port .arrow{
+  width: 10px; height: 10px;
+  display: grid; place-items: center;
+  color: var(--fg-4);
+}
+.p4 .port.is-drop-target .arrow{ color: var(--acc); }
+
+/* ============================================================ */
+/* Port hypothesis P5 — Notched edge                            */
+/*   The card edge is gently notched where the port lives; chev */
+/*   sits in the notch like a label tab.                        */
+/* ============================================================ */
+.p5 .port{
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  height: 16px; padding: 0 5px 0 4px;
+  color: var(--fg-2);
+}
+.p5 .port .chev{
+  color: var(--fg-3);
+  width: 9px; height: 9px;
+}
+.p5 .port.is-drop-target{
+  background: var(--acc-bg);
+  border-color: var(--acc-border);
+  color: var(--acc);
+}
+.p5 .port.is-drop-target .chev{ color: var(--acc); }
+.p5 .port.side-left   { left: 0; transform: translate(-30%, -50%); top: 50%; }
+.p5 .port.side-right  { left: 100%; transform: translate(-70%, -50%); top: 50%; }
+.p5 .port.side-top    { top: 0; left: 50%; transform: translate(-50%, -30%); }
+.p5 .port.side-bottom { top: 100%; left: 50%; transform: translate(-50%, -70%); }
+
+/* ============================================================ */
+/* Sheet 2 — port row sheet layout                              */
+/* ============================================================ */
+.port-sheet{
+  display: grid;
+  grid-template-columns: 200px repeat(6, 1fr);
+  gap: 22px 14px;
+}
+.port-sheet .col-h{
+  display: flex; flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+  text-transform: uppercase; letter-spacing: 0.14em;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+.port-sheet .col-h .col-sub{
+  font-family: var(--font-sans);
+  text-transform: none;
+  letter-spacing: -0.005em;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+.port-sheet .ph,
+.sel-sheet .ph{
+  display: flex; flex-direction: column;
+  justify-content: center;
+  padding: 8px 4px;
+}
+.port-sheet .ph .ph-tag,
+.sel-sheet .ph .ph-tag{
+  font-family: var(--font-mono);
+  font-size: 10px; letter-spacing: 0.14em;
+  color: var(--fg-4); text-transform: uppercase;
+}
+.port-sheet .ph .ph-title,
+.sel-sheet .ph .ph-title{
+  font-size: 13px; font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--fg);
+  margin-top: 2px;
+}
+.port-sheet .ph .ph-cap,
+.sel-sheet .ph .ph-cap{
+  font-size: 11.5px;
+  color: var(--fg-3);
+  line-height: 1.45;
+  margin-top: 4px;
+}
+.port-cell{
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  min-height: 130px;
+  display: grid; place-items: center;
+  padding: 14px;
+  position: relative;
+}
+.port-cell .ed-tag{
+  position: absolute; top: 6px; left: 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--fg-5);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* compact node used in the port sheet — only edges matter visually */
+.nc.compact{
+  --nc-w: 120px;
+  min-height: 54px;
+  padding: 8px 10px;
+}
+.nc.compact .nc-head{ gap: 6px; }
+.nc.compact .nc-icon{ width: 16px; height: 16px; }
+.nc.compact .nc-name{ font-size: 12px; }
+.nc.compact .nc-meta{ display: none; }
+
+/* dragline shown in the "valid drop target" cell — purely indicative */
+.dragline{
+  position: absolute;
+  width: 64px; height: 1.5px;
+  background: linear-gradient(90deg, transparent, var(--acc) 30%, var(--acc) 100%);
+  pointer-events: none;
+}
+.dragline::after{
+  content: "";
+  position: absolute;
+  right: -3px; top: -3px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 25%, transparent);
+}
+
+/* ============================================================ */
+/* Sheet 3 — selection cohabitation                              */
+/* ============================================================ */
+.sel-sheet{
+  display: grid;
+  grid-template-columns: 200px repeat(3, 1fr);
+  gap: 18px 14px;
+}
+.sel-sheet .col-h{
+  display: flex; flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+  text-transform: uppercase; letter-spacing: 0.14em;
+  padding: 0 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.sel-sheet .col-h .col-sub{
+  font-family: var(--font-sans);
+  text-transform: none; letter-spacing: -0.005em;
+  color: var(--fg-2); font-size: 12.5px;
+  font-weight: 500;
+}
+.sel-sheet .col-h .col-cap{
+  font-family: var(--font-sans);
+  text-transform: none; letter-spacing: -0.005em;
+  color: var(--fg-3); font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* ============================================================ */
+/* Misc — Captions and key                                       */
+/* ============================================================ */
+.legend{
+  display: flex; gap: 16px; flex-wrap: wrap;
+  margin: 0 0 28px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+.legend .lk{
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+.legend .lk .sw{
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 2px;
+  background: var(--st-pending);
+}
+.legend .lk .sw.running { background: var(--st-running); }
+.legend .lk .sw.await   { background: var(--st-await); }
+.legend .lk .sw.done    { background: var(--st-done); }
+.legend .lk .sw.failed  { background: var(--st-failed); }
+.legend .lk .sw.sel     { background: var(--acc); }
+
+/* TOC chip strip */
+.toc{
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 28px;
+}
+.toc a{
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg-2);
+  text-decoration: none;
+  font-family: var(--font-sans);
+}
+.toc a:hover{ background: var(--bg-4); color: var(--fg); }
+.toc a .ord{
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  letter-spacing: 0.12em;
+}
+
+/* helper for the "Specials" strip — labels under each card */
+.spec-cap{
+  position: absolute;
+  bottom: 8px; left: 0; right: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--fg-5);
+  text-transform: uppercase;
+}
+
+/* end-of-doc note */
+.outro{
+  margin-top: 80px;
+  padding: 28px 0 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--fg-3);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  max-width: 1100px;
+}
+.outro h5{
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-4);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+.outro ul{ padding-left: 18px; margin: 0; line-height: 1.6; }
+.outro li{ margin: 2px 0; }

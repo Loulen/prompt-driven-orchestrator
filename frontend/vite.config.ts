@@ -13,10 +13,11 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      '/ws': {
-        target: 'http://127.0.0.1:5172',
-        ws: true,
-      },
+      '/ws': { target: 'http://127.0.0.1:5172', ws: true },
+      '/sessions': { target: 'http://127.0.0.1:5172', ws: true },
+      '/runs': 'http://127.0.0.1:5172',
+      '/pipelines': 'http://127.0.0.1:5172',
+      '/library': 'http://127.0.0.1:5172',
     },
   },
   test: {

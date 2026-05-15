@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::frontmatter_parser;
-use crate::pipeline::{FrontmatterFieldDecl, PipelineDef, Port, PortType, IMAGE_EXTENSIONS};
+use crate::pipeline::{self, FrontmatterFieldDecl, PipelineDef, Port, PortType};
 
 fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
     let entries = match std::fs::read_dir(node_dir) {
@@ -18,19 +18,13 @@ fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
         .count()
 }
 
-fn is_image_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-}
-
 fn count_image_files(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
     entries
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && is_image_file(&e.path()))
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path()))
         .count()
 }
 

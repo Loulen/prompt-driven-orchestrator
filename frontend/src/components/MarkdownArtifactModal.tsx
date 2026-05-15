@@ -83,10 +83,13 @@ export default function MarkdownArtifactModal({
     source.kind === "iter-nav" ? iterNumbers.indexOf(iter) : -1;
   const hasIterNav = source.kind === "iter-nav" && iterNumbers.length > 1;
 
+  const isImage = portType === "image" || portType === "image_list";
   const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!isImage);
 
   useEffect(() => {
+    if (isImage) return;
+
     let cancelled = false;
 
     (async () => {
@@ -114,7 +117,7 @@ export default function MarkdownArtifactModal({
     return () => {
       cancelled = true;
     };
-  }, [runId, file?.path, file?.exists]);
+  }, [runId, file?.path, file?.exists, isImage]);
 
   const goPrevIter = useCallback(() => {
     if (!hasIterNav || iterIndex <= 0) return;
@@ -147,7 +150,6 @@ export default function MarkdownArtifactModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const isImage = portType === "image" || portType === "image_list";
   const frontmatter = file?.frontmatter;
   const bodyContent = content ? stripFrontmatter(content) : null;
 

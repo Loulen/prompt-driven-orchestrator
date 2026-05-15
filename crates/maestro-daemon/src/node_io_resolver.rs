@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::frontmatter_parser;
-use crate::pipeline::{PipelineDef, PortType, IMAGE_EXTENSIONS};
+use crate::pipeline::{self, PipelineDef, PortType};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileInfo {
@@ -196,19 +196,13 @@ fn serde_yaml_to_json(v: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
-fn is_image_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-}
-
 fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
     let Ok(entries) = std::fs::read_dir(port_dir) else {
         return vec![];
     };
     let mut files: Vec<FileInfo> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && is_image_file(&e.path()))
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path()))
         .map(|e| {
             let path = e.path();
             let size = std::fs::metadata(&path).ok().map(|m| m.len());

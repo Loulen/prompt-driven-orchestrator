@@ -694,7 +694,7 @@ function PortRow({
               style={{ fontSize: "9px" }}
               data-testid="port-type-badge"
             >
-              {portType === "image" ? "image" : "image_list"}
+              {portType}
             </span>
           )}
         </div>

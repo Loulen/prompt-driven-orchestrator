@@ -607,7 +607,7 @@ fn check_all_upstream_completed(
 }
 
 // ---------------------------------------------------------------------------
-// Tick queue — non-reentrant sequential tick model (issue #122)
+// Tick queue — non-reentrant sequential tick model
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -669,7 +669,7 @@ impl TickQueue {
 }
 
 // ---------------------------------------------------------------------------
-// scheduler_step — unified entry point (issue #122)
+// scheduler_step — unified entry point
 // ---------------------------------------------------------------------------
 
 /// Top-level scheduler entry point. Given the current pipeline and run state,
@@ -3353,7 +3353,7 @@ edges:
     }
 
     // ===================================================================
-    // scheduler_step tests (issue #122)
+    // scheduler_step tests
     // ===================================================================
 
     fn step(pipeline: &PipelineDef, state: &RunState) -> Vec<SchedulerAction> {
@@ -3374,8 +3374,6 @@ edges:
         s
     }
 
-    // --- AC 5: Pause gate — scheduler_step returns empty when paused ---
-
     #[test]
     fn pause_gate_returns_empty_when_paused() {
         let pipeline = PipelineDef {
@@ -3393,8 +3391,6 @@ edges:
         let actions = step(&pipeline, &state);
         assert!(actions.is_empty(), "paused run should produce no actions");
     }
-
-    // --- AC 6: Resume flipping paused flag queues a new tick ---
 
     #[test]
     fn resume_enables_scheduling() {
@@ -3425,8 +3421,6 @@ edges:
             "after resume, ready nodes should be proposed"
         );
     }
-
-    // --- AC 7: Running nodes finish during pause (pause doesn't kill) ---
 
     #[test]
     fn running_nodes_unaffected_by_pause() {
@@ -3460,8 +3454,6 @@ edges:
         );
     }
 
-    // --- AC 8: No new nodes spawn after pause until resume ---
-
     #[test]
     fn no_new_spawns_while_paused_even_with_ready_nodes() {
         let pipeline = PipelineDef {
@@ -3487,8 +3479,6 @@ edges:
             "no spawns while paused, even if nodes are ready"
         );
     }
-
-    // --- AC 2-3: Non-reentrant tick model ---
 
     #[test]
     fn tick_queue_sequential_processing() {
@@ -3520,8 +3510,6 @@ edges:
         assert!(q.start_tick().is_none());
         assert!(q.is_empty());
     }
-
-    // --- AC 10: Verify no nested tick execution ---
 
     #[test]
     #[should_panic(expected = "non-reentrant")]
@@ -3559,8 +3547,6 @@ edges:
         );
         q.end_tick();
     }
-
-    // --- AC 4: Idempotent proposals ---
 
     #[test]
     fn idempotent_no_spawn_for_running_node() {
@@ -3645,8 +3631,6 @@ edges:
             "stopped node should not be re-proposed"
         );
     }
-
-    // --- AC 12: Duplicate events don't produce duplicate actions ---
 
     #[test]
     fn duplicate_events_produce_no_duplicate_actions() {
@@ -3743,8 +3727,6 @@ edges:
         );
     }
 
-    // --- AC 1: Compose graph_resolver::ready_nodes ---
-
     #[test]
     fn scheduler_step_uses_ready_nodes_for_entry_spawning() {
         let pipeline = PipelineDef {
@@ -3807,8 +3789,6 @@ edges:
         assert!(spawn_ids.contains(&"c"), "c should be ready");
     }
 
-    // --- AC 1: scheduler_step handles end-node detection ---
-
     #[test]
     fn scheduler_step_detects_run_completion() {
         let pipeline = PipelineDef {
@@ -3843,8 +3823,6 @@ edges:
             "should detect run completion via end node, got {actions:?}"
         );
     }
-
-    // --- AC 1: scheduler_step handles switch routing ---
 
     #[test]
     fn scheduler_step_evaluates_switch_inline() {
@@ -3902,8 +3880,6 @@ edges:
         );
     }
 
-    // --- AC 1: scheduler_step handles loop bootstrapping ---
-
     #[test]
     fn scheduler_step_seeds_pending_loops() {
         let pipeline = PipelineDef {
@@ -3959,8 +3935,6 @@ edges:
         );
     }
 
-    // --- AC 1: scheduler_step handles loop body completion ---
-
     #[test]
     fn scheduler_step_advances_loop_iteration() {
         let pipeline = PipelineDef {
@@ -4005,8 +3979,6 @@ edges:
             "should detect loop break from outgoing edges, got {actions:?}"
         );
     }
-
-    // --- AC 13: Integration test — full tick cycle ---
 
     #[test]
     fn integration_full_tick_cycle() {
@@ -4094,8 +4066,6 @@ edges:
         // Queue should be empty now
         assert!(queue.is_empty());
     }
-
-    // --- AC 11: Pause/resume flow integration ---
 
     #[test]
     fn integration_pause_resume_flow() {

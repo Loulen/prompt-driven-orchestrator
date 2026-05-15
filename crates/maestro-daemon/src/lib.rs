@@ -488,6 +488,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/stop", post(node_stop))
         .route("/runs/{run_id}/nodes/{node_id}/retry", post(node_retry))
         .route(
+            "/runs/{run_id}/nodes/{node_id}/retry/preview",
+            get(node_retry_preview),
+        )
+        .route(
             "/sessions/{session_id}/pty",
             get(pty_bridge::session_pty_handler),
         )
@@ -3966,6 +3970,68 @@ async fn node_retry(
             "ok": true,
             "iter": next_iter,
             "invalidated": invalidated,
+        })),
+    )
+        .into_response()
+}
+
+async fn node_retry_preview(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+) -> Response {
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "run not found" })),
+            )
+                .into_response();
+        }
+    };
+
+    let repo_root = effective_repo_root(&state, &run_state);
+    let pipeline_path = {
+        let run_scoped = run_scoped_pipeline_path(&repo_root, &run_id);
+        if run_scoped.exists() {
+            run_scoped
+        } else {
+            resolve_pipeline_path(&repo_root, &run_state.pipeline_name)
+        }
+    };
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline").into_response();
+    };
+    let pipeline_def = parse_result.pipeline;
+
+    let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
+    let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+
+    let mut downstream: Vec<String> = graph_resolver::downstream_subgraph(&pipeline_def, &node_id)
+        .into_iter()
+        .collect();
+    downstream.sort();
+
+    let with_artifacts: Vec<&String> = downstream
+        .iter()
+        .filter(|nid| artifacts_dir.join(nid.as_str()).exists())
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "downstream": downstream,
+            "affected_count": with_artifacts.len(),
+            "with_artifacts": with_artifacts,
         })),
     )
         .into_response()
@@ -10629,7 +10695,7 @@ edges:
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/runs/{run_id}/nodes/worker/retry"))
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -10733,7 +10799,7 @@ edges:
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/runs/{run_id}/nodes/worker/retry"))
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -10746,5 +10812,241 @@ edges:
             .iter()
             .any(|e| e.kind == event_log::EventKind::NodeStopped);
         assert!(has_stopped, "should have NodeStopped event before retry");
+    }
+
+    #[tokio::test]
+    async fn node_retry_idempotent_on_pending_node() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "retry-pending";
+        let pipeline_yaml = "\
+name: test-pipe
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: code }
+    target: { node: end, port: result }
+";
+        let pipelines_dir = repo_root.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(pipelines_dir.join("test-pipe.yaml"), pipeline_yaml).unwrap();
+
+        let worktree_dir = worktree_dir_for_run(repo_root, run_id);
+        std::fs::create_dir_all(worktree_dir.join(".maestro").join("artifacts")).unwrap();
+
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        // worker has never started — it's implicitly pending (not in run state)
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["iter"], 2);
+    }
+
+    #[tokio::test]
+    async fn node_retry_preview_returns_downstream_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "preview-test";
+        let pipeline_yaml = "\
+name: test-pipe
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: reviewer
+    name: Reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: code }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
+";
+
+        let pipelines_dir = repo_root.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(pipelines_dir.join("test-pipe.yaml"), pipeline_yaml).unwrap();
+
+        let worktree_dir = worktree_dir_for_run(repo_root, run_id);
+        let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+        let reviewer_artifacts = artifacts_dir.join("reviewer").join("iter-1");
+        std::fs::create_dir_all(&reviewer_artifacts).unwrap();
+        std::fs::write(reviewer_artifacts.join("review.md"), "old review").unwrap();
+
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry/preview"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let downstream = json["downstream"].as_array().unwrap();
+        assert!(
+            downstream.iter().any(|v| v == "reviewer"),
+            "reviewer should be in downstream"
+        );
+
+        assert_eq!(
+            json["affected_count"], 1,
+            "reviewer has artifacts, so affected_count should be 1"
+        );
+
+        let with_artifacts = json["with_artifacts"].as_array().unwrap();
+        assert!(
+            with_artifacts.iter().any(|v| v == "reviewer"),
+            "reviewer should be in with_artifacts"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_retry_preview_returns_404_for_unknown_run() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/runs/no-such-run/nodes/worker/retry/preview")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn node_retry_preview_zero_affected_when_no_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "preview-no-artifacts";
+        let pipeline_yaml = "\
+name: test-pipe
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: code }
+    target: { node: end, port: result }
+";
+
+        let pipelines_dir = repo_root.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(pipelines_dir.join("test-pipe.yaml"), pipeline_yaml).unwrap();
+
+        let worktree_dir = worktree_dir_for_run(repo_root, run_id);
+        std::fs::create_dir_all(worktree_dir.join(".maestro").join("artifacts")).unwrap();
+
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry/preview"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["affected_count"], 0);
     }
 }

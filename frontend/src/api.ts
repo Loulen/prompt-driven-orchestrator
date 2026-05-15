@@ -319,6 +319,26 @@ export async function retryNode(
   return resp.json();
 }
 
+export interface RetryPreviewResult {
+  downstream: string[];
+  affected_count: number;
+  with_artifacts: string[];
+}
+
+export async function retryNodePreview(
+  runId: string,
+  nodeId: string,
+): Promise<RetryPreviewResult> {
+  const resp = await fetch(
+    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry/preview`,
+  );
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `retry_preview failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export async function cleanupRun(runId: string): Promise<void> {
   const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
     method: "POST",

@@ -15,6 +15,7 @@ import {
   restartNode,
   stopNode,
   retryNode,
+  retryNodePreview,
   fetchPrompt,
   fetchNodeIO,
   artifactUrl,
@@ -94,6 +95,9 @@ export default function NodeDetailPanel({
     nodeId: string;
     iter: number;
   } | null>(null);
+  const [retryConfirm, setRetryConfirm] = useState<{
+    affectedCount: number;
+  } | null>(null);
 
   const selectedIter =
     userSelectedIter?.nodeId === node.node_id
@@ -172,6 +176,28 @@ export default function NodeDetailPanel({
       clearInterval(timer);
     };
   }, [interval, node.node_id, selectedIter, runId, isStaleIter, node.status]);
+
+  const handleRetry = useCallback(async () => {
+    try {
+      const preview = await retryNodePreview(runId, node.node_id);
+      if (preview.affected_count > 0) {
+        setRetryConfirm({ affectedCount: preview.affected_count });
+        return;
+      }
+      await retryNode(runId, node.node_id);
+    } catch {
+      // best-effort
+    }
+  }, [runId, node.node_id]);
+
+  const handleRetryConfirmed = useCallback(async () => {
+    setRetryConfirm(null);
+    try {
+      await retryNode(runId, node.node_id);
+    } catch {
+      // best-effort
+    }
+  }, [runId, node.node_id]);
 
   const handleMarkComplete = useCallback(async () => {
     setMissingOutputs(null);
@@ -257,9 +283,7 @@ export default function NodeDetailPanel({
           {node.status === "running" ? (
             <button
               data-testid="retry-btn"
-              onClick={async () => {
-                try { await retryNode(runId, node.node_id); } catch { /* best-effort */ }
-              }}
+              onClick={handleRetry}
               className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4"
               style={{ fontSize: "10.5px", fontWeight: 500 }}
             >
@@ -269,9 +293,7 @@ export default function NodeDetailPanel({
           ) : ["completed", "failed", "stopped", "stale"].includes(node.status) ? (
             <button
               data-testid="play-retry-btn"
-              onClick={async () => {
-                try { await retryNode(runId, node.node_id); } catch { /* best-effort */ }
-              }}
+              onClick={handleRetry}
               className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4"
               style={{ fontSize: "10.5px", fontWeight: 500 }}
             >
@@ -562,6 +584,47 @@ export default function NodeDetailPanel({
           }
           onClose={() => setModal(null)}
         />
+      )}
+
+      {retryConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          data-testid="retry-confirm-backdrop"
+          onClick={() => setRetryConfirm(null)}
+        >
+          <div
+            className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+            style={{ fontSize: "12px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+              Retry this node?
+            </h3>
+            <p className="mt-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+              This will reset {retryConfirm.affectedCount} downstream{" "}
+              {retryConfirm.affectedCount === 1 ? "node" : "nodes"} with
+              artifacts. Continue?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                data-testid="retry-confirm-cancel"
+                onClick={() => setRetryConfirm(null)}
+                className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                style={{ fontSize: "11.5px" }}
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="retry-confirm-ok"
+                onClick={handleRetryConfirmed}
+                className="rounded-md bg-accent px-3 py-1.5 text-white transition-colors hover:bg-accent/80"
+                style={{ fontSize: "11.5px" }}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </aside>
   );

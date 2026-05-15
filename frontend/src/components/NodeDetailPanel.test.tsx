@@ -23,6 +23,7 @@ const killNodeMock = vi.fn().mockResolvedValue(undefined);
 const restartNodeMock = vi.fn().mockResolvedValue(undefined);
 const stopNodeMock = vi.fn().mockResolvedValue(undefined);
 const retryNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
+const retryNodePreviewMock = vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
 
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
@@ -32,6 +33,7 @@ vi.mock("../api", () => ({
   restartNode: (...args: unknown[]) => restartNodeMock(...args),
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
   retryNode: (...args: unknown[]) => retryNodeMock(...args),
+  retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
   startNode: vi.fn(),
   attachSession: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
@@ -103,6 +105,8 @@ describe("NodeDetailPanel", () => {
     restartNodeMock.mockClear();
     stopNodeMock.mockClear();
     retryNodeMock.mockClear();
+    retryNodePreviewMock.mockClear();
+    retryNodePreviewMock.mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
     tmuxMountCount.current = 0;
     tmuxUnmountCount.current = 0;
   });
@@ -814,6 +818,7 @@ describe("NodeDetailPanel", () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId("retry-btn"));
       });
+      expect(retryNodePreviewMock).toHaveBeenCalledWith("run-1", "test-node");
       expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
     });
 
@@ -826,7 +831,148 @@ describe("NodeDetailPanel", () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId("play-retry-btn"));
       });
+      expect(retryNodePreviewMock).toHaveBeenCalledWith("run-1", "test-node");
       expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+  });
+
+  describe("Retry confirmation dialog (issue #124)", () => {
+    it("shows confirmation dialog when downstream has artifacts", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByTestId("retry-confirm-backdrop")).toBeInTheDocument();
+      expect(screen.getByText(/reset 1 downstream node/)).toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+
+    it("shows plural text for multiple downstream nodes", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer", "merger"],
+        affected_count: 2,
+        with_artifacts: ["reviewer", "merger"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByText(/reset 2 downstream nodes/)).toBeInTheDocument();
+    });
+
+    it("proceeds with retry after confirmation", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(retryNodeMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("retry-confirm-ok"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+    });
+
+    it("cancels retry when Cancel is clicked", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByTestId("retry-confirm-backdrop")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("retry-confirm-cancel"));
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+
+    it("skips confirmation when no downstream artifacts", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("dismisses dialog by clicking backdrop", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      fireEvent.click(screen.getByTestId("retry-confirm-backdrop"));
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
     });
   });
 });

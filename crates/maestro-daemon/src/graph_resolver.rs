@@ -12,7 +12,7 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
     for node in &pipeline.nodes {
         if matches!(
             node.node_type,
-            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::ForEach
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::ForEach | NodeType::Switch
         ) {
             continue;
         }
@@ -319,6 +319,31 @@ mod tests {
     }
 
     // ========== ready_nodes ==========
+
+    #[test]
+    fn ready_nodes_skips_switch() {
+        let pipeline = make_pipeline(
+            vec![
+                make_node("upstream", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
+                make_node("downstream", NodeType::DocOnly, &["in"], &["out"]),
+            ],
+            vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "downstream", "in"),
+            ],
+        );
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"sw".to_string()),
+            "Switch nodes must never appear in ready_nodes"
+        );
+    }
 
     #[test]
     fn ready_nodes_linear_chain_first_ready() {

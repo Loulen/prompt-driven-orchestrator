@@ -313,19 +313,8 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
       const iter = nodeState?.iter ?? 1;
 
       if (def.node_type === "switch") {
-        const edgeInfos = run.edges ?? [];
-        let activeBranch: string | null = null;
-        if (status === "completed") {
-          for (const ei of edgeInfos) {
-            if (ei.source_node === def.id) {
-              const targetState = run.nodes[ei.target_node];
-              if (targetState && targetState.status !== "pending") {
-                activeBranch = ei.source_port;
-                break;
-              }
-            }
-          }
-        }
+        const switchState = run.switch_states?.[def.id];
+        const activeBranch: string | null = switchState?.chosen_branch ?? null;
         return {
           id: def.id,
           type: "switchRun",

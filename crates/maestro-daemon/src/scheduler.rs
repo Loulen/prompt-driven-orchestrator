@@ -210,7 +210,22 @@ pub fn evaluate_outgoing_edges_with_context(
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
             let is_foreach_target = target_node.is_some_and(|n| n.node_type == NodeType::ForEach);
 
-            if is_loop_target {
+            let is_switch_target = target_node.is_some_and(|n| n.node_type == NodeType::Switch);
+
+            if is_switch_target {
+                let all_upstream_done =
+                    check_all_upstream_completed(pipeline, run_state, target_id, completed_node_id);
+                if all_upstream_done {
+                    let switch_actions = evaluate_outgoing_edges_with_context(
+                        pipeline,
+                        run_state,
+                        target_id,
+                        resolved_vars,
+                        frontmatter_fields,
+                    );
+                    actions.extend(switch_actions);
+                }
+            } else if is_loop_target {
                 let loop_actions = handle_loop_input(
                     pipeline,
                     run_state,
@@ -1267,6 +1282,483 @@ mod tests {
                 node_id: "sw".into(),
                 chosen_branch: "pass".into(),
             }
+        );
+    }
+
+    // --- Inline Switch evaluation (issue #118) ---
+
+    #[test]
+    fn upstream_completion_evaluates_switch_inline() {
+        // upstream → sw → downstream
+        // When upstream completes, the scheduler should evaluate the Switch
+        // inline and spawn downstream directly — no Spawn for "sw".
+        let pipeline = PipelineDef {
+            name: "inline-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        // Switch should be evaluated inline: SwitchRouted emitted
+        assert!(
+            actions.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }),
+            "expected SwitchRouted, got {actions:?}"
+        );
+        // Downstream of the matched branch should be spawned
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "pass-handler".into(),
+                iter: 1,
+            }),
+            "expected Spawn pass-handler, got {actions:?}"
+        );
+        // No Spawn for the Switch node itself
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sw")),
+            "Switch must NOT be spawned, got {actions:?}"
+        );
+        // Non-matched branch must NOT be spawned
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "default-handler")
+            ),
+            "default-handler must NOT be spawned, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn inline_switch_default_fallthrough() {
+        let pipeline = PipelineDef {
+            name: "inline-switch-default".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("FAIL".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "default".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "default-handler".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(
+            |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "pass-handler")
+        ),);
+    }
+
+    #[test]
+    fn inline_switch_to_end_produces_complete() {
+        // upstream → sw → end (via pass branch)
+        let pipeline = PipelineDef {
+            name: "inline-switch-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("rework", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "end", "result"),
+                make_edge("sw", "default", "rework", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "pass".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn inline_switch_to_loop_fires_loop_iter() {
+        // upstream → sw(pass) → loop.break
+        let pipeline = PipelineDef {
+            name: "inline-switch-to-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_loop_node("loop1", 5),
+                make_node("rework", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+                make_edge("sw", "default", "rework", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "pass".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::LoopBreakReceived {
+            loop_node_id: "loop1".into(),
+        }));
+    }
+
+    #[test]
+    fn inline_switch_first_match_wins_ordering() {
+        let pipeline = PipelineDef {
+            name: "first-match".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("first", "verdict: { eq: PASS }"),
+                        switch_port("second", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("first-handler", &["in"], &["out"]),
+                make_node("second-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "first", "first-handler", "in"),
+                make_edge("sw", "second", "second-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "first".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "first-handler".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(
+            |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "second-handler")
+        ),);
+    }
+
+    #[test]
+    fn inline_switch_with_variable_resolution() {
+        let pipeline = PipelineDef {
+            name: "var-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("high", "score: { gte: \"$threshold\" }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("high-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "high", "high-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> = [(
+            "score".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(8)),
+        )]
+        .into_iter()
+        .collect();
+        let vars: HashMap<String, serde_yaml::Value> = [(
+            "threshold".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(7)),
+        )]
+        .into_iter()
+        .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "upstream", &vars, &fm);
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "high".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "high-handler".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn inline_switch_waits_for_all_upstream() {
+        // Two nodes feed the Switch. Only one is complete — Switch must NOT evaluate yet.
+        let pipeline = PipelineDef {
+            name: "fan-in-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("downstream", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("a", "out", "sw", "in"),
+                make_edge("b", "out", "sw", "in"),
+                make_edge("sw", "pass", "downstream", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        // b is still running
+        state.nodes.insert("b".into(), running_node("b"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "a", &HashMap::new(), &fm);
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::SwitchRouted { .. })),
+            "Switch must not evaluate until all upstream complete, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn inline_switch_mid_run_clause_edit_changes_routing() {
+        let make_pipeline_with_clause = |clause: &str| PipelineDef {
+            name: "mid-run-edit".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![switch_port("pass", clause), switch_default_port()],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        // First evaluation: clause matches → routes to "pass"
+        let pipeline_v1 = make_pipeline_with_clause("verdict: { eq: PASS }");
+        let actions_v1 = evaluate_outgoing_edges_with_context(
+            &pipeline_v1,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v1.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }),
+            "v1 should route to pass"
+        );
+
+        // Mid-run edit: change the clause so it no longer matches → routes to "default"
+        let pipeline_v2 = make_pipeline_with_clause("verdict: { eq: APPROVED }");
+        let actions_v2 = evaluate_outgoing_edges_with_context(
+            &pipeline_v2,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v2.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "default".into(),
+            }),
+            "v2 (edited clause) should route to default"
         );
     }
 

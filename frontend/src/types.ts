@@ -101,6 +101,12 @@ export interface ForEachStateInfo {
   done: boolean;
 }
 
+export interface SwitchStateInfo {
+  switch_node_id: string;
+  chosen_branch: string;
+  evaluated_at: string;
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -117,6 +123,7 @@ export interface RunState {
   merge_resolver: MergeResolverInfo | null;
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
+  switch_states?: Record<string, SwitchStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
 }

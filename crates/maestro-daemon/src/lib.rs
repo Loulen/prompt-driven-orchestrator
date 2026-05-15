@@ -1497,6 +1497,7 @@ async fn handle_node_completion(
                     })),
                 )
                 .await;
+                passthrough_switch_artifact(&spawn_ctx, node_id, chosen_branch, source_iter);
             }
             scheduler::SchedulerAction::LoopIterStarted { .. }
             | scheduler::SchedulerAction::LoopBreakReceived { .. }
@@ -1744,6 +1745,36 @@ fn resolve_run_variables(
         }
     }
     resolved_vars
+}
+
+fn passthrough_switch_artifact(
+    ctx: &SpawnContext<'_>,
+    switch_node_id: &str,
+    chosen_branch: &str,
+    source_iter: i64,
+) {
+    let in_edge = ctx
+        .pipeline
+        .edges
+        .iter()
+        .find(|e| e.target.node == switch_node_id && e.target.port == "in");
+    let Some(in_edge) = in_edge else { return };
+
+    let src_path = blackboard::artifact_path(
+        ctx.artifacts_dir,
+        &in_edge.source.node,
+        source_iter,
+        &in_edge.source.port,
+    );
+    if !src_path.exists() {
+        return;
+    }
+
+    let dst_path = blackboard::artifact_path(ctx.artifacts_dir, switch_node_id, 1, chosen_branch);
+    if let Some(parent) = dst_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::copy(&src_path, &dst_path);
 }
 
 fn resolve_source_frontmatter(
@@ -3847,6 +3878,7 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                         })),
                     )
                     .await;
+                    passthrough_switch_artifact(&spawn_ctx, node_id, chosen_branch, source_iter);
                 }
                 scheduler::SchedulerAction::LoopIterStarted { .. }
                 | scheduler::SchedulerAction::LoopBreakReceived { .. }
@@ -9256,5 +9288,97 @@ edges: []
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn passthrough_switch_artifact_copies_input_to_matched_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let upstream_artifact = blackboard::artifact_path(&artifacts_dir, "reviewer", 1, "review");
+        std::fs::create_dir_all(upstream_artifact.parent().unwrap()).unwrap();
+        std::fs::write(&upstream_artifact, "---\nverdict: PASS\n---\nLooks good.\n").unwrap();
+
+        let pipeline = pipeline::PipelineDef {
+            name: "passthrough-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![pipeline::EdgeDef {
+                source: pipeline::EdgeEndpoint {
+                    node: "reviewer".into(),
+                    port: "review".into(),
+                },
+                target: pipeline::EdgeEndpoint {
+                    node: "sw".into(),
+                    port: "in".into(),
+                },
+                reason: None,
+            }],
+        };
+
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id: "test-run",
+            pipeline_path: tmp.path(),
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &HashMap::new(),
+            repo_root: tmp.path(),
+        };
+
+        passthrough_switch_artifact(&ctx, "sw", "pass", 1);
+
+        let dst = blackboard::artifact_path(&artifacts_dir, "sw", 1, "pass");
+        assert!(dst.exists(), "passthrough artifact should exist at {dst:?}");
+        let content = std::fs::read_to_string(&dst).unwrap();
+        assert!(
+            content.contains("verdict: PASS"),
+            "passthrough should copy content verbatim"
+        );
+    }
+
+    #[test]
+    fn passthrough_switch_artifact_noop_when_no_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let pipeline = pipeline::PipelineDef {
+            name: "passthrough-noop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![pipeline::EdgeDef {
+                source: pipeline::EdgeEndpoint {
+                    node: "reviewer".into(),
+                    port: "review".into(),
+                },
+                target: pipeline::EdgeEndpoint {
+                    node: "sw".into(),
+                    port: "in".into(),
+                },
+                reason: None,
+            }],
+        };
+
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id: "test-run",
+            pipeline_path: tmp.path(),
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &HashMap::new(),
+            repo_root: tmp.path(),
+        };
+
+        passthrough_switch_artifact(&ctx, "sw", "pass", 1);
+
+        let dst = blackboard::artifact_path(&artifacts_dir, "sw", 1, "pass");
+        assert!(
+            !dst.exists(),
+            "no artifact should be created when source is missing"
+        );
     }
 }

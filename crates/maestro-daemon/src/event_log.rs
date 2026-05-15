@@ -180,6 +180,13 @@ pub struct ForEachState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwitchState {
+    pub switch_node_id: String,
+    pub chosen_branch: String,
+    pub evaluated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
     pub status: RunStatus,
@@ -204,6 +211,8 @@ pub struct RunState {
     pub loop_states: HashMap<String, LoopState>,
     #[serde(default)]
     pub foreach_states: HashMap<String, ForEachState>,
+    #[serde(default)]
+    pub switch_states: HashMap<String, SwitchState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -228,6 +237,7 @@ impl RunState {
             merge_resolver: None,
             loop_states: HashMap::new(),
             foreach_states: HashMap::new(),
+            switch_states: HashMap::new(),
             target_repo: None,
             source_branch: None,
         }
@@ -461,7 +471,53 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 // Informational — the run either spawns a resolver or fails
             }
             EventKind::SwitchRouted => {
-                // Informational — records which branch the switch chose
+                if let Some(ref payload) = event.payload {
+                    if let Some(node_id) = payload.get("node_id").and_then(|v| v.as_str()) {
+                        let chosen_branch = payload
+                            .get("chosen_branch")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("default")
+                            .to_string();
+
+                        state.switch_states.insert(
+                            node_id.to_string(),
+                            SwitchState {
+                                switch_node_id: node_id.to_string(),
+                                chosen_branch: chosen_branch.clone(),
+                                evaluated_at: event.ts.clone(),
+                            },
+                        );
+
+                        let iter = event.iter.unwrap_or(1);
+                        let node =
+                            state
+                                .nodes
+                                .entry(node_id.to_string())
+                                .or_insert_with(|| NodeState {
+                                    node_id: node_id.to_string(),
+                                    status: NodeStatus::Completed,
+                                    iter,
+                                    started_at: Some(event.ts.clone()),
+                                    completed_at: Some(event.ts.clone()),
+                                    failure_reason: None,
+                                    iterations: Vec::new(),
+                                    frontmatter_retries: 0,
+                                    frontmatter_violations: Vec::new(),
+                                });
+                        node.status = NodeStatus::Completed;
+                        node.completed_at = Some(event.ts.clone());
+                        node.iter = iter;
+                        upsert_iteration(
+                            &mut node.iterations,
+                            IterationInfo {
+                                iter,
+                                status: NodeStatus::Completed,
+                                started_at: Some(event.ts.clone()),
+                                completed_at: Some(event.ts.clone()),
+                            },
+                        );
+                    }
+                }
             }
             EventKind::LoopIterStarted => {
                 if let Some(ref payload) = event.payload {
@@ -2240,6 +2296,76 @@ mod tests {
             let d: NodeStatus = serde_json::from_str(&s).unwrap();
             assert_eq!(d, status);
         }
+    }
+
+    // --- SwitchRouted projection (issue #118) ---
+
+    #[test]
+    fn switch_routed_creates_synthetic_completed_node() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "switch-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("reviewer"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("reviewer"), Some(1)),
+            make_event_with_payload(
+                EventKind::SwitchRouted,
+                Some("sw"),
+                serde_json::json!({
+                    "node_id": "sw",
+                    "chosen_branch": "pass",
+                }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+
+        // Switch should have synthetic Completed status
+        let sw_node = &state.nodes["sw"];
+        assert_eq!(sw_node.status, NodeStatus::Completed);
+        assert!(sw_node.started_at.is_some());
+        assert!(sw_node.completed_at.is_some());
+
+        // SwitchState should track chosen branch
+        let sw_state = &state.switch_states["sw"];
+        assert_eq!(sw_state.chosen_branch, "pass");
+        assert_eq!(sw_state.switch_node_id, "sw");
+    }
+
+    #[test]
+    fn switch_routed_updates_on_re_evaluation() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "switch-test" }),
+            ),
+            make_event_with_payload(
+                EventKind::SwitchRouted,
+                Some("sw"),
+                serde_json::json!({
+                    "node_id": "sw",
+                    "chosen_branch": "default",
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::SwitchRouted,
+                Some("sw"),
+                serde_json::json!({
+                    "node_id": "sw",
+                    "chosen_branch": "pass",
+                }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        let sw_state = &state.switch_states["sw"];
+        assert_eq!(
+            sw_state.chosen_branch, "pass",
+            "re-evaluation should update chosen_branch"
+        );
     }
 
     #[test]

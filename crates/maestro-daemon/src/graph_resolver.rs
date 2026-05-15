@@ -83,7 +83,7 @@ pub fn compute_body_subgraph(
     }
 
     let mut body = HashSet::new();
-    let mut queue: Vec<&str> = body_targets.clone();
+    let mut queue: Vec<&str> = body_targets;
 
     while let Some(current) = queue.pop() {
         if current == loop_node_id {
@@ -93,8 +93,7 @@ pub fn compute_body_subgraph(
         let is_nested_loop = pipeline
             .nodes
             .iter()
-            .find(|n| n.id == current)
-            .is_some_and(|n| matches!(n.node_type, NodeType::Loop | NodeType::ForEach));
+            .any(|n| n.id == current && matches!(n.node_type, NodeType::Loop | NodeType::ForEach));
         if is_nested_loop {
             body.insert(current.to_string());
             continue;

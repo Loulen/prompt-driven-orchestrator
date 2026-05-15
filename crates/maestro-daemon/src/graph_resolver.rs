@@ -10,11 +10,10 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
     let mut ready = Vec::new();
 
     for node in &pipeline.nodes {
-        if node.node_type == NodeType::Start
-            || node.node_type == NodeType::End
-            || node.node_type == NodeType::Loop
-            || node.node_type == NodeType::ForEach
-        {
+        if matches!(
+            node.node_type,
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::ForEach
+        ) {
             continue;
         }
         if run_state.nodes.contains_key(&node.id) {
@@ -69,10 +68,7 @@ pub fn compute_body_subgraph(
     pipeline
         .nodes
         .iter()
-        .find(|n| {
-            n.id == loop_node_id
-                && (n.node_type == NodeType::Loop || n.node_type == NodeType::ForEach)
-        })
+        .find(|n| n.id == loop_node_id && matches!(n.node_type, NodeType::Loop | NodeType::ForEach))
         .ok_or_else(|| BodyResolutionError::LoopNotFound(loop_node_id.to_string()))?;
 
     let body_targets: Vec<&str> = pipeline
@@ -98,7 +94,7 @@ pub fn compute_body_subgraph(
             .nodes
             .iter()
             .find(|n| n.id == current)
-            .is_some_and(|n| n.node_type == NodeType::Loop || n.node_type == NodeType::ForEach);
+            .is_some_and(|n| matches!(n.node_type, NodeType::Loop | NodeType::ForEach));
         if is_nested_loop {
             body.insert(current.to_string());
             continue;
@@ -165,7 +161,7 @@ pub fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> usize {
     pipeline
         .nodes
         .iter()
-        .filter(|n| n.node_type != NodeType::Start && n.node_type != NodeType::End)
+        .filter(|n| !matches!(n.node_type, NodeType::Start | NodeType::End))
         .filter(|n| {
             !run_state
                 .nodes
@@ -438,6 +434,64 @@ mod tests {
             compute_body_subgraph(&pipeline, "nonexistent"),
             Err(BodyResolutionError::LoopNotFound("nonexistent".into()))
         );
+    }
+
+    #[test]
+    fn body_subgraph_non_loop_node_returns_error() {
+        let pipeline = make_pipeline(
+            vec![make_node("a", NodeType::DocOnly, &["in"], &["out"])],
+            vec![],
+        );
+        assert_eq!(
+            compute_body_subgraph(&pipeline, "a"),
+            Err(BodyResolutionError::LoopNotFound("a".into()))
+        );
+    }
+
+    #[test]
+    fn body_subgraph_no_exit_returns_error() {
+        let pipeline = make_pipeline(
+            vec![
+                make_loop_node("loop1", 5),
+                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+            ],
+            vec![
+                make_edge("loop1", "body", "a", "in"),
+                make_edge("a", "out", "b", "in"),
+            ],
+        );
+
+        assert_eq!(
+            compute_body_subgraph(&pipeline, "loop1"),
+            Err(BodyResolutionError::NoExitToBreakOrDone("loop1".into()))
+        );
+    }
+
+    #[test]
+    fn body_subgraph_internal_switch_all_branches_stay() {
+        let pipeline = make_pipeline(
+            vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", NodeType::CodeMutating, &["in"], &["out"]),
+                make_node("reviewer", NodeType::DocOnly, &["in"], &["review"]),
+                make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
+            ],
+            vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "reviewer", "in"),
+                make_edge("reviewer", "review", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+                make_edge("sw", "default", "impl", "in"),
+            ],
+        );
+
+        let body = compute_body_subgraph(&pipeline, "loop1").unwrap();
+        let expected: HashSet<String> = ["impl", "reviewer", "sw"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(body, expected);
     }
 
     // ========== downstream_subgraph ==========

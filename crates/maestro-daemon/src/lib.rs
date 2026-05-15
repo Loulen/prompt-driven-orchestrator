@@ -5,7 +5,6 @@ mod event_log;
 mod frontmatter_parser;
 pub mod graph_resolver;
 pub mod library_store;
-mod loop_body_resolver;
 #[allow(dead_code)]
 mod merge_action;
 mod mutation_validator;

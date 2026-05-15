@@ -9,6 +9,7 @@ pub mod library_store;
 mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;
+pub mod node_primitives;
 mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
@@ -2083,7 +2084,10 @@ async fn run_diff(
     {
         Ok(o) => o,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {e}"))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("git diff failed: {e}"),
+            )
                 .into_response();
         }
     };
@@ -2093,7 +2097,10 @@ async fn run_diff(
         if stderr.contains("unknown revision") || stderr.contains("not a git repository") {
             return (StatusCode::NOT_FOUND, "run branch not found").into_response();
         }
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {stderr}"))
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("git diff failed: {stderr}"),
+        )
             .into_response();
     }
 
@@ -2132,7 +2139,10 @@ async fn node_diff(
     {
         Ok(o) => o,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {e}"))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("git diff failed: {e}"),
+            )
                 .into_response();
         }
     };
@@ -2142,7 +2152,10 @@ async fn node_diff(
         if stderr.contains("unknown revision") || stderr.contains("not a git repository") {
             return (StatusCode::NOT_FOUND, "node branch not found").into_response();
         }
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("git diff failed: {stderr}"))
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("git diff failed: {stderr}"),
+        )
             .into_response();
     }
 
@@ -9078,7 +9091,7 @@ edges: []
 
         let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("maestro/run-{run_id}");
-        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
         let app = build_router(state);
         let resp = app
@@ -9114,7 +9127,7 @@ edges: []
 
         let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("maestro/run-{run_id}");
-        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
         // Make a change on the pipeline branch
         std::fs::write(wt_dir.join("new_file.rs"), "fn hello() {}\n").unwrap();
@@ -9147,8 +9160,14 @@ edges: []
                 .to_vec(),
         )
         .unwrap();
-        assert!(body.contains("new_file.rs"), "diff should mention new_file.rs");
-        assert!(body.contains("fn hello()"), "diff should contain the added content");
+        assert!(
+            body.contains("new_file.rs"),
+            "diff should mention new_file.rs"
+        );
+        assert!(
+            body.contains("fn hello()"),
+            "diff should contain the added content"
+        );
     }
 
     #[tokio::test]
@@ -9163,7 +9182,7 @@ edges: []
 
         let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("maestro/run-{run_id}");
-        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
         // Create a sub-worktree for impl-1
         let sub_wt_dir = sub_worktree_path(repo, run_id, "impl-1", 1);
@@ -9201,8 +9220,14 @@ edges: []
                 .to_vec(),
         )
         .unwrap();
-        assert!(body.contains("node_file.rs"), "diff should mention node_file.rs");
-        assert!(body.contains("fn node_work()"), "diff should contain the node's changes");
+        assert!(
+            body.contains("node_file.rs"),
+            "diff should mention node_file.rs"
+        );
+        assert!(
+            body.contains("fn node_work()"),
+            "diff should contain the node's changes"
+        );
     }
 
     #[tokio::test]
@@ -9217,7 +9242,7 @@ edges: []
 
         let wt_dir = repo.join(".maestro/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("maestro/run-{run_id}");
-        create_worktree(repo, &wt_dir, &pipeline_branch).unwrap();
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
         let app = build_router(state);
         let resp = app

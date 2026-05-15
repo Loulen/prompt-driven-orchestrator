@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { fetchArtifact, fetchNodeIO } from "../api";
+import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
-import type { IterationInfo } from "../types";
+import type { IterationInfo, PortType } from "../types";
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -19,6 +19,7 @@ export type ArtifactSource =
 interface Props {
   runId: string;
   portName: string;
+  portType?: PortType;
   source: ArtifactSource;
   onClose: () => void;
 }
@@ -26,6 +27,7 @@ interface Props {
 export default function MarkdownArtifactModal({
   runId,
   portName,
+  portType = "markdown",
   source,
   onClose,
 }: Props) {
@@ -43,12 +45,16 @@ export default function MarkdownArtifactModal({
     source.kind === "static" ? source.files : [],
   );
   const [fileIndex, setFileIndex] = useState(0);
-  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesLoading, setFilesLoading] = useState(source.kind === "iter-nav");
+
+  const changeIter = useCallback((newIter: number) => {
+    setFilesLoading(true);
+    setIter(newIter);
+  }, []);
 
   useEffect(() => {
     if (source.kind !== "iter-nav") return;
     let cancelled = false;
-    setFilesLoading(true);
     fetchNodeIO(runId, source.nodeId, iter)
       .then((io) => {
         if (cancelled) return;
@@ -77,10 +83,13 @@ export default function MarkdownArtifactModal({
     source.kind === "iter-nav" ? iterNumbers.indexOf(iter) : -1;
   const hasIterNav = source.kind === "iter-nav" && iterNumbers.length > 1;
 
+  const isImage = portType === "image" || portType === "image_list";
   const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!isImage);
 
   useEffect(() => {
+    if (isImage) return;
+
     let cancelled = false;
 
     (async () => {
@@ -108,18 +117,18 @@ export default function MarkdownArtifactModal({
     return () => {
       cancelled = true;
     };
-  }, [runId, file?.path, file?.exists]);
+  }, [runId, file?.path, file?.exists, isImage]);
 
   const goPrevIter = useCallback(() => {
     if (!hasIterNav || iterIndex <= 0) return;
-    setIter(iterNumbers[iterIndex - 1]);
-  }, [hasIterNav, iterIndex, iterNumbers]);
+    changeIter(iterNumbers[iterIndex - 1]);
+  }, [hasIterNav, iterIndex, iterNumbers, changeIter]);
 
   const goNextIter = useCallback(() => {
     if (!hasIterNav || iterIndex < 0 || iterIndex >= iterNumbers.length - 1)
       return;
-    setIter(iterNumbers[iterIndex + 1]);
-  }, [hasIterNav, iterIndex, iterNumbers]);
+    changeIter(iterNumbers[iterIndex + 1]);
+  }, [hasIterNav, iterIndex, iterNumbers, changeIter]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -239,35 +248,47 @@ export default function MarkdownArtifactModal({
 
         {/* Body */}
         <div className="flex-1 overflow-auto p-4">
-          {/* Frontmatter card */}
-          {frontmatter && Object.keys(frontmatter).length > 0 && (
-            <div
-              className="mb-3 grid rounded border border-line bg-bg-0 p-2 font-mono"
-              style={{
-                fontSize: "10.5px",
-                gridTemplateColumns: "auto 1fr",
-                gap: "4px 10px",
-              }}
-            >
-              {Object.entries(frontmatter).map(([k, v]) => (
-                <FrontmatterRow key={k} field={k} value={v} />
-              ))}
-            </div>
-          )}
-
-          {/* Markdown body */}
-          {filesLoading || loading ? (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
-              Loading...
-            </span>
-          ) : bodyContent ? (
-            <div className="artifact-markdown prose-sm">
-              <Markdown remarkPlugins={[remarkGfm]}>{bodyContent}</Markdown>
-            </div>
+          {isImage ? (
+            <ImageBody
+              runId={runId}
+              files={files}
+              filesLoading={filesLoading}
+              fileIndex={fileIndex}
+              portType={portType}
+            />
           ) : (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
-              {file?.exists ? "Could not load content." : "File does not exist yet."}
-            </span>
+            <>
+              {/* Frontmatter card */}
+              {frontmatter && Object.keys(frontmatter).length > 0 && (
+                <div
+                  className="mb-3 grid rounded border border-line bg-bg-0 p-2 font-mono"
+                  style={{
+                    fontSize: "10.5px",
+                    gridTemplateColumns: "auto 1fr",
+                    gap: "4px 10px",
+                  }}
+                >
+                  {Object.entries(frontmatter).map(([k, v]) => (
+                    <FrontmatterRow key={k} field={k} value={v} />
+                  ))}
+                </div>
+              )}
+
+              {/* Markdown body */}
+              {filesLoading || loading ? (
+                <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                  Loading...
+                </span>
+              ) : bodyContent ? (
+                <div className="artifact-markdown prose-sm">
+                  <Markdown remarkPlugins={[remarkGfm]}>{bodyContent}</Markdown>
+                </div>
+              ) : (
+                <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                  {file?.exists ? "Could not load content." : "File does not exist yet."}
+                </span>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -283,6 +304,78 @@ function FrontmatterRow({ field, value }: { field: string; value: unknown }) {
       <span className="text-fg-3">{field}</span>
       <span className="text-fg">{display}</span>
     </>
+  );
+}
+
+function ImageBody({
+  runId,
+  files,
+  filesLoading,
+  fileIndex,
+  portType,
+}: {
+  runId: string;
+  files: FileInfo[];
+  filesLoading: boolean;
+  fileIndex: number;
+  portType: PortType;
+}) {
+  const existingFiles = files.filter((f) => f.exists);
+
+  if (filesLoading) {
+    return (
+      <span className="text-fg-4" style={{ fontSize: "11px" }}>
+        Loading...
+      </span>
+    );
+  }
+
+  if (existingFiles.length === 0) {
+    return (
+      <span className="text-fg-4" style={{ fontSize: "11px" }}>
+        No image files yet.
+      </span>
+    );
+  }
+
+  if (portType === "image_list") {
+    return (
+      <div className="flex flex-col gap-3" data-testid="image-gallery">
+        {existingFiles.map((f, i) => (
+          <div key={f.path} className="flex flex-col gap-1">
+            <img
+              src={artifactUrl(runId, f.path)}
+              alt={f.path.split("/").pop() ?? ""}
+              className="max-h-[60vh] w-full rounded border border-line object-contain"
+              data-testid={`gallery-image-${i}`}
+            />
+            <span
+              className="font-mono text-fg-4"
+              style={{ fontSize: "10px" }}
+            >
+              {f.path.split("/").pop()}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const current = existingFiles[fileIndex] ?? existingFiles[0];
+  if (!current) return null;
+
+  return (
+    <div className="flex flex-col items-center gap-2" data-testid="image-viewer">
+      <img
+        src={artifactUrl(runId, current.path)}
+        alt={current.path.split("/").pop() ?? ""}
+        className="max-h-[60vh] max-w-full rounded border border-line object-contain"
+        data-testid="image-viewer-img"
+      />
+      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        {current.path.split("/").pop()}
+      </span>
+    </div>
   );
 }
 

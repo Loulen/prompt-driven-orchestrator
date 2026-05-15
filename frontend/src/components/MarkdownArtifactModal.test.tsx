@@ -7,6 +7,7 @@ const fetchNodeIOMock = vi.fn();
 vi.mock("../api", () => ({
   fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
 vi.mock("react-markdown", () => ({
@@ -188,6 +189,71 @@ describe("MarkdownArtifactModal", () => {
 
       await act(async () => {});
       expect(screen.queryByTestId("iter-nav")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("image port rendering", () => {
+    it("renders single image viewer for image port type", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="screenshot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("artifacts/node/iter-1/screenshot/capture.png")] }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByTestId("image-viewer")).toBeInTheDocument();
+      const img = screen.getByTestId("image-viewer-img");
+      expect(img.getAttribute("src")).toContain("capture.png");
+    });
+
+    it("renders gallery for image_list port type", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="diagrams"
+          portType="image_list"
+          source={{
+            kind: "static",
+            files: [
+              makeFile("artifacts/node/iter-1/diagrams/a.png"),
+              makeFile("artifacts/node/iter-1/diagrams/b.jpg"),
+            ],
+          }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByTestId("image-gallery")).toBeInTheDocument();
+      expect(screen.getByTestId("gallery-image-0")).toBeInTheDocument();
+      expect(screen.getByTestId("gallery-image-1")).toBeInTheDocument();
+    });
+
+    it("shows 'no image files' when no files exist", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="screenshot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("artifacts/x.png", false)] }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByText("No image files yet.")).toBeInTheDocument();
+    });
+
+    it("renders markdown by default when portType is not set", () => {
+      fetchArtifactMock.mockResolvedValue("# Hello");
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("artifacts/out.md")] }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("image-viewer")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("image-gallery")).not.toBeInTheDocument();
     });
   });
 });

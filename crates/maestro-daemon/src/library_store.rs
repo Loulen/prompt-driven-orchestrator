@@ -509,6 +509,7 @@ mod tests {
                 name: "in".to_string(),
                 repeated: false,
                 side: Some(pipeline::PortSide::Left),
+                port_type: pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -517,6 +518,7 @@ mod tests {
                 name: "out".to_string(),
                 repeated: false,
                 side: Some(pipeline::PortSide::Right),
+                port_type: pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -646,6 +648,7 @@ mod tests {
                     name: "plan".to_string(),
                     repeated: false,
                     side: Some(pipeline::PortSide::Left),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -654,6 +657,7 @@ mod tests {
                     name: "reviews".to_string(),
                     repeated: true,
                     side: Some(pipeline::PortSide::Top),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -664,6 +668,7 @@ mod tests {
                 repeated: false,
                 side: Some(pipeline::PortSide::Right),
                 when: None,
+                port_type: pipeline::PortType::Markdown,
                 frontmatter: Some({
                     let mut m = HashMap::new();
                     m.insert(
@@ -992,6 +997,7 @@ mod tests {
                     name: "task".to_string(),
                     repeated: false,
                     side: Some(pipeline::PortSide::Left),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -1000,6 +1006,7 @@ mod tests {
                     name: "reviews".to_string(),
                     repeated: true,
                     side: Some(pipeline::PortSide::Top),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -1009,6 +1016,7 @@ mod tests {
                 name: "review".to_string(),
                 repeated: false,
                 side: Some(pipeline::PortSide::Right),
+                port_type: pipeline::PortType::Markdown,
                 frontmatter: Some({
                     let mut m = HashMap::new();
                     m.insert(
@@ -1077,6 +1085,7 @@ mod tests {
                     name: "in".to_string(),
                     repeated: false,
                     side: Some(pipeline::PortSide::Left),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -1085,6 +1094,7 @@ mod tests {
                     name: "result".to_string(),
                     repeated: false,
                     side: Some(pipeline::PortSide::Right),
+                    port_type: pipeline::PortType::Markdown,
                     frontmatter: Some({
                         let mut m = HashMap::new();
                         m.insert(

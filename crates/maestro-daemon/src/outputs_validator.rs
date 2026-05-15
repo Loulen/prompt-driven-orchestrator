@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::frontmatter_parser;
-use crate::pipeline::{FrontmatterFieldDecl, PipelineDef, Port};
+use crate::pipeline::{self, FrontmatterFieldDecl, PipelineDef, Port, PortType};
 
 fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
     let entries = match std::fs::read_dir(node_dir) {
@@ -15,6 +15,16 @@ fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
             entry.file_name().to_string_lossy().starts_with("iter-")
                 && entry.path().join(port_name).join("output.md").exists()
         })
+        .count()
+}
+
+fn count_image_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path()))
         .count()
 }
 
@@ -47,18 +57,46 @@ pub fn validate(
     }
 
     let mut missing = Vec::new();
+    let mut violations = Vec::new();
 
     for port in &node.outputs {
-        if port.repeated {
-            let node_dir = artifacts_dir.join(node_id);
-            let found = iter_dirs_containing(&node_dir, &port.name);
-            if found == 0 {
-                missing.push(port.name.clone());
+        match port.port_type {
+            PortType::Image => {
+                let port_dir =
+                    crate::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+                let count = count_image_files(&port_dir);
+                if count == 0 {
+                    missing.push(port.name.clone());
+                } else if count > 1 {
+                    violations.push(FieldViolation {
+                        port: port.name.clone(),
+                        field: "(image)".into(),
+                        reason: format!("image port expects exactly 1 image file, found {count}"),
+                    });
+                }
             }
-        } else {
-            let path = crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name);
-            if !path.exists() {
-                missing.push(port.name.clone());
+            PortType::ImageList => {
+                let port_dir =
+                    crate::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+                let count = count_image_files(&port_dir);
+                if count == 0 {
+                    missing.push(port.name.clone());
+                }
+            }
+            PortType::Markdown => {
+                if port.repeated {
+                    let node_dir = artifacts_dir.join(node_id);
+                    let found = iter_dirs_containing(&node_dir, &port.name);
+                    if found == 0 {
+                        missing.push(port.name.clone());
+                    }
+                } else {
+                    let path =
+                        crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name);
+                    if !path.exists() {
+                        missing.push(port.name.clone());
+                    }
+                }
             }
         }
     }
@@ -67,9 +105,13 @@ pub fn validate(
         return Err(ValidationError::MissingOutputs(missing));
     }
 
-    let violations = validate_frontmatter_schemas(&node.outputs, node_id, iter, artifacts_dir);
     if !violations.is_empty() {
         return Err(ValidationError::FrontmatterMismatch(violations));
+    }
+
+    let fm_violations = validate_frontmatter_schemas(&node.outputs, node_id, iter, artifacts_dir);
+    if !fm_violations.is_empty() {
+        return Err(ValidationError::FrontmatterMismatch(fm_violations));
     }
 
     Ok(())
@@ -84,6 +126,9 @@ fn validate_frontmatter_schemas(
     let mut violations = Vec::new();
 
     for port in outputs {
+        if port.port_type != PortType::Markdown {
+            continue;
+        }
         let schema = match &port.frontmatter {
             Some(s) if !s.is_empty() => s,
             _ => continue,
@@ -207,7 +252,7 @@ pub fn corrective_message(violations: &[FieldViolation]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{FrontmatterFieldDecl, NodeDef, NodeType, Port};
+    use crate::pipeline::{FrontmatterFieldDecl, NodeDef, NodeType, Port, PortType};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -240,6 +285,7 @@ mod tests {
             name: name.into(),
             repeated: false,
             side: None,
+            port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
             description: None,
@@ -251,6 +297,7 @@ mod tests {
             name: name.into(),
             repeated: true,
             side: None,
+            port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
             description: None,
@@ -262,6 +309,7 @@ mod tests {
             name: name.into(),
             repeated: false,
             side: None,
+            port_type: PortType::Markdown,
             frontmatter: Some(schema),
             when: None,
             description: None,
@@ -606,5 +654,136 @@ mod tests {
         assert!(msg.contains("verdict"));
         assert!(msg.contains("score"));
         assert!(msg.contains("maestro complete"));
+    }
+
+    // --- image port helpers ---
+
+    fn image_port(name: &str) -> Port {
+        Port {
+            name: name.into(),
+            repeated: false,
+            side: None,
+            port_type: PortType::Image,
+            frontmatter: None,
+            when: None,
+            description: None,
+        }
+    }
+
+    fn image_list_port(name: &str) -> Port {
+        Port {
+            name: name.into(),
+            repeated: false,
+            side: None,
+            port_type: PortType::ImageList,
+            frontmatter: None,
+            when: None,
+            description: None,
+        }
+    }
+
+    fn write_image(dir: &Path, node_id: &str, iter: i64, port_name: &str, filename: &str) {
+        let d = dir
+            .join(node_id)
+            .join(format!("iter-{iter}"))
+            .join(port_name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(filename), b"fake image data").unwrap();
+    }
+
+    // --- image port: exactly one image required ---
+
+    #[test]
+    fn image_port_with_one_image_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_image(artifacts, "node", 1, "screenshot", "output.png");
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_port("screenshot")])]);
+        assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn image_port_with_no_files_missing() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_port("screenshot")])]);
+        let result = validate(&pipeline, "node", 1, artifacts);
+        assert!(
+            matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["screenshot"])
+        );
+    }
+
+    #[test]
+    fn image_port_with_two_images_fails() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_image(artifacts, "node", 1, "screenshot", "a.png");
+        write_image(artifacts, "node", 1, "screenshot", "b.jpg");
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_port("screenshot")])]);
+        let result = validate(&pipeline, "node", 1, artifacts);
+        match result {
+            Err(ValidationError::FrontmatterMismatch(v)) => {
+                assert_eq!(v.len(), 1);
+                assert!(v[0].reason.contains("exactly 1"));
+            }
+            other => panic!("expected FrontmatterMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_port_ignores_non_image_files() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let d = artifacts.join("node/iter-1/screenshot");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("notes.txt"), "not an image").unwrap();
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_port("screenshot")])]);
+        let result = validate(&pipeline, "node", 1, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(_))));
+    }
+
+    #[test]
+    fn image_port_accepts_all_extensions() {
+        for ext in &["png", "jpg", "jpeg", "webp", "gif"] {
+            let tmp = TempDir::new().unwrap();
+            let artifacts = tmp.path();
+            write_image(artifacts, "node", 1, "img", &format!("photo.{ext}"));
+            let pipeline = make_pipeline(vec![make_node("node", vec![image_port("img")])]);
+            assert!(
+                validate(&pipeline, "node", 1, artifacts).is_ok(),
+                "extension .{ext} should be accepted"
+            );
+        }
+    }
+
+    // --- image_list port: at least one image ---
+
+    #[test]
+    fn image_list_port_with_one_image_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_image(artifacts, "node", 1, "gallery", "photo.png");
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_list_port("gallery")])]);
+        assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn image_list_port_with_multiple_images_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_image(artifacts, "node", 1, "gallery", "a.png");
+        write_image(artifacts, "node", 1, "gallery", "b.jpg");
+        write_image(artifacts, "node", 1, "gallery", "c.webp");
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_list_port("gallery")])]);
+        assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn image_list_port_with_no_images_missing() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let pipeline = make_pipeline(vec![make_node("node", vec![image_list_port("gallery")])]);
+        let result = validate(&pipeline, "node", 1, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["gallery"]));
     }
 }

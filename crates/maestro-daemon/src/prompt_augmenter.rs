@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::pipeline::{NodeDef, PipelineDef};
+use crate::pipeline::{NodeDef, PipelineDef, PortType, IMAGE_EXTENSIONS};
 
 pub struct InputResolution {
     pub port_name: String,
@@ -12,6 +12,7 @@ pub struct InputResolution {
 pub struct OutputDeclaration {
     pub port_name: String,
     pub path: PathBuf,
+    pub port_type: PortType,
 }
 
 pub struct ForEachContext {
@@ -94,14 +95,26 @@ pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> 
     ctx.node
         .outputs
         .iter()
-        .map(|port| OutputDeclaration {
-            port_name: port.name.clone(),
-            path: crate::blackboard::artifact_path(
-                ctx.artifacts_dir,
-                &ctx.node.id,
-                ctx.iter,
-                &port.name,
-            ),
+        .map(|port| {
+            let path = match port.port_type {
+                PortType::Image | PortType::ImageList => crate::blackboard::port_dir(
+                    ctx.artifacts_dir,
+                    &ctx.node.id,
+                    ctx.iter,
+                    &port.name,
+                ),
+                PortType::Markdown => crate::blackboard::artifact_path(
+                    ctx.artifacts_dir,
+                    &ctx.node.id,
+                    ctx.iter,
+                    &port.name,
+                ),
+            };
+            OutputDeclaration {
+                port_name: port.name.clone(),
+                path,
+                port_type: port.port_type,
+            }
         })
         .collect()
 }
@@ -146,35 +159,58 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     if outputs.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
     } else {
+        let ext_list = IMAGE_EXTENSIONS.join(", .");
         for output in &outputs {
-            preamble.push_str(&format!(
-                "- `{}`: write to `{}`\n",
-                output.port_name,
-                output.path.display()
-            ));
+            match output.port_type {
+                PortType::Image => {
+                    preamble.push_str(&format!(
+                        "- `{}` (image): drop exactly one image file in `{}`\n\
+                         \x20 Accepted extensions: .{}\n",
+                        output.port_name,
+                        output.path.display(),
+                        ext_list,
+                    ));
+                }
+                PortType::ImageList => {
+                    preamble.push_str(&format!(
+                        "- `{}` (image_list): drop one or more image files in `{}`\n\
+                         \x20 Accepted extensions: .{}\n",
+                        output.port_name,
+                        output.path.display(),
+                        ext_list,
+                    ));
+                }
+                PortType::Markdown => {
+                    preamble.push_str(&format!(
+                        "- `{}`: write to `{}`\n",
+                        output.port_name,
+                        output.path.display()
+                    ));
 
-            let schema = ctx
-                .node
-                .outputs
-                .iter()
-                .find(|p| p.name == output.port_name)
-                .and_then(|p| p.frontmatter.as_ref());
+                    let schema = ctx
+                        .node
+                        .outputs
+                        .iter()
+                        .find(|p| p.name == output.port_name)
+                        .and_then(|p| p.frontmatter.as_ref());
 
-            if let Some(schema) = schema {
-                preamble.push_str("  Required YAML frontmatter:\n");
-                for (field_name, field_decl) in schema {
-                    if let Some(ref allowed) = field_decl.allowed {
-                        preamble.push_str(&format!(
-                            "  - `{}`: {} (allowed: {})\n",
-                            field_name,
-                            field_decl.field_type,
-                            allowed.join(", ")
-                        ));
-                    } else {
-                        preamble.push_str(&format!(
-                            "  - `{}`: {}\n",
-                            field_name, field_decl.field_type
-                        ));
+                    if let Some(schema) = schema {
+                        preamble.push_str("  Required YAML frontmatter:\n");
+                        for (field_name, field_decl) in schema {
+                            if let Some(ref allowed) = field_decl.allowed {
+                                preamble.push_str(&format!(
+                                    "  - `{}`: {} (allowed: {})\n",
+                                    field_name,
+                                    field_decl.field_type,
+                                    allowed.join(", ")
+                                ));
+                            } else {
+                                preamble.push_str(&format!(
+                                    "  - `{}`: {}\n",
+                                    field_name, field_decl.field_type
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -359,7 +395,7 @@ pub fn build_manager_prompt(run_id: &str, daemon_url: &str, role_prompt: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeType, Port};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeType, Port, PortType};
 
     fn sample_pipeline() -> PipelineDef {
         PipelineDef {
@@ -374,6 +410,7 @@ mod tests {
                     name: "task".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -382,6 +419,7 @@ mod tests {
                     name: "plan".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -497,6 +535,7 @@ mod tests {
                 name: "plan".into(),
                 repeated: false,
                 side: None,
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -505,6 +544,7 @@ mod tests {
                 name: "summary".into(),
                 repeated: false,
                 side: None,
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -598,6 +638,7 @@ mod tests {
                         name: "plan".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -616,6 +657,7 @@ mod tests {
                         name: "context".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -634,6 +676,7 @@ mod tests {
                             name: "plan".into(),
                             repeated: false,
                             side: None,
+                            port_type: PortType::Markdown,
                             frontmatter: None,
                             when: None,
                             description: None,
@@ -642,6 +685,7 @@ mod tests {
                             name: "context".into(),
                             repeated: false,
                             side: None,
+                            port_type: PortType::Markdown,
                             frontmatter: None,
                             when: None,
                             description: None,
@@ -651,6 +695,7 @@ mod tests {
                         name: "summary".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -727,6 +772,7 @@ mod tests {
                     name: "code".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -735,6 +781,7 @@ mod tests {
                     name: "review".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: Some(
                         [(
                             "verdict".into(),
@@ -857,5 +904,133 @@ mod tests {
         );
         assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
         assert!(prompt.contains("You are the Pipeline Manager."));
+    }
+
+    // --- image port type preamble tests ---
+
+    #[test]
+    fn image_port_preamble_says_drop_exactly_one() {
+        let pipeline = PipelineDef {
+            name: "img-pipe".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![NodeDef {
+                id: "designer".into(),
+                name: "designer".into(),
+                node_type: NodeType::DocOnly,
+                inputs: vec![],
+                outputs: vec![Port {
+                    name: "screenshot".into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Image,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+                over: None,
+            }],
+            edges: vec![],
+        };
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("(image)"),
+            "preamble should label port as image"
+        );
+        assert!(
+            preamble.contains("exactly one image file"),
+            "preamble should say exactly one"
+        );
+        assert!(preamble.contains(".png"), "preamble should list extensions");
+        assert!(
+            !preamble.contains("output.md"),
+            "image port should not reference output.md"
+        );
+    }
+
+    #[test]
+    fn image_list_port_preamble_says_one_or_more() {
+        let pipeline = PipelineDef {
+            name: "gallery-pipe".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![NodeDef {
+                id: "gallery".into(),
+                name: "gallery".into(),
+                node_type: NodeType::DocOnly,
+                inputs: vec![],
+                outputs: vec![Port {
+                    name: "photos".into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::ImageList,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+                over: None,
+            }],
+            edges: vec![],
+        };
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("(image_list)"),
+            "preamble should label port as image_list"
+        );
+        assert!(
+            preamble.contains("one or more image files"),
+            "preamble should say one or more"
+        );
+    }
+
+    #[test]
+    fn image_port_output_path_is_directory_not_file() {
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![NodeDef {
+                id: "node".into(),
+                name: "node".into(),
+                node_type: NodeType::DocOnly,
+                inputs: vec![],
+                outputs: vec![Port {
+                    name: "img".into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Image,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+                over: None,
+            }],
+            edges: vec![],
+        };
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+        let outputs = resolve_output_paths(&ctx);
+        assert_eq!(outputs.len(), 1);
+        assert!(
+            !outputs[0].path.to_string_lossy().ends_with("output.md"),
+            "image port path should be a directory, not output.md"
+        );
+        assert!(outputs[0].path.to_string_lossy().ends_with("/img"));
     }
 }

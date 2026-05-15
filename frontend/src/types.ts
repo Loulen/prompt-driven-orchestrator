@@ -168,11 +168,13 @@ export interface PipelineListEntry {
 }
 
 export type PortSide = "left" | "right" | "top" | "bottom";
+export type PortType = "markdown" | "image" | "image_list";
 
 export interface PortDef {
   name: string;
   repeated: boolean;
   side?: PortSide;
+  port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
   description?: string | null;

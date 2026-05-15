@@ -10,8 +10,10 @@ import {
   markNodeDone,
   fetchPrompt,
   fetchNodeIO,
+  artifactUrl,
 } from "../api";
 import type { PortIO, FileInfo, MarkNodeDoneResult } from "../api";
+import type { PortType } from "../types";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -63,6 +65,7 @@ interface ModalState {
   portName: string;
   files: FileInfo[];
   portKind: "input" | "output";
+  portType: PortType;
 }
 
 export default function NodeDetailPanel({
@@ -384,8 +387,9 @@ export default function NodeDetailPanel({
               <IOSection
                 title="Inputs"
                 ports={inputs}
-                onOpenFile={(portName, files) =>
-                  setModal({ portName, files, portKind: "input" })
+                runId={runId}
+                onOpenFile={(portName, files, portType) =>
+                  setModal({ portName, files, portKind: "input", portType })
                 }
               />
             )}
@@ -395,9 +399,10 @@ export default function NodeDetailPanel({
               <IOSection
                 title="Outputs"
                 ports={outputs}
+                runId={runId}
                 showFrontmatter
-                onOpenFile={(portName, files) =>
-                  setModal({ portName, files, portKind: "output" })
+                onOpenFile={(portName, files, portType) =>
+                  setModal({ portName, files, portKind: "output", portType })
                 }
               />
             )}
@@ -447,6 +452,7 @@ export default function NodeDetailPanel({
         <MarkdownArtifactModal
           runId={runId}
           portName={modal.portName}
+          portType={modal.portType}
           source={
             node.iterations && node.iterations.length > 1
               ? {
@@ -574,13 +580,15 @@ function IterSelector({
 function IOSection({
   title,
   ports,
+  runId,
   showFrontmatter,
   onOpenFile,
 }: {
   title: string;
   ports: PortIO[];
+  runId: string;
   showFrontmatter?: boolean;
-  onOpenFile: (portName: string, files: FileInfo[]) => void;
+  onOpenFile: (portName: string, files: FileInfo[], portType: PortType) => void;
 }) {
   return (
     <div className="border-t border-line">
@@ -598,8 +606,9 @@ function IOSection({
           <PortRow
             key={port.port}
             port={port}
+            runId={runId}
             showFrontmatter={showFrontmatter}
-            onOpen={() => onOpenFile(port.port, port.files)}
+            onOpen={() => onOpenFile(port.port, port.files, port.port_type ?? "markdown")}
           />
         ))}
       </div>
@@ -609,17 +618,28 @@ function IOSection({
 
 // --- Port Row ---
 
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+
+function isImageFile(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
 function PortRow({
   port,
+  runId,
   showFrontmatter,
   onOpen,
 }: {
   port: PortIO;
+  runId: string;
   showFrontmatter?: boolean;
   onOpen: () => void;
 }) {
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
+  const portType = port.port_type ?? "markdown";
+  const isImage = portType === "image" || portType === "image_list";
 
   let dotClass = "bg-fg-5";
   if (anyExists && port.repeated && port.files.length > 1) {
@@ -629,16 +649,20 @@ function PortRow({
   }
 
   let displayPath = firstFile?.path ?? "";
-  if (port.files.length > 1 && port.repeated) {
+  if (port.files.length > 1 && (port.repeated || isImage)) {
     displayPath = `${port.files.length} files`;
   }
 
   const totalSize = port.files.reduce((sum, f) => sum + (f.size ?? 0), 0);
 
   const frontmatter =
-    showFrontmatter && firstFile?.frontmatter
+    showFrontmatter && !isImage && firstFile?.frontmatter
       ? firstFile.frontmatter
       : null;
+
+  const imageFiles = isImage
+    ? port.files.filter((f) => f.exists && isImageFile(f.path))
+    : [];
 
   const gridStyle = {
     gridTemplateColumns: "8px 1fr auto",
@@ -662,6 +686,15 @@ function PortRow({
               style={{ fontSize: "9px" }}
             >
               repeated
+            </span>
+          )}
+          {isImage && (
+            <span
+              className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
+              style={{ fontSize: "9px" }}
+              data-testid="port-type-badge"
+            >
+              {portType}
             </span>
           )}
         </div>
@@ -690,6 +723,31 @@ function PortRow({
           </span>
         )}
       </div>
+
+      {/* Image thumbnails */}
+      {imageFiles.length > 0 && (
+        <div
+          className="col-span-3 mt-1 flex gap-1 overflow-x-auto"
+          data-testid="image-thumbnails"
+        >
+          {imageFiles.slice(0, 4).map((f) => (
+            <img
+              key={f.path}
+              src={artifactUrl(runId, f.path)}
+              alt={f.path.split("/").pop() ?? ""}
+              className="h-12 w-12 rounded border border-line object-cover"
+            />
+          ))}
+          {imageFiles.length > 4 && (
+            <span
+              className="flex h-12 w-12 items-center justify-center rounded border border-line bg-bg-0 font-mono text-fg-4"
+              style={{ fontSize: "10px" }}
+            >
+              +{imageFiles.length - 4}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Frontmatter card (spans full width below) */}
       {frontmatter && Object.keys(frontmatter).length > 0 && (

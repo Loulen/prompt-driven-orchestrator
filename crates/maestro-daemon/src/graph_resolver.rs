@@ -174,7 +174,7 @@ pub fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> usize {
 mod tests {
     use super::*;
     use crate::event_log::NodeState;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -189,6 +189,7 @@ mod tests {
                     name: (*n).into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -200,6 +201,7 @@ mod tests {
                     name: (*n).into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -222,6 +224,7 @@ mod tests {
                     name: "in".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -230,6 +233,7 @@ mod tests {
                     name: "break".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -240,6 +244,7 @@ mod tests {
                     name: "body".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -248,6 +253,7 @@ mod tests {
                     name: "done".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,

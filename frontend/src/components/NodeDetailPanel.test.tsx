@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   markNodeDone: vi.fn(),
   attachSession: vi.fn(),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
 function MockTmuxTerminal({ session, expanded, onExpand, status }: {
@@ -459,6 +460,77 @@ describe("NodeDetailPanel", () => {
       );
       // Just verify it renders without error
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+  });
+
+  describe("Image port thumbnails", () => {
+    it("shows image thumbnails for image port type", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "screenshot",
+            repeated: false,
+            port_type: "image",
+            files: [{ path: "artifacts/node/iter-1/screenshot/capture.png", exists: true, size: 1024, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("image-thumbnails")).toBeInTheDocument();
+    });
+
+    it("shows port-type badge for image ports", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "diagram",
+            repeated: false,
+            port_type: "image_list",
+            files: [{ path: "artifacts/node/iter-1/diagram/a.png", exists: true, size: 512, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("port-type-badge")).toHaveTextContent("image_list");
+    });
+
+    it("does not show thumbnails for markdown ports", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [{ path: "artifacts/node/iter-1/out/output.md", exists: true, size: 100, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("image-thumbnails")).not.toBeInTheDocument();
     });
   });
 

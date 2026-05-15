@@ -2748,14 +2748,31 @@ async fn artifact(
         return (StatusCode::BAD_REQUEST, "path traversal not allowed").into_response();
     }
 
-    match std::fs::read_to_string(&resolved) {
-        Ok(content) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/markdown")],
-            content,
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "artifact not found").into_response(),
+    let mime = match resolved
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "text/markdown",
+    };
+
+    if mime.starts_with("image/") {
+        match std::fs::read(&resolved) {
+            Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, mime)], bytes).into_response(),
+            Err(_) => (StatusCode::NOT_FOUND, "artifact not found").into_response(),
+        }
+    } else {
+        match std::fs::read_to_string(&resolved) {
+            Ok(content) => {
+                (StatusCode::OK, [(header::CONTENT_TYPE, mime)], content).into_response()
+            }
+            Err(_) => (StatusCode::NOT_FOUND, "artifact not found").into_response(),
+        }
     }
 }
 
@@ -8417,6 +8434,7 @@ mod tests {
                     name: "in".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,
@@ -8425,6 +8443,7 @@ mod tests {
                     name: "pass".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
                     description: None,
@@ -8467,6 +8486,7 @@ mod tests {
                     name: "in".into(),
                     repeated: false,
                     side: None,
+                    port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
                     description: None,

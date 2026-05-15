@@ -300,6 +300,7 @@ function StarButton({
         name: p.name,
         repeated: p.repeated,
         side: p.side,
+        ...(p.port_type && p.port_type !== "markdown" ? { port_type: p.port_type } : {}),
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
       })),

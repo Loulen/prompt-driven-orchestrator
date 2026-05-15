@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, RunListEntry, RunState, PortDef, PortSide, FrontmatterFieldDecl } from "./types";
+import type { PipelineListEntry, PipelineDetail, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl } from "./types";
 
 const BASE = "";
 
@@ -108,6 +108,7 @@ export interface FileInfo {
 export interface PortIO {
   port: string;
   repeated: boolean;
+  port_type?: PortType;
   files: FileInfo[];
 }
 
@@ -137,6 +138,10 @@ export async function fetchArtifact(
   );
   if (!resp.ok) throw new Error(`GET artifact failed: ${resp.status}`);
   return resp.text();
+}
+
+export function artifactUrl(runId: string, relativePath: string): string {
+  return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
 }
 
 export async function fetchPane(
@@ -288,6 +293,7 @@ export interface LibraryPort {
   name: string;
   repeated: boolean;
   side?: string;
+  port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
 }
@@ -297,6 +303,7 @@ export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): 
     name: port.name,
     repeated: port.repeated,
     side: (port.side as PortSide) ?? defaultSide,
+    ...(port.port_type ? { port_type: port.port_type } : {}),
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),
   };

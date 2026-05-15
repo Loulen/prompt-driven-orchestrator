@@ -38,6 +38,23 @@ pub struct FrontmatterFieldDecl {
     pub allowed: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortType {
+    #[default]
+    Markdown,
+    Image,
+    ImageList,
+}
+
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
+
+pub fn is_image_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PortSide {
@@ -65,6 +82,8 @@ pub struct Port {
     pub repeated: bool,
     #[serde(default)]
     pub side: Option<PortSide>,
+    #[serde(default)]
+    pub port_type: PortType,
     #[serde(default)]
     pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -322,6 +341,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         name: "default".into(),
                         repeated: false,
                         side: Some(PortSide::Right),
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -2657,5 +2677,92 @@ edges:
         let pass_port = gate.outputs.iter().find(|p| p.name == "pass").unwrap();
         let when = pass_port.when.as_ref().unwrap();
         assert!(when.as_mapping().unwrap().len() >= 2);
+    }
+
+    // --- port_type deserialization ---
+
+    #[test]
+    fn port_type_defaults_to_markdown() {
+        let yaml = r#"
+name: test
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: out }
+    target: { node: end, port: result }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let worker = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "worker")
+            .unwrap();
+        assert_eq!(worker.outputs[0].port_type, PortType::Markdown);
+    }
+
+    #[test]
+    fn port_type_image_deserializes() {
+        let yaml = r#"
+name: test
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: designer
+    name: Designer
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: screenshot
+        port_type: image
+      - name: gallery
+        port_type: image_list
+      - name: report
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: designer, port: task }
+  - source: { node: designer, port: report }
+    target: { node: end, port: result }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let designer = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "designer")
+            .unwrap();
+        assert_eq!(designer.outputs[0].name, "screenshot");
+        assert_eq!(designer.outputs[0].port_type, PortType::Image);
+        assert_eq!(designer.outputs[1].name, "gallery");
+        assert_eq!(designer.outputs[1].port_type, PortType::ImageList);
+        assert_eq!(designer.outputs[2].name, "report");
+        assert_eq!(designer.outputs[2].port_type, PortType::Markdown);
     }
 }

@@ -96,4 +96,35 @@ describe("OutputPortCard — O3 tab-head card", () => {
     const body = screen.getByTestId("output-port-card-out").querySelector(".op-body")!;
     expect(body.querySelector("[data-testid='output-schema-editor']")).toBeTruthy();
   });
+
+  it("shows port type selector with default markdown", () => {
+    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
+    const select = screen.getByTestId("port-type-select") as HTMLSelectElement;
+    expect(select.value).toBe("markdown");
+  });
+
+  it("hides schema editor when port type is image", () => {
+    const port = { ...baseProps.port, port_type: "image" as const };
+    render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("output-schema-editor")).toBeNull();
+  });
+
+  it("hides schema editor when port type is image_list", () => {
+    const port = { ...baseProps.port, port_type: "image_list" as const };
+    render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("output-schema-editor")).toBeNull();
+  });
+
+  it("shows schema editor when port type is markdown", () => {
+    const port = { ...baseProps.port, port_type: "markdown" as const };
+    render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("output-schema-editor")).toBeTruthy();
+  });
+
+  it("calls onUpdate with port_type when type selector changes", () => {
+    const onUpdate = vi.fn();
+    render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
+    fireEvent.change(screen.getByTestId("port-type-select"), { target: { value: "image" } });
+    expect(onUpdate).toHaveBeenCalledWith({ port_type: "image" });
+  });
 });

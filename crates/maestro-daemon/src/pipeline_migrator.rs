@@ -897,7 +897,7 @@ edges:
 
     // --- lint_missing_merge tests (issue #61) ---
 
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide, PortType};
 
     fn make_cm_node(id: &str) -> NodeDef {
         NodeDef {
@@ -908,6 +908,7 @@ edges:
                 name: "in".into(),
                 repeated: false,
                 side: Some(PortSide::Left),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -916,6 +917,7 @@ edges:
                 name: "out".into(),
                 repeated: false,
                 side: Some(PortSide::Right),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -936,6 +938,7 @@ edges:
                 name: "branches".into(),
                 repeated: true,
                 side: Some(PortSide::Left),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -944,6 +947,7 @@ edges:
                 name: "merged".into(),
                 repeated: false,
                 side: Some(PortSide::Right),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -964,6 +968,7 @@ edges:
                 name: "in".into(),
                 repeated: false,
                 side: Some(PortSide::Left),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,
@@ -972,6 +977,7 @@ edges:
                 name: "out".into(),
                 repeated: false,
                 side: Some(PortSide::Right),
+                port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
                 description: None,

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::frontmatter_parser;
-use crate::pipeline::PipelineDef;
+use crate::pipeline::{self, PipelineDef, PortType};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileInfo {
@@ -18,6 +18,7 @@ pub struct FileInfo {
 pub struct PortIO {
     pub port: String,
     pub repeated: bool,
+    pub port_type: PortType,
     pub files: Vec<FileInfo>,
 }
 
@@ -73,20 +74,41 @@ pub fn resolve(pipeline: &PipelineDef, artifacts_dir: &Path, node_id: &str, iter
         inputs.push(PortIO {
             port: input_port.name.clone(),
             repeated: input_port.repeated,
+            port_type: input_port.port_type,
             files,
         });
     }
 
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
-        let path =
-            crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &output_port.name);
-        let info = file_info_with_frontmatter(artifacts_dir, &path);
-        outputs.push(PortIO {
-            port: output_port.name.clone(),
-            repeated: output_port.repeated,
-            files: vec![info],
-        });
+        match output_port.port_type {
+            PortType::Image | PortType::ImageList => {
+                let port_dir =
+                    crate::blackboard::port_dir(artifacts_dir, node_id, iter, &output_port.name);
+                let files = list_image_files(artifacts_dir, &port_dir);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    repeated: output_port.repeated,
+                    port_type: output_port.port_type,
+                    files,
+                });
+            }
+            PortType::Markdown => {
+                let path = crate::blackboard::artifact_path(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &output_port.name,
+                );
+                let info = file_info_with_frontmatter(artifacts_dir, &path);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    repeated: output_port.repeated,
+                    port_type: output_port.port_type,
+                    files: vec![info],
+                });
+            }
+        }
     }
 
     NodeIO { inputs, outputs }
@@ -174,6 +196,28 @@ fn serde_yaml_to_json(v: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
+fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
+    let Ok(entries) = std::fs::read_dir(port_dir) else {
+        return vec![];
+    };
+    let mut files: Vec<FileInfo> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path()))
+        .map(|e| {
+            let path = e.path();
+            let size = std::fs::metadata(&path).ok().map(|m| m.len());
+            FileInfo {
+                path: relative_path(artifacts_dir, &path),
+                exists: true,
+                size,
+                frontmatter: None,
+            }
+        })
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
 fn glob_repeated(source_dir: &Path, port_name: &str) -> Vec<FileInfo> {
     let mut results = Vec::new();
 
@@ -219,7 +263,7 @@ fn glob_repeated(source_dir: &Path, port_name: &str) -> Vec<FileInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::fs;
 
@@ -237,6 +281,7 @@ mod tests {
                         name: "task".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -245,6 +290,7 @@ mod tests {
                         name: "plan".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -262,6 +308,7 @@ mod tests {
                         name: "plan".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -270,6 +317,7 @@ mod tests {
                         name: "summary".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -392,6 +440,7 @@ mod tests {
                         name: "review".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -409,6 +458,7 @@ mod tests {
                         name: "reviews".into(),
                         repeated: true,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -417,6 +467,7 @@ mod tests {
                         name: "code".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -496,6 +547,7 @@ mod tests {
                         name: "out".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -514,6 +566,7 @@ mod tests {
                         name: "out".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,
@@ -531,6 +584,7 @@ mod tests {
                         name: "docs".into(),
                         repeated: false,
                         side: None,
+                        port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
                         description: None,

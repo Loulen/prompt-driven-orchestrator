@@ -151,7 +151,6 @@ export default function UnifiedLeftPanel({
             const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
             const isArchived = run.status === "archived";
             const canCleanup = !isArchived;
-            const displayLabel = run.name || null;
             const isRenaming = renamingRunId === run.run_id;
 
             return (
@@ -188,7 +187,7 @@ export default function UnifiedLeftPanel({
                     />
                   ) : (
                     <div className="truncate font-medium" data-testid="run-display-label">
-                      {displayLabel ?? run.run_id.slice(0, 20)}
+                      {run.name || run.run_id.slice(0, 20)}
                     </div>
                   )}
                   <div

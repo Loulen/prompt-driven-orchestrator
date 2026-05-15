@@ -5309,8 +5309,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // --- Run display name tests (issue #115) ---
-
     #[tokio::test]
     async fn rename_run_updates_display_name() {
         let state = test_state().await;

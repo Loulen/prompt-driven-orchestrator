@@ -1853,8 +1853,6 @@ mod tests {
         assert!(!fe_state.done);
     }
 
-    // --- Run display name tests (issue #115) ---
-
     #[test]
     fn run_started_with_name_sets_display_name() {
         let events = vec![make_event_with_payload(

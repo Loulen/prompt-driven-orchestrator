@@ -236,10 +236,7 @@ pub mod pipelines {
     }
 
     pub fn repo_pipelines_dir(repo_root: &Path) -> PathBuf {
-        repo_root
-            .join(".maestro")
-            .join("library")
-            .join("pipelines")
+        repo_root.join(".maestro").join("library").join("pipelines")
     }
 
     fn scope_dir(repo_root: &Path, scope: Scope) -> Option<PathBuf> {
@@ -494,7 +491,10 @@ mod tests {
     /// repo-scoped library tests. The repo root lives under the temp HOME.
     fn with_temp_repo<F: FnOnce(&std::path::Path)>(f: F) {
         with_temp_home(|| {
-            let repo = std::env::var("HOME").map(PathBuf::from).unwrap().join("repo");
+            let repo = std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap()
+                .join("repo");
             std::fs::create_dir_all(&repo).unwrap();
             f(&repo);
         });
@@ -1183,15 +1183,8 @@ mod tests {
             let mut p1 = HashMap::new();
             p1.insert("planner".to_string(), "v1".to_string());
             p1.insert("ghost".to_string(), "removed-soon".to_string());
-            let id = pipelines::save(
-                repo,
-                None,
-                "Promptful",
-                &yaml,
-                &p1,
-                pipelines::Scope::Repo,
-            )
-            .unwrap();
+            let id = pipelines::save(repo, None, "Promptful", &yaml, &p1, pipelines::Scope::Repo)
+                .unwrap();
 
             let mut p2 = HashMap::new();
             p2.insert("planner".to_string(), "v2".to_string());
@@ -1243,7 +1236,10 @@ mod tests {
                 all[0].prompts.get("planner").map(String::as_str),
                 Some("You are a planner."),
             );
-            assert_eq!(all[0].prompts.get("end").map(String::as_str), Some("Wrap up."));
+            assert_eq!(
+                all[0].prompts.get("end").map(String::as_str),
+                Some("Wrap up.")
+            );
         });
     }
 

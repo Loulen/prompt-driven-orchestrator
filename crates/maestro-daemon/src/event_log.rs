@@ -291,7 +291,7 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                     }
 
                     state.start_node = Some(StartNodeInfo {
-                        input_path: "_input.md".to_string(),
+                        input_path: "_input/output.md".to_string(),
                         started_at: event.ts.clone(),
                         target_node_ids: entry_node_ids(&state.edges, &state.node_defs),
                     });
@@ -1027,7 +1027,7 @@ mod tests {
 
         let state = project(&events).unwrap();
         let start = state.start_node.as_ref().unwrap();
-        assert_eq!(start.input_path, "_input.md");
+        assert_eq!(start.input_path, "_input/output.md");
         assert_eq!(start.started_at, "2026-01-01T00:00:00.000Z");
         assert_eq!(start.target_node_ids, vec!["planner"]);
     }

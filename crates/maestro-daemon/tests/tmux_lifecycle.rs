@@ -68,7 +68,16 @@ fn tmux_has_session(socket: &str, session: &str) -> bool {
 
 fn create_fake_tmux_session(socket: &str, name: &str) {
     let _ = std::process::Command::new("tmux")
-        .args(["-L", socket, "new-session", "-d", "-s", name, "sleep", "300"])
+        .args([
+            "-L",
+            socket,
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "sleep",
+            "300",
+        ])
         .output();
 }
 
@@ -174,13 +183,13 @@ async fn reaper_kills_completed_session_after_ttl() {
     );
 
     // Create the required output file so output validation passes (refs #36).
-    let artifacts_dir = daemon
+    let port_dir = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
-        .join("worktree/.maestro/artifacts/worker/iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("out.md"), "# Output\nDone.").unwrap();
+        .join("worktree/.maestro/artifacts/worker/iter-1/out");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
 
     // Complete the node — session stays alive per #23
     let resp = reqwest::Client::new()

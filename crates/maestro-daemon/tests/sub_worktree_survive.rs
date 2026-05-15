@@ -124,15 +124,16 @@ async fn sub_worktree_survives_node_completion() {
     // Write a code change in the sub-worktree so merge has something to commit
     std::fs::write(sub_wt_dir.join("implementation.rs"), "fn main() {}\n").unwrap();
 
-    let artifacts_dir = daemon
+    let port_dir = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
         .join("worktree/.maestro/artifacts")
         .join(NODE_ID)
-        .join("iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("summary.md"), "# Summary\nDone.\n").unwrap();
+        .join("iter-1")
+        .join("summary");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Summary\nDone.\n").unwrap();
 
     // Mark node done — triggers commit_and_merge_sub_worktree
     let resp = reqwest::Client::new()
@@ -203,15 +204,16 @@ async fn cleanup_run_removes_surviving_sub_worktrees() {
     // Write a code change and mark done
     std::fs::write(sub_wt_dir.join("implementation.rs"), "fn main() {}\n").unwrap();
 
-    let artifacts_dir = daemon
+    let port_dir2 = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
         .join("worktree/.maestro/artifacts")
         .join(NODE_ID)
-        .join("iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("summary.md"), "# Summary\nDone.\n").unwrap();
+        .join("iter-1")
+        .join("summary");
+    std::fs::create_dir_all(&port_dir2).unwrap();
+    std::fs::write(port_dir2.join("output.md"), "# Summary\nDone.\n").unwrap();
 
     let resp = reqwest::Client::new()
         .post(format!(

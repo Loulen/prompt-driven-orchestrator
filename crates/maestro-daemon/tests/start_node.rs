@@ -2,7 +2,7 @@
 //!
 //! Spawns a real TestDaemon, creates a run via POST /runs with input "hello world",
 //! then asserts that GET /runs/{run_id} returns a RunState with start_node populated
-//! and that GET /runs/{run_id}/artifact?path=_input.md returns the input content.
+//! and that GET /runs/{run_id}/artifact?path=_input/output.md returns the input content.
 
 mod common;
 
@@ -110,7 +110,7 @@ async fn run_state_includes_start_node_with_entry_targets() {
 
     let start_node = &run_state["start_node"];
     assert!(!start_node.is_null(), "start_node should be non-null");
-    assert_eq!(start_node["input_path"], "_input.md");
+    assert_eq!(start_node["input_path"], "_input/output.md");
     assert!(
         start_node["started_at"].as_str().is_some(),
         "started_at should be a string"
@@ -162,7 +162,7 @@ async fn artifact_endpoint_serves_input_md() {
     let run_id = create_run(&daemon.url()).await;
 
     let resp = reqwest::get(format!(
-        "{}/runs/{}/artifact?path=_input.md",
+        "{}/runs/{}/artifact?path=_input/output.md",
         daemon.url(),
         run_id
     ))

@@ -104,13 +104,13 @@ async fn maestro_complete_does_not_panic_and_marks_node_done() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Create the required output file so output validation passes (refs #36).
-    let artifacts_dir = daemon
+    let port_dir = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
-        .join("worktree/.maestro/artifacts/solo/iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("out.md"), "# Output\nDone.").unwrap();
+        .join("worktree/.maestro/artifacts/solo/iter-1/out");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
 
     // Sanity: the daemon is reachable from this process via async reqwest.
     reqwest::get(format!("{}/runs", daemon.url()))

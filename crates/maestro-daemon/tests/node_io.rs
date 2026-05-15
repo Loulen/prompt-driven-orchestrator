@@ -114,16 +114,18 @@ fn seed_artifacts(repo: &std::path::Path, run_id: &str) {
         .join(run_id)
         .join("worktree/.maestro/artifacts");
 
-    let planner_dir = artifacts_dir.join("planner/iter-1");
+    let planner_dir = artifacts_dir.join("planner/iter-1/plan");
     std::fs::create_dir_all(&planner_dir).unwrap();
-    std::fs::write(planner_dir.join("plan.md"), "# Plan\n\nBuild the thing.").unwrap();
+    std::fs::write(planner_dir.join("output.md"), "# Plan\n\nBuild the thing.").unwrap();
 
-    std::fs::write(artifacts_dir.join("_input.md"), "test input for IO").unwrap();
+    let input_dir = artifacts_dir.join("_input");
+    std::fs::create_dir_all(&input_dir).unwrap();
+    std::fs::write(input_dir.join("output.md"), "test input for IO").unwrap();
 
-    let impl_dir = artifacts_dir.join("implementer/iter-1");
+    let impl_dir = artifacts_dir.join("implementer/iter-1/summary");
     std::fs::create_dir_all(&impl_dir).unwrap();
     std::fs::write(
-        impl_dir.join("summary.md"),
+        impl_dir.join("output.md"),
         "---\nverdict: PASS\n---\n\n## Summary\nDone.",
     )
     .unwrap();
@@ -159,7 +161,7 @@ async fn io_endpoint_returns_port_paths_and_frontmatter() {
         inputs[0]["files"][0]["path"]
             .as_str()
             .unwrap()
-            .contains("planner/iter-1/plan.md"),
+            .contains("planner/iter-1/plan/output.md"),
         "input file path should reference planner artifact"
     );
 
@@ -207,7 +209,7 @@ async fn artifact_endpoint_returns_markdown_content() {
     seed_artifacts(daemon.repo_root(), &run_id);
 
     let resp = reqwest::get(format!(
-        "{}/runs/{}/artifact?path=planner/iter-1/plan.md",
+        "{}/runs/{}/artifact?path=planner/iter-1/plan/output.md",
         daemon.url(),
         run_id,
     ))

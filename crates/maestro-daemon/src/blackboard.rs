@@ -1,11 +1,16 @@
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
-pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+pub fn port_dir(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
     artifacts_dir
         .join(node_id)
         .join(format!("iter-{iter}"))
-        .join(format!("{port_name}.md"))
+        .join(port_name)
+}
+
+#[allow(dead_code)]
+pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+    port_dir(artifacts_dir, node_id, iter, port_name).join("output.md")
 }
 
 #[allow(dead_code)]
@@ -15,7 +20,7 @@ pub fn artifact_exists(artifacts_dir: &Path, node_id: &str, iter: i64, port_name
 
 #[allow(dead_code)]
 pub fn input_path(artifacts_dir: &Path) -> PathBuf {
-    artifacts_dir.join("_input.md")
+    artifacts_dir.join("_input").join("output.md")
 }
 
 #[cfg(test)]
@@ -30,7 +35,7 @@ mod tests {
         let path = artifact_path(dir, "planner", 1, "plan");
         assert_eq!(
             path,
-            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan.md")
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
         );
     }
 
@@ -40,16 +45,26 @@ mod tests {
         let path = artifact_path(dir, "reviewer", 3, "review");
         assert_eq!(
             path,
-            PathBuf::from("/repo/.maestro/artifacts/reviewer/iter-3/review.md")
+            PathBuf::from("/repo/.maestro/artifacts/reviewer/iter-3/review/output.md")
         );
     }
 
     #[test]
-    fn input_md_path() {
+    fn port_dir_returns_directory_for_port() {
+        let dir = Path::new("/repo/.maestro/artifacts");
+        let pd = port_dir(dir, "reviewer", 3, "review");
+        assert_eq!(
+            pd,
+            PathBuf::from("/repo/.maestro/artifacts/reviewer/iter-3/review")
+        );
+    }
+
+    #[test]
+    fn input_path_points_to_directory_based_output_md() {
         let dir = Path::new("/repo/.maestro/artifacts");
         assert_eq!(
             input_path(dir),
-            PathBuf::from("/repo/.maestro/artifacts/_input.md")
+            PathBuf::from("/repo/.maestro/artifacts/_input/output.md")
         );
     }
 
@@ -65,9 +80,9 @@ mod tests {
     fn artifact_exists_returns_true_when_present() {
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
-        let node_dir = artifacts_dir.join("planner").join("iter-1");
-        fs::create_dir_all(&node_dir).unwrap();
-        fs::write(node_dir.join("plan.md"), "# Plan").unwrap();
+        let port_d = artifacts_dir.join("planner").join("iter-1").join("plan");
+        fs::create_dir_all(&port_d).unwrap();
+        fs::write(port_d.join("output.md"), "# Plan").unwrap();
         assert!(artifact_exists(&artifacts_dir, "planner", 1, "plan"));
     }
 
@@ -79,7 +94,7 @@ mod tests {
         let path = artifact_path(base, "implementer-1", 2, "summary");
         assert_eq!(
             path.to_str().unwrap(),
-            "/home/user/repo/.maestro/runs/20260506-1200-abc1234/worktree/.maestro/artifacts/implementer-1/iter-2/summary.md"
+            "/home/user/repo/.maestro/runs/20260506-1200-abc1234/worktree/.maestro/artifacts/implementer-1/iter-2/summary/output.md"
         );
     }
 }

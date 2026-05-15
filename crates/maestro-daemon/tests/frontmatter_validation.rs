@@ -94,9 +94,10 @@ fn write_artifact(
         .join(run_id)
         .join("worktree/.maestro/artifacts")
         .join(node_id)
-        .join(format!("iter-{iter}"));
+        .join(format!("iter-{iter}"))
+        .join(port_name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(format!("{port_name}.md")), content).unwrap();
+    std::fs::write(dir.join("output.md"), content).unwrap();
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {

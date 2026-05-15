@@ -56,17 +56,19 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             .any(|n| n.id == *source_node && n.node_type == crate::pipeline::NodeType::Start);
 
         let path = if is_start {
-            ctx.artifacts_dir.join("_input.md")
+            ctx.artifacts_dir.join("_input").join("output.md")
         } else if repeated {
             ctx.artifacts_dir
                 .join(source_node)
                 .join("iter-*")
-                .join(format!("{}.md", edge.source.port))
+                .join(&edge.source.port)
+                .join("output.md")
         } else {
             ctx.artifacts_dir
                 .join(source_node)
                 .join(format!("iter-{}", ctx.iter))
-                .join(format!("{}.md", edge.source.port))
+                .join(&edge.source.port)
+                .join("output.md")
         };
 
         inputs.push(InputResolution {
@@ -79,7 +81,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     if inputs.is_empty() && ctx.node.inputs.iter().any(|p| p.name == "task") {
         inputs.push(InputResolution {
             port_name: "task".into(),
-            path: ctx.artifacts_dir.join("_input.md"),
+            path: ctx.artifacts_dir.join("_input").join("output.md"),
             repeated: false,
         });
     }
@@ -97,7 +99,8 @@ pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> 
                 .artifacts_dir
                 .join(&ctx.node.id)
                 .join(format!("iter-{}", ctx.iter))
-                .join(format!("{}.md", port.name)),
+                .join(&port.name)
+                .join("output.md"),
         })
         .collect()
 }
@@ -328,7 +331,7 @@ Write an artifact directly into the Blackboard.
 ```bash
 curl -X POST {daemon_url}/runs/{run_id}/commands \
   -H 'Content-Type: application/json' \
-  -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>.md","content":"<markdown content>"}}'
+  -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>/output.md","content":"<markdown content>"}}'
 ```
 
 ### 7. cleanup_run
@@ -421,7 +424,7 @@ mod tests {
         assert_eq!(inputs[0].port_name, "task");
         assert_eq!(
             inputs[0].path,
-            PathBuf::from("/repo/.maestro/artifacts/_input.md")
+            PathBuf::from("/repo/.maestro/artifacts/_input/output.md")
         );
         assert!(!inputs[0].repeated);
     }
@@ -438,7 +441,7 @@ mod tests {
         assert_eq!(outputs[0].port_name, "plan");
         assert_eq!(
             outputs[0].path,
-            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan.md")
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
         );
     }
 
@@ -531,7 +534,7 @@ mod tests {
         assert_eq!(inputs[0].port_name, "plan");
         assert_eq!(
             inputs[0].path,
-            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan.md")
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
         );
     }
 
@@ -693,20 +696,20 @@ mod tests {
         let plan_input = inputs.iter().find(|i| i.port_name == "plan").unwrap();
         assert_eq!(
             plan_input.path,
-            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan.md")
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
         );
 
         let ctx_input = inputs.iter().find(|i| i.port_name == "context").unwrap();
         assert_eq!(
             ctx_input.path,
-            PathBuf::from("/repo/.maestro/artifacts/researcher/iter-1/context.md")
+            PathBuf::from("/repo/.maestro/artifacts/researcher/iter-1/context/output.md")
         );
 
         let preamble = build_preamble(&ctx);
         assert!(preamble.contains("`plan`"));
         assert!(preamble.contains("`context`"));
-        assert!(preamble.contains("planner/iter-1/plan.md"));
-        assert!(preamble.contains("researcher/iter-1/context.md"));
+        assert!(preamble.contains("planner/iter-1/plan/output.md"));
+        assert!(preamble.contains("researcher/iter-1/context/output.md"));
     }
 
     #[test]

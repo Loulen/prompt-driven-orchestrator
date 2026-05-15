@@ -35,9 +35,6 @@ pub struct AugmentContext<'a> {
     /// agent must edit in. Set to `None` for nodes that run directly in the
     /// pipeline worktree (doc-only, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
-    /// Image files uploaded alongside the text prompt, stored in `_input/`.
-    /// Referenced in the entry node's preamble so the agent knows to view them.
-    #[allow(dead_code)]
     pub input_images: Vec<String>,
 }
 
@@ -58,10 +55,7 @@ pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
-        if matches!(
-            ext.as_str(),
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp"
-        ) {
+        if crate::ALLOWED_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 images.push(name.to_string());
             }

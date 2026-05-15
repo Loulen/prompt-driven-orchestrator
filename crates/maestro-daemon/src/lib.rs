@@ -1337,11 +1337,14 @@ async fn spawn_node(
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
-    let is_entry_node = spawn_ctx
-        .pipeline
-        .edges
-        .iter()
-        .any(|e| e.target.node == node.id && spawn_ctx.pipeline.nodes.iter().any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start));
+    let is_entry_node = spawn_ctx.pipeline.edges.iter().any(|e| {
+        e.target.node == node.id
+            && spawn_ctx
+                .pipeline
+                .nodes
+                .iter()
+                .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
+    });
     let input_images = if is_entry_node {
         prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
     } else {
@@ -1786,7 +1789,7 @@ struct ImageFile {
     data: Vec<u8>,
 }
 
-const ALLOWED_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+pub(crate) const ALLOWED_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
 
 fn sanitize_image_filename(raw: &str) -> Option<String> {
     let name = Path::new(raw)

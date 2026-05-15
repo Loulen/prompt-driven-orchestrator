@@ -188,43 +188,45 @@ fn resolve_inputs(
     let mut input_paths = HashMap::new();
 
     for input_port in &node.inputs {
-        if let Some(ref overrides) = params.overrides {
-            if let Some(override_path) = overrides.get(&input_port.name) {
-                input_paths.insert(
-                    input_port.name.clone(),
-                    override_path.to_string_lossy().to_string(),
-                );
-                continue;
-            }
+        if let Some(override_path) = params
+            .overrides
+            .as_ref()
+            .and_then(|o| o.get(&input_port.name))
+        {
+            input_paths.insert(
+                input_port.name.clone(),
+                override_path.to_string_lossy().to_string(),
+            );
+            continue;
         }
 
-        for edge in &params.pipeline.edges {
-            if edge.target.node != params.node_id || edge.target.port != input_port.name {
-                continue;
-            }
+        let matching_edge = params
+            .pipeline
+            .edges
+            .iter()
+            .find(|e| e.target.node == params.node_id && e.target.port == input_port.name);
 
-            if input_port.repeated {
+        if let Some(edge) = matching_edge {
+            let resolved = if input_port.repeated {
                 let source_dir = params.artifacts_dir.join(&edge.source.node);
-                let glob_pattern = format!(
+                format!(
                     "{}/iter-*/{}/output.md",
                     source_dir.to_string_lossy(),
                     edge.source.port
-                );
-                input_paths.insert(input_port.name.clone(), glob_pattern);
+                )
             } else {
                 let source_iter = latest_iter_for_node(params.run_state, &edge.source.node);
-                let path = blackboard::artifact_path(
+                blackboard::artifact_path(
                     params.artifacts_dir,
                     &edge.source.node,
                     source_iter,
                     &edge.source.port,
-                );
-                input_paths.insert(input_port.name.clone(), path.to_string_lossy().to_string());
-            }
-            break;
-        }
-
-        if !input_paths.contains_key(&input_port.name) && input_port.name == "task" {
+                )
+                .to_string_lossy()
+                .to_string()
+            };
+            input_paths.insert(input_port.name.clone(), resolved);
+        } else if input_port.name == "task" {
             let path = blackboard::input_path(params.artifacts_dir);
             input_paths.insert(input_port.name.clone(), path.to_string_lossy().to_string());
         }
@@ -406,7 +408,7 @@ pub fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers (re-used from lib.rs logic but kept local to avoid coupling)
+// Helpers
 // ---------------------------------------------------------------------------
 
 fn sub_worktree_path(repo_root: &Path, run_id: &str, node_id: &str, iter: i64) -> PathBuf {

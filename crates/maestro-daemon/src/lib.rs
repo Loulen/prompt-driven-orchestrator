@@ -426,7 +426,7 @@ async fn repos_branches(Query(q): Query<RepoPathQuery>) -> Response {
 async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
     match validate_target_repo(&q.path) {
         Ok(_) => Json(serde_json::json!({ "valid": true })).into_response(),
-        Err(_msg) => Json(serde_json::json!({ "valid": false, "error": _msg })).into_response(),
+        Err(msg) => Json(serde_json::json!({ "valid": false, "error": msg })).into_response(),
     }
 }
 
@@ -4392,9 +4392,7 @@ fn list_branches(repo: &Path) -> Result<Vec<String>, String> {
     }
 }
 
-/// Returns the effective repo root for a run — the run's `target_repo` if set,
-/// otherwise the daemon's repo_root.
-fn effective_repo_root<'a>(state: &'a AppState, run_state: &'a event_log::RunState) -> PathBuf {
+fn effective_repo_root(state: &AppState, run_state: &event_log::RunState) -> PathBuf {
     run_state
         .target_repo
         .as_ref()

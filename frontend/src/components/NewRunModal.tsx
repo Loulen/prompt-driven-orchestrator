@@ -219,6 +219,10 @@ export default function NewRunModal({ open, onClose, onCreated, libraryPipelines
 
   const canLaunch = repoValid && (selectedPipeline || selectedLibraryId) && input.trim();
 
+  let repoBorderClass = "border-line-strong focus:border-acc";
+  if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
+  else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
+
   if (!open) return null;
 
   return (
@@ -264,13 +268,7 @@ export default function NewRunModal({ open, onClose, onCreated, libraryPipelines
               </label>
               <input
                 id="target-repo"
-                className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${
-                  repoValid === true
-                    ? "border-acc focus:border-acc"
-                    : repoValid === false
-                      ? "border-st-failed focus:border-st-failed"
-                      : "border-line-strong focus:border-acc"
-                }`}
+                className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${repoBorderClass}`}
                 style={{ fontSize: "12px" }}
                 placeholder="/path/to/your/repo"
                 value={targetRepo}

@@ -1695,6 +1695,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn inline_switch_mid_run_clause_edit_changes_routing() {
+        let make_pipeline_with_clause = |clause: &str| PipelineDef {
+            name: "mid-run-edit".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![switch_port("pass", clause), switch_default_port()],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        // First evaluation: clause matches → routes to "pass"
+        let pipeline_v1 = make_pipeline_with_clause("verdict: { eq: PASS }");
+        let actions_v1 = evaluate_outgoing_edges_with_context(
+            &pipeline_v1,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v1.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }),
+            "v1 should route to pass"
+        );
+
+        // Mid-run edit: change the clause so it no longer matches → routes to "default"
+        let pipeline_v2 = make_pipeline_with_clause("verdict: { eq: APPROVED }");
+        let actions_v2 = evaluate_outgoing_edges_with_context(
+            &pipeline_v2,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v2.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "default".into(),
+            }),
+            "v2 (edited clause) should route to default"
+        );
+    }
+
     // --- Loop node tests ---
 
     fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {

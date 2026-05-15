@@ -28,6 +28,7 @@ import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
+import SwitchDetailPanel from "./components/SwitchDetailPanel";
 import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -155,6 +156,17 @@ export default function App() {
   // down and reattach, pushing terminal content upward on every flip.
   function inspectorRunPane() {
     if (isEditingRun && selectedRun && runNode) {
+      if (editNodeType === "switch") {
+        return (
+          <SwitchDetailPanel
+            key={runNode.node_id}
+            node={runNode}
+            runId={selectedRun.run_id}
+            switchState={selectedRun.switch_states?.[runNode.node_id] ?? null}
+            nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          />
+        );
+      }
       return (
         <NodeDetailPanel
           key={runNode.node_id}
@@ -478,7 +490,16 @@ export default function App() {
                     endNode={selectedRun.end_node}
                   />
                 )}
-                {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && (
+                {selectedNode && selectedRun && selectedNodeType === "switch" && (
+                  <SwitchDetailPanel
+                    key={selectedNode.node_id}
+                    node={selectedNode}
+                    runId={selectedRun.run_id}
+                    switchState={selectedRun.switch_states?.[selectedNode.node_id] ?? null}
+                    nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
+                  />
+                )}
+                {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && selectedNodeType !== "switch" && (
                   <NodeDetailPanel
                     key={selectedNode.node_id}
                     node={selectedNode}

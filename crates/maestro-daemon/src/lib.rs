@@ -6488,14 +6488,45 @@ mod tests {
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
 
+    /// RAII guard that sets HOME to a temporary directory and restores it on drop.
+    /// Holds HOME_TEST_LOCK to prevent concurrent env var mutation.
+    struct FakeHome {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        dir: tempfile::TempDir,
+        prev: Option<String>,
+    }
+
+    impl FakeHome {
+        fn new() -> Self {
+            let lock = library_store::HOME_TEST_LOCK.lock().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let prev = std::env::var("HOME").ok();
+            std::env::set_var("HOME", dir.path());
+            Self {
+                _lock: lock,
+                dir,
+                prev,
+            }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.dir.path()
+        }
+    }
+
+    impl Drop for FakeHome {
+        fn drop(&mut self) {
+            if let Some(ref h) = self.prev {
+                std::env::set_var("HOME", h);
+            }
+        }
+    }
+
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_pipelines_scans_repo_dir() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
+        let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
-        let fake_home = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", fake_home.path());
 
         write_test_pipeline(tmp.path(), "test-pipe");
         write_test_pipeline(tmp.path(), "another-pipe");
@@ -6522,20 +6553,13 @@ mod tests {
         assert!(list.iter().any(|p| p["id"] == "test-pipe"));
         assert!(list.iter().any(|p| p["id"] == "another-pipe"));
         assert!(list.iter().all(|p| p["scope"] == "repo"));
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_pipelines_empty_when_no_dir() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
+        let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
-        let fake_home = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", fake_home.path());
 
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state);
@@ -6556,10 +6580,6 @@ mod tests {
             .unwrap();
         let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(list.is_empty());
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]
@@ -6971,13 +6991,10 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn promote_pipeline_copies_to_library() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
+        let fake_home = FakeHome::new();
 
-        write_test_pipeline(tmp.path(), "promotable");
-        let state = test_state_with_dir(tmp.path()).await;
+        write_test_pipeline(fake_home.path(), "promotable");
+        let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
         let resp = app
@@ -7002,21 +7019,14 @@ mod tests {
         let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
         assert!(lib_dir.join("promotable.yaml").exists());
         assert!(lib_dir.join("promotable.meta.json").exists());
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn promote_nonexistent_pipeline_returns_error() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
+        let fake_home = FakeHome::new();
 
-        let state = test_state_with_dir(tmp.path()).await;
+        let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
         let resp = app
@@ -7031,25 +7041,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_pipelines_includes_library_with_drift() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
+        let fake_home = FakeHome::new();
 
-        write_test_pipeline(tmp.path(), "repo-pipe");
+        write_test_pipeline(fake_home.path(), "repo-pipe");
 
-        library_store::pipelines::promote(tmp.path(), "repo-pipe").unwrap();
+        library_store::pipelines::promote(fake_home.path(), "repo-pipe").unwrap();
 
-        let state = test_state_with_dir(tmp.path()).await;
+        let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
         let resp = app
@@ -7075,32 +7078,25 @@ mod tests {
         let lib_entry = list.iter().find(|p| p["scope"] == "library").unwrap();
         assert_eq!(lib_entry["id"], "repo-pipe");
         assert_eq!(lib_entry["drifted"], false);
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_pipelines_library_shows_drift_after_source_change() {
-        let _guard = library_store::HOME_TEST_LOCK.lock().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
+        let fake_home = FakeHome::new();
 
-        write_test_pipeline(tmp.path(), "drifting");
-        library_store::pipelines::promote(tmp.path(), "drifting").unwrap();
+        write_test_pipeline(fake_home.path(), "drifting");
+        library_store::pipelines::promote(fake_home.path(), "drifting").unwrap();
 
         let changed_yaml =
             format!("name: drifting-modified\nversion: \"2.0\"\nnodes:\n{START_END_YAML}");
         std::fs::write(
-            tmp.path().join(".maestro/pipelines/drifting.yaml"),
+            fake_home.path().join(".maestro/pipelines/drifting.yaml"),
             changed_yaml,
         )
         .unwrap();
 
-        let state = test_state_with_dir(tmp.path()).await;
+        let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
         let resp = app
@@ -7119,10 +7115,6 @@ mod tests {
         let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         let lib_entry = list.iter().find(|p| p["scope"] == "library").unwrap();
         assert_eq!(lib_entry["drifted"], true);
-
-        if let Some(h) = prev_home {
-            std::env::set_var("HOME", h);
-        }
     }
 
     #[tokio::test]

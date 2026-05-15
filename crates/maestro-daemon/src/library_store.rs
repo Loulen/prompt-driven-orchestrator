@@ -270,6 +270,14 @@ pub mod pipelines {
         std::fs::write(&meta_path, json).map_err(|e| format!("meta write error: {e}"))
     }
 
+    fn compute_drift(promoted_from: &PromotedFrom) -> Option<bool> {
+        let source = Path::new(&promoted_from.path);
+        let yaml = std::fs::read_to_string(source).ok()?;
+        let prompts = read_prompts_dir(&source.with_extension("prompts"));
+        let current = content_hash(&yaml, &prompts);
+        Some(current != promoted_from.content_hash)
+    }
+
     pub fn user_pipelines_dir() -> Option<PathBuf> {
         std::env::var_os("HOME").map(|h| {
             PathBuf::from(h)
@@ -373,13 +381,7 @@ pub mod pipelines {
             let prompts = read_prompts_dir(&path.with_extension("prompts"));
 
             let meta = read_meta(&path);
-            let drifted = meta.promoted_from.as_ref().and_then(|pf| {
-                let source = Path::new(&pf.path);
-                let source_yaml = std::fs::read_to_string(source).ok()?;
-                let source_prompts = read_prompts_dir(&source.with_extension("prompts"));
-                let current = content_hash(&source_yaml, &source_prompts);
-                Some(current != pf.content_hash)
-            });
+            let drifted = meta.promoted_from.as_ref().and_then(compute_drift);
 
             entries.push(PipelineLibraryEntry {
                 id,
@@ -570,13 +572,7 @@ pub mod pipelines {
         let lib_dir = user_pipelines_dir()?;
         let lib_path = lib_dir.join(format!("{library_id}.yaml"));
         let meta = read_meta(&lib_path);
-        let promoted = meta.promoted_from?;
-
-        let source_path = Path::new(&promoted.path);
-        let yaml = std::fs::read_to_string(source_path).ok()?;
-        let prompts = read_prompts_dir(&source_path.with_extension("prompts"));
-        let current_hash = content_hash(&yaml, &prompts);
-        Some(current_hash != promoted.content_hash)
+        meta.promoted_from.as_ref().and_then(compute_drift)
     }
 
     pub fn get_meta(library_id: &str) -> Option<PipelineMeta> {

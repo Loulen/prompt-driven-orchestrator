@@ -171,10 +171,7 @@ mod tests {
 
     #[test]
     fn encode_deeply_nested() {
-        assert_eq!(
-            encode_working_dir(Path::new("/a/b/c/d/e")),
-            "a-b-c-d-e"
-        );
+        assert_eq!(encode_working_dir(Path::new("/a/b/c/d/e")), "a-b-c-d-e");
     }
 
     // --- decide (pure logic) ---
@@ -348,6 +345,11 @@ mod tests {
         use crate::event_log::{project, Event, EventKind};
 
         fn make_event(kind: EventKind, node_id: Option<&str>, iter: Option<i64>) -> Event {
+            let payload = if kind == EventKind::RunStarted {
+                Some(serde_json::json!({ "pipeline_name": "test" }))
+            } else {
+                None
+            };
             Event {
                 id: None,
                 run_id: "test-run".to_string(),
@@ -355,11 +357,7 @@ mod tests {
                 kind,
                 node_id: node_id.map(String::from),
                 iter,
-                payload: if kind == EventKind::RunStarted {
-                    Some(serde_json::json!({ "pipeline_name": "test" }))
-                } else {
-                    None
-                },
+                payload,
             }
         }
 
@@ -444,7 +442,12 @@ mod tests {
         let artifacts_dir = tmp.path().join("artifacts");
         std::fs::create_dir_all(&artifacts_dir).unwrap();
 
-        assert!(validate_outputs(&pipeline_path, "worker", 1, &artifacts_dir));
+        assert!(validate_outputs(
+            &pipeline_path,
+            "worker",
+            1,
+            &artifacts_dir
+        ));
     }
 
     #[test]

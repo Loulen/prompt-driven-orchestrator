@@ -14,36 +14,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Trash2, Terminal, Info, Play, Square, Pause, RotateCcw } from "lucide-react";
-import { isLiveRun, type NodeStatus, type NodeType, type PipelineDef, type PipelineDetail, type RunState, type RunStatus, type PortBrief } from "../types";
+import { isLiveRun, type NodeStatus, type NodeType, type PipelineDetail, type RunState, type RunStatus, type PortBrief } from "../types";
 import { cleanupRun, attachManager, fetchRunPipeline, saveRunPipeline, pauseRun, resumeRun, retryAll } from "../api";
 import { serializePipeline } from "../stores/editStore";
-
-export const START_NODE_OFFSET_X_PX = 180;
-
-// deriveNodes places non-start/end nodes at canvas (view_x + START_NODE_OFFSET_X_PX)
-// to leave room for the start node. When persisting a drag back to YAML we must
-// reverse that offset so the round-trip is stable.
-export function canvasToYamlX(type: string | undefined, canvasX: number): number {
-  return type === "start" || type === "end"
-    ? canvasX
-    : canvasX - START_NODE_OFFSET_X_PX;
-}
-
-export function withUpdatedNodeView(
-  pipeline: PipelineDef,
-  nodeId: string,
-  x: number,
-  y: number,
-): PipelineDef | null {
-  const idx = pipeline.nodes.findIndex((n) => n.id === nodeId);
-  if (idx < 0) return null;
-  const updated = pipeline.nodes.slice();
-  updated[idx] = {
-    ...updated[idx],
-    view: { x: Math.round(x), y: Math.round(y) },
-  };
-  return { ...pipeline, nodes: updated };
-}
+import { START_NODE_OFFSET_X_PX, canvasToYamlX, withUpdatedNodeView } from "./dagCanvasUtils";
 import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
 import { STATUS_BORDER, STATUS_DOT } from "../nodeStyles";

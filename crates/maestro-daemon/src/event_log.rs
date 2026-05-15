@@ -59,6 +59,7 @@ pub enum EventKind {
     NodeStopped,
     NodeAutoCompleted,
     NodeStale,
+    NodeInvalidated,
     PipelineLint,
     PipelineModified,
     RunCompleted,
@@ -458,6 +459,11 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                             it.status = NodeStatus::Stale;
                         }
                     }
+                }
+            }
+            EventKind::NodeInvalidated => {
+                if let Some(ref node_id) = event.node_id {
+                    state.nodes.remove(node_id);
                 }
             }
             EventKind::FrontmatterRetryPending => {
@@ -2374,5 +2380,55 @@ mod tests {
         assert_eq!(s, "\"paused\"");
         let d: RunStatus = serde_json::from_str(&s).unwrap();
         assert_eq!(d, RunStatus::Paused);
+    }
+
+    #[test]
+    fn node_invalidated_removes_node_from_state() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "invalidate-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeInvalidated, Some("worker"), None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert!(
+            !state.nodes.contains_key("worker"),
+            "NodeInvalidated should remove the node from state"
+        );
+    }
+
+    #[test]
+    fn node_invalidated_allows_re_start() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "retry-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeInvalidated, Some("worker"), None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(2)),
+        ];
+
+        let state = project(&events).unwrap();
+        let node = &state.nodes["worker"];
+        assert_eq!(node.status, NodeStatus::Running);
+        assert_eq!(node.iter, 2);
+        assert_eq!(node.iterations.len(), 1);
+    }
+
+    #[test]
+    fn node_invalidated_serialization_roundtrip() {
+        let kind = EventKind::NodeInvalidated;
+        let serialized = serde_json::to_string(&kind).unwrap();
+        assert_eq!(serialized, "\"node_invalidated\"");
+        let deserialized: EventKind = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, kind);
     }
 }

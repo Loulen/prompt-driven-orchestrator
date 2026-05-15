@@ -3,7 +3,7 @@ import {
   withUpdatedNodeView,
   canvasToYamlX,
   START_NODE_OFFSET_X_PX,
-} from "./DagCanvas";
+} from "./dagCanvasUtils";
 import type { RunState, NodeDefInfo, EdgeInfo, PortBrief, PipelineDef } from "../types";
 
 function makeRunState(overrides?: Partial<RunState>): RunState {

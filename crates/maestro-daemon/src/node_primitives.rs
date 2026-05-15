@@ -326,7 +326,7 @@ pub fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> InvalidateNodesRe
             id: None,
             run_id: params.run_id.to_string(),
             ts: event_log::now_iso(),
-            kind: EventKind::NodeStale,
+            kind: EventKind::NodeInvalidated,
             node_id: Some(node_id.clone()),
             iter: None,
             payload: Some(serde_json::json!({
@@ -1044,7 +1044,7 @@ mod tests {
         assert_eq!(result.events.len(), 2);
 
         for event in &result.events {
-            assert_eq!(event.kind, EventKind::NodeStale);
+            assert_eq!(event.kind, EventKind::NodeInvalidated);
         }
 
         assert!(!artifacts_dir.join("node-a").exists());
@@ -1085,7 +1085,7 @@ mod tests {
         let result = invalidate_nodes(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
         assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].kind, EventKind::NodeStale);
+        assert_eq!(result.events[0].kind, EventKind::NodeInvalidated);
         assert!(result.deleted_dirs.is_empty());
     }
 

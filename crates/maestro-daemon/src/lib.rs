@@ -2238,14 +2238,20 @@ async fn create_run_core(
 
     spawn_ready_after_event(state, &run_id).await;
 
-    spawn_manager_session(state, &run_id, &worktree_dir);
+    let needs_name = req.name.as_ref().map_or(true, |n| n.is_empty());
+    spawn_manager_session(state, &run_id, &worktree_dir, needs_name);
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
     (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
 }
 
-fn spawn_manager_session(state: &AppState, run_id: &str, worktree_dir: &std::path::Path) {
+fn spawn_manager_session(
+    state: &AppState,
+    run_id: &str,
+    worktree_dir: &std::path::Path,
+    needs_name: bool,
+) {
     let daemon_url = format!("http://localhost:{}", state.port);
 
     let static_prompt = std::fs::read_to_string(
@@ -2257,7 +2263,8 @@ fn spawn_manager_session(state: &AppState, run_id: &str, worktree_dir: &std::pat
     )
     .unwrap_or_default();
 
-    let full_prompt = prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt);
+    let full_prompt =
+        prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, needs_name);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
     if let Err(e) = tmux_session_manager::spawn(

@@ -337,12 +337,20 @@ pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String 
     format!("{preamble}---\n\n{role_prompt}")
 }
 
-pub fn build_manager_preamble(run_id: &str, daemon_url: &str) -> String {
+pub fn build_manager_preamble(run_id: &str, daemon_url: &str, needs_name: bool) -> String {
+    let auto_name_instruction = if needs_name {
+        format!(
+            "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n"
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r#"# Pipeline Manager Runtime Preamble
 
 You manage **run `{run_id}`**.
-
+{auto_name_instruction}
 - Daemon base URL: `{daemon_url}`
 - Run state: `curl {daemon_url}/runs/{run_id}`
 - Event log: `curl {daemon_url}/runs/{run_id}/events`
@@ -424,14 +432,29 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"cleanup_run"}}'
 ```
 
+### 8. rename_run
+
+Set or update the display name of this run.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"rename_run","name":"<display name>"}}'
+```
+
 ---
 
 "#
     )
 }
 
-pub fn build_manager_prompt(run_id: &str, daemon_url: &str, role_prompt: &str) -> String {
-    let preamble = build_manager_preamble(run_id, daemon_url);
+pub fn build_manager_prompt(
+    run_id: &str,
+    daemon_url: &str,
+    role_prompt: &str,
+    needs_name: bool,
+) -> String {
+    let preamble = build_manager_preamble(run_id, daemon_url, needs_name);
     format!("{preamble}{role_prompt}")
 }
 
@@ -908,14 +931,15 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_run_id_and_daemon_url() {
-        let preamble = build_manager_preamble("20260507-120000-abc1234", "http://localhost:5172");
+        let preamble =
+            build_manager_preamble("20260507-120000-abc1234", "http://localhost:5172", false);
         assert!(preamble.contains("20260507-120000-abc1234"));
         assert!(preamble.contains("http://localhost:5172"));
     }
 
     #[test]
-    fn manager_preamble_contains_all_seven_commands() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
+    fn manager_preamble_contains_all_eight_commands() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
         for cmd in [
             "extend_cycle",
             "resume_run",
@@ -924,6 +948,7 @@ mod tests {
             "mark_node_done",
             "inject_artifact",
             "cleanup_run",
+            "rename_run",
         ] {
             assert!(
                 preamble.contains(cmd),
@@ -934,7 +959,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_curl_examples() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
         assert!(preamble.contains("curl -X POST"));
         assert!(preamble.contains("Content-Type: application/json"));
     }
@@ -945,9 +970,23 @@ mod tests {
             "run-1",
             "http://localhost:5172",
             "You are the Pipeline Manager.",
+            false,
         );
         assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
         assert!(prompt.contains("You are the Pipeline Manager."));
+    }
+
+    #[test]
+    fn manager_preamble_includes_auto_name_instruction_when_needs_name() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172", true);
+        assert!(preamble.contains("No display name was provided"));
+        assert!(preamble.contains("rename_run"));
+    }
+
+    #[test]
+    fn manager_preamble_omits_auto_name_instruction_when_name_provided() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+        assert!(!preamble.contains("No display name was provided"));
     }
 
     // --- image port type preamble tests ---

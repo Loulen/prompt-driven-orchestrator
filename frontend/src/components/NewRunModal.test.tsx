@@ -483,6 +483,106 @@ describe("NewRunModal — image upload", () => {
   });
 });
 
+describe("NewRunModal — form persistence across close/reopen", () => {
+  it("preserves prompt text across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await enterValidRepo();
+
+    const textarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(textarea, { target: { value: "my prompt text" } });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("my prompt text");
+  });
+
+  it("preserves target repo and pipeline selection across close/reopen", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "My Pipeline", scope: "repo" }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await enterValidRepo("/home/user/my-repo");
+
+    await waitFor(() => {
+      const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
+      expect(select.value).toBe("p1");
+    });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    const repoInput = screen.getByLabelText(/target repository/i) as HTMLInputElement;
+    expect(repoInput.value).toBe("/home/user/my-repo");
+
+    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
+    expect(select.value).toBe("p1");
+  });
+
+  it("preserves images across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    const file = new File(["png-data"], "screenshot.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+  });
+
+  it("resets form fields after successful launch", async () => {
+    const onCreated = vi.fn();
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline", scope: "repo" }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={onCreated} />,
+    );
+
+    await enterValidRepo();
+
+    const textarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(textarea, { target: { value: "implement feature" } });
+
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    const file = new File(["png-data"], "design.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    vi.useRealTimers();
+    const launchButton = screen.getByRole("button", { name: /launch/i });
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith("test-run");
+    });
+
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={onCreated} />);
+
+    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
+    expect(screen.queryAllByTestId("image-thumbnail")).toHaveLength(0);
+  });
+});
+
 describe("NewRunModal run name field", () => {
   it("renders a name input and auto-generated checkbox", () => {
     renderModal();

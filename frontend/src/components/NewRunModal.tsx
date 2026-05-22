@@ -38,22 +38,6 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* eslint-disable react-hooks/set-state-in-effect -- modal form reset on open is intentionally synchronous */
-  useEffect(() => {
-    if (!open) return;
-    setTargetRepo("");
-    setRepoValid(null);
-    setRepoError(null);
-    setBranches([]);
-    setSourceBranch("");
-    setSelectedPipelineId("");
-    setInput("");
-    setOverrides({});
-    setError(null);
-    setImages([]);
-  }, [open]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
   const handleRepoChange = useCallback((value: string) => {
     setTargetRepo(value);
     if (!value.trim()) {

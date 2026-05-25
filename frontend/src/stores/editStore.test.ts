@@ -898,3 +898,182 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("threshold: 0.8");
   });
 });
+
+describe("updateNode propagates port changes to edges", () => {
+  it("renames edge source port when an output port is renamed", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [{ name: "screenshots", repeated: false }],
+    });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
+    const edge: EdgeDef = {
+      source: { node: "aaaaaaaa", port: "screenshots" },
+      target: { node: "bbbbbbbb", port: "in" },
+    };
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "screen", repeated: false }],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.edges[0].source.port).toBe("screen");
+    expect(tab.pipeline.edges[0].target).toEqual({ node: "bbbbbbbb", port: "in" });
+  });
+
+  it("renames edge target port when an input port is renamed", () => {
+    const nodeA = makeNode({ id: "aaaaaaaa" });
+    const nodeB = makeNode({
+      id: "bbbbbbbb",
+      inputs: [{ name: "data", repeated: false }],
+    });
+    const edge: EdgeDef = {
+      source: { node: "aaaaaaaa", port: "out" },
+      target: { node: "bbbbbbbb", port: "data" },
+    };
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
+
+    useEditStore.getState().updateNode("bbbbbbbb", {
+      inputs: [{ name: "payload", repeated: false }],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.edges[0].target.port).toBe("payload");
+  });
+
+  it("removes edge when a connected output port is deleted", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [
+        { name: "out", repeated: false },
+        { name: "screenshots", repeated: false },
+      ],
+    });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "out" }, target: { node: "bbbbbbbb", port: "in" } },
+      { source: { node: "aaaaaaaa", port: "screenshots" }, target: { node: "bbbbbbbb", port: "in" } },
+    ];
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], edges));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "out", repeated: false }],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.edges[0].source.port).toBe("out");
+  });
+
+  it("removes edge when a connected input port is deleted", () => {
+    const nodeA = makeNode({ id: "aaaaaaaa" });
+    const nodeB = makeNode({
+      id: "bbbbbbbb",
+      inputs: [
+        { name: "in", repeated: false },
+        { name: "extra", repeated: false },
+      ],
+    });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "out" }, target: { node: "bbbbbbbb", port: "in" } },
+      { source: { node: "aaaaaaaa", port: "out" }, target: { node: "bbbbbbbb", port: "extra" } },
+    ];
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], edges));
+
+    useEditStore.getState().updateNode("bbbbbbbb", {
+      inputs: [{ name: "in", repeated: false }],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.edges[0].target.port).toBe("in");
+  });
+
+  it("does not affect edges on other nodes", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [{ name: "out", repeated: false }],
+    });
+    const nodeB = makeNode({
+      id: "bbbbbbbb",
+      outputs: [{ name: "out", repeated: false }],
+    });
+    const nodeC = makeNode({ id: "cccccccc" });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "out" }, target: { node: "cccccccc", port: "in" } },
+      { source: { node: "bbbbbbbb", port: "out" }, target: { node: "cccccccc", port: "in" } },
+    ];
+    seedTabWithPipeline(makePipeline([nodeA, nodeB, nodeC], edges));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "result", repeated: false }],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(2);
+    expect(tab.pipeline.edges[0].source.port).toBe("result");
+    expect(tab.pipeline.edges[1].source.port).toBe("out");
+  });
+
+  it("clears for-each over when deleting a port causes in-edge removal", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [{ name: "items", repeated: false }],
+    });
+    const foreachNode: NodeDef = {
+      id: "fe1",
+      name: "ForEach",
+      type: "for-each",
+      inputs: [{ name: "in", repeated: false }],
+      outputs: [{ name: "body", repeated: false }],
+      interactive: false,
+      view: { x: 0, y: 0 },
+      over: "issues",
+    };
+    const edge: EdgeDef = {
+      source: { node: "aaaaaaaa", port: "items" },
+      target: { node: "fe1", port: "in" },
+    };
+    seedTabWithPipeline(makePipeline([nodeA, foreachNode], [edge]));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(0);
+    const fe = tab.pipeline.nodes.find((n) => n.id === "fe1");
+    expect(fe?.over).toBeNull();
+  });
+
+  it("does not rename when old port name still exists in new array", () => {
+    const node = makeNode({
+      id: "aaaaaaaa",
+      outputs: [
+        { name: "alpha", repeated: false },
+        { name: "beta", repeated: false },
+      ],
+    });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "alpha" }, target: { node: "bbbbbbbb", port: "in" } },
+      { source: { node: "aaaaaaaa", port: "beta" }, target: { node: "bbbbbbbb", port: "in" } },
+    ];
+    seedTabWithPipeline(makePipeline([node, nodeB], edges));
+
+    // Swap order: [beta, alpha] — same names, different indices
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [
+        { name: "beta", repeated: false },
+        { name: "alpha", repeated: false },
+      ],
+    });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(2);
+    expect(tab.pipeline.edges[0].source.port).toBe("alpha");
+    expect(tab.pipeline.edges[1].source.port).toBe("beta");
+  });
+});

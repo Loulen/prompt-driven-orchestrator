@@ -263,6 +263,53 @@ function edgeReferencesNode(edge: EdgeDef, nodeId: string): boolean {
   return "node" in edge.target && (edge.target as { node: string }).node === nodeId;
 }
 
+function cleanEdgeSideEffects(tab: OpenPipeline, edge: EdgeDef): void {
+  if (edge.target.port === "in") {
+    const targetNode = tab.pipeline.nodes.find((n) => n.id === edge.target.node);
+    if (targetNode?.type === "for-each") {
+      targetNode.over = null;
+    }
+  }
+  cleanSwitchPredicatesOnDisconnect(tab, edge);
+}
+
+function propagatePortChangesToEdges(
+  tab: OpenPipeline,
+  nodeId: string,
+  oldPorts: { name: string }[],
+  newPorts: { name: string }[],
+  side: "inputs" | "outputs",
+): void {
+  const edgeSide = side === "inputs" ? "target" : "source";
+  const newPortNames = new Set(newPorts.map((p) => p.name));
+
+  const renameMap = new Map<string, string>();
+  if (oldPorts.length === newPorts.length) {
+    for (let i = 0; i < oldPorts.length; i++) {
+      if (oldPorts[i].name !== newPorts[i].name && !newPortNames.has(oldPorts[i].name)) {
+        renameMap.set(oldPorts[i].name, newPorts[i].name);
+      }
+    }
+  }
+
+  const kept: EdgeDef[] = [];
+  for (const edge of tab.pipeline.edges) {
+    if (edge[edgeSide].node !== nodeId) {
+      kept.push(edge);
+      continue;
+    }
+    const renamed = renameMap.get(edge[edgeSide].port);
+    if (renamed) {
+      kept.push({ ...edge, [edgeSide]: { ...edge[edgeSide], port: renamed } });
+    } else if (newPortNames.has(edge[edgeSide].port)) {
+      kept.push(edge);
+    } else {
+      cleanEdgeSideEffects(tab, edge);
+    }
+  }
+  tab.pipeline.edges = kept;
+}
+
 function cleanSwitchPredicatesOnDisconnect(tab: OpenPipeline, deletedEdge: EdgeDef): void {
   if (deletedEdge.target.port !== "in") return;
   const switchNode = tab.pipeline.nodes.find(
@@ -403,9 +450,18 @@ export const useEditStore = create<EditState>((set, get) => ({
 
   updateNode: (nodeId: string, updates: Partial<NodeDef>) => {
     set((s) => mutateActiveTab(s, (tab) => {
+      const oldNode = tab.pipeline.nodes.find((n) => n.id === nodeId);
       tab.pipeline.nodes = tab.pipeline.nodes.map((n) =>
         n.id === nodeId ? { ...n, ...updates } : n,
       );
+      if (oldNode) {
+        if (updates.inputs) {
+          propagatePortChangesToEdges(tab, nodeId, oldNode.inputs, updates.inputs, "inputs");
+        }
+        if (updates.outputs) {
+          propagatePortChangesToEdges(tab, nodeId, oldNode.outputs, updates.outputs, "outputs");
+        }
+      }
     }));
   },
 
@@ -457,13 +513,7 @@ export const useEditStore = create<EditState>((set, get) => ({
         const deletedEdge = tab.pipeline.edges[index];
         tab.pipeline.edges = tab.pipeline.edges.filter((_, i) => i !== index);
         if (deletedEdge) {
-          if (deletedEdge.target.port === "in") {
-            const targetNode = tab.pipeline.nodes.find((n) => n.id === deletedEdge.target.node);
-            if (targetNode && targetNode.type === "for-each") {
-              targetNode.over = null;
-            }
-          }
-          cleanSwitchPredicatesOnDisconnect(tab, deletedEdge);
+          cleanEdgeSideEffects(tab, deletedEdge);
         }
       }),
       selection: { kind: "none" as const, id: null },

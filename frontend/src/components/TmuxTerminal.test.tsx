@@ -85,6 +85,9 @@ interface MockTerminal {
     active: { baseY: number; viewportY: number; type: "normal" | "alternate" };
     normal: { baseY: number };
   };
+  modes: {
+    mouseTrackingMode: "none" | "x10" | "vt200" | "drag" | "any";
+  };
   rows: number;
 }
 
@@ -102,6 +105,9 @@ vi.mock("@xterm/xterm", () => ({
       buffer: {
         active: { baseY: 50, viewportY: 25, type: "normal" },
         normal: { baseY: 50 },
+      },
+      modes: {
+        mouseTrackingMode: "none",
       },
       rows: 24,
     };
@@ -361,6 +367,43 @@ describe("TmuxTerminal", () => {
     );
 
     expect(xtermInnerHandler).not.toHaveBeenCalled();
+  });
+
+  it("lets wheel events through when mouse tracking is active", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+    term.modes.mouseTrackingMode = "vt200";
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(wheelEvent, "preventDefault");
+    container.dispatchEvent(wheelEvent);
+
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
+    expect(term.scrollLines).not.toHaveBeenCalled();
+  });
+
+  it("lets wheel events through in alt-screen when mouse tracking is active", () => {
+    render(<TmuxTerminal session="test-session" />);
+    const container = screen.getByTestId("xterm-container");
+    const term = mockTerminalInstances[0];
+    term.buffer.active.type = "alternate";
+    term.modes.mouseTrackingMode = "any";
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(wheelEvent, "preventDefault");
+    container.dispatchEvent(wheelEvent);
+
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
+    expect(term.scrollLines).not.toHaveBeenCalled();
   });
 
   it("suppresses wheel silently in alt-screen mode (no scrollback to scroll)", () => {

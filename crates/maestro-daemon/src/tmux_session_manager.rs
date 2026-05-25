@@ -40,6 +40,14 @@ fn tmux(socket: &str) -> std::process::Command {
     c
 }
 
+/// Enable mouse mode on a tmux session so that wheel events are forwarded
+/// as mouse-report escape sequences instead of being silently dropped.
+fn enable_mouse(socket: &str, session_name: &str) {
+    let _ = tmux(socket)
+        .args(["set-option", "-t", session_name, "mouse", "on"])
+        .output();
+}
+
 /// Env var that overrides the reaper TTL (seconds). Default: 3600 (1 h).
 pub const REAPER_TTL_SECS_ENV: &str = "MAESTRO_REAPER_TTL_SECS";
 
@@ -181,6 +189,8 @@ pub fn spawn(
         anyhow::bail!("tmux new-session failed: {stderr}");
     }
 
+    enable_mouse(&socket, session_name);
+
     info!("Spawned tmux session: {session_name}");
     Ok(())
 }
@@ -208,6 +218,8 @@ pub fn resume(
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("tmux new-session (resume) failed: {stderr}");
     }
+
+    enable_mouse(&socket, session_name);
 
     info!("Resumed tmux session: {session_name}");
     Ok(())

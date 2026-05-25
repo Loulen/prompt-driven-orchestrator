@@ -152,13 +152,16 @@ export default function TmuxTerminal({
     // *after* xterm's handler has already pushed those bytes to the WS. We
     // register in capture phase so we run first and can stopImmediatePropagation
     // before xterm's handler sees the event.
+    //
+    // However, when tmux has mouse mode enabled, it requests mouse tracking
+    // from the terminal. In that mode xterm.js correctly encodes wheel events
+    // as mouse-report escape sequences (not arrow keys). We must let those
+    // through so tmux can enter copy-mode and scroll its own scrollback.
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.shiftKey || e.metaKey) return;
+      if (term.modes.mouseTrackingMode !== "none") return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      // Alt-screen has no scrollback for us to scroll into — xterm.js only
-      // accumulates scrollback from the normal buffer. Suppress silently in
-      // alt-screen mode (matches Ghostty / iTerm default).
       if (term.buffer.active.type === "alternate") return;
       const lines = Math.round(e.deltaY / 25) || (e.deltaY > 0 ? 1 : -1);
       term.scrollLines(lines);

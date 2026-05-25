@@ -2108,11 +2108,18 @@ async fn create_run_core(
                 (y, path)
             }
             None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("library pipeline template not found: {lib_id}") })),
-                )
-                    .into_response();
+                // Not in library store — fall back to non-library pipeline dirs
+                let path = resolve_pipeline_path(&state.repo_root, lib_id);
+                match std::fs::read_to_string(&path) {
+                    Ok(y) => (y, path),
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": format!("pipeline template not found: {lib_id}") })),
+                        )
+                            .into_response();
+                    }
+                }
             }
         }
     } else {

@@ -3,6 +3,8 @@ import { ChevronDown, FolderGit2, GitBranch, ImagePlus, Sparkles, Star, X } from
 import type { PipelineListEntry } from "../types";
 import { createRun, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
+import RepoCombobox from "./RepoCombobox";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -34,9 +36,12 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   const [branchesLoading, setBranchesLoading] = useState(false);
 
   const [images, setImages] = useState<File[]>([]);
+  const recentRepos = useRecentReposStore((s) => s.recentRepos);
+  const refreshRecentRepos = useRecentReposStore((s) => s.refresh);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const prefillDone = useRef(false);
 
   const handleRepoChange = useCallback((value: string) => {
     setTargetRepo(value);
@@ -47,6 +52,16 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
       setSourceBranch("");
     }
   }, []);
+
+  useEffect(() => {
+    if (open && !prefillDone.current && recentRepos.length > 0 && !targetRepo) {
+      prefillDone.current = true;
+      handleRepoChange(recentRepos[0]);
+    }
+    if (!open) {
+      prefillDone.current = false;
+    }
+  }, [open, recentRepos, targetRepo, handleRepoChange]);
 
   useEffect(() => {
     if (!open || !targetRepo.trim()) return;
@@ -234,6 +249,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
         images: images.length > 0 ? images : undefined,
       });
       onCreated(resp.run_id);
+      refreshRecentRepos();
       setRunName("");
       setAutoName(true);
       setInput("");
@@ -245,7 +261,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images]);
+  }, [selectedPipeline, input, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, refreshRecentRepos]);
 
   const canLaunch = repoValid && selectedPipeline && input.trim();
 
@@ -330,30 +346,15 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                 <FolderGit2 size={12} className="text-fg-3" />
                 Target repository
               </label>
-              <input
-                id="target-repo"
-                className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${repoBorderClass}`}
-                style={{ fontSize: "12px" }}
-                placeholder="/path/to/your/repo"
+              <RepoCombobox
                 value={targetRepo}
-                onChange={(e) => handleRepoChange(e.target.value)}
-                data-testid="target-repo-input"
+                onChange={handleRepoChange}
+                recentRepos={recentRepos}
+                repoValid={repoValid}
+                repoValidating={repoValidating}
+                repoError={repoError}
+                borderClass={repoBorderClass}
               />
-              {repoValidating && (
-                <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                  Validating...
-                </span>
-              )}
-              {repoError && (
-                <span className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="repo-error">
-                  {repoError}
-                </span>
-              )}
-              {repoValid && !repoError && (
-                <span className="text-acc" style={{ fontSize: "10.5px" }} data-testid="repo-valid">
-                  Valid git repository
-                </span>
-              )}
             </div>
 
             {/* Source branch */}

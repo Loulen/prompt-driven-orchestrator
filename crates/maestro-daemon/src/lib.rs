@@ -456,6 +456,44 @@ async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
     }
 }
 
+async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
+    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
+        "SELECT payload FROM events \
+         WHERE kind = 'run_started' AND payload IS NOT NULL \
+         ORDER BY ts DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut repos = Vec::new();
+            for (payload_str,) in &rows {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload_str) {
+                    if let Some(repo) = val["target_repo"].as_str() {
+                        if seen.insert(repo.to_string()) {
+                            repos.push(repo.to_string());
+                            if repos.len() >= 5 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            Json(repos).into_response()
+        }
+        Err(e) => {
+            error!("failed to query recent repos: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to query recent repos" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
@@ -516,6 +554,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines/{pipeline_id}/promote", post(promote_pipeline))
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
+        .route("/repos/recent", get(repos_recent))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -11436,5 +11475,131 @@ edges:
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["affected_count"], 0);
+    }
+
+    // --- GET /repos/recent (issue #132) ---
+
+    static SEED_TS_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    async fn seed_run_started(state: &Arc<AppState>, run_id: &str, target_repo: Option<&str>) {
+        let seq = SEED_TS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let ts = format!("2026-01-01T00:00:{:02}.000Z", seq);
+        let mut payload = serde_json::json!({
+            "pipeline_name": "test-pipe",
+            "input": "test",
+        });
+        if let Some(repo) = target_repo {
+            payload["target_repo"] = serde_json::json!(repo);
+        }
+        append_event(
+            state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts,
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(payload),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn repos_recent_empty_when_no_events() {
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert!(repos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn repos_recent_returns_single_repo() {
+        let state = test_state().await;
+        seed_run_started(&state, "run-1", Some("/home/user/project-a")).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(repos, vec!["/home/user/project-a"]);
+    }
+
+    #[tokio::test]
+    async fn repos_recent_deduplicates_and_orders_by_most_recent() {
+        let state = test_state().await;
+        seed_run_started(&state, "run-1", Some("/repo/a")).await;
+        seed_run_started(&state, "run-2", Some("/repo/b")).await;
+        seed_run_started(&state, "run-3", Some("/repo/a")).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(repos, vec!["/repo/a", "/repo/b"]);
+    }
+
+    #[tokio::test]
+    async fn repos_recent_limits_to_5() {
+        let state = test_state().await;
+        for i in 0..8 {
+            seed_run_started(&state, &format!("run-{i}"), Some(&format!("/repo/{i}"))).await;
+        }
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(repos.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn repos_recent_ignores_events_without_target_repo() {
+        let state = test_state().await;
+        seed_run_started(&state, "run-1", None).await;
+        seed_run_started(&state, "run-2", Some("/repo/real")).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(repos, vec!["/repo/real"]);
     }
 }

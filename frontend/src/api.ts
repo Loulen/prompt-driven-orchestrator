@@ -229,6 +229,12 @@ export async function listBranches(repoPath: string): Promise<string[]> {
   return resp.json();
 }
 
+export async function fetchRecentRepos(): Promise<string[]> {
+  const resp = await fetch(`${BASE}/repos/recent`);
+  if (!resp.ok) throw new Error(`GET /repos/recent failed: ${resp.status}`);
+  return resp.json();
+}
+
 export async function killNode(
   runId: string,
   nodeId: string,

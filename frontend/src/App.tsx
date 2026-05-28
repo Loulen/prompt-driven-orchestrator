@@ -16,6 +16,7 @@ import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
 import { computePipelineSyncState } from "./hooks/useLibraryPipelines";
 import { serializePipeline } from "./stores/editStore";
+import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
@@ -222,6 +223,7 @@ export default function App() {
     if (!mountedRef.current) {
       mountedRef.current = true;
       refreshRuns();
+      useRecentReposStore.getState().refresh();
     }
   }, [refreshRuns]);
 

@@ -899,6 +899,46 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 });
 
+describe("serializePipeline persists port_type", () => {
+  function makePipelineWithTypedPorts(): PipelineDef {
+    const tester: NodeDef = {
+      id: "9NOnrpKY",
+      name: "Tester",
+      type: "doc-only",
+      inputs: [
+        { name: "screens", repeated: false, side: "left", port_type: "image_list" },
+      ],
+      outputs: [
+        { name: "screens-fixed", repeated: false, side: "right", port_type: "image_list" },
+        { name: "report", repeated: false, side: "right" },
+      ],
+      interactive: false,
+      view: { x: 200, y: 0 },
+    };
+    return {
+      name: "typed-ports-test",
+      version: "1.0",
+      variables: {},
+      nodes: [tester],
+      edges: [],
+    };
+  }
+
+  it("emits port_type: image_list for both input and output ports", () => {
+    const yaml = serializePipeline(makePipelineWithTypedPorts());
+    const occurrences = yaml.match(/port_type: image_list/g) ?? [];
+    // One for the input port (screens), one for the output port (screens-fixed).
+    expect(occurrences.length).toBe(2);
+  });
+
+  it("does not emit port_type for the default markdown type", () => {
+    const yaml = serializePipeline(makePipelineWithTypedPorts());
+    // The "report" output has no port_type set, so it must default to markdown
+    // implicitly and never appear in the YAML.
+    expect(yaml).not.toContain("port_type: markdown");
+  });
+});
+
 describe("updateNode propagates port changes to edges", () => {
   it("renames edge source port when an output port is renamed", () => {
     const nodeA = makeNode({

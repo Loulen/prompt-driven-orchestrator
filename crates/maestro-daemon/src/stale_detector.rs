@@ -435,7 +435,7 @@ mod tests {
         let pipeline_path = tmp.path().join("pipeline.yaml");
         std::fs::write(
             &pipeline_path,
-            "name: test\nnodes:\n  - id: worker\n    type: doc-only\n    inputs: []\n    outputs: []\nedges: []\n",
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs: []\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
         )
         .unwrap();
 
@@ -456,7 +456,7 @@ mod tests {
         let pipeline_path = tmp.path().join("pipeline.yaml");
         std::fs::write(
             &pipeline_path,
-            "name: test\nnodes:\n  - id: worker\n    type: doc-only\n    inputs: []\n    outputs:\n      - name: report\n    edges: []\n",
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: report\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
         )
         .unwrap();
 

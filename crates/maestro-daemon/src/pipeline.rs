@@ -2765,4 +2765,57 @@ edges:
         assert_eq!(designer.outputs[2].name, "report");
         assert_eq!(designer.outputs[2].port_type, PortType::Markdown);
     }
+
+    #[test]
+    fn port_type_image_list_deserializes_on_input_port() {
+        // Regression for the "image list ports not persisted" bug: the frontend
+        // serializer now emits `port_type: image_list` on INPUT ports too (e.g.
+        // the Tester node's `screens` input). Confirm the daemon read path
+        // round-trips it to PortType::ImageList rather than the markdown default.
+        let yaml = r#"
+name: test
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: tester
+    name: Tester
+    type: doc-only
+    inputs:
+      - name: screens
+        port_type: image_list
+      - name: notes
+    outputs:
+      - name: screens-fixed
+        port_type: image_list
+      - name: result
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: tester, port: notes }
+  - source: { node: tester, port: result }
+    target: { node: end, port: result }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let tester = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "tester")
+            .unwrap();
+        assert_eq!(tester.inputs[0].name, "screens");
+        assert_eq!(tester.inputs[0].port_type, PortType::ImageList);
+        assert_eq!(tester.inputs[1].name, "notes");
+        assert_eq!(tester.inputs[1].port_type, PortType::Markdown);
+        assert_eq!(tester.outputs[0].name, "screens-fixed");
+        assert_eq!(tester.outputs[0].port_type, PortType::ImageList);
+        assert_eq!(tester.outputs[1].name, "result");
+        assert_eq!(tester.outputs[1].port_type, PortType::Markdown);
+    }
 }

@@ -144,6 +144,8 @@ export function serializePipeline(p: PipelineDef): string {
         const p: Record<string, unknown> = { name: port.name };
         if (port.repeated) p.repeated = true;
         if (port.side) p.side = port.side;
+        if (port.port_type && port.port_type !== "markdown")
+          p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = port.frontmatter;
         return p;
       });
@@ -152,6 +154,8 @@ export function serializePipeline(p: PipelineDef): string {
         const p: Record<string, unknown> = { name: port.name };
         if (port.repeated) p.repeated = true;
         if (port.side) p.side = port.side;
+        if (port.port_type && port.port_type !== "markdown")
+          p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = port.frontmatter;
         if (port.when) p.when = port.when;
         return p;

@@ -10732,8 +10732,17 @@ edges: []
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn retry_all_archives_and_creates_new_run() {
-        let state = test_state().await;
+        // retry_all reconstructs a fresh run by re-resolving the original
+        // pipeline by name from disk and creating a new git worktree for it,
+        // so the repo root must be a real git repo with the template present.
+        // Isolate HOME so user-scoped resolution/cleanup can't leak.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        write_test_pipeline(tmp.path(), "retry-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
 
         let run_event = event_log::Event {
             id: None,
@@ -10783,7 +10792,8 @@ edges: []
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(status, StatusCode::OK);
+        // retry_all returns create_run_core's response verbatim, which is 201 Created.
+        assert_eq!(status, StatusCode::CREATED, "retry_all body: {json}");
         assert!(json.get("run_id").is_some(), "should return new run_id");
 
         let old_events = load_events(&state.db, "retry-test").await.unwrap();

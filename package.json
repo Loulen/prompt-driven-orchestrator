@@ -1,5 +1,6 @@
 {
   "devDependencies": {
-    "@ai-hero/sandcastle": "^0.5.7"
+    "@ai-hero/sandcastle": "^0.5.7",
+    "tsx": "^4.21.1"
   }
 }

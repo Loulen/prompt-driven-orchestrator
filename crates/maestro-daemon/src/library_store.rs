@@ -321,6 +321,11 @@ pub mod pipelines {
         pub node_count: usize,
         pub modified: Option<String>,
         pub yaml: String,
+        /// Parsed form of `yaml`, normalized by the same parser the run/pipeline
+        /// endpoints use. Clients must compare against this (not the raw text):
+        /// textual comparison flags formatting noise — key order, defaults the
+        /// parser fills in, serializer version drift — as divergence.
+        pub pipeline: crate::pipeline::PipelineDef,
         #[serde(default)]
         pub prompts: HashMap<String, String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,6 +395,7 @@ pub mod pipelines {
                 node_count: parsed.pipeline.nodes.len(),
                 modified,
                 yaml: contents,
+                pipeline: parsed.pipeline,
                 prompts,
                 promoted_from: meta.promoted_from,
                 drifted,
@@ -597,7 +603,9 @@ mod tests {
     use super::HOME_TEST_LOCK as TEST_LOCK;
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _guard = TEST_LOCK.lock().unwrap();
+        // Poison-tolerant: the lock only serializes HOME mutation; a panic in
+        // another test must not cascade into every later HOME-using test.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("maestro-lib-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -980,6 +988,35 @@ mod tests {
             assert_eq!(id1, "my-pipeline");
             assert_eq!(id2, "my-pipeline-2");
             assert_eq!(pipelines::list(repo).len(), 2);
+        });
+    }
+
+    #[test]
+    fn pipeline_library_list_exposes_parsed_pipeline() {
+        with_temp_repo(|repo| {
+            let yaml = sample_pipeline_yaml("My Pipeline");
+            pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+
+            let all = pipelines::list(repo);
+            assert_eq!(all.len(), 1);
+            let parsed = &all[0].pipeline;
+            assert_eq!(parsed.name, "My Pipeline");
+            assert_eq!(parsed.nodes.len(), 3);
+            assert_eq!(parsed.edges.len(), 2);
+            // The parser's normalizations are baked in — e.g. port sides get
+            // their defaults — so clients comparing two parsed pipelines see
+            // both sides normalized identically.
+            let planner = parsed.nodes.iter().find(|n| n.id == "planner").unwrap();
+            assert_eq!(planner.inputs[0].side, Some(pipeline::PortSide::Left));
+            assert_eq!(planner.outputs[0].side, Some(pipeline::PortSide::Right));
         });
     }
 

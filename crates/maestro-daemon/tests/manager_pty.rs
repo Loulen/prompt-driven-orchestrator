@@ -51,7 +51,14 @@ async fn manager_pty_ws_roundtrip() {
     // manager session on. With the per-daemon socket isolation
     // (post-#86), the daemon's PTY bridge attaches via `tmux -L
     // maestro-<port>` — `default` is a different tmux server.
+    //
+    // This test exercises the PTY bridge, not the reaper. The manager session
+    // below is created out-of-band (its run is absent from the event log), so
+    // the daemon's orphan sweep would race the test and kill it — opt out of
+    // all automatic cleanup for this daemon.
+    std::env::set_var("MAESTRO_DAEMON_NO_CLEANUP", "1");
     let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+    std::env::remove_var("MAESTRO_DAEMON_NO_CLEANUP");
     let socket = daemon.tmux_socket();
 
     kill_tmux_session(&socket, &session_name);

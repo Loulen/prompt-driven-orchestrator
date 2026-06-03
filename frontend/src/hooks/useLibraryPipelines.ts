@@ -2,22 +2,35 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibraryPipelines } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import type { PipelineDef } from "../types";
-import { serializePipeline } from "../stores/editStore";
+import { pipelineToYamlObject } from "../stores/editStore";
+import { deepEqual } from "../lib/deepEqual";
 
 export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 
-// Compare two YAMLs while ignoring canvas-only diffs:
-//   - `view: { x, y }` coordinates,
-//   - trailing whitespace on each line,
-//   - blank lines.
-// Library pipelines don't carry layout, so the canvas can freely rearrange
-// nodes without that registering as "diverged".
-export function normalizePipelineYaml(yaml: string): string {
-  return yaml
-    .split("\n")
-    .map((line) => line.replace(/\s*view:\s*\{[^}]*\}\s*$/u, "").trimEnd())
-    .filter((line) => line.length > 0)
-    .join("\n");
+// Semantic equality between two parsed pipelines. Both sides are reduced to
+// the canonical save-shape (`pipelineToYamlObject`) and deep-compared with
+// order-insensitive object keys, so none of the following registers as
+// divergence:
+//   - YAML formatting (quoting, flow vs block style, key order),
+//   - defaults the daemon parser fills in (port sides, switch default output),
+//   - map-key serialization order (variables, frontmatter, when-clauses come
+//     from Rust HashMaps whose JSON order is nondeterministic),
+//   - fields the canvas serializer doesn't round-trip.
+// `view: { x, y }` is stripped: library pipelines don't carry layout, so the
+// canvas can freely rearrange nodes without that registering as "diverged".
+export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
+  return deepEqual(comparablePipelineObject(a), comparablePipelineObject(b));
+}
+
+function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
+  const obj = pipelineToYamlObject(p);
+  const nodes = obj.nodes as Record<string, unknown>[] | undefined;
+  if (nodes) {
+    for (const node of nodes) {
+      delete node.view;
+    }
+  }
+  return obj;
 }
 
 // Prompts live in `<id>.prompts/<node_id>.md` on disk, separate from the
@@ -42,19 +55,17 @@ function promptsEqual(
 /// twin. Callers should lock-in the resolved id on the tab so future renames
 /// don't fall back to the (now-mismatching) name path.
 export function computePipelineSyncState(
-  pipelineYaml: string,
+  pipeline: PipelineDef,
   entries: LibraryPipelineEntry[],
-  pipelineName: string,
   libraryId?: string | null,
   canvasPrompts?: Record<string, string>,
 ): { state: PipelineLibrarySyncState; entry: LibraryPipelineEntry | null } {
   const byId = libraryId ? entries.find((e) => e.id === libraryId) ?? null : null;
-  const entry = byId ?? entries.find((e) => e.name === pipelineName) ?? null;
+  const entry = byId ?? entries.find((e) => e.name === pipeline.name) ?? null;
   if (!entry) return { state: "outline", entry: null };
-  const yamlMatches =
-    normalizePipelineYaml(pipelineYaml) === normalizePipelineYaml(entry.yaml);
+  const pipelineMatches = pipelinesEquivalent(pipeline, entry.pipeline);
   const promptsMatch = promptsEqual(canvasPrompts ?? {}, entry.prompts ?? {});
-  if (yamlMatches && promptsMatch) {
+  if (pipelineMatches && promptsMatch) {
     return { state: "synced", entry };
   }
   return { state: "diverged", entry };
@@ -68,8 +79,7 @@ export function usePipelineLibraryState(
 ): { state: PipelineLibrarySyncState; entry: LibraryPipelineEntry | null } {
   return useMemo(() => {
     if (!pipeline) return { state: "outline", entry: null };
-    const yaml = serializePipeline(pipeline);
-    return computePipelineSyncState(yaml, entries, pipeline.name, libraryId, prompts);
+    return computePipelineSyncState(pipeline, entries, libraryId, prompts);
   }, [pipeline, entries, libraryId, prompts]);
 }
 

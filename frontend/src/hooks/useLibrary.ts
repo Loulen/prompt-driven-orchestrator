@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibrary } from "../api";
 import type { LibraryEntry } from "../api";
 import type { NodeDef, PortDef } from "../types";
+import { deepEqual } from "../lib/deepEqual";
 
 export type LibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -46,8 +47,10 @@ function portsMatch(
     if (np.name !== lp.name) return false;
     if (np.repeated !== lp.repeated) return false;
     if ((np.side ?? null) !== (lp.side ?? null)) return false;
-    if (JSON.stringify(np.frontmatter ?? null) !== JSON.stringify(lp.frontmatter ?? null)) return false;
-    if (JSON.stringify(np.when ?? null) !== JSON.stringify(lp.when ?? null)) return false;
+    // deepEqual, not JSON.stringify: frontmatter/when are maps whose key
+    // order is nondeterministic on the daemon side (Rust HashMap).
+    if (!deepEqual(np.frontmatter ?? null, lp.frontmatter ?? null)) return false;
+    if (!deepEqual(np.when ?? null, lp.when ?? null)) return false;
   }
   return true;
 }

@@ -7475,7 +7475,11 @@ mod tests {
 
     impl FakeHome {
         fn new() -> Self {
-            let lock = library_store::HOME_TEST_LOCK.lock().unwrap();
+            // Poison-tolerant: the lock only serializes HOME mutation; a panic
+            // in another test must not cascade here.
+            let lock = library_store::HOME_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let dir = tempfile::tempdir().unwrap();
             let prev = std::env::var("HOME").ok();
             std::env::set_var("HOME", dir.path());
@@ -9771,7 +9775,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn library_full_flow() {
-        let _guard = crate::library_store::HOME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::library_store::HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         let tmp = std::env::temp_dir().join(format!("maestro-lib-http-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -9961,7 +9967,9 @@ edges: []
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn library_save_works_without_pipeline_on_disk() {
-        let _guard = crate::library_store::HOME_TEST_LOCK.lock().unwrap();
+        let _guard = crate::library_store::HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         let tmp = std::env::temp_dir().join(format!("maestro-lib-nopipe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);

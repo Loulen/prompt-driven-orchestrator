@@ -15,7 +15,6 @@ import ConflictModal from "./components/ConflictModal";
 import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
 import { computePipelineSyncState } from "./hooks/useLibraryPipelines";
-import { serializePipeline } from "./stores/editStore";
 import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
@@ -297,17 +296,13 @@ export default function App() {
   }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines, closeRunPipeline]);
 
   // Detect: active tab is a run, library has the same pipeline name, and
-  // the library YAML diverges from the run snapshot. Show the modal once per
-  // (tabId, library-yaml) pair so re-entering an unchanged run is silent.
+  // the library pipeline diverges from the run snapshot. Show the modal once
+  // per (tabId, library-yaml) pair so re-entering an unchanged run is silent.
   useEffect(() => {
     if (!editTab || !editTab.runId) return;
     const libEntry = libraryPipelines.find((lp) => lp.name === editTab.pipeline.name);
     if (!libEntry) return;
-    const { state } = computePipelineSyncState(
-      serializePipeline(editTab.pipeline),
-      [libEntry],
-      editTab.pipeline.name,
-    );
+    const { state } = computePipelineSyncState(editTab.pipeline, [libEntry]);
     if (state !== "diverged") return;
     const last = promptedLibraryYamlRef.current.get(editTab.id);
     if (last === libEntry.yaml) return;

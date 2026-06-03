@@ -19,17 +19,20 @@ fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
-fn create_tmux_session_with_cat(name: &str) {
+// The daemon talks to a tmux server scoped to its own socket (`tmux -L`), so
+// out-of-band session management must go through the same socket — a session
+// created on the default server would be invisible to the PTY bridge.
+fn create_tmux_session_with_cat(socket: &str, name: &str) {
     let status = std::process::Command::new("tmux")
-        .args(["new-session", "-d", "-s", name, "cat"])
+        .args(["-L", socket, "new-session", "-d", "-s", name, "cat"])
         .status()
         .expect("failed to run tmux");
     assert!(status.success(), "tmux new-session should succeed");
 }
 
-fn kill_tmux_session(name: &str) {
+fn kill_tmux_session(socket: &str, name: &str) {
     let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", name])
+        .args(["-L", socket, "kill-session", "-t", name])
         .status();
 }
 
@@ -41,12 +44,19 @@ async fn pty_ws_roundtrip_echo() {
         return;
     }
 
+    // This test exercises the PTY bridge, not the reaper. The session below is
+    // created out-of-band (no run in the event log), so the daemon's orphan
+    // sweep would race the test and kill it as unrecognised — opt out of all
+    // automatic cleanup for this daemon.
+    std::env::set_var("MAESTRO_DAEMON_NO_CLEANUP", "1");
+    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+    std::env::remove_var("MAESTRO_DAEMON_NO_CLEANUP");
+    let socket = daemon.tmux_socket();
+
     let session_name = "maestro-pty-test-echo";
     // Clean up any leftover from a previous run
-    kill_tmux_session(session_name);
-    create_tmux_session_with_cat(session_name);
-
-    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+    kill_tmux_session(&socket, session_name);
+    create_tmux_session_with_cat(&socket, session_name);
 
     let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -91,7 +101,7 @@ async fn pty_ws_roundtrip_echo() {
 
     // Clean up
     let _ = ws.close(None).await;
-    kill_tmux_session(session_name);
+    kill_tmux_session(&socket, session_name);
 }
 
 /// Layer 3a: WS /sessions/<id>/pty rejects requests with bad Origin header.

@@ -377,10 +377,49 @@ mod tests {
 
     // --- find_session_jsonl (filesystem) ---
 
+    /// RAII guard that swaps HOME for a temp dir while holding the crate-wide
+    /// HOME lock. `find_session_jsonl` reads `$HOME`, and other test modules
+    /// (library_store, lib.rs FakeHome) also mutate HOME — without the lock,
+    /// parallel test threads clobber each other's HOME mid-test.
+    struct TempHome {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        tmp: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new() -> Self {
+            let lock = crate::library_store::HOME_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::tempdir().unwrap();
+            let prev = std::env::var_os("HOME");
+            std::env::set_var("HOME", tmp.path());
+            Self {
+                _lock: lock,
+                tmp,
+                prev,
+            }
+        }
+
+        fn path(&self) -> &Path {
+            self.tmp.path()
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(p) => std::env::set_var("HOME", p),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
     #[test]
     fn find_jsonl_returns_newest_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
+        let home_guard = TempHome::new();
+        let home = home_guard.path();
 
         let encoded = encode_working_dir(Path::new("/home/user/project"));
         let projects_dir = home.join(".claude").join("projects").join(&encoded);
@@ -397,7 +436,6 @@ mod tests {
         let new_file = projects_dir.join("new-session.jsonl");
         std::fs::write(&new_file, "new").unwrap();
 
-        std::env::set_var("HOME", home);
         let result = find_session_jsonl(Path::new("/home/user/project"));
 
         assert!(result.is_some());
@@ -406,15 +444,14 @@ mod tests {
 
     #[test]
     fn find_jsonl_no_dir_returns_none() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", tmp.path());
+        let _home_guard = TempHome::new();
         assert!(find_session_jsonl(Path::new("/nonexistent/dir")).is_none());
     }
 
     #[test]
     fn find_jsonl_ignores_non_jsonl_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
+        let home_guard = TempHome::new();
+        let home = home_guard.path();
 
         let encoded = encode_working_dir(Path::new("/tmp/testdir"));
         let projects_dir = home.join(".claude").join("projects").join(&encoded);
@@ -423,7 +460,6 @@ mod tests {
         std::fs::write(projects_dir.join("notes.txt"), "not jsonl").unwrap();
         std::fs::write(projects_dir.join("data.json"), "not jsonl either").unwrap();
 
-        std::env::set_var("HOME", home);
         assert!(find_session_jsonl(Path::new("/tmp/testdir")).is_none());
     }
 

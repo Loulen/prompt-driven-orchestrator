@@ -117,7 +117,12 @@ interface EditState {
   ) => void;
 }
 
-export function serializePipeline(p: PipelineDef): string {
+// Canonical plain-object form of a pipeline — the exact structure that gets
+// YAML-serialized on save. Also used for semantic comparison against library
+// entries (see useLibraryPipelines): building both sides through this single
+// code path erases formatting noise (key order, quoting, parser defaults)
+// that a textual YAML comparison would misread as divergence.
+export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   const obj: Record<string, unknown> = {
     name: p.name,
   };
@@ -171,7 +176,11 @@ export function serializePipeline(p: PipelineDef): string {
     return edge;
   });
 
-  return yamlStringify(obj);
+  return obj;
+}
+
+export function serializePipeline(p: PipelineDef): string {
+  return yamlStringify(pipelineToYamlObject(p));
 }
 
 function yamlStringify(obj: unknown): string {

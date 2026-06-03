@@ -61,6 +61,7 @@ function libEntry(yaml = ""): LibraryPipelineEntry {
     node_count: 2,
     modified: null,
     yaml,
+    pipeline: PIPELINE,
     prompts: {},
   };
 }

@@ -29,6 +29,15 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
+        // When the test suite itself runs inside a Maestro node (e.g. an agent
+        // worktree), `MAESTRO_NODE_ID` is exported in the environment and the
+        // daemon under test would consider itself "nested" — silently disabling
+        // the orphan sweep and reaper, and failing every test that asserts on
+        // them. A TestDaemon must behave like a top-level daemon regardless of
+        // where the tests run; nested-mode tests opt back in explicitly via
+        // `MAESTRO_DAEMON_NO_CLEANUP=1`.
+        std::env::remove_var("MAESTRO_NODE_ID");
+
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 

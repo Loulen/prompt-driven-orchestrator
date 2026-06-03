@@ -117,8 +117,10 @@ async fn create_run(daemon_url: &str) -> String {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "POST /runs should succeed");
-    let json: serde_json::Value = resp.json().await.unwrap();
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 201, "POST /runs should succeed, got body: {text}");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     json["run_id"].as_str().unwrap().to_string()
 }
 
@@ -272,13 +274,14 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
     .await;
 
     // Create the required output file so output validation passes (refs #36).
-    let artifacts_dir = daemon
+    // Artifacts live at `<node>/iter-<n>/<port>/output.md`.
+    let port_dir = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
-        .join("worktree/.maestro/artifacts/planner/iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("plan.md"), "# Plan\nDo the thing.").unwrap();
+        .join("worktree/.maestro/artifacts/planner/iter-1/plan");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Plan\nDo the thing.").unwrap();
 
     // Complete the planner node so the new downstream node's inputs are satisfied
     let resp = reqwest::Client::new()
@@ -316,10 +319,14 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
     let new_yaml = r#"name: run-edit-test
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
   - id: planner
     name: planner
     type: doc-only
-    prompt_file: run-edit-test.prompts/planner.md
     inputs:
       - name: task
     outputs:
@@ -333,7 +340,14 @@ nodes:
     outputs:
       - name: summary
     view: { x: 300, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
 edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: implementer, port: plan }
 "#;
@@ -348,8 +362,11 @@ edges:
     )
     .await;
 
-    // Kill any tmux sessions we spawned
-    let _ = Command::new("tmux").args(["kill-server"]).output();
+    // Kill any tmux sessions we spawned — only on this daemon's scoped
+    // socket, never the user's default server.
+    let _ = Command::new("tmux")
+        .args(["-L", &daemon.tmux_socket(), "kill-server"])
+        .output();
     std::env::remove_var("MAESTRO_TMUX_CMD_OVERRIDE");
 
     assert!(
@@ -505,6 +522,11 @@ const TWO_NODE_PIPELINE_NAME: &str = "two-node-test";
 const TWO_NODE_PIPELINE_YAML: &str = r#"name: two-node-test
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
   - id: planner
     name: planner
     type: doc-only
@@ -521,7 +543,14 @@ nodes:
     outputs:
       - name: summary
     view: { x: 300, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
 edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: implementer, port: plan }
 "#;
@@ -556,8 +585,10 @@ async fn create_two_node_run(daemon_url: &str) -> String {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "POST /runs should succeed");
-    let json: serde_json::Value = resp.json().await.unwrap();
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 201, "POST /runs should succeed, got body: {text}");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     json["run_id"].as_str().unwrap().to_string()
 }
 
@@ -595,6 +626,11 @@ async fn removing_node_from_run_pipeline_prevents_spawn() {
     let reduced_yaml = r#"name: two-node-test
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
   - id: planner
     name: planner
     type: doc-only
@@ -603,7 +639,14 @@ nodes:
     outputs:
       - name: plan
     view: { x: 100, y: 100 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: planner, port: task }
 "#;
     std::fs::write(&yaml_path, reduced_yaml).unwrap();
 
@@ -617,14 +660,15 @@ edges: []
     })
     .await;
 
-    // Create required output file and complete the planner node
-    let artifacts_dir = daemon
+    // Create required output file and complete the planner node.
+    // Artifacts live at `<node>/iter-<n>/<port>/output.md`.
+    let port_dir = daemon
         .repo_root()
         .join(".maestro/runs")
         .join(&run_id)
-        .join("worktree/.maestro/artifacts/planner/iter-1");
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("plan.md"), "# Plan\nDo the thing.").unwrap();
+        .join("worktree/.maestro/artifacts/planner/iter-1/plan");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Plan\nDo the thing.").unwrap();
 
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
@@ -647,7 +691,10 @@ edges: []
     )
     .await;
 
-    let _ = Command::new("tmux").args(["kill-server"]).output();
+    // Scoped kill: this daemon's tmux server only, never the user's default.
+    let _ = Command::new("tmux")
+        .args(["-L", &daemon.tmux_socket(), "kill-server"])
+        .output();
     std::env::remove_var("MAESTRO_TMUX_CMD_OVERRIDE");
 
     assert!(

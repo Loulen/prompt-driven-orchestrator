@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl } from "./types";
 
 const BASE = "";
 
@@ -563,6 +563,11 @@ export interface LibraryPipelineEntry {
   node_count: number;
   modified: string | null;
   yaml: string;
+  /// Parsed form of `yaml`, normalized by the daemon's pipeline parser.
+  /// Divergence checks compare against this — never against the raw text,
+  /// whose formatting (key order, parser-filled defaults, serializer drift)
+  /// does not survive a round-trip.
+  pipeline: PipelineDef;
   prompts: Record<string, string>;
 }
 

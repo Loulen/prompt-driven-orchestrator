@@ -84,9 +84,10 @@ describe("RunsListPanel Library section", () => {
   });
 
   it("renders starred pipeline template entries", () => {
+    const emptyDef = (name: string) => ({ name, variables: {}, nodes: [], edges: [] });
     const pipelines: LibraryPipelineEntry[] = [
-      { id: "review-pipeline", name: "Review Pipeline", scope: "repo", node_count: 5, modified: null, yaml: "", prompts: {} },
-      { id: "deploy-pipeline", name: "Deploy Pipeline", scope: "repo", node_count: 3, modified: null, yaml: "", prompts: {} },
+      { id: "review-pipeline", name: "Review Pipeline", scope: "repo", node_count: 5, modified: null, yaml: "", pipeline: emptyDef("Review Pipeline"), prompts: {} },
+      { id: "deploy-pipeline", name: "Deploy Pipeline", scope: "repo", node_count: 3, modified: null, yaml: "", pipeline: emptyDef("Deploy Pipeline"), prompts: {} },
     ];
     renderPanel({ libraryPipelines: pipelines });
 

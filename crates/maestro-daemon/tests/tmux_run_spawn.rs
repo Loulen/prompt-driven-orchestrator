@@ -127,6 +127,9 @@ async fn tmux_session_alive_after_run_spawn() {
     std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // The daemon spawns sessions on its own scoped tmux socket (`tmux -L`),
+    // not the default server — inspect/kill through the same socket.
+    let socket = daemon.tmux_socket();
 
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
@@ -149,7 +152,7 @@ async fn tmux_session_alive_after_run_spawn() {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut alive = false;
     while std::time::Instant::now() < deadline {
-        if tmux_has_session(&session) {
+        if tmux_has_session(&socket, &session) {
             alive = true;
             break;
         }
@@ -159,7 +162,7 @@ async fn tmux_session_alive_after_run_spawn() {
     // Always best-effort kill regardless of outcome so a flake doesn't leak
     // a sleep 60 process.
     let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", &session])
+        .args(["-L", &socket, "kill-session", "-t", &session])
         .output();
 
     std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
@@ -178,9 +181,9 @@ fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
-fn tmux_has_session(session: &str) -> bool {
+fn tmux_has_session(socket: &str, session: &str) -> bool {
     std::process::Command::new("tmux")
-        .args(["has-session", "-t", session])
+        .args(["-L", socket, "has-session", "-t", session])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

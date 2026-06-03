@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibraryPipelines } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import type { PipelineDef } from "../types";
+import type { OpenPipeline } from "../stores/editStore";
 import { pipelineToYamlObject } from "../stores/editStore";
 import { deepEqual } from "../lib/deepEqual";
 
@@ -69,6 +70,31 @@ export function computePipelineSyncState(
     return { state: "synced", entry };
   }
   return { state: "diverged", entry };
+}
+
+// Decision logic for the "Pipeline template updated" modal (App.tsx): a
+// run-scoped tab whose library twin genuinely diverges gets prompted, once per
+// (tab, library-yaml) pair. It MUST use the same comparison as the star
+// indicator — pipeline and prompts, resolved by libraryId first — or the two
+// contradict each other on screen. Kept pure so the exact call shape is
+// unit-testable: the false-modal regression came from the App.tsx call site
+// omitting the tab's prompts, which made every pipeline with a non-empty
+// prompt file read as diverged.
+export function shouldPromptLibraryUpdate(
+  tab: Pick<OpenPipeline, "runId" | "pipeline" | "prompts" | "libraryId">,
+  entries: LibraryPipelineEntry[],
+  lastPromptedYaml: string | undefined,
+): LibraryPipelineEntry | null {
+  if (!tab.runId) return null;
+  const { state, entry } = computePipelineSyncState(
+    tab.pipeline,
+    entries,
+    tab.libraryId ?? null,
+    tab.prompts,
+  );
+  if (!entry || state !== "diverged") return null;
+  if (lastPromptedYaml === entry.yaml) return null;
+  return entry;
 }
 
 export function usePipelineLibraryState(

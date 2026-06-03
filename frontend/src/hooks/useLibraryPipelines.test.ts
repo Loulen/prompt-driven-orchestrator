@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   pipelinesEquivalent,
   computePipelineSyncState,
+  shouldPromptLibraryUpdate,
 } from "./useLibraryPipelines";
 import type { LibraryPipelineEntry } from "../api";
 import type { NodeDef, PipelineDef } from "../types";
@@ -261,5 +262,87 @@ describe("computePipelineSyncState", () => {
       a: "",
     });
     expect(result.state).toBe("synced");
+  });
+});
+
+// Covers the App.tsx modal-trigger call shape. The false "Pipeline template
+// updated" modal regression came from that call site omitting the tab's
+// prompts, which read as `{} !== <library prompts>` → "diverged" for every
+// pipeline that has at least one non-empty prompt file.
+describe("shouldPromptLibraryUpdate", () => {
+  const PROMPTS = {
+    planner: "You are a planner.",
+    fixer: "You fix bugs.",
+  };
+
+  function runTab(over: Partial<Parameters<typeof shouldPromptLibraryUpdate>[0]> = {}) {
+    return {
+      runId: "20260603-125909-f5348b6",
+      pipeline: def({ nodes: [node("planner"), node("fixer")] }),
+      prompts: { ...PROMPTS },
+      libraryId: null,
+      ...over,
+    };
+  }
+
+  function libEntry(
+    opts: Parameters<typeof entry>[1] & { pipeline?: PipelineDef } = {},
+  ): LibraryPipelineEntry {
+    return entry(opts.pipeline ?? def({ nodes: [node("planner"), node("fixer")] }), {
+      yaml: "name: My Pipeline\n",
+      prompts: { ...PROMPTS },
+      ...opts,
+    });
+  }
+
+  // The exact regression: a freshly created run is a verbatim copy of the
+  // library template — pipeline AND prompts — and the library prompts map is
+  // non-empty. Opening it must stay silent.
+  it("stays silent for an untouched run whose library entry has non-empty prompts", () => {
+    expect(shouldPromptLibraryUpdate(runTab(), [libEntry()], undefined)).toBeNull();
+  });
+
+  it("prompts when the library pipeline structurally diverges", () => {
+    const lib = libEntry({ pipeline: def({ nodes: [node("planner")] }) });
+    expect(shouldPromptLibraryUpdate(runTab(), [lib], undefined)).toBe(lib);
+  });
+
+  it("prompts when only a prompt file diverges", () => {
+    const lib = libEntry({ prompts: { ...PROMPTS, planner: "You are an EDITED planner." } });
+    expect(shouldPromptLibraryUpdate(runTab(), [lib], undefined)).toBe(lib);
+  });
+
+  it("never prompts on non-run tabs, even when diverged", () => {
+    const lib = libEntry({ pipeline: def({ nodes: [node("planner")] }) });
+    expect(
+      shouldPromptLibraryUpdate(runTab({ runId: undefined }), [lib], undefined),
+    ).toBeNull();
+  });
+
+  it("stays silent when there is no library twin", () => {
+    expect(shouldPromptLibraryUpdate(runTab(), [], undefined)).toBeNull();
+  });
+
+  it("does not re-prompt for a library yaml the user already answered", () => {
+    const lib = libEntry({ pipeline: def({ nodes: [node("planner")] }) });
+    expect(shouldPromptLibraryUpdate(runTab(), [lib], lib.yaml)).toBeNull();
+  });
+
+  it("re-prompts when the library yaml changed again since the last answer", () => {
+    const lib = libEntry({ pipeline: def({ nodes: [node("planner")] }) });
+    expect(shouldPromptLibraryUpdate(runTab(), [lib], "name: Old Version\n")).toBe(lib);
+  });
+
+  // Same id-first resolution as the star: a tab locked onto its library entry
+  // keeps tracking it through renames instead of silently going "outline".
+  it("resolves the library twin by libraryId when names differ", () => {
+    const lib = libEntry({
+      id: "stable-id",
+      name: "Original Name",
+      pipeline: def({ name: "Original Name", nodes: [node("planner")] }),
+    });
+    expect(
+      shouldPromptLibraryUpdate(runTab({ libraryId: "stable-id" }), [lib], undefined),
+    ).toBe(lib);
   });
 });

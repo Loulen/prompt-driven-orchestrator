@@ -94,6 +94,10 @@ struct AppState {
     /// TTL window — that's how we tell our own writes apart from external ones
     /// (vim, git checkout, future Pipeline Manager) without ignoring the latter.
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+    /// Live handle to the pipeline file watcher. Run dirs are watched
+    /// individually and non-recursively (see `pipeline_watcher::watch_run_dir`),
+    /// so run creation must register each new run dir here.
+    run_watcher: Arc<Mutex<Option<pipeline_watcher::PipelineDebouncer>>>,
 }
 
 impl AppState {
@@ -304,6 +308,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         recent_writes.clone(),
         run_modified_tx,
     );
+    let run_watcher = Arc::new(Mutex::new(watcher));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -320,6 +325,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         port: bound_addr.port(),
         merge_lock: tokio::sync::Mutex::new(()),
         recent_writes,
+        run_watcher: run_watcher.clone(),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -400,7 +406,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
     };
 
     let task = tokio::spawn(async move {
-        let _watcher = watcher; // keep the file watcher alive for the server's lifetime
+        let _watcher = run_watcher; // keep the file watcher alive for the server's lifetime
         let _reaper = _reaper_handle; // keep the reaper alive
         let _run_modified = _run_modified_handle; // keep the pipeline_modified handler alive
         let _stale = _stale_handle; // keep the stale detector alive
@@ -2261,6 +2267,17 @@ async fn create_run_core(
     // Copy pipeline YAML + prompts to run-scoped location (always in target repo)
     if let Err(e) = copy_pipeline_to_run(&run_repo_root, &pipeline_path, &run_id) {
         error!("failed to copy pipeline to run dir: {e}");
+    } else if run_repo_root == state.repo_root {
+        // Register the new run dir with the file watcher (run dirs are watched
+        // individually and non-recursively). Runs created in another target
+        // repo live outside this daemon's watch root and stay unwatched — the
+        // watcher's run-id detection is rooted at `state.repo_root` anyway.
+        let mut guard = state.run_watcher.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(debouncer) = guard.as_mut() {
+            if let Some(run_dir) = run_scoped_pipeline_path(&run_repo_root, &run_id).parent() {
+                pipeline_watcher::watch_run_dir(debouncer, run_dir);
+            }
+        }
     }
 
     // Write _input/output.md (directory-based artifact, ADR-0010)
@@ -5590,9 +5607,12 @@ fn copy_pipeline_to_run(
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join(format!("{stem}.prompts"));
+    // Always create the prompts dir — even when the template has none — so the
+    // file watcher can attach to it at run creation (it is watched
+    // non-recursively and there is no later hook to pick it up).
+    let dest_prompts = run_scoped_prompts_dir(repo_root, run_id);
+    std::fs::create_dir_all(&dest_prompts).context("create prompts dir")?;
     if src_prompts.is_dir() {
-        let dest_prompts = run_scoped_prompts_dir(repo_root, run_id);
-        std::fs::create_dir_all(&dest_prompts).context("create prompts dir")?;
         for entry in std::fs::read_dir(&src_prompts)
             .into_iter()
             .flatten()
@@ -6106,6 +6126,7 @@ mod tests {
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            run_watcher: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -7451,6 +7472,7 @@ mod tests {
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            run_watcher: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -9831,6 +9853,7 @@ edges: []
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            run_watcher: Arc::new(Mutex::new(None)),
         });
         let app = build_router(state);
 
@@ -9997,6 +10020,7 @@ edges: []
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            run_watcher: Arc::new(Mutex::new(None)),
         });
         let app = build_router(state);
 

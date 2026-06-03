@@ -211,6 +211,41 @@ async fn cleanup_run_removes_pipeline_copy() {
     assert!(!run_dir.exists(), "run dir should be removed after cleanup");
 }
 
+#[tokio::test]
+async fn external_prompt_edit_in_run_emits_pipeline_modified() {
+    // Regression guard for the watcher redesign: run dirs are watched
+    // individually and non-recursively (the recursive runs-tree watch used to
+    // exhaust the per-user inotify limit), so `<run>/pipeline.prompts/` needs
+    // its own watch — registered at run creation. An external edit to a
+    // prompt file must still surface as a `pipeline_modified` event.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon.url()).await;
+
+    let mut ws = daemon.connect_ws().await.unwrap();
+    // Drain ready + any startup events.
+    let _ = timeout(Duration::from_millis(500), ws.next()).await;
+
+    let prompt_path = daemon
+        .repo_root()
+        .join(".maestro")
+        .join("runs")
+        .join(&run_id)
+        .join("pipeline.prompts")
+        .join("planner.md");
+    std::fs::write(&prompt_path, "You are an EDITED planner.\n").unwrap();
+
+    let evt = next_pipeline_modified_event(&mut ws, &run_id, Duration::from_secs(4))
+        .await
+        .expect("external prompt edit should emit pipeline_modified within 4s");
+
+    assert_eq!(evt["kind"], "pipeline_modified");
+    assert_eq!(evt["run_id"], run_id);
+    assert_eq!(
+        evt["payload"]["kind"], "prompt",
+        "the modification kind should be 'prompt', got {evt:?}"
+    );
+}
+
 /// Wait for a specific event kind + node_id on the WebSocket.
 async fn next_event_for_node(
     ws: &mut tokio_tungstenite::WebSocketStream<

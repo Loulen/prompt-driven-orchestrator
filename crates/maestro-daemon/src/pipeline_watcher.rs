@@ -1,13 +1,62 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use notify_debouncer_mini::{new_debouncer, new_debouncer_opt, DebouncedEventKind};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::SELF_WRITE_TTL;
+
+/// Debounce window for both backends.
+const DEBOUNCE: Duration = Duration::from_secs(1);
+/// Scan interval of the polling fallback. Combined with the debounce window,
+/// worst-case detection latency stays well under the 4s the integration tests
+/// (and a human waiting on hot-reload) tolerate.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// File watcher with a graceful degradation path: prefer the OS-native
+/// backend (inotify on Linux), and fall back to a 1s polling watcher for any
+/// path the native backend cannot register — typically because the per-user
+/// inotify watch pool (`fs.inotify.max_user_watches`) has been exhausted by
+/// other processes (editors and Electron apps routinely pin hundreds of
+/// thousands of watches). Without the fallback, a failed `watch()` silently
+/// disabled hot-reload and external-edit detection for that path.
+///
+/// Every watched path is small (a pipelines dir, a run dir, a prompts dir),
+/// so polling them is cheap; each path is registered with exactly one
+/// backend, so no event is ever delivered twice.
+pub struct PipelineDebouncer {
+    native: Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>,
+    poll: Option<notify_debouncer_mini::Debouncer<notify::PollWatcher>>,
+}
+
+impl PipelineDebouncer {
+    fn watch(&mut self, path: &Path, mode: notify::RecursiveMode) -> Result<(), notify::Error> {
+        let mut native_err = None;
+        if let Some(d) = self.native.as_mut() {
+            match d.watcher().watch(path, mode) {
+                Ok(()) => return Ok(()),
+                Err(e) => native_err = Some(e),
+            }
+        }
+        if let Some(d) = self.poll.as_mut() {
+            let result = d.watcher().watch(path, mode);
+            if result.is_ok() {
+                if let Some(e) = native_err {
+                    warn!(
+                        "Native file watch failed for {} ({e}); falling back to {}s polling",
+                        path.display(),
+                        POLL_INTERVAL.as_secs()
+                    );
+                }
+            }
+            return result;
+        }
+        Err(native_err.unwrap_or_else(|| notify::Error::generic("no watcher backend available")))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RunPipelineModified {
@@ -21,7 +70,7 @@ pub fn spawn_watcher(
     event_tx: broadcast::Sender<serde_json::Value>,
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
     run_modified_tx: tokio::sync::mpsc::UnboundedSender<RunPipelineModified>,
-) -> Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>> {
+) -> Option<PipelineDebouncer> {
     let repo_pipelines_dir = repo_root.join(".maestro").join("pipelines");
     let runs_dir = repo_root.join(".maestro").join("runs");
     let user_pipelines_dir = std::env::var_os("HOME")
@@ -38,9 +87,11 @@ pub fn spawn_watcher(
 
     let runs_dir_for_closure = runs_dir.clone();
 
-    let mut debouncer = match new_debouncer(
-        Duration::from_secs(1),
-        move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
+    // One shared handler, fed by both backends (a given path only ever
+    // reports through the backend that registered it).
+    type DebounceResult = Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>;
+    let handler: Arc<dyn Fn(DebounceResult) + Send + Sync> = Arc::new(
+        move |events: DebounceResult| {
             let Ok(events) = events else { return };
             for event in events {
                 if event.kind != DebouncedEventKind::Any {
@@ -105,39 +156,62 @@ pub fn spawn_watcher(
                 info!("Pipeline file changed: {}", path.display());
             }
         },
-    ) {
-        Ok(d) => d,
+    );
+
+    let native = match new_debouncer(DEBOUNCE, {
+        let handler = handler.clone();
+        move |events: DebounceResult| handler(events)
+    }) {
+        Ok(d) => Some(d),
         Err(e) => {
-            warn!("Failed to create file watcher: {e}");
-            return None;
+            warn!("Failed to create native file watcher: {e}");
+            None
         }
     };
 
-    if repo_pipelines_dir.exists() {
-        if let Err(e) = debouncer
-            .watcher()
-            .watch(&repo_pipelines_dir, notify::RecursiveMode::Recursive)
+    let poll = match new_debouncer_opt::<_, notify::PollWatcher>(
+        notify_debouncer_mini::Config::default()
+            .with_timeout(DEBOUNCE)
+            .with_notify_config(
+                notify::Config::default()
+                    .with_poll_interval(POLL_INTERVAL)
+                    // The poll backend stores mtimes at *second* granularity;
+                    // without content comparison, a write landing in the same
+                    // wall-clock second as the previous scan is never seen.
+                    // The watched sets are tiny (a few KB of YAML/MD), so
+                    // hashing them every scan is negligible.
+                    .with_compare_contents(true),
+            ),
         {
-            warn!("Failed to watch repo pipelines dir: {e}");
-        } else {
-            info!("Watching repo pipelines: {}", repo_pipelines_dir.display());
+            let handler = handler.clone();
+            move |events: DebounceResult| handler(events)
+        },
+    ) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            warn!("Failed to create polling file watcher: {e}");
+            None
         }
-    } else {
+    };
+
+    if native.is_none() && poll.is_none() {
+        warn!("Failed to create file watcher: no backend available");
+        return None;
+    }
+    let mut debouncer = PipelineDebouncer { native, poll };
+
+    if !repo_pipelines_dir.exists() {
         let _ = std::fs::create_dir_all(&repo_pipelines_dir);
-        if let Err(e) = debouncer
-            .watcher()
-            .watch(&repo_pipelines_dir, notify::RecursiveMode::Recursive)
-        {
-            warn!("Failed to watch repo pipelines dir: {e}");
-        }
+    }
+    if let Err(e) = debouncer.watch(&repo_pipelines_dir, notify::RecursiveMode::Recursive) {
+        warn!("Failed to watch repo pipelines dir: {e}");
+    } else {
+        info!("Watching repo pipelines: {}", repo_pipelines_dir.display());
     }
 
     if let Some(ref user_dir) = user_pipelines_dir {
         if user_dir.exists() {
-            if let Err(e) = debouncer
-                .watcher()
-                .watch(user_dir, notify::RecursiveMode::Recursive)
-            {
+            if let Err(e) = debouncer.watch(user_dir, notify::RecursiveMode::Recursive) {
                 warn!("Failed to watch user pipelines dir: {e}");
             } else {
                 info!("Watching user pipelines: {}", user_dir.display());
@@ -145,20 +219,53 @@ pub fn spawn_watcher(
         }
     }
 
-    // Watch runs directory for run-scoped pipeline edits
+    // Watch run dirs for run-scoped pipeline edits. Each run dir is watched
+    // individually and non-recursively (see `watch_run_dir`); runs created
+    // after boot are registered by the run-creation handler.
     if !runs_dir.exists() {
         let _ = std::fs::create_dir_all(&runs_dir);
     }
-    if let Err(e) = debouncer
-        .watcher()
-        .watch(&runs_dir, notify::RecursiveMode::Recursive)
-    {
-        warn!("Failed to watch runs dir: {e}");
-    } else {
-        info!("Watching runs dir: {}", runs_dir.display());
+    if let Ok(entries) = std::fs::read_dir(&runs_dir) {
+        let mut count = 0usize;
+        for entry in entries.flatten() {
+            let run_dir = entry.path();
+            if run_dir.is_dir() {
+                watch_run_dir(&mut debouncer, &run_dir);
+                count += 1;
+            }
+        }
+        info!(
+            "Watching {count} run dir(s) under: {}",
+            runs_dir.display()
+        );
     }
 
     Some(debouncer)
+}
+
+/// Watch a single run directory for the only run-scoped files the daemon
+/// reacts to: `<run>/pipeline.yaml` and `<run>/pipeline.prompts/*.md`. Both
+/// watches are non-recursive on purpose — a run dir also contains the
+/// pipeline worktree and per-node sub-worktrees (`target/`, `node_modules/`,
+/// `.git/`, ...). Watching the runs tree recursively used to pin tens of
+/// thousands of inotify watches per run, exhausting the per-user
+/// `max_user_watches` limit and silently breaking every other watcher on the
+/// machine (including freshly spawned daemons, whose `watch()` calls then
+/// fail with ENOSPC).
+pub fn watch_run_dir(debouncer: &mut PipelineDebouncer, run_dir: &Path) {
+    if let Err(e) = debouncer.watch(run_dir, notify::RecursiveMode::NonRecursive) {
+        warn!("Failed to watch run dir {}: {e}", run_dir.display());
+        return;
+    }
+    let prompts_dir = run_dir.join("pipeline.prompts");
+    if prompts_dir.is_dir() {
+        if let Err(e) = debouncer.watch(&prompts_dir, notify::RecursiveMode::NonRecursive) {
+            warn!(
+                "Failed to watch run prompts dir {}: {e}",
+                prompts_dir.display()
+            );
+        }
+    }
 }
 
 /// Detect if a changed path is a run-scoped pipeline file.

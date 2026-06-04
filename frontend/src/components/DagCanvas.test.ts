@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   withUpdatedNodeView,
   canvasToYamlX,
+  runReachedEnd,
   START_NODE_OFFSET_X_PX,
 } from "./dagCanvasUtils";
-import type { RunState, NodeDefInfo, EdgeInfo, PortBrief, PipelineDef } from "../types";
+import { deriveNodes } from "./DagCanvas";
+import type { RunState, RunStatus, NodeDefInfo, EdgeInfo, PortBrief, PipelineDef } from "../types";
 
 function makeRunState(overrides?: Partial<RunState>): RunState {
   return {
@@ -84,6 +86,66 @@ describe("DagCanvas data derivation", () => {
     const edge = makeEdge("start", "user_prompt", "planner", "in");
     const sourceHandle = edge.source_port || null;
     expect(sourceHandle).toBe("user_prompt");
+  });
+});
+
+describe("runReachedEnd", () => {
+  it("is true only when the run completed successfully", () => {
+    expect(runReachedEnd("completed")).toBe(true);
+  });
+
+  it("is false for live and non-success terminal statuses", () => {
+    const notReached: RunStatus[] = [
+      "running",
+      "awaiting_user",
+      "paused",
+      "failed",
+      "halted",
+      "archived",
+    ];
+    for (const status of notReached) {
+      expect(runReachedEnd(status)).toBe(false);
+    }
+  });
+});
+
+describe("deriveNodes — start/end reached flag (issue #105)", () => {
+  function makeStartEndRun(status: RunStatus): RunState {
+    return makeRunState({
+      status,
+      node_defs: [
+        makeNodeDef("start", "start", [], [{ name: "user_prompt", side: "right" }]),
+        makeNodeDef("work", "doc-only", [{ name: "in", side: "left" }], [{ name: "out", side: "right" }]),
+        makeNodeDef("end", "end", [{ name: "result", side: "left" }], []),
+      ],
+      start_node: { input_path: "/input.md", started_at: "t0", target_node_ids: ["work"] },
+      edges: [
+        makeEdge("start", "user_prompt", "work", "in"),
+        makeEdge("work", "out", "end", "result"),
+      ],
+    });
+  }
+
+  it("marks start and end as reached once the run is completed", () => {
+    const nodes = deriveNodes(makeStartEndRun("completed"), null);
+    const start = nodes.find((n) => n.id === "start");
+    const end = nodes.find((n) => n.id === "end");
+    expect(start?.data.reached).toBe(true);
+    expect(end?.data.reached).toBe(true);
+  });
+
+  it("leaves start and end not-reached while the run is still running", () => {
+    const nodes = deriveNodes(makeStartEndRun("running"), null);
+    const start = nodes.find((n) => n.id === "start");
+    const end = nodes.find((n) => n.id === "end");
+    expect(start?.data.reached).toBe(false);
+    expect(end?.data.reached).toBe(false);
+  });
+
+  it("does not mark reached for a failed run", () => {
+    const nodes = deriveNodes(makeStartEndRun("failed"), null);
+    const end = nodes.find((n) => n.id === "end");
+    expect(end?.data.reached).toBe(false);
   });
 });
 

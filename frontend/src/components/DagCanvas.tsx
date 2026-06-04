@@ -17,7 +17,7 @@ import { Trash2, Terminal, Info, Play, Square, Pause, RotateCcw } from "lucide-r
 import { isLiveRun, type NodeStatus, type NodeType, type PipelineDetail, type RunState, type RunStatus, type PortBrief } from "../types";
 import { cleanupRun, attachManager, fetchRunPipeline, saveRunPipeline, pauseRun, resumeRun, retryAll } from "../api";
 import { serializePipeline } from "../stores/editStore";
-import { START_NODE_OFFSET_X_PX, canvasToYamlX, withUpdatedNodeView } from "./dagCanvasUtils";
+import { START_NODE_OFFSET_X_PX, canvasToYamlX, withUpdatedNodeView, runReachedEnd } from "./dagCanvasUtils";
 import { Tooltip } from "./ui/tooltip";
 import { formatWhenClause } from "../predicates";
 import { STATUS_BORDER, STATUS_DOT } from "../nodeStyles";
@@ -109,20 +109,30 @@ function PipelineNode({ data, selected }: NodeProps<Node<PipelineNodeData>>) {
 
 interface EndNodeData {
   inputs: PortBrief[];
+  reached: boolean;
   [key: string]: unknown;
 }
 
-function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
+export function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
   const inputs = data.inputs ?? [];
+  const reached = data.reached ?? false;
   return (
     <div
+      data-testid="node-end"
+      data-reached={reached}
       className="grid place-items-center rounded-full border"
       style={{
         width: 28,
         height: 28,
-        borderColor: "var(--color-st-blocked, #f97316)",
-        color: "var(--color-st-blocked, #f97316)",
-        background: "var(--color-bg-3, #1e1f23)",
+        borderColor: reached
+          ? "var(--color-acc, #10b981)"
+          : "var(--color-st-blocked, #f97316)",
+        color: reached
+          ? "var(--color-acc, #10b981)"
+          : "var(--color-st-blocked, #f97316)",
+        background: reached
+          ? "var(--color-st-done-bg, rgba(16,185,129,0.14))"
+          : "var(--color-bg-3, #1e1f23)",
       }}
     >
       {inputs.map((port, i) => (
@@ -143,20 +153,26 @@ function EndNode({ data }: NodeProps<Node<EndNodeData>>) {
 
 interface StartNodeData {
   outputs: PortBrief[];
+  reached: boolean;
   [key: string]: unknown;
 }
 
-function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
+export function StartNode({ data }: NodeProps<Node<StartNodeData>>) {
   const outputs = data.outputs ?? [];
+  const reached = data.reached ?? false;
   return (
     <div
+      data-testid="node-start"
+      data-reached={reached}
       className="start-node grid place-items-center rounded-full border-2"
       style={{
         width: 32,
         height: 32,
         borderColor: "var(--color-acc, #10b981)",
         color: "var(--color-acc, #10b981)",
-        background: "var(--color-bg-3, #1e1f23)",
+        background: reached
+          ? "var(--color-st-done-bg, rgba(16,185,129,0.14))"
+          : "var(--color-bg-3, #1e1f23)",
       }}
     >
       <Play data-testid="node-icon-start" size={14} />
@@ -271,9 +287,13 @@ interface Props {
 
 const START_NODE_OFFSET_X = START_NODE_OFFSET_X_PX;
 
-function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
+// Exported for unit tests; co-located with the components whose render model it
+// feeds. Same allowance as ui/button.tsx for a component file with a helper export.
+// eslint-disable-next-line react-refresh/only-export-components
+export function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
   const nodeDefs = run.node_defs ?? [];
   const nodeEntries = Object.values(run.nodes);
+  const reached = runReachedEnd(run.status);
 
   const allNodes: Node[] = [];
 
@@ -424,7 +444,7 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
           x: startDef.view_x ?? minX - START_NODE_OFFSET_X,
           y: startDef.view_y ?? avgY,
         },
-        data: { outputs: startDef.outputs },
+        data: { outputs: startDef.outputs, reached },
         selected: startDef.id === selectedNodeId,
       });
     }
@@ -455,7 +475,7 @@ function deriveNodes(run: RunState, selectedNodeId: string | null): Node[] {
           x: endDef.view_x ?? maxX + 280,
           y: endDef.view_y ?? avgY + 50,
         },
-        data: { inputs: endDef.inputs },
+        data: { inputs: endDef.inputs, reached },
         selected: endDef.id === selectedNodeId,
       });
     }

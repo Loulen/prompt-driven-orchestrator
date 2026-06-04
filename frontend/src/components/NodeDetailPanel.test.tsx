@@ -550,6 +550,36 @@ describe("NodeDetailPanel", () => {
       await act(async () => {});
       expect(screen.queryByTestId("image-thumbnails")).not.toBeInTheDocument();
     });
+
+    it("opens the lightbox when a thumbnail is clicked", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "screenshot",
+            repeated: false,
+            port_type: "image",
+            files: [{ path: "artifacts/node/iter-1/screenshot/capture.png", exists: true, size: 1024, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("image-lightbox")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("thumbnail-0"));
+
+      expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+      expect(screen.getByTestId("lightbox-image").getAttribute("src")).toContain(
+        "capture.png",
+      );
+    });
   });
 
   describe("New statuses (issue #112)", () => {

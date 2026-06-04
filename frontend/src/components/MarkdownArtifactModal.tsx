@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
 import type { IterationInfo, PortType } from "../types";
+import ImageLightbox from "./ImageLightbox";
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -86,6 +87,8 @@ export default function MarkdownArtifactModal({
   const isImage = portType === "image" || portType === "image_list";
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(!isImage);
+  // URL of the image currently shown fullscreen in the lightbox, or null.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   useEffect(() => {
     if (isImage) return;
@@ -132,6 +135,9 @@ export default function MarkdownArtifactModal({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // While the lightbox is open it owns Escape (close lightbox, not the
+      // modal) and we suppress file/iter navigation behind it.
+      if (lightboxSrc !== null) return;
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowLeft") {
         if (isRepeated && fileIndex > 0) setFileIndex(fileIndex - 1);
@@ -142,7 +148,7 @@ export default function MarkdownArtifactModal({
         else goNextIter();
       }
     },
-    [onClose, isRepeated, fileIndex, total, goPrevIter, goNextIter],
+    [lightboxSrc, onClose, isRepeated, fileIndex, total, goPrevIter, goNextIter],
   );
 
   useEffect(() => {
@@ -255,6 +261,7 @@ export default function MarkdownArtifactModal({
               filesLoading={filesLoading}
               fileIndex={fileIndex}
               portType={portType}
+              onZoom={setLightboxSrc}
             />
           ) : (
             <>
@@ -281,7 +288,26 @@ export default function MarkdownArtifactModal({
                 </span>
               ) : bodyContent ? (
                 <div className="artifact-markdown prose-sm">
-                  <Markdown remarkPlugins={[remarkGfm]}>{bodyContent}</Markdown>
+                  <Markdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      img: ({ src, alt }) => {
+                        const url = typeof src === "string" ? src : undefined;
+                        return (
+                          <img
+                            src={url}
+                            alt={alt ?? ""}
+                            className="cursor-zoom-in rounded transition-opacity hover:opacity-90"
+                            onClick={() => {
+                              if (url) setLightboxSrc(url);
+                            }}
+                          />
+                        );
+                      },
+                    }}
+                  >
+                    {bodyContent}
+                  </Markdown>
                 </div>
               ) : (
                 <span className="text-fg-4" style={{ fontSize: "11px" }}>
@@ -292,6 +318,13 @@ export default function MarkdownArtifactModal({
           )}
         </div>
       </div>
+
+      {lightboxSrc && (
+        <ImageLightbox
+          src={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+        />
+      )}
     </div>
   );
 }
@@ -313,12 +346,14 @@ function ImageBody({
   filesLoading,
   fileIndex,
   portType,
+  onZoom,
 }: {
   runId: string;
   files: FileInfo[];
   filesLoading: boolean;
   fileIndex: number;
   portType: PortType;
+  onZoom: (src: string) => void;
 }) {
   const existingFiles = files.filter((f) => f.exists);
 
@@ -346,7 +381,8 @@ function ImageBody({
             <img
               src={artifactUrl(runId, f.path)}
               alt={f.path.split("/").pop() ?? ""}
-              className="max-h-[60vh] w-full rounded border border-line object-contain"
+              className="max-h-[60vh] w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
+              onClick={() => onZoom(artifactUrl(runId, f.path))}
               data-testid={`gallery-image-${i}`}
             />
             <span
@@ -369,7 +405,8 @@ function ImageBody({
       <img
         src={artifactUrl(runId, current.path)}
         alt={current.path.split("/").pop() ?? ""}
-        className="max-h-[60vh] max-w-full rounded border border-line object-contain"
+        className="max-h-[60vh] max-w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
+        onClick={() => onZoom(artifactUrl(runId, current.path))}
         data-testid="image-viewer-img"
       />
       <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>

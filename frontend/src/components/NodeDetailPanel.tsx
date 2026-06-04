@@ -34,6 +34,7 @@ import {
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
@@ -827,6 +828,8 @@ function PortRow({
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
   const portType = port.port_type ?? "markdown";
+  // URL of the thumbnail currently shown fullscreen in the lightbox, or null.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const isImage = portType === "image" || portType === "image_list";
 
   let dotClass = "bg-fg-5";
@@ -918,12 +921,19 @@ function PortRow({
           className="col-span-3 mt-1 flex gap-1 overflow-x-auto"
           data-testid="image-thumbnails"
         >
-          {imageFiles.slice(0, 4).map((f) => (
+          {imageFiles.slice(0, 4).map((f, i) => (
             <img
               key={f.path}
               src={artifactUrl(runId, f.path)}
               alt={f.path.split("/").pop() ?? ""}
-              className="h-12 w-12 rounded border border-line object-cover"
+              className="h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80"
+              onClick={(e) => {
+                // Open this thumbnail fullscreen instead of bubbling up to the
+                // row button (which opens the artifact modal).
+                e.stopPropagation();
+                setLightboxSrc(artifactUrl(runId, f.path));
+              }}
+              data-testid={`thumbnail-${i}`}
             />
           ))}
           {imageFiles.length > 4 && (
@@ -955,16 +965,23 @@ function PortRow({
     </>
   );
 
+  const lightbox = lightboxSrc && (
+    <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+  );
+
   if (anyExists) {
     return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="port-row grid w-full cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
-        style={gridStyle}
-      >
-        {children}
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="port-row grid w-full cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
+          style={gridStyle}
+        >
+          {children}
+        </button>
+        {lightbox}
+      </>
     );
   }
 
@@ -974,6 +991,7 @@ function PortRow({
       style={gridStyle}
     >
       {children}
+      {lightbox}
     </div>
   );
 }

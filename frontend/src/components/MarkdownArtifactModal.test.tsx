@@ -256,4 +256,90 @@ describe("MarkdownArtifactModal", () => {
       expect(screen.queryByTestId("image-gallery")).not.toBeInTheDocument();
     });
   });
+
+  describe("image lightbox", () => {
+    it("opens the lightbox when a gallery image is clicked", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="diagrams"
+          portType="image_list"
+          source={{
+            kind: "static",
+            files: [
+              makeFile("artifacts/node/iter-1/diagrams/a.png"),
+              makeFile("artifacts/node/iter-1/diagrams/b.jpg"),
+            ],
+          }}
+          onClose={() => {}}
+        />,
+      );
+
+      expect(screen.queryByTestId("image-lightbox")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("gallery-image-1"));
+
+      expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+      expect(screen.getByTestId("lightbox-image").getAttribute("src")).toContain(
+        "b.jpg",
+      );
+    });
+
+    it("opens the lightbox when the single image viewer is clicked", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="screenshot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("artifacts/node/iter-1/screenshot/capture.png")] }}
+          onClose={() => {}}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("image-viewer-img"));
+
+      expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+      expect(screen.getByTestId("lightbox-image").getAttribute("src")).toContain(
+        "capture.png",
+      );
+    });
+
+    it("Escape closes the lightbox without closing the modal", () => {
+      const onClose = vi.fn();
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="screenshot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("artifacts/node/iter-1/screenshot/capture.png")] }}
+          onClose={onClose}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("image-viewer-img"));
+      expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      expect(screen.queryByTestId("image-lightbox")).not.toBeInTheDocument();
+      // The underlying modal must stay open.
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("image-viewer")).toBeInTheDocument();
+    });
+
+    it("Escape closes the modal when no lightbox is open", () => {
+      const onClose = vi.fn();
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="screenshot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("artifacts/node/iter-1/screenshot/capture.png")] }}
+          onClose={onClose}
+        />,
+      );
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
 });

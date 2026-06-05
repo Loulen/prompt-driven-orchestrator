@@ -1,4 +1,5 @@
-import type { Node } from "@xyflow/react";
+import type { Edge, Node } from "@xyflow/react";
+import { MarkerType } from "@xyflow/react";
 import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 
 /**
@@ -132,6 +133,104 @@ export function deriveEditNodes(
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
         outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
         interactive: n.interactive,
+      },
+    };
+  });
+}
+
+const OP_SYMBOLS: Record<string, string> = {
+  eq: "=",
+  neq: "!=",
+  lt: "<",
+  lte: "<=",
+  gt: ">",
+  gte: ">=",
+};
+
+/**
+ * Renders a `when:` clause (ADR-0002 grammar) as a compact, human-readable pill
+ * string for the canvas. Multiple predicates are joined with "and"; `in` /
+ * `not_in` show a bracketed list. The shape mirrors the mechanical predicate
+ * grammar exactly — no LLM-eval, no free expression (ADR-0011).
+ */
+export function formatWhenPill(when: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [field, predicate] of Object.entries(when)) {
+    if (predicate == null || typeof predicate !== "object") {
+      parts.push(field);
+      continue;
+    }
+    for (const [op, value] of Object.entries(predicate as Record<string, unknown>)) {
+      if (op === "in" || op === "not_in") {
+        const list = Array.isArray(value) ? value.join(", ") : String(value);
+        parts.push(`${field} ${op} [${list}]`);
+      } else {
+        const sym = OP_SYMBOLS[op] ?? op;
+        parts.push(`${field} ${sym} ${String(value)}`);
+      }
+    }
+  }
+  return parts.join(" and ");
+}
+
+export interface EditEdgeData extends Record<string, unknown> {
+  isConditional: boolean;
+  isElse: boolean;
+}
+
+/**
+ * Derives xyflow edges from a pipeline. Conditional edges (ADR-0011) carry an
+ * always-visible condition pill at their midpoint: the rendered `when:` clause
+ * for guarded edges, the literal "else" for fallback edges. The pill is the
+ * edge's `label` (xyflow renders it at the midpoint, not gated on hover/select).
+ * Unconditional edges carry no label.
+ */
+export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
+  const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
+
+  return pipeline.edges.map((e, i) => {
+    const isEndEdge = endNodeId != null && e.target.node === endNodeId;
+    const isElse = e.else === true;
+    const hasWhen = e.when != null && Object.keys(e.when).length > 0;
+    const isConditional = isElse || hasWhen;
+
+    const isDashed = isEndEdge;
+    const strokeColor = isDashed
+      ? "var(--color-st-blocked, #f97316)"
+      : isConditional
+        ? "var(--color-acc)"
+        : "var(--color-fg-4)";
+
+    const label = isElse
+      ? "else"
+      : hasWhen
+        ? formatWhenPill(e.when as Record<string, unknown>)
+        : undefined;
+
+    return {
+      id: `e-${i}`,
+      source: e.source.node,
+      target: e.target.node,
+      sourceHandle: e.source.port || null,
+      targetHandle: e.target.port || null,
+      type: "default",
+      label,
+      labelShowBg: isConditional,
+      labelBgPadding: [6, 3] as [number, number],
+      labelBgBorderRadius: 6,
+      labelStyle: { fill: "var(--color-fg)", fontSize: 10, fontFamily: "var(--font-mono, monospace)" },
+      labelBgStyle: { fill: "var(--color-bg-2, #1e1e1e)", stroke: strokeColor, strokeWidth: 1 },
+      data: { isConditional, isElse },
+      style: {
+        stroke: strokeColor,
+        strokeWidth: 1.5,
+        strokeDasharray: isDashed ? "6 3" : undefined,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: strokeColor,
+        width: 16,
+        height: 16,
       },
     };
   });

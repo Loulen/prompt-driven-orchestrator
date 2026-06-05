@@ -212,6 +212,10 @@ export interface EdgeDef {
   source: EdgeEndpoint;
   target: EdgeEndpoint;
   reason?: string | null;
+  /** Optional `when:` clause (ADR-0011): conditional routing on the edge. */
+  when?: Record<string, unknown> | null;
+  /** `else: true` marks a fallback edge (fires iff no sibling matched). */
+  else?: boolean;
 }
 
 export interface PipelineDef {

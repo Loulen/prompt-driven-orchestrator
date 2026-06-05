@@ -249,6 +249,8 @@ mod tests {
                 port: "in".into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
         });
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 

@@ -631,6 +631,8 @@ mod tests {
                 port: "plan".into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -784,6 +786,8 @@ mod tests {
                         port: "plan".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -795,6 +799,8 @@ mod tests {
                         port: "context".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
                 },
             ],
         };

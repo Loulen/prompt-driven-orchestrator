@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::condition;
+use crate::edge_router;
 use crate::event_log::{NodeStatus, RunState, RunStatus};
 use crate::graph_resolver;
 use crate::pipeline::{NodeType, PipelineDef};
@@ -177,7 +178,35 @@ pub fn evaluate_outgoing_edges_with_context(
         .find(|n| n.node_type == NodeType::End)
         .map(|n| n.id.as_str());
 
-    for edge in &pipeline.edges {
+    // Conditional routing on edges (ADR-0011): for a non-Switch producer,
+    // evaluate the source node's outgoing edges in multi-match. Every edge whose
+    // `when:` is satisfied fires; an `else` edge fires iff no sibling on the same
+    // source port matched; an unconditional edge always fires. We compute the
+    // firing set up-front (keyed by index into `pipeline.edges`) and gate the
+    // loop on it. (Switch nodes keep their own port-based routing via
+    // `matched_port` for backward compatibility.)
+    let fired_indices: HashSet<usize> = if is_switch {
+        // Switch routing is handled by `matched_port`; don't double-gate.
+        HashSet::new()
+    } else {
+        let outgoing: Vec<(usize, &crate::pipeline::EdgeDef)> = pipeline
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.source.node == completed_node_id)
+            .collect();
+        let edge_refs: Vec<&crate::pipeline::EdgeDef> = outgoing.iter().map(|(_, e)| *e).collect();
+        let fired =
+            edge_router::fired_edges(&edge_refs, frontmatter_fields, resolved_vars, source_iter);
+        // Map firing edges back to their global indices by identity.
+        outgoing
+            .iter()
+            .filter(|(_, e)| fired.iter().any(|f| std::ptr::eq(*f, *e)))
+            .map(|(i, _)| *i)
+            .collect()
+    };
+
+    for (edge_index, edge) in pipeline.edges.iter().enumerate() {
         if edge.source.node != completed_node_id {
             continue;
         }
@@ -186,6 +215,11 @@ pub fn evaluate_outgoing_edges_with_context(
             if edge.source.port != *port {
                 continue;
             }
+        }
+
+        // Skip edges whose conditional clause did not fire (non-Switch sources).
+        if !is_switch && !fired_indices.contains(&edge_index) {
+            continue;
         }
 
         let target_id = &edge.target.node;
@@ -920,6 +954,31 @@ mod tests {
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
+        }
+    }
+
+    fn make_cond_edge(
+        src_node: &str,
+        src_port: &str,
+        tgt_node: &str,
+        tgt_port: &str,
+        when: Option<&str>,
+        is_else: bool,
+    ) -> EdgeDef {
+        EdgeDef {
+            source: EdgeEndpoint {
+                node: src_node.into(),
+                port: src_port.into(),
+            },
+            target: EdgeEndpoint {
+                node: tgt_node.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+            when: when.map(|s| serde_yaml::from_str(s).unwrap()),
+            is_else,
         }
     }
 
@@ -934,6 +993,8 @@ mod tests {
                 port: "result".into(),
             },
             reason: Some(reason.into()),
+            when: None,
+            is_else: false,
         }
     }
 
@@ -1239,6 +1300,8 @@ mod tests {
                     port: "result".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -1314,6 +1377,136 @@ mod tests {
             node_id: "c".into(),
             iter: 1,
         }));
+    }
+
+    #[test]
+    fn conditional_edges_multi_match_spawn_all_satisfied_targets() {
+        // ADR-0011: a producer fans out to ALL guarded edges whose `when:` is
+        // satisfied; the `else` edge is suppressed because a sibling matched.
+        let pipeline = PipelineDef {
+            name: "cond-fanout".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> = [
+            ("severity".into(), serde_yaml::Value::String("high".into())),
+            ("security".into(), serde_yaml::Value::Bool(true)),
+        ]
+        .into_iter()
+        .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "hotfix".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "security".into(),
+            iter: 1,
+        }));
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must be suppressed when a sibling matched: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_edges_else_fires_when_none_match() {
+        let pipeline = PipelineDef {
+            name: "cond-else".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "hotfix".into(),
+                iter: 1,
+            }),
+            "unmatched guarded edge must not fire: {actions:?}"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must fire when no sibling matched: {actions:?}"
+        );
     }
 
     #[test]
@@ -3874,6 +4067,8 @@ edges:
                     port: "result".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 

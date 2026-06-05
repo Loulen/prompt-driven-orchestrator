@@ -1,6 +1,7 @@
 mod blackboard;
 #[allow(dead_code)]
 mod condition;
+mod edge_router;
 mod event_log;
 mod frontmatter_parser;
 pub mod graph_resolver;
@@ -9618,6 +9619,8 @@ mod tests {
                     port: "in".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -9662,6 +9665,8 @@ mod tests {
                     port: "in".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -10496,6 +10501,8 @@ edges: []
                     port: "in".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -10578,6 +10585,8 @@ edges: []
                     port: "in".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -11555,7 +11564,12 @@ edges:
         let app = build_router(state);
 
         let resp = app
-            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/repos/recent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -11574,7 +11588,12 @@ edges:
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/repos/recent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -11595,7 +11614,12 @@ edges:
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/repos/recent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -11615,7 +11639,12 @@ edges:
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/repos/recent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -11634,7 +11663,12 @@ edges:
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/repos/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/repos/recent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

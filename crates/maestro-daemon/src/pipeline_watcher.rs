@@ -90,8 +90,8 @@ pub fn spawn_watcher(
     // One shared handler, fed by both backends (a given path only ever
     // reports through the backend that registered it).
     type DebounceResult = Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>;
-    let handler: Arc<dyn Fn(DebounceResult) + Send + Sync> = Arc::new(
-        move |events: DebounceResult| {
+    let handler: Arc<dyn Fn(DebounceResult) + Send + Sync> =
+        Arc::new(move |events: DebounceResult| {
             let Ok(events) = events else { return };
             for event in events {
                 if event.kind != DebouncedEventKind::Any {
@@ -155,8 +155,7 @@ pub fn spawn_watcher(
                 let _ = tx.send(msg);
                 info!("Pipeline file changed: {}", path.display());
             }
-        },
-    );
+        });
 
     let native = match new_debouncer(DEBOUNCE, {
         let handler = handler.clone();
@@ -234,10 +233,7 @@ pub fn spawn_watcher(
                 count += 1;
             }
         }
-        info!(
-            "Watching {count} run dir(s) under: {}",
-            runs_dir.display()
-        );
+        info!("Watching {count} run dir(s) under: {}", runs_dir.display());
     }
 
     Some(debouncer)

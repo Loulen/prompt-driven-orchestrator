@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { deriveEditNodes, markerReached, statusForNode } from "./editNodeDerivation";
+import {
+  deriveEditEdges,
+  deriveEditNodes,
+  formatWhenPill,
+  markerReached,
+  statusForNode,
+} from "./editNodeDerivation";
 import type { NodeStatus, NodeType, PipelineDef, RunState, RunStatus } from "../types";
 
 function makePipeline(): PipelineDef {
@@ -275,5 +281,129 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
     const r = reachedById(null);
     expect(r.start).toBe(false);
     expect(r.end).toBe(false);
+  });
+});
+
+describe("formatWhenPill — condition pill text (ADR-0011)", () => {
+  it("renders a single field/op as 'field op value'", () => {
+    expect(formatWhenPill({ severity: { eq: "high" } })).toBe("severity = high");
+    expect(formatWhenPill({ security: { eq: true } })).toBe("security = true");
+    expect(formatWhenPill({ score: { gte: 8 } })).toBe("score >= 8");
+  });
+
+  it("renders 'in' / 'not_in' with a bracketed list", () => {
+    expect(formatWhenPill({ verdict: { in: ["PASS", "APPROVED"] } })).toBe(
+      "verdict in [PASS, APPROVED]",
+    );
+  });
+
+  it("joins multiple predicates with 'and'", () => {
+    expect(
+      formatWhenPill({ verdict: { eq: "PASS" }, score: { gte: 8 } }),
+    ).toBe("verdict = PASS and score >= 8");
+  });
+});
+
+describe("deriveEditEdges — condition pills always visible at midpoint (issue #144)", () => {
+  function condPipeline(): PipelineDef {
+    return {
+      name: "cond",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "classifier",
+          name: "classifier",
+          type: "doc-only",
+          inputs: [{ name: "task", repeated: false, side: "left" }],
+          outputs: [{ name: "triage", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "hotfix",
+          name: "hotfix",
+          type: "code-mutating",
+          inputs: [{ name: "triage", repeated: false, side: "left" }],
+          outputs: [{ name: "patch", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+        {
+          id: "backlog",
+          name: "backlog",
+          type: "doc-only",
+          inputs: [{ name: "triage", repeated: false, side: "left" }],
+          outputs: [{ name: "note", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 200 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "classifier", port: "triage" },
+          target: { node: "hotfix", port: "triage" },
+          when: { severity: { eq: "high" } },
+        },
+        {
+          source: { node: "classifier", port: "triage" },
+          target: { node: "backlog", port: "triage" },
+          else: true,
+        },
+      ],
+    };
+  }
+
+  it("labels a guarded edge with its when: pill", () => {
+    const edges = deriveEditEdges(condPipeline());
+    const guarded = edges[0];
+    expect(guarded.label).toBe("severity = high");
+    expect(guarded.data?.isConditional).toBe(true);
+    expect(guarded.data?.isElse).toBe(false);
+  });
+
+  it("labels an else edge with 'else'", () => {
+    const edges = deriveEditEdges(condPipeline());
+    const fallback = edges[1];
+    expect(fallback.label).toBe("else");
+    expect(fallback.data?.isConditional).toBe(true);
+    expect(fallback.data?.isElse).toBe(true);
+  });
+
+  it("gives unconditional edges no pill", () => {
+    const pipeline: PipelineDef = {
+      name: "plain",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "a",
+          name: "a",
+          type: "doc-only",
+          inputs: [],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "b",
+          name: "b",
+          type: "doc-only",
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "a", port: "out" },
+          target: { node: "b", port: "in" },
+        },
+      ],
+    };
+    const edges = deriveEditEdges(pipeline);
+    expect(edges[0].label).toBeUndefined();
+    expect(edges[0].data?.isConditional).toBe(false);
   });
 });

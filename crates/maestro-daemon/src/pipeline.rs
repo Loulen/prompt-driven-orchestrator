@@ -129,6 +129,20 @@ pub struct EdgeDef {
     pub target: EdgeEndpoint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional `when:` clause: a mechanical predicate (ADR-0002 grammar)
+    /// evaluated against the source node's frontmatter, `iter`, and pipeline
+    /// variables. When present, the edge fires only if the clause is satisfied.
+    /// Conditional routing lives on the edge (ADR-0011).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<serde_yaml::Value>,
+    /// `else: true` marks a fallback edge that fires iff no sibling edge on the
+    /// same source port matched (ADR-0011). Mutually exclusive with `when:`.
+    #[serde(default, rename = "else", skip_serializing_if = "is_false")]
+    pub is_else: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,22 +308,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    // Reject when: on edges (moved to Switch nodes since #45)
-    if let Some(edges) = raw
-        .as_mapping()
-        .and_then(|m| m.get(serde_yaml::Value::String("edges".into())))
-        .and_then(|v| v.as_sequence())
-    {
-        for edge_val in edges {
-            if let Some(edge_map) = edge_val.as_mapping() {
-                if edge_map.contains_key(serde_yaml::Value::String("when".into())) {
-                    return Err(ParseError::MissingField(
-                        "edges no longer accept 'when:' (since #45). Move the condition into a Switch node.".into(),
-                    ));
-                }
-            }
-        }
-    }
+    // Conditional routing lives on the edge: an edge may carry a `when:` clause
+    // and/or an `else: true` marker (ADR-0011, supersedes #45's Switch-port
+    // placement). No prescriptive validation here (ADR-0001 sharp tool).
 
     let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
@@ -936,6 +937,57 @@ edges:
     }
 
     #[test]
+    fn parses_edge_with_when_clause_and_else_marker() {
+        let yaml = with_start_end(
+            r#"
+name: conditional-edges
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: review
+    outputs:
+      - name: code
+  - id: ab000003
+    name: archiver
+    type: doc-only
+    inputs:
+      - name: review
+    outputs:
+      - name: note
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: review }
+    when:
+      verdict: { eq: FAIL }
+  - source: { node: ab000001, port: review }
+    target: { node: ab000003, port: review }
+    else: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let guarded = &result.pipeline.edges[0];
+        assert!(guarded.when.is_some(), "first edge should carry when:");
+        assert!(!guarded.is_else, "first edge is not an else edge");
+
+        let fallback = &result.pipeline.edges[1];
+        assert!(fallback.when.is_none(), "else edge carries no when:");
+        assert!(fallback.is_else, "second edge should be an else edge");
+
+        // Round-trips: re-serialize, re-parse — no drift on the conditional fields.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed = parse_pipeline(&serialized).unwrap();
+        assert!(reparsed.pipeline.edges[0].when.is_some());
+        assert!(reparsed.pipeline.edges[1].is_else);
+    }
+
+    #[test]
     fn parses_interactive_node() {
         let yaml = with_start_end(
             r#"
@@ -1218,7 +1270,8 @@ nodes:
     }
 
     #[test]
-    fn rejects_edge_with_when_clause() {
+    fn accepts_edge_with_when_clause() {
+        // ADR-0011 supersedes #45: conditional routing lives on the edge again.
         let yaml = with_start_end(
             r#"
 name: conditional
@@ -1242,12 +1295,8 @@ edges:
       iter: { lt: 5 }
 "#,
         );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("edges no longer accept 'when:'"),
-            "error should mention when removal: {msg}"
-        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.edges[0].when.is_some());
     }
 
     #[test]

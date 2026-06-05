@@ -74,6 +74,8 @@ mod tests {
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
         }
     }
 

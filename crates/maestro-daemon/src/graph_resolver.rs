@@ -20,10 +20,29 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             continue;
         }
 
-        let upstream: HashSet<&str> = pipeline
+        // A conditional edge (`when:`/`else`, ADR-0011) only fires when the
+        // producer completes and the condition is evaluated — never on upstream
+        // completion alone. So entry-point readiness considers ONLY unconditional
+        // incoming edges. A node that *has* incoming edges but whose edges are all
+        // conditional is never an entry point: it is spawned solely by the
+        // producer's edge evaluation. (A node with no incoming edges at all is a
+        // root and stays ready.)
+        let incoming: Vec<&crate::pipeline::EdgeDef> = pipeline
             .edges
             .iter()
             .filter(|e| e.target.node == node.id)
+            .collect();
+        let unconditional_in: Vec<&&crate::pipeline::EdgeDef> = incoming
+            .iter()
+            .filter(|e| e.when.is_none() && !e.is_else)
+            .collect();
+
+        if !incoming.is_empty() && unconditional_in.is_empty() {
+            continue;
+        }
+
+        let upstream: HashSet<&str> = unconditional_in
+            .iter()
             .map(|e| e.source.node.as_str())
             .filter(|src| {
                 !pipeline
@@ -279,6 +298,31 @@ mod tests {
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
+        }
+    }
+
+    fn make_cond_edge(
+        src_node: &str,
+        src_port: &str,
+        tgt_node: &str,
+        tgt_port: &str,
+        when: Option<&str>,
+        is_else: bool,
+    ) -> EdgeDef {
+        EdgeDef {
+            source: EdgeEndpoint {
+                node: src_node.into(),
+                port: src_port.into(),
+            },
+            target: EdgeEndpoint {
+                node: tgt_node.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+            when: when.map(|s| serde_yaml::from_str(s).unwrap()),
+            is_else,
         }
     }
 
@@ -349,6 +393,87 @@ mod tests {
             !ready.contains(&"sw".to_string()),
             "Switch nodes must never appear in ready_nodes"
         );
+    }
+
+    #[test]
+    fn ready_nodes_skips_target_reached_only_by_conditional_edge() {
+        // ADR-0011: a node reached only via a conditional (`when:`) edge must not
+        // be spawned as an entry point. Whether it runs depends on the edge
+        // condition, evaluated when the producer completes — not on upstream
+        // completion alone. Otherwise the guarded branch would always fire.
+        let pipeline = make_pipeline(
+            vec![
+                make_node("classifier", NodeType::DocOnly, &["task"], &["triage"]),
+                make_node("hotfix", NodeType::CodeMutating, &["triage"], &["patch"]),
+            ],
+            vec![make_cond_edge(
+                "classifier",
+                "triage",
+                "hotfix",
+                "triage",
+                Some("severity: { eq: high }"),
+                false,
+            )],
+        );
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"hotfix".to_string()),
+            "conditional-edge target must not be an entry point: {ready:?}"
+        );
+    }
+
+    #[test]
+    fn ready_nodes_skips_target_reached_only_by_else_edge() {
+        let pipeline = make_pipeline(
+            vec![
+                make_node("classifier", NodeType::DocOnly, &["task"], &["triage"]),
+                make_node("backlog", NodeType::DocOnly, &["triage"], &["note"]),
+            ],
+            vec![make_cond_edge(
+                "classifier",
+                "triage",
+                "backlog",
+                "triage",
+                None,
+                true,
+            )],
+        );
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"backlog".to_string()),
+            "else-edge target must not be an entry point: {ready:?}"
+        );
+    }
+
+    #[test]
+    fn ready_nodes_spawns_target_with_an_unconditional_incoming_edge() {
+        // A node with at least one plain (unconditional) incoming edge is still
+        // a normal entry point once that upstream completes.
+        let pipeline = make_pipeline(
+            vec![
+                make_node("a", NodeType::DocOnly, &["task"], &["out"]),
+                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+            ],
+            vec![make_edge("a", "out", "b", "in")],
+        );
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.contains(&"b".to_string()));
     }
 
     #[test]

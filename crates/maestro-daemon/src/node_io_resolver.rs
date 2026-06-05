@@ -340,6 +340,8 @@ mod tests {
                     port: "plan".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         }
     }
@@ -490,6 +492,8 @@ mod tests {
                     port: "reviews".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
             }],
         };
 
@@ -609,6 +613,8 @@ mod tests {
                         port: "docs".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -620,6 +626,8 @@ mod tests {
                         port: "docs".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
                 },
             ],
         };

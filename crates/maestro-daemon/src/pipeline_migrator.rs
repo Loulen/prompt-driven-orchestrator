@@ -50,17 +50,6 @@ fn has_start_end_nodes(yaml_value: &serde_yaml::Value) -> bool {
     nodes_contain_type(nodes, "start") && nodes_contain_type(nodes, "end")
 }
 
-fn has_when_on_edges(yaml_value: &serde_yaml::Value) -> bool {
-    let edges = match yaml_value.get("edges").and_then(|e| e.as_sequence()) {
-        Some(seq) => seq,
-        None => return false,
-    };
-    edges.iter().any(|e| {
-        e.as_mapping()
-            .is_some_and(|m| m.contains_key(serde_yaml::Value::String("when".into())))
-    })
-}
-
 fn has_halt_edges(yaml_value: &serde_yaml::Value) -> bool {
     let edges = match yaml_value.get("edges").and_then(|e| e.as_sequence()) {
         Some(seq) => seq,
@@ -84,6 +73,10 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         Some(seq) => seq,
         None => return false,
     };
+    // Switch nodes are dissolved into guarded edges (ADR-0011).
+    if nodes_contain_type(nodes, "switch") {
+        return true;
+    }
     for node in nodes {
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if node_type == "for-each" && node.get("over").is_none() {
@@ -128,12 +121,6 @@ pub fn migrate_pipeline_yaml(
     let mut doc: serde_yaml::Value =
         serde_yaml::from_str(yaml_text).map_err(|e| format!("YAML parse error: {e}"))?;
 
-    if has_when_on_edges(&doc) {
-        return Err("edge-level `when:` clauses are no longer supported; \
-             use a Switch node instead (see issue #45)"
-            .into());
-    }
-
     if !needs_migration(&doc) {
         return Ok(MigrateResult {
             migrated: false,
@@ -143,6 +130,10 @@ pub fn migrate_pipeline_yaml(
     }
 
     let pipeline_dir = pipeline_path.parent().unwrap_or(Path::new("."));
+
+    // Dissolve Switch nodes into guarded edges (ADR-0011) before id-rewriting,
+    // so the rewritten edges still reference the original node ids.
+    dissolve_switches(&mut doc)?;
 
     let nodes = doc
         .get_mut("nodes")
@@ -403,6 +394,165 @@ fn rewrite_edge_endpoint(
             }
         }
     }
+}
+
+/// Dissolves every `switch` node into guarded edges (ADR-0011). For a switch
+/// `SW` fed by `(P, p_port)`, each switch output port becomes a direct edge from
+/// `(P, p_port)` to wherever that switch port wired to, carrying the port's
+/// `when:` clause. A switch's `default` port (no `when:`) becomes `else: true`
+/// edges. The switch node and all edges touching it are removed.
+fn dissolve_switches(doc: &mut serde_yaml::Value) -> Result<(), String> {
+    let nodes = match doc.get("nodes").and_then(|n| n.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => return Ok(()),
+    };
+
+    // Collect switch node ids and their output-port `when:` clauses.
+    let mut switch_ids: HashSet<String> = HashSet::new();
+    let mut switch_port_when: HashMap<(String, String), Option<serde_yaml::Value>> = HashMap::new();
+    for node in &nodes {
+        let is_switch = node
+            .get("type")
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| t == "switch");
+        if !is_switch {
+            continue;
+        }
+        let id = match node.get("id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return Err("switch node missing 'id'".into()),
+        };
+        switch_ids.insert(id.clone());
+        if let Some(outputs) = node.get("outputs").and_then(|v| v.as_sequence()) {
+            for port in outputs {
+                if let Some(pname) = port.get("name").and_then(|v| v.as_str()) {
+                    let when = port.get("when").cloned();
+                    switch_port_when.insert((id.clone(), pname.to_string()), when);
+                }
+            }
+        }
+    }
+
+    if switch_ids.is_empty() {
+        return Ok(());
+    }
+
+    let edges = match doc.get("edges").and_then(|e| e.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => Vec::new(),
+    };
+
+    let endpoint = |edge: &serde_yaml::Value, key: &str| -> Option<(String, String)> {
+        let ep = edge.get(key)?.as_mapping()?;
+        let node = ep
+            .get(serde_yaml::Value::String("node".into()))?
+            .as_str()?
+            .to_string();
+        let port = ep
+            .get(serde_yaml::Value::String("port".into()))?
+            .as_str()?
+            .to_string();
+        Some((node, port))
+    };
+
+    // Map each switch id to its inbound source `(node, port)` (the edge feeding
+    // its `in` port). A switch with no inbound edge is dropped with its outbound
+    // edges (sharp tool: no error — nothing routes through it).
+    let mut switch_source: HashMap<String, (String, String)> = HashMap::new();
+    for edge in &edges {
+        if let (Some(src), Some(tgt)) = (endpoint(edge, "source"), endpoint(edge, "target")) {
+            if switch_ids.contains(&tgt.0) {
+                switch_source.insert(tgt.0.clone(), src);
+            }
+        }
+    }
+
+    // Build the new edge list: keep edges not touching a switch; for each edge
+    // leaving a switch port, emit a guarded edge from the switch's source.
+    let mut new_edges: Vec<serde_yaml::Value> = Vec::new();
+    for edge in &edges {
+        let src = endpoint(edge, "source");
+        let tgt = endpoint(edge, "target");
+
+        // Drop the edge feeding a switch's input — it is folded into the source.
+        if let Some((tnode, _)) = &tgt {
+            if switch_ids.contains(tnode) {
+                continue;
+            }
+        }
+
+        match &src {
+            Some((snode, sport)) if switch_ids.contains(snode) => {
+                // Edge leaving a switch output port → guarded edge from source.
+                let (real_src_node, real_src_port) = match switch_source.get(snode) {
+                    Some(s) => s.clone(),
+                    None => continue, // switch had no inbound: nothing to route
+                };
+                let target = match edge.get("target") {
+                    Some(t) => t.clone(),
+                    None => continue,
+                };
+
+                let mut m = serde_yaml::Mapping::new();
+                let mut source_map = serde_yaml::Mapping::new();
+                source_map.insert(
+                    serde_yaml::Value::String("node".into()),
+                    serde_yaml::Value::String(real_src_node),
+                );
+                source_map.insert(
+                    serde_yaml::Value::String("port".into()),
+                    serde_yaml::Value::String(real_src_port),
+                );
+                m.insert(
+                    serde_yaml::Value::String("source".into()),
+                    serde_yaml::Value::Mapping(source_map),
+                );
+                m.insert(serde_yaml::Value::String("target".into()), target);
+
+                match switch_port_when.get(&(snode.clone(), sport.clone())) {
+                    Some(Some(when)) => {
+                        m.insert(serde_yaml::Value::String("when".into()), when.clone());
+                    }
+                    _ => {
+                        // `default` (or any when-less) port → else edge.
+                        m.insert(
+                            serde_yaml::Value::String("else".into()),
+                            serde_yaml::Value::Bool(true),
+                        );
+                    }
+                }
+
+                // Preserve a `reason:` on the original switch-output edge if any.
+                if let Some(reason) = edge.get("reason") {
+                    m.insert(serde_yaml::Value::String("reason".into()), reason.clone());
+                }
+
+                new_edges.push(serde_yaml::Value::Mapping(m));
+            }
+            _ => {
+                // Edge untouched by any switch — keep verbatim.
+                new_edges.push(edge.clone());
+            }
+        }
+    }
+
+    // Remove switch nodes.
+    if let Some(nodes_mut) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+        nodes_mut.retain(|n| {
+            n.get("type")
+                .and_then(|v| v.as_str())
+                .is_none_or(|t| t != "switch")
+        });
+    }
+
+    if let Some(m) = doc.as_mapping_mut() {
+        m.insert(
+            serde_yaml::Value::String("edges".into()),
+            serde_yaml::Value::Sequence(new_edges),
+        );
+    }
+
+    Ok(())
 }
 
 pub fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String> {
@@ -847,11 +997,22 @@ nodes:
 edges: []
 "#;
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        assert!(!result.migrated);
+        // The Loop alone (everything already nanoid + sided) needs no migration;
+        // but the Switch is now dissolved into guarded edges (ADR-0011).
+        assert!(result.migrated);
+        let migrated: PipelineDef = serde_yaml::from_str(&result.yaml_text).unwrap();
+        assert!(
+            !migrated
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::Switch),
+            "Switch node must be removed by the migrator"
+        );
     }
 
     #[test]
-    fn rejects_when_on_edges() {
+    fn accepts_when_on_edges() {
+        // ADR-0011 supersedes #45: edge-level `when:` clauses are supported.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -882,16 +1043,178 @@ edges:
       iter: { lt: 3 }
 "#;
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml"));
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("when:"), "error should mention when:");
+        assert!(result.is_ok(), "edge when: must be accepted: {result:?}");
+    }
+
+    #[test]
+    fn migrates_switch_node_to_guarded_edges() {
+        // A producer → Switch → {pass, default} dissolves into two edges leaving
+        // the producer's output port directly: a guarded edge (when:) for `pass`,
+        // an `else: true` edge for `default`. The Switch node disappears.
+        // Nanoid ids + sided ports so the ONLY migration is switch dissolution.
+        let yaml = r#"
+name: switch-migrate
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+  - id: aBcD1234
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+        side: left
+    outputs:
+      - name: review
+        side: right
+  - id: eFgH5678
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: review
+        side: left
+    outputs:
+      - name: code
+        side: right
+  - id: sW1tcH00
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+        side: left
+    outputs:
+      - name: pass
+        side: right
+        when:
+          verdict: { in: [PASS, APPROVED] }
+      - name: default
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: eFgH5678, port: review }
+  - source: { node: eFgH5678, port: code }
+    target: { node: aBcD1234, port: code }
+  - source: { node: aBcD1234, port: review }
+    target: { node: sW1tcH00, port: in }
+  - source: { node: sW1tcH00, port: pass }
+    target: { node: end, port: result }
+  - source: { node: sW1tcH00, port: default }
+    target: { node: eFgH5678, port: review }
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated);
+
+        let migrated: PipelineDef = serde_yaml::from_str(&result.yaml_text).unwrap();
+
+        // Switch node is gone.
         assert!(
-            err.contains("Switch node"),
-            "error should mention Switch node"
+            !migrated
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::Switch),
+            "Switch node must be removed"
         );
+
+        // No edge references the switch node any more.
         assert!(
-            err.contains("issue #45"),
-            "error should reference issue #45"
+            !migrated
+                .edges
+                .iter()
+                .any(|e| e.source.node == "sW1tcH00" || e.target.node == "sW1tcH00"),
+            "no edge may reference the dissolved switch"
+        );
+
+        // The guarded `pass` branch becomes a when-edge from reviewer:review → end.
+        let pass_edge = migrated
+            .edges
+            .iter()
+            .find(|e| {
+                e.source.node == "aBcD1234" && e.source.port == "review" && e.target.node == "end"
+            })
+            .expect("guarded pass edge from reviewer to end");
+        assert!(pass_edge.when.is_some(), "pass edge keeps its when: clause");
+        assert!(!pass_edge.is_else);
+
+        // The `default` branch becomes an else-edge from reviewer:review → implementer.
+        let else_edge = migrated
+            .edges
+            .iter()
+            .find(|e| {
+                e.source.node == "aBcD1234"
+                    && e.source.port == "review"
+                    && e.target.node == "eFgH5678"
+            })
+            .expect("else edge from reviewer to implementer");
+        assert!(else_edge.is_else, "default branch becomes else: true");
+        assert!(else_edge.when.is_none());
+    }
+
+    #[test]
+    fn migrate_switch_is_idempotent() {
+        let yaml = r#"
+name: switch-migrate
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+  - id: reviewer1
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+        side: left
+    outputs:
+      - name: review
+        side: right
+  - id: sw1
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+        side: left
+    outputs:
+      - name: pass
+        side: right
+        when:
+          verdict: { eq: PASS }
+      - name: default
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer1, port: code }
+  - source: { node: reviewer1, port: review }
+    target: { node: sw1, port: in }
+  - source: { node: sw1, port: pass }
+    target: { node: end, port: result }
+  - source: { node: sw1, port: default }
+    target: { node: end, port: result }
+"#;
+        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(first.migrated);
+        let second = migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(
+            !second.migrated,
+            "a migrated switch pipeline must not migrate again"
         );
     }
 
@@ -1000,6 +1323,8 @@ edges:
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
         }
     }
 
@@ -1166,6 +1491,74 @@ edges: []
         assert!(
             !result.migrated,
             "pipeline with over already set should not need migration"
+        );
+    }
+
+    // --- Real fixtures: Switch → guarded edges (issue #144) ---
+
+    fn migrate_str_and_parse(yaml: &str) -> PipelineDef {
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        // After migration there must be no Switch left, and the result re-parses.
+        let parsed = pipeline::parse_pipeline(&result.yaml_text)
+            .expect("migrated fixture must parse")
+            .pipeline;
+        assert!(
+            !parsed.nodes.iter().any(|n| n.node_type == NodeType::Switch),
+            "no Switch node may remain after migration"
+        );
+        assert!(
+            !parsed.edges.iter().any(|e| {
+                parsed.nodes.iter().any(|n| {
+                    n.node_type == NodeType::Switch
+                        && (n.id == e.source.node || n.id == e.target.node)
+                })
+            }),
+            "no edge may reference a Switch node"
+        );
+        parsed
+    }
+
+    #[test]
+    fn migrates_review_loop_fixture_switch_to_guarded_edges() {
+        let yaml = include_str!("../../../.maestro/pipelines/review-loop.yaml");
+        let parsed = migrate_str_and_parse(yaml);
+        // The dissolved switch leaves at least one guarded (when:) or else edge.
+        assert!(
+            parsed.edges.iter().any(|e| e.when.is_some() || e.is_else),
+            "review-loop should have conditional edges after migration"
+        );
+        // Idempotent: migrating the result again is a no-op.
+        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        let second =
+            migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
+        assert!(!second.migrated, "migration must be idempotent");
+    }
+
+    #[test]
+    fn migrates_simple_bugfix_fixture_switches_to_guarded_edges() {
+        let yaml = include_str!("../../../.maestro/pipelines/simple-bugfix.yaml");
+        let parsed = migrate_str_and_parse(yaml);
+        assert!(
+            parsed.edges.iter().any(|e| e.when.is_some() || e.is_else),
+            "simple-bugfix should have conditional edges after migration"
+        );
+        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        let second =
+            migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
+        assert!(!second.migrated, "migration must be idempotent");
+    }
+
+    #[test]
+    fn migrates_planner_fixture_no_switch_unchanged_topology() {
+        // planner has no Switch — migration must not introduce conditional edges.
+        let yaml = include_str!("../../../.maestro/pipelines/planner.yaml");
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        let parsed = pipeline::parse_pipeline(&result.yaml_text)
+            .unwrap()
+            .pipeline;
+        assert!(
+            !parsed.edges.iter().any(|e| e.when.is_some() || e.is_else),
+            "planner has no switch, so no conditional edges should appear"
         );
     }
 }

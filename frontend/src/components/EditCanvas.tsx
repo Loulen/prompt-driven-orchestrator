@@ -9,13 +9,12 @@ import {
   type Edge,
   type NodeProps,
   type Connection,
-  MarkerType,
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeDef, NodeStatus, NodeType, PipelineDef, PortBrief, RunState } from "../types";
+import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { deriveEditNodes } from "./editNodeDerivation";
+import { deriveEditEdges, deriveEditNodes } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
@@ -115,42 +114,6 @@ const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "for-each": "foreach",
   "merge": "merge",
 };
-
-function deriveEditEdges(pipeline: PipelineDef): Edge[] {
-  const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
-
-  return pipeline.edges.map((e, i) => {
-    const isEndEdge = endNodeId != null && e.target.node === endNodeId;
-    const isDashed = isEndEdge;
-
-    const strokeColor = isDashed
-      ? "var(--color-st-blocked, #f97316)"
-      : "var(--color-fg-4)";
-
-    const sourcePort = e.source.port;
-    const targetPort = e.target.port;
-
-    return {
-      id: `e-${i}`,
-      source: e.source.node,
-      target: e.target.node,
-      sourceHandle: sourcePort || null,
-      targetHandle: targetPort || null,
-      type: "default",
-      style: {
-        stroke: strokeColor,
-        strokeWidth: 1.5,
-        strokeDasharray: isDashed ? "6 3" : undefined,
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: strokeColor,
-        width: 16,
-        height: 16,
-      },
-    };
-  });
-}
 
 interface EditCanvasProps {
   libraryEntries: LibraryEntry[];

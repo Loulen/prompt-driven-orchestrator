@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { deriveEditNodes, statusForNode } from "./editNodeDerivation";
-import type { NodeStatus, PipelineDef, RunState } from "../types";
+import { deriveEditNodes, markerReached, statusForNode } from "./editNodeDerivation";
+import type { NodeStatus, NodeType, PipelineDef, RunState, RunStatus } from "../types";
 
 function makePipeline(): PipelineDef {
   return {
@@ -149,5 +149,131 @@ describe("deriveEditNodes — live status wiring (regression: node-card borders 
     expect((byId.loop1 as { status: NodeStatus }).status).toBe("pending");
     expect((byId.fe1 as { status: NodeStatus }).status).toBe("pending");
     expect((byId.m1 as { status: NodeStatus }).status).toBe("pending");
+  });
+});
+
+describe("markerReached", () => {
+  function runWith(status: RunStatus): RunState {
+    return { ...makeRunState({}), status };
+  }
+
+  it("is true for start/end markers only when the run completed", () => {
+    const run = runWith("completed");
+    expect(markerReached("start", run)).toBe(true);
+    expect(markerReached("end", run)).toBe(true);
+  });
+
+  it("is false for non-marker node types even on a completed run", () => {
+    const run = runWith("completed");
+    const others: NodeType[] = [
+      "doc-only",
+      "code-mutating",
+      "switch",
+      "loop",
+      "for-each",
+      "merge",
+    ];
+    for (const t of others) expect(markerReached(t, run)).toBe(false);
+  });
+
+  it("is false for markers on live / non-success terminal statuses (end keeps non-completed styling)", () => {
+    const notReached: RunStatus[] = [
+      "running",
+      "awaiting_user",
+      "paused",
+      "failed",
+      "halted",
+      "archived",
+    ];
+    for (const status of notReached) {
+      expect(markerReached("start", runWith(status))).toBe(false);
+      expect(markerReached("end", runWith(status))).toBe(false);
+    }
+  });
+
+  it("is false when there is no run state (library/template editing)", () => {
+    expect(markerReached("start", null)).toBe(false);
+    expect(markerReached("end", undefined)).toBe(false);
+  });
+});
+
+describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inline run view)", () => {
+  function makeStartEndPipeline(): PipelineDef {
+    return {
+      name: "p",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "start",
+          name: "start",
+          type: "start",
+          inputs: [],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "work",
+          name: "implementer",
+          type: "code-mutating",
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+        {
+          id: "end",
+          name: "end",
+          type: "end",
+          inputs: [{ name: "in", repeated: false, side: "left" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 400, y: 0 },
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  function runWith(status: RunStatus): RunState {
+    return { ...makeRunState({}), status };
+  }
+
+  function reachedById(run: RunState | null) {
+    const nodes = deriveEditNodes(makeStartEndPipeline(), run);
+    return Object.fromEntries(
+      nodes.map((n) => [n.id, (n.data as { reached?: boolean }).reached]),
+    );
+  }
+
+  it("marks start and end reached on a completed run", () => {
+    const r = reachedById(runWith("completed"));
+    expect(r.start).toBe(true);
+    expect(r.end).toBe(true);
+  });
+
+  it("never marks a regular work node reached, even when the run completed", () => {
+    expect(reachedById(runWith("completed")).work).toBe(false);
+  });
+
+  it("leaves start and end not-reached while the run is still running", () => {
+    const r = reachedById(runWith("running"));
+    expect(r.start).toBe(false);
+    expect(r.end).toBe(false);
+  });
+
+  it("does not mark reached for failed or halted runs", () => {
+    for (const status of ["failed", "halted"] as RunStatus[]) {
+      const r = reachedById(runWith(status));
+      expect(r.start).toBe(false);
+      expect(r.end).toBe(false);
+    }
+  });
+
+  it("does not mark reached when editing a template (no run state)", () => {
+    const r = reachedById(null);
+    expect(r.start).toBe(false);
+    expect(r.end).toBe(false);
   });
 });

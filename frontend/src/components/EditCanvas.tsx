@@ -40,20 +40,30 @@ interface EditNodeData {
   outputs: PortBrief[];
   interactive: boolean;
   status: NodeStatus;
+  // True only for start/end markers on a completed run — see `markerReached`.
+  reached?: boolean;
   [key: string]: unknown;
 }
 
-function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
+// Exported for unit tests; co-located with the canvas it renders. Same allowance
+// as DagCanvas's StartNode/EndNode exports.
+export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   const isSelected = selection.kind === "node" && selection.id === id;
   const isDropTarget = useIsDropTarget(id);
+  const reached = data.reached ?? false;
+  // A reached start/end marker borrows the green "completed" cadre (border +
+  // faint green fill) so the inline run view signals end-reached the same way
+  // completed work nodes already do (issue #105). Otherwise keep the live status.
+  const cardStatus: NodeStatus = reached ? "completed" : data.status;
   const iconColor =
-    data.nodeType === "start" ? "text-acc"
+    reached ? "text-st-done"
+    : data.nodeType === "start" ? "text-acc"
     : data.nodeType === "end" ? "text-st-blocked"
     : "text-fg-3";
 
   return (
-    <NodeCard status={data.status} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
+    <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
       {data.inputs.map((port, i) => (
         <PortRow
           key={`in-${port.name}`}

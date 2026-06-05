@@ -25,8 +25,10 @@ Un Node se définit par :
 
 - **Nom** — identifiant lisible affiché dans le canvas.
 - **Prompt système** — le rôle, écrit dans la zone de texte qui s'ouvre à l'édition.
-- **Ports d'entrée** — un ou plusieurs, chacun reçoit un document amont. Multi-fan-in supporté (ex. Implementer reçoit `plan` + `task` + `reviews_bloquantes`).
-- **Ports de sortie** — un ou plusieurs documents produits. Multi-fan-out supporté (ex. Planner sort `plan.md` + `task_list.md` consommés par des Nodes différents).
+- **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté (le Debugger sort `repro_steps` + `screenshots`). Rendu : **un dot vert par document**, drag-source des edges, librement placé.
+- **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps` (le nom suit le document amont). Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches : chaque flèche atterrit où le designer veut sur le Node, **sans dot d'entrée**. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations (glob `iter-*`) est un flag `repeated` porté par l'**edge**, pas par l'entrée.
+
+Asymétrie assumée (et déjà présente dans le typage : output = contrat vérifié, input = best-effort) : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
 
 Distinct de :
 
@@ -44,147 +46,96 @@ Modèle (A) — **document-first, code en side-channel** :
 
 ---
 
-## Switch — branchement conditionnel mécanique
+## Edges conditionnelles — le routage vit sur l'arête
 
-Le **`Switch`** est un nœud first-class dont la fonction est de router un artefact d'entrée vers une de N branches selon des prédicats mécaniques (jamais LLM, ADR-0002). Il remplace l'ancien modèle "clause `when:` portée par l'edge" : **les conditions vivent désormais sur les ports de sortie d'un Switch, pas sur les edges**.
-
-Justifié par les pratiques des outils matures (n8n `Switch`, Unreal `Branch`/`Switch on Int`, ComfyUI `ifElse`) : un nœud routeur dédié rend les points de décision visibles au coup d'œil et permet une UI de composition AND/OR par branche.
+Le nœud **`Switch`** est **supprimé** (obsolète), ainsi que le pattern "clause `when:` portée par les ports de sortie d'un Switch". **La condition de routage vit désormais directement sur l'edge**, attachée à l'output port qu'elle quitte. Un Switch n'était qu'un pass-through ré-émettant son input sur un port gardé — un hop fantôme dans le dataflow que l'edge conditionnelle élimine : le `review` d'un Reviewer va directement vers `implementer` (`verdict=FAIL`) ou `end` (`verdict=PASS`), chaque arête gardée, sans nœud intermédiaire. Cf. ADR-0011 (supersede le placement décidé en ADR-0002).
 
 ### Forme
 
-- 1 input port (`in`) qui reçoit l'artefact à inspecter.
-- N output ports nommés, chacun porteur d'une clause `when:`.
-- 1 output port `default` implicite, sans clause, qui fire si aucune autre branche n'a matché.
-
-### Évaluation
-
-`first-match-wins`, dans l'ordre déclaré (ordre dans l'Inspector, persisté en YAML). Les conditions opèrent sur :
-
-- Tout champ de frontmatter de l'artefact entrant.
-- Toute variable pipeline référencée par `$<name>`.
-
-`iter` n'est **plus** un champ de `when:` — le compteur d'itération est désormais une propriété du nœud `Loop` (cf. ci-dessous), pas une variable globale d'un nœud source.
-
-### Composabilité
-
-Plusieurs prédicats dans une même branche sont **AND'd implicitement**. Pour OR :
-- `in: [...]` pour OR-sur-un-même-champ (cas dominant).
-- Plusieurs branches Switch qui wirent vers la même target downstream (cas cross-fields).
-
-Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pas d'eval libre, pas de string-expression — le runtime parse YAML, résout les variables, applique les prédicats.
-
-### YAML
+Une edge porte une clause `when:` **optionnelle** (même grammaire de prédicats qu'avant). Sans clause, l'edge est inconditionnelle (fire toujours).
 
 ```yaml
-- id: gate
-  type: switch
-  inputs:
-    - { name: in }
-  outputs:
-    - name: pass
-      when:
-        verdict: { eq: PASS }
-        complexity_score: { lt: 3 }
-    - name: rework
-      when:
-        verdict: { in: [FAIL, NEEDS_WORK] }
-    - { name: default }
+edges:
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: task }
+    when: { verdict: { in: [FAIL, NEEDS_WORK] } }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
+    when: { verdict: { eq: PASS } }
 ```
+
+### Évaluation — multi-match, pas d'ordre
+
+À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`, aucun ordre déclaré ne compte (supersede la sémantique first-match-wins du Switch). Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out `code-mutating` via un `Merge`. Une edge **`else`** (clause vide marquée `else: true`) fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
+
+Feedback runtime : un nœud qui a firé passe au vert ; les edges déclenchées sont marquées d'un indicateur sur le canvas, pour rendre le fan-out lisible.
+
+### Champs référençables
+
+- Tout champ de frontmatter de l'artefact quittant le port source.
+- Toute variable pipeline `$<name>`.
+- **`iter`** — le compteur de la région englobante (cf. *Loop regions*). Re-autorisé comme champ de `when:` : il n'avait été retiré que parce que le nœud `Loop` portait le compteur ; le nœud disparaissant, le compteur redevient adressable. Sert notamment à câbler une sortie d'épuisement (`iter: { gte: $max }`).
+
+Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pas d'eval libre, jamais de LLM-router — le principe mécanique d'ADR-0002 tient. Plusieurs prédicats dans une clause sont **AND'd** ; pour OR, `in: [...]` sur un champ, ou plusieurs edges sœurs vers la même target.
 
 ---
 
-## Loop — itération bornée first-class
+## Loops — boucles matérialisées, nommées
 
-Le **`Loop`** est un nœud first-class qui matérialise les boucles précédemment "émergentes". Il remplace le pattern back-edge + `iter < N`. L'ancienne formulation "Cycle = propriété émergente" est **obsolète** : les cycles d'une pipeline Maestro sont désormais des Loop nodes explicites, dans l'esprit de Unreal `ForLoopWithBreak` ou n8n `Loop Over Items`.
+Les nœuds **`Loop`** et **`ForEach`** sont **supprimés** (obsolètes). Une boucle n'est plus un nœud à ports `body`/`done`/`break` : c'est une **entrée nommée du bloc `loops:`** du YAML, qui référence un ensemble de nœuds membres. Le mot *région* désigne son **rendu** sur le canvas (boîte translucide autour des membres ; simple marqueur si la boucle n'a qu'un membre). Les edges restent uniformes : **aucune edge n'est marquée "back-edge"**, son rôle est *dérivé* de la boucle, jamais stocké.
+
+Pourquoi une identité nommée plutôt qu'une détection de cycle pure : "quelle edge est *la* back-edge" est une propriété topologique globale qui bascule quand on édite le graphe ailleurs. Un **id stable** sort cette identité de la topologie, stabilise la persistance du bound, et ouvre les boucles imbriquées. Cf. ADR-0011.
 
 ### Forme
 
-- 2 input ports : `in` (entrée), `break` (force la sortie immédiate).
-- 2 output ports : `body` (fire une fois par itération), `done` (fire à la sortie).
-- Config : `max_iter: int` (référencable via `$<var>` pipeline).
-
-### Sémantique runtime
-
-- Réception sur `in` : initialise `iter = 1`, fire `body`.
-- Le **body subgraph** = ensemble des nœuds joignables depuis `body` qui ne pointent pas vers `break`/`done`. Calculé par le runtime au lancement, pas déclaré dans le YAML.
-- Quand tous les NodeRuns du body subgraph pour iter N sont terminés : si `iter < max_iter`, incrémente `iter` et re-fire `body` avec mêmes inputs ; sinon, fire `done` (event `loop_max_reached`).
-- Trigger sur `break` : court-circuite, fire `done` immédiatement (event `loop_break`).
-
-Le compteur `iter` est scopé à un Loop instance pour ce Run. Plusieurs Loops dans une même pipeline ont chacun leur propre compteur, indépendant.
-
-### Itération intra-Run uniquement
-
-Les compteurs `iter` sont remis à zéro pour chaque nouveau Run. Pas de "mémoire d'itérations" entre Runs distincts du même pipeline.
-
-### Accumulation côté input (inchangé)
-
-Un nœud du body avec un input port `repeated: true` lit le glob `iter-*/<port>.md` du nœud source amont — le mécanisme reste valide, scopé au Loop courant via le sous-dossier d'artefacts.
-
-### YAML
-
 ```yaml
-- id: review-loop
-  type: loop
-  inputs:
-    - { name: in }
-    - { name: break }
-  outputs:
-    - { name: body }
-    - { name: done }
-  max_iter: 5
+loops:
+  - id: review-loop
+    kind: bounded          # compteur borné, séquentiel
+    members: [implementer, reviewer]
+    max_iter: 3
+  - id: per-issue
+    kind: collection       # fan-out parallèle data-driven
+    members: [fixer]       # ≥ 1 membre — souvent un seul nœud
+    over: issues           # champ liste dans l'artefact entrant
 ```
+
+- `members` : **liste explicite d'ids de nœuds, ≥ 1** (jamais spatial — déplacer un nœud hors de la boîte ne le retire pas de la boucle). Une boucle **n'est pas nécessairement un sous-graphe** : un seul membre est légal et fréquent.
+  - `collection` à un membre = fan-out d'**un** nœud par item (le foreach le plus courant : « un fixer par issue »).
+  - `bounded` à un membre = un nœud qui **se relance** (self-edge) jusqu'à `max_iter`.
+- **Entrée** = le membre ayant une in-edge depuis un non-membre (membre unique : ce nœud). **Re-entry** = une edge d'un membre vers cette entrée (membre unique : sa self-edge).
+- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ N items` (collection), éditable.
+
+### Deux drivers
+
+- **`bounded`** — driver = compteur `max_iter`. **Naît par auto-détection** : câbler une edge qui ferme un cycle (self-edge incluse) matérialise une boucle (id généré + `max_iter` par défaut), pour qu'un cycle ne soit jamais accidentellement non-borné.
+- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (sélection du/des membre(s) → « fan out sur une collection » → choix du champ) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer.
+
+### Compteur d'itération
+
+- **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant ; tout nœud hors boucle est toujours `iter-1`.
+- `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées — absorbe le double-spawn iter+1 de #108). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure, pas une machinerie dédiée.
+- Adressage et accumulation inchangés : `reviewer/iter-2/review/output.md` ; un input `repeated: true` glob `iter-*/<port>` → un artefact par lap, ordonné.
+
+### Sortie de boucle
+
+- **Succès anticipé** : une edge forward conditionnelle quittant un membre (`verdict=PASS → end`). Remplace l'ancien `break`.
+- **Épuisement** (`bounded`) : à `iter = max_iter` avec la condition de continuation encore vraie, la re-entry est plafonnée. Le designer **peut** câbler une sortie d'épuisement (`when: { iter: { gte: $max } }`) vers où il veut. Sinon, et si aucune edge forward ne matche, la boucle entre dans un état **bloqué "exhausted — unrouted"** explicite (jamais de stall silencieux), routable par le Pipeline Manager (#126). Pas d'auto-proceed implicite.
+- **`collection`** : **barrière** — les edges quittant la boucle firent **une seule fois, quand tous les items sont terminés** (préserve `done → Merge`, ADR-0006). Liste vide → barrière immédiate, edges sortantes firent une fois sans item-artefact. Items `code-mutating` → chacun son sous-worktree, convergence via `Merge`.
+
+### Imbrication — différée
+
+Le modèle à id autorise de *déclarer* `inner ⊂ outer`, mais la **sémantique d'itération imbriquée** (coordonnée composite `outer-2/inner-3`, accumulation scopée au lap parent) est **différée** : v1 = itération plate, un seul niveau.
+
+### Édition pendant un Run & intra-Run
+
+Supprimer l'edge qui retire le **dernier cycle** des membres d'une boucle `bounded` déclenche un **popup de confirmation** (« ceci détruira la boucle <id> ») ; confirmé, l'entrée `loops:` est retirée, bound et état d'itération partent avec. L'interaction avec un Run actif est régie par ADR-0007 (nœuds running immuables, edges libres). Les compteurs `iter` repartent de zéro à chaque Run — pas de mémoire d'itérations entre Runs.
 
 ---
 
-## ForEach — itération parallèle sur collection
+## Edges — structure
 
-Le **`ForEach`** est un nœud first-class qui itère un body subgraph **en parallèle** sur les items d'une collection. Distinct du `Loop` (qui est un compteur borné, séquentiel) : `ForEach` est *data-driven* (la liste pilote les itérations) et *parallèle par construction*.
-
-Cas d'usage canonique : un nœud upstream produit un artefact dont la frontmatter contient `items: [...]` (ex. liste d'issues GitHub) ; le ForEach fan-out une itération du body par item, toutes les itérations tournent en parallèle, les `code-mutating` parmi elles produisent chacune leur sous-worktree, et un nœud `Merge` downstream rassemble (cf. ADR-0006).
-
-### Forme
-
-- 2 input ports : `in` (artefact contenant la liste), `break` (sortie anticipée).
-- 2 output ports : `body` (fire une fois par item, toutes les fires en parallèle), `done` (fire quand toutes les itérations body sont terminées).
-- Source de la collection : champ `items: [...]` dans la frontmatter de l'artefact reçu sur `in`.
-
-### Sémantique runtime
-
-- Réception sur `in` : lit `items` du frontmatter, taille N. Pour chaque item `i ∈ [1..N]`, fire `body` avec un préambule injecté contenant `current_item` (la valeur) + `current_iter` (1-based) + `total` (N), et dépose un fichier `<artifacts>/<foreach-id>/iter-<i>/_item.md` avec la valeur sérialisée.
-- Toutes les fires `body` sont **simultanées** — pas de sérialisation. Les NodeRuns body parallèles forkent chacun leur sous-worktree (s'ils sont `code-mutating`).
-- Le `done` port fire quand **toutes** les itérations body sont terminées (barrière intrinsèque). Si une convergence vers un nœud `code-mutating` downstream est nécessaire, le designer place un `Merge` (ADR-0006).
-- Liste vide (N = 0) : fire `done` immédiatement avec event `foreach_empty`.
-- `break` : court-circuite, les itérations body en cours finissent leur tour mais aucune nouvelle n'est lancée, `done` fire dès leur complétion.
-
-### YAML
-
-```yaml
-- id: per-issue
-  type: foreach
-  inputs:
-    - { name: in }
-    - { name: break }
-  outputs:
-    - { name: body }
-    - { name: done }
-```
-
-Pas de `max_iter` — la borne, c'est la taille de la collection. Pas de spec de schéma de l'item — l'agent du body fait du best-effort sur ce qu'il reçoit (cf. décision sur le typage : pas de typage côté input, ADR à venir / décision design 2026-05-08).
-
----
-
-## Edges — purement structurelles
-
-Une edge transporte un artefact d'un output port à un input port. Forme :
-
-```yaml
-- source: { node: <id>, port: <port> }
-  target: { node: <id>, port: <port> }
-```
-
-**Plus aucune clause `when:` sur les edges.** Toute la logique conditionnelle est portée par les nœuds `Switch` et `Loop`. Les edges sont un graphe muet — leur rôle est purement structurel : déclarer le câblage des ports.
-
-Le pattern halt-edge décrit dans des versions antérieures est lui aussi déprécié — depuis #39, la terminaison du Run passe par un edge vers le nœud `End` mandatoire.
+Une edge câble un output port source vers un input port target, et porte une clause `when:` **optionnelle** (sémantique multi-match : cf. *Edges conditionnelles*). La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39) ; le pattern halt-edge des versions antérieures reste déprécié.
 
 ---
 
@@ -366,16 +317,20 @@ Conséquences à anticiper sur les décisions futures :
 
 ---
 
-## Principe — Deliberate over autonomous
+## Principe — Deliberate, then autonomous (trust-earned)
 
-Maestro ne vise pas le *"set it and forget it"*. La valeur est dans le **temps passé en conception**, pas dans la rapidité d'exécution. Conséquences :
+Maestro ne **démarre** pas en *"set it and forget it"* : la valeur initiale est dans le **temps passé en conception**, et le défaut reste délibéré (humain dans la boucle). Mais l'autonomie est une **cible atteignable, pas un interdit** : une fois qu'un pipeline a gagné la confiance de l'utilisateur sur une classe de tâches, celui-ci **peut** le laisser aller jusqu'au bout — pousser, ouvrir une PR, merger — sans intervention.
+
+Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur du runtime ni du Trigger.** Le tool ne court-circuite jamais l'humain de sa propre initiative ; c'est le *designer* qui inscrit les actions durables dans le graphe (nœud Shipper avec `gh pr create`, nœud de merge vers main, etc.). Conséquence directe : un pipeline auto-shippant se comporte **à l'identique** qu'il soit lancé à la main ou par un Trigger — aucune divergence manuel/automatique. La confiance se construit et s'audite sur le *pipeline*, pas sur le déclencheur.
+
+Conséquences :
 
 - **Tout NodeRun est attachable** en tmux à n'importe quel moment ; l'utilisateur peut intervenir, converser, corriger.
 - **Un Node peut être marqué `interactive: true`** à l'édition. Quand son NodeRun spawn, il s'arrête en attente que l'utilisateur attache la session et signale la complétion (slash command, fichier sentinelle, ou autre — TBD). Cas typique : nœud d'entrée qui grille l'utilisateur pour construire l'input du pipeline (à la `grill-with-docs`).
 - **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état. Il vit dans l'onglet info de la toolbar (cf. *UX — un seul mode d'édition unifié*).
-- **Pas d'auto-merge vers main, jamais.** Pas d'auto-cleanup. L'humain tranche les actions à effets durables.
+- **Aucune action durable auto par le runtime lui-même.** Maestro ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné dans le graphe, auditable. (Révise l'ancien « pas d'auto-merge, jamais » : l'interdit ne porte plus sur l'*effet* mais sur son *origine* — jamais le runtime, toujours le pipeline.)
 
-À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate over autonomous* parle du **runtime** (on ne court-circuite pas l'humain à l'exécution).
+À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate, then autonomous* parle du **runtime** (on ne court-circuite pas l'humain de force ; on lui laisse *choisir* d'inscrire l'autonomie dans son pipeline).
 
 ---
 
@@ -416,6 +371,13 @@ Le runtime ne distingue pas (i) de (ii) : il pose le contenu utilisateur tel que
 
 L'input peut aussi être **construit interactivement** via un nœud d'entrée marqué `interactive: true` (cf. principe *Deliberate over autonomous*). Pattern typique : le user écrit un prompt brut court, attache la session du nœud d'entrée, l'agent grille jusqu'à un input structuré, le user "submit", le pipeline démarre vraiment.
 
+### `prompt_required` — pipeline runnable sans prompt
+
+Flag racine du pipeline YAML (à côté de `variables:`), **défaut `true`** (préserve le comportement actuel). Mis à `false`, le pipeline est *self-sufficient* : son nœud d'entrée sait trouver son propre travail (lire le backlog, `git diff main`, etc.). Rendu UI : case « Prompt required » cochée par défaut, décochable.
+
+- **New Run modal** : si `prompt_required: false`, le champ prompt devient optionnel (`canLaunch` ne l'exige plus). Un prompt fourni est passé comme *« additional info »*, pas comme tâche principale.
+- **Runtime** : un input vide n'est légal que si `prompt_required: false`. Le préambule du nœud d'entrée s'adapte — avec input : « additional info : … » ; sans : le nœud source son travail lui-même.
+
 ### Termination
 
 À la fin d'un Run réussi, **niveau 0** par défaut : la branche `maestro/run-<run-id>` reste en l'état, le worktree reste sur disque, l'utilisateur fait ce qu'il veut. Maestro ne fait **pas** de PR auto, **pas** de commentaire d'issue, **pas** d'auto-merge. Si un projet veut ce comportement, il l'exprime en ajoutant un nœud "Shipper" dans son pipeline (un Claude Code avec `gh pr create` dans son prompt).
@@ -439,6 +401,64 @@ Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner s
 - Blackboard : `<pipeline-worktree>/.maestro/artifacts/...` (déjà défini).
 
 `<run-id>` = slug `<timestamp>-<short-uuid>` pour rester lisible humainement et garanti unique.
+
+---
+
+## Trigger
+
+Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, Maestro crée un Pipeline Run *ordinaire* à partir du template.
+
+- **Template de Run** = exactement la charge utile d'un `POST /runs` : pipeline (depuis la bibliothèque) + repo cible + source branch + input + overrides de variables.
+- **Start-only.** Un Trigger sait *quand* déclencher et *quel input* passer — rien de plus. Il ne décide jamais de la terminaison du Run (pas de policy de finish côté Trigger, cf. *Deliberate, then autonomous*). L'autonomie de bout-en-bout (push/PR/merge) est une propriété du **pipeline** visé (nœud Shipper), pas du Trigger.
+- **Provenance.** Un Run créé par un Trigger porte une référence `triggered_by: <trigger-id>` ; à part ça c'est un Run ordinaire, indistinguable dans son cycle de vie.
+- **Pas de chaînage interne.** Un Trigger ne déclenche pas un autre Trigger. Les pipelines se couplent par le **monde extérieur** (ex. un pipeline auditeur écrit des issues GitHub `ready-for-agent` ; un Trigger de polling les ramasse), jamais par un wiring interne Maestro — cohérent avec « les Runs ne partagent pas de blackboard ».
+
+### Condition de déclenchement
+
+Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script optionnel** :
+
+- **Sans guard** : à chaque tick cron, le Trigger fire — un Run est spawné. (Le pipeline visé est typiquement *self-sufficient*, cf. #137 : pas d'input requis.)
+- **Avec guard** : à chaque tick, Maestro exécute d'abord le script (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; exit non-zéro ⇒ skip** (aucun Run spawné, pas de pollution de la liste). **Le `stdout` du guard devient l'input du Run** (stdout vide ⇒ pas d'input). Exemple issue-polling : `gh issue list --label ready-for-agent --json number,title` → vide ⇒ exit 1 (skip) ; non-vide ⇒ exit 0, la liste sert d'input.
+
+**Un firing = un Run.** Maestro ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
+
+**Résolution de l'input du Run déclenché**, dans l'ordre : `stdout` du guard (s'il existe et non-vide) → `input_template` statique du Trigger → rien. Si l'input résolu est vide *et* que le pipeline a `prompt_required: true`, le Trigger est **rejeté à la création** (erreur claire : « ce pipeline exige un prompt ; ajoute un guard, un input template, ou passe le pipeline en prompt-not-required »). Échec loud au config-time plutôt qu'un nœud d'entrée paumé toutes les 15 min. (Le guard prime quand présent ; pas de merge template+stdout en v1 — `echo` ton texte statique dans le guard si tu veux les deux.)
+
+### Idempotence — déléguée au monde extérieur
+
+**Maestro ne tient aucun état de dedup.** Pas de `fired_keys`, pas de mémoire « ai-je déjà traité ce work-item ». L'idempotence est une responsabilité de l'utilisateur (*Sharp tool*), naturellement satisfaite quand le pipeline **mute l'état qu'il poll** : le nœud Shipper du fixer relabel/ferme l'issue (`ready-for-agent` → `in-progress`/closed), donc le prochain `gh issue list --label ready-for-agent` du guard ne la voit plus. Le label GitHub *est* le registre de dedup.
+
+Risque assumé : un guard qui renvoie toujours le même work + un pipeline qui ne mute pas l'état ⇒ Runs dupliqués en boucle, bornés seulement par la politique de recouvrement. Choix v1 délibéré : pas de moteur de dedup qui *devine* l'intention ; la boucle est à l'utilisateur de la fermer.
+
+### Politique de recouvrement — skip
+
+Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (`running`/`awaiting_user`/`blocked`). Le tick est sauté (loggué « skipped — previous run still active »), pas mis en file. Justification : ferme la fenêtre de course du dedup-par-label (Q4) — tant que le fixer-run-1 travaille l'issue #42, l'issue reste `ready-for-agent`, donc sans skip les polls suivants re-firent sur #42. Le skip est le défaut, surchargeable en `allow` par-Trigger pour qui veut des fires concurrents.
+
+**Pas d'empilement de Runs en attente.** On ne crée jamais un Run entièrement « en attente ». La seule attente possible est *au niveau nœud* (back-pressure du cap de sessions, ci-dessous), à l'intérieur d'un Run déjà admis.
+
+### Mécanisme cron & cycle de vie
+
+- **Format** : expression cron 5 champs (crate cron + `chrono`), timezone locale (single-user). L'UI propose des presets (toutes les 15 min / horaire / quotidien 09:00) compilés en cron + une échappatoire expression brute.
+- **Scheduler** : nouvelle task background (`tokio::time::interval`, sœur du reaper/stale) qui tick ~toutes les 30 s ; résolution cron à la minute. À chaque tick : pour chaque Trigger activé dont `next_fire ≤ now`, applique le skip de recouvrement, exécute le guard, spawn le Run, recalcule `next_fire`.
+- **Fires manqués = forward-only, pas de backfill.** Daemon down pendant 50 slots ⇒ au redémarrage `next_fire` est recalculé depuis *now*, les slots manqués ne sont pas rejoués. Correct *par construction* : le dedup étant externe, un seul poll forward voit *tout* le travail accumulé (`gh issue list` ramène toutes les issues en attente d'un coup).
+- **Daemon best-effort (v1)** : les Triggers ne firent que tant que le process daemon est vivant (survit à la fermeture de l'UI, meurt au reboot). L'onglet Triggers l'affiche clairement. Service unit persistant (systemd/launchd) traité séparément → #156.
+
+### Persistence — table SQLite
+
+Les Triggers vivent dans une **nouvelle table `triggers`** de `~/.maestro/maestro.db`, *pas* en YAML sur disque. Un Trigger est de la **config + état de scheduling** (créé via modale, pas un artefact canvas-backed comme un pipeline), et son état mutable (`enabled`, `next_fire_at`, `last_fired_at`, `last_outcome`) serait réécrit à chaque tick — mauvais fit YAML. La requête centrale du scheduler (« quels Triggers sont dûs ») est une requête indexée triviale.
+
+Ligne : `id, name, pipeline_id, target_repo, source_branch, input_template, variables(JSON), cron, guard_command(nullable), overlap_policy, enabled, next_fire_at, last_fired_at, last_outcome`.
+
+Ne viole pas l'event-sourcing : l'event log reste la vérité du **Run** (keyé `run_id`) ; un Trigger *produit* des Runs (eux event-sourcés normalement, avec provenance `triggered_by`).
+
+**Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif — `fired→run_id` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`. Répond à la question #1 du debug (« pourquoi mon Trigger n'a pas firé cette nuit ? »). L'onglet Triggers la lit pour « last fired / last skipped + raison ».
+
+### UI — onglet Triggers
+
+- **Ligne** : status dot (depuis `last_outcome`, tooltip au survol « last run date : XXX, result : YYY ») · nom · pipeline · badge repo · planning lisible (« every 15 min ») · toggle enable/disable · « next fire in … / last fired … ». Actions au survol : run-now, edit, delete. Langage visuel calqué sur les lignes Runs.
+- **Sélection → panneau détail droit** : config complète + **historique des fires** (table `trigger_fires` : horodatage · outcome · lien run-id). C'est là qu'on répond à « pourquoi pas firé cette nuit » (skips et guard-errors listés avec raison).
+- **Run now** = ouvre `NewRunModal` en mode Run-now pré-rempli depuis le Trigger (pipeline, repo, branch, variables, input_template→prompt) ; lancement manuel. **Le guard n'est pas exécuté** (c'est une gate de polling, pas une partie du template). Sidestep l'ambiguïté guard/overlap, et sert de « tester ce que fait ce Trigger ».
+- **Trigger désactivé** : reste dans la liste, grisé, ne fire pas — le contrôle « pause de la boucle d'audit ».
 
 ---
 
@@ -547,6 +567,15 @@ Chaque NodeRun = **une session tmux détachée** créée par le daemon (`tmux ne
 
 Les sessions sont **invisibles à l'utilisateur** par défaut — pas de fenêtre OS qui s'ouvre. Elles tournent en arrière-plan et survivent au crash de l'UI ou du daemon (le runtime peut récupérer leur état au redémarrage).
 
+### Cap de sessions concurrentes (admission control)
+
+Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** vivantes simultanément — la ressource qui s'effondre réellement (cf. tmux-collapse, #77/#78). S'applique à *tous* les Runs, manuels comme déclenchés (les Triggers ne font qu'exposer le besoin).
+
+- **Admission par spawn de nœud**, pas par Run : quand le scheduler veut spawner un NodeRun et que `live_sessions + 1 > cap`, le nœud passe en état **`waiting`** jusqu'à libération d'un slot, puis spawn. Le Run est admis immédiatement ; ce sont les *nœuds* qui s'étranglent.
+- **Les sessions Pipeline Manager ne comptent pas** dans le cap (légères, 1/Run ; les compter risquerait un soft-deadlock où N managers saturent le budget sans laisser de slot au travail réel).
+- **Valeur configurable** sur la page de réglages instance-wide (#129, n'existe pas encore).
+- **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde.
+
 ### Pont UI ↔ tmux : terminal inline xterm.js
 
 ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS native) est **obsolète**. Mécanisme actuel :
@@ -577,7 +606,11 @@ Maestro est un **atelier de production de code** ; la conception de pipelines es
 
 ### Layout 3 panneaux
 
-- **Gauche — Liste.** Runs actifs en haut (status `running`/`awaiting_user`/`blocked`), Runs récents en dessous, Pipelines de la bibliothèque (templates) en dessous encore avec badge favorite. Click → bascule l'affichage middle/droite. Le contexte d'édition (run-snapshot ou template) est inféré du clic, pas d'un toggle global.
+- **Gauche — Liste, à trois onglets** `Runs | Triggers | Library` (l'ancien empilement de sections collapsibles devient une barre d'onglets, cf. mockup `lp-tabs`). Triggers est au milieu : il *produit* des Runs (gauche) et *consomme* des pipelines de la Library (droite).
+  - **Runs** : Runs actifs en haut (`running`/`awaiting_user`/`blocked`), Runs récents en dessous. Un Run créé par un Trigger porte un badge de provenance (icône + nom du Trigger, cliquable vers celui-ci).
+  - **Triggers** : liste des Triggers (cf. *Trigger*), toggle enable/disable, « + New Trigger ».
+  - **Library** : pipelines templates avec badge favorite.
+  - Click → bascule l'affichage middle/droite. Le contexte d'édition (run-snapshot ou template) est inféré du clic, pas d'un toggle global.
 - **Centre — Canvas du graphe.** Render du DAG, toujours interactif (drag-drop nodes, créer edges, sélection multiple). Quand le contexte est un Run en cours :
   - **Highlight** sur le(s) nœud(s) en cours d'exécution (pluriel — fan-out parallèle peut en avoir plusieurs simultanés).
   - **Encart overlay** flottant : run-id, status global, boutons d'action niveau Run (cancel, cleanup, attacher manager).

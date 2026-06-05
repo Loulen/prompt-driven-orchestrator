@@ -25,12 +25,12 @@ function makePipeline(): PipelineDef {
       },
       {
         id: "sw1",
-        name: "switch",
-        type: "switch",
+        name: "gate",
+        type: "doc-only",
         inputs: [{ name: "in", repeated: false, side: "left" }],
         outputs: [
           { name: "branch", repeated: false, side: "right" },
-          { name: "default", repeated: false, side: "right" },
+          { name: "out", repeated: false, side: "right" },
         ],
         interactive: false,
         view: { x: 200, y: 100 },
@@ -119,7 +119,7 @@ describe("statusForNode", () => {
 });
 
 describe("deriveEditNodes — live status wiring (regression: node-card borders ignore run state)", () => {
-  it("forwards live status into every node type's data (regular / switch / loop / for-each / merge)", () => {
+  it("forwards live status into every node type's data (regular / loop / for-each / merge)", () => {
     const pipeline = makePipeline();
     const run = makeRunState({
       impl: "running",
@@ -174,7 +174,6 @@ describe("markerReached", () => {
     const others: NodeType[] = [
       "doc-only",
       "code-mutating",
-      "switch",
       "loop",
       "for-each",
       "merge",

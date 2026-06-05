@@ -40,27 +40,6 @@ export function deriveEditNodes(
 ): Node[] {
   return pipeline.nodes.map((n, i) => {
     const status = statusForNode(n.id, runState);
-    if (n.type === "switch") {
-      return {
-        id: n.id,
-        type: "switch",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          status,
-          branches: n.outputs.map((p) => ({
-            name: p.name,
-            side: p.side ?? "right",
-            hasWhen: p.when != null,
-          })),
-          inputSide: n.inputs[0]?.side ?? "left",
-        },
-      };
-    }
     if (n.type === "merge") {
       return {
         id: n.id,
@@ -185,6 +164,18 @@ export interface EditEdgeData extends Record<string, unknown> {
  * edge's `label` (xyflow renders it at the midpoint, not gated on hover/select).
  * Unconditional edges carry no label.
  */
+/**
+ * Decodes the `pipeline.edges` index from a canvas edge id (`e-{index}`).
+ * Returns null for ids that are not edge ids (node ids, malformed). This is the
+ * inverse of the `id: \`e-${i}\`` assignment in {@link deriveEditEdges} and is
+ * how an edge click resolves to the edge selection (#147).
+ */
+export function edgeIndexFromId(edgeId: string): number | null {
+  const m = /^e-(\d+)$/.exec(edgeId);
+  if (!m) return null;
+  return Number(m[1]);
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 

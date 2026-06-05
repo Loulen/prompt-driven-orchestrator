@@ -39,14 +39,14 @@ describe("computeBodySubgraph", () => {
       nodeDef("loop1", "loop"),
       nodeDef("a", "doc-only"),
       nodeDef("b", "doc-only"),
-      nodeDef("sw", "switch"),
+      nodeDef("sw", "doc-only"),
     ];
 
     const body = computeBodySubgraph(edges, defs, "loop1");
     expect(body).toEqual(new Set(["a", "b", "sw"]));
   });
 
-  it("includes all switch branches that stay in the body", () => {
+  it("includes all downstream branches that stay in the body", () => {
     const edges = [
       edge("loop1", "body", "impl", "in"),
       edge("impl", "out", "reviewer", "in"),
@@ -58,7 +58,7 @@ describe("computeBodySubgraph", () => {
       nodeDef("loop1", "loop"),
       nodeDef("impl", "code-mutating"),
       nodeDef("reviewer", "doc-only"),
-      nodeDef("sw", "switch"),
+      nodeDef("sw", "doc-only"),
     ];
 
     const body = computeBodySubgraph(edges, defs, "loop1");

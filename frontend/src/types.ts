@@ -4,7 +4,7 @@ export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" |
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
 }
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop" | "for-each" | "merge";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "loop" | "for-each" | "merge";
 
 export interface RunListEntry {
   run_id: string;
@@ -40,6 +40,19 @@ export interface EdgeInfo {
   target_port: string;
   halt_message?: string | null;
   when_clause?: Record<string, unknown> | null;
+}
+
+/**
+ * Runtime trigger status for a single conditional edge (ADR-0011, #147).
+ * Shown ONLY in the edge detail panel — never rendered on the canvas. Derived
+ * from the run state; absent until the edge's source node has been evaluated.
+ */
+export interface EdgeTriggerStatus {
+  fired: boolean;
+  /** The clause's evaluated value rendered for display, e.g. `verdict = FAIL`. */
+  last_value: string | null;
+  evaluated_at: string | null;
+  iter: number | null;
 }
 
 export interface PortBrief {
@@ -101,12 +114,6 @@ export interface ForEachStateInfo {
   done: boolean;
 }
 
-export interface SwitchStateInfo {
-  switch_node_id: string;
-  chosen_branch: string;
-  evaluated_at: string;
-}
-
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -123,7 +130,6 @@ export interface RunState {
   merge_resolver: MergeResolverInfo | null;
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
-  switch_states?: Record<string, SwitchStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
 }

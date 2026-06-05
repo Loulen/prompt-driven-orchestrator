@@ -1,4 +1,4 @@
-import { Plus, Repeat, GitBranch, GitMerge, Info } from "lucide-react";
+import { Plus, Repeat, GitMerge, Info } from "lucide-react";
 import { ForEachIcon } from "./ForEachNode";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
@@ -51,16 +51,6 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
           className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
         >
           <ForEachIcon />
-        </button>
-      </Tooltip>
-
-      <Tooltip content="Switch node">
-        <button
-          data-testid="toolbar-switch"
-          onClick={() => onAddNode("switch")}
-          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
-        >
-          <GitBranch size={14} />
         </button>
       </Tooltip>
 

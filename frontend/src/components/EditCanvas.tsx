@@ -14,13 +14,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { deriveEditEdges, deriveEditNodes } from "./editNodeDerivation";
+import { deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
-import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
 import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
@@ -105,11 +104,10 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
+const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
-  "switch": "switch",
   "loop": "loop",
   "for-each": "foreach",
   "merge": "merge",
@@ -130,7 +128,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
-  const setScrollToPort = useEditStore((s) => s.setScrollToPort);
   const updateNode = useEditStore((s) => s.updateNode);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
@@ -368,13 +365,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           ],
         };
         break;
-      case "switch":
-        newNode = {
-          id, name, type, interactive: false, view,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "default", repeated: false, side: "right" }],
-        };
-        break;
       default:
         newNode = {
           id, name, type, interactive: false, view,
@@ -427,8 +417,12 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
             onCloseInfo?.();
           }}
           onEdgeClick={(_event, edge) => {
-            setSelection({ kind: "node", id: edge.source });
-            setScrollToPort(edge.sourceHandle ?? null);
+            // Clicking an edge opens the edge detail panel (#147), keyed by the
+            // edge's index in pipeline.edges (decoded from its `e-{i}` id).
+            const idx = edgeIndexFromId(edge.id);
+            if (idx == null) return;
+            setSelection({ kind: "edge", id: null, edgeIndex: idx });
+            onCloseInfo?.();
           }}
           onPaneClick={() => setSelection({ kind: "none", id: null })}
           onConnect={onConnect}

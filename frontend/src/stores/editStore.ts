@@ -17,11 +17,17 @@ import {
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 
-export type SelectionKind = "node" | "none";
+export type SelectionKind = "node" | "edge" | "none";
 
 export interface Selection {
   kind: SelectionKind;
   id: string | null;
+  /**
+   * Index into `pipeline.edges` when `kind === "edge"`. Edges have no stable id,
+   * so the index is the selection key — the same key the canvas uses (`e-{i}`)
+   * and `updateEdge`/`deleteEdge` take. Undefined for node/none selections.
+   */
+  edgeIndex?: number;
 }
 
 export interface ConflictData {
@@ -173,6 +179,11 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       source: e.source,
       target: e.target,
     };
+    // Conditional routing (ADR-0011): a guarded edge carries `when:`, a
+    // fallback edge carries `else: true`. Both live on the edge now, not on a
+    // Switch node's output ports.
+    if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
+    if (e.else === true) edge.else = true;
     return edge;
   });
 
@@ -283,7 +294,6 @@ function cleanEdgeSideEffects(tab: OpenPipeline, edge: EdgeDef): void {
       targetNode.over = null;
     }
   }
-  cleanSwitchPredicatesOnDisconnect(tab, edge);
 }
 
 function propagatePortChangesToEdges(
@@ -321,34 +331,6 @@ function propagatePortChangesToEdges(
     }
   }
   tab.pipeline.edges = kept;
-}
-
-function cleanSwitchPredicatesOnDisconnect(tab: OpenPipeline, deletedEdge: EdgeDef): void {
-  if (deletedEdge.target.port !== "in") return;
-  const switchNode = tab.pipeline.nodes.find(
-    (n) => n.id === deletedEdge.target.node && n.type === "switch",
-  );
-  if (!switchNode) return;
-
-  tab.pipeline.nodes = tab.pipeline.nodes.map((n) => {
-    if (n.id !== switchNode.id) return n;
-    return {
-      ...n,
-      outputs: n.outputs.map((port) => {
-        if (port.name === "default" || !port.when) return port;
-        const filtered: Record<string, unknown> = {};
-        for (const [field, pred] of Object.entries(port.when)) {
-          if (field.startsWith("$")) {
-            filtered[field] = pred;
-          }
-        }
-        return {
-          ...port,
-          when: Object.keys(filtered).length > 0 ? filtered : null,
-        };
-      }),
-    };
-  });
 }
 
 export const useEditStore = create<EditState>((set, get) => ({

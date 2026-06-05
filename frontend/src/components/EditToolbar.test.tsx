@@ -25,12 +25,15 @@ describe("EditToolbar", () => {
     );
   }
 
-  it("renders four icon buttons", () => {
+  it("renders the core icon buttons", () => {
     renderToolbar();
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-library")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-loop")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-switch")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-merge")).toBeInTheDocument();
+    // The Switch node was removed (ADR-0011): conditional routing now lives on
+    // the edge, authored via the edge detail panel (#147).
+    expect(screen.queryByTestId("toolbar-switch")).toBeNull();
   });
 
   it("add button calls onAddNode with code-mutating", () => {
@@ -45,10 +48,10 @@ describe("EditToolbar", () => {
     expect(onAddNode).toHaveBeenCalledWith("loop");
   });
 
-  it("switch button calls onAddNode with switch", () => {
+  it("merge button calls onAddNode with merge", () => {
     renderToolbar();
-    fireEvent.click(screen.getByTestId("toolbar-switch"));
-    expect(onAddNode).toHaveBeenCalledWith("switch");
+    fireEvent.click(screen.getByTestId("toolbar-merge"));
+    expect(onAddNode).toHaveBeenCalledWith("merge");
   });
 
   it("tooltips render the correct text on hover", async () => {
@@ -85,9 +88,14 @@ describe("EditToolbar", () => {
       expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
     });
 
-    await user.hover(screen.getByTestId("toolbar-switch"));
+    fireEvent.pointerDown(screen.getByTestId("toolbar-loop"));
     await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Switch node");
+      expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
+    });
+
+    await user.hover(screen.getByTestId("toolbar-merge"));
+    await waitFor(() => {
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Merge node");
     });
   });
 });

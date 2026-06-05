@@ -1,7 +1,7 @@
 // Structural deep equality for JSON-like values.
 //
 // Object key *order* is deliberately ignored: several pipeline fields
-// (variables, port frontmatter, switch when-clauses) cross the wire as maps
+// (variables, port frontmatter, edge when-clauses) cross the wire as maps
 // whose serialization order is nondeterministic on the daemon side (Rust
 // HashMap). Two payloads that differ only in key order are the same value.
 // Array order is significant — nodes/edges are ordered lists.

@@ -215,4 +215,30 @@ Ic.Play = make(<>
   <path d="M3.5 2.5l8 4.5-8 4.5z"/>
 </>);
 
+Ic.Clock = make(<>
+  <circle cx="7" cy="7" r="5.2"/>
+  <path d="M7 4.2V7l2 1.4"/>
+</>);
+
+Ic.Bolt = make(<>
+  <path d="M7.6 1.5L3 7.8h3.2L6 12.5 10.6 6.2H7.4z"/>
+</>);
+
+Ic.Shield = make(<>
+  <path d="M7 1.6l4 1.6v3.2c0 2.6-1.7 4.4-4 5.4-2.3-1-4-2.8-4-5.4V3.2z"/>
+  <path d="M5.2 7l1.4 1.4 2.2-2.6"/>
+</>);
+
+Ic.Repeat = make(<>
+  <path d="M2.5 6V5.2A1.6 1.6 0 0 1 4.1 3.6h5.5"/>
+  <path d="M8 1.8l1.8 1.8L8 5.4"/>
+  <path d="M11.5 8v.8a1.6 1.6 0 0 1-1.6 1.6H4.4"/>
+  <path d="M6 12.2L4.2 10.4 6 8.6"/>
+</>);
+
+Ic.SkipDot = make(<>
+  <circle cx="7" cy="7" r="5.2"/>
+  <path d="M5 7h4"/>
+</>);
+
 window.Ic = Ic;

@@ -54,6 +54,7 @@ const RUNS = [
     title: 'Audit deps for CVE-2025-39022',
     when: '21 h ago',
     elapsed: '03:18',
+    trigger: 'Nightly security audit',
   },
   {
     id: 'run-2026-05-04-2031-6b8',

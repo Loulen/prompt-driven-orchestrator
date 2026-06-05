@@ -1,0 +1,575 @@
+/* refonte.css — Pipeline canvas editor: interaction refonte
+   Evolves the live editor. Reuses Maestro tokens (styles.css).
+   New vocab: slim node cards · per-document output dots · dot-less emergent
+   inputs · always-visible condition pills on edges · translucent loop
+   regions · orthogonal user-anchored edges · edge detail panel · pooled
+   node inspector. */
+
+/* ── Canvas surface (same dotted bg as dag-canvas) ───────────────────────── */
+.rf-canvas {
+  position: absolute; inset: 0;
+  background-color: var(--bg-1);
+  background-image: radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+.rf-world { position: absolute; inset: 0; }
+
+/* muted pastel tokens — shared across the whole canvas surface */
+.rf-canvas, .rf-world, .rf-spot, .rf-spot-stage, .rf-spot-panel {
+  --p-run: #c2a15e;   /* periwinkle */
+  --p-done: #c2a15e;  /* sage       */
+  --p-sel: #c2a15e;   /* lavender   */
+  --p-warn: #c2a15e;  /* sand       */
+  --p-fail: #c2a15e;  /* rose       */
+  --p-teal: #c2a15e;  /* muted teal (collection) */
+  --rf-hair: rgba(255,255,255,0.12);
+}
+
+/* ── Node — hairline outline (V3) ────────────────────────────────────────
+   Thin full outline, flush fill, naked icons. No status band, no chips.
+   State is carried by a single muted pastel on the outline + icon. */
+.rf-node {
+  position: absolute;
+  width: 168px;
+  min-height: 46px;
+  /* muted pastels — dark-mode safe, low chroma */
+  --p-run: #c2a15e; --p-done: #c2a15e; --p-sel: #c2a15e; --p-warn: #c2a15e; --p-fail: #c2a15e;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2, rgba(255,255,255,0.12));
+  border-radius: 10px;
+  padding: 0 13px;
+  display: flex; align-items: center; gap: 10px;
+  user-select: none;
+  cursor: pointer;
+  transition: border-color 150ms, box-shadow 150ms;
+  z-index: 3;
+}
+.rf-node:hover { border-color: rgba(255,255,255,0.2); }
+.rf-node.selected {
+  border-color: rgba(194,161,94,0.55);
+  box-shadow: 0 0 0 3px rgba(194,161,94,0.08);
+}
+.rf-node.running { border-color: rgba(194,161,94,0.34); }
+.rf-node.done,
+.rf-node.fired   { border-color: rgba(194,161,94,0.5); }
+.rf-node.blocked { border-color: rgba(194,161,94,0.5); border-style: dashed; }
+.rf-node.failed  { border-color: rgba(194,161,94,0.5); border-style: dashed; }
+
+/* naked role glyph — no container */
+.rf-ntype {
+  width: auto; height: auto; flex-shrink: 0;
+  border: none; background: none; border-radius: 0;
+  display: inline-flex; place-items: center;
+  color: var(--fg-3);
+}
+.rf-node.running .rf-ntype { color: var(--p-run); }
+.rf-node.done .rf-ntype, .rf-node.fired .rf-ntype { color: var(--p-done); }
+.rf-node.blocked .rf-ntype { color: var(--p-warn); }
+.rf-node.selected .rf-ntype { color: var(--p-sel); }
+
+.rf-nbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.rf-nname {
+  font-size: 12.5px; font-weight: 500; color: var(--fg-2);
+  letter-spacing: -0.005em; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rf-node.running .rf-nname, .rf-node.done .rf-nname, .rf-node.fired .rf-nname { color: var(--fg); }
+.rf-node.selected .rf-nname { color: #fff; }
+.rf-nsub {
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--fg-4);
+  letter-spacing: 0; line-height: 1.2;
+}
+
+/* code/doc marker — naked glyph, no chip */
+.rf-mark {
+  width: auto; height: auto; flex-shrink: 0;
+  border: none; background: none; border-radius: 0;
+  display: inline-flex; place-items: center;
+}
+.rf-mark.code { color: #c2ad86; }
+.rf-mark.doc  { color: #8e96a4; }
+.rf-mark svg { width: 13px; height: 12px; }
+
+/* running indicator — quiet breathing dot beside the glyph */
+.rf-run-pulse {
+  position: absolute; top: -3px; right: -4px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--p-run);
+  animation: rf-breathe 2.4s ease-in-out infinite;
+}
+@keyframes rf-breathe { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+/* ── Output connection dots (one per produced document) ──────────────────── */
+.rf-out {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--bg-1);
+  border: 1.4px solid var(--fg-4);
+  z-index: 5;
+  cursor: crosshair;
+  transition: border-color 120ms, background 120ms, transform 120ms;
+}
+.rf-out:hover { transform: scale(1.18); border-color: #c2a15e; }
+.rf-out.produced { border-color: #c2a15e; background: rgba(194,161,94,0.22); }
+.rf-out.empty { border-style: dashed; }
+.rf-out-lbl {
+  position: absolute;
+  left: 50%; transform: translateX(-50%);
+  top: -22px;
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 2px 6px; border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+  z-index: 7;
+}
+/* persistent (shown) name — used to demonstrate hover label statically */
+.rf-out-lbl.shown { opacity: 1; }
+
+/* emergent input — no standing dot. Hover name floats at landing point. */
+.rf-in-lbl {
+  position: absolute;
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-3);
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 2px 6px; border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+  z-index: 7;
+}
+.rf-in-lbl .arr { color: var(--fg-5); margin: 0 3px; }
+
+/* ── Always-visible condition label at edge midpoint (flat, not a pill) ──── */
+.rf-pill {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 6px;
+  background: var(--bg-1);
+  border: none;
+  border-radius: 3px;
+  font-family: var(--font-mono); font-size: 10px;
+  white-space: nowrap;
+  z-index: 6;
+  cursor: pointer;
+  transition: box-shadow 120ms, background 120ms;
+}
+.rf-pill:hover { background: var(--bg-2); }
+.rf-pill.selected { box-shadow: inset 0 -1.5px 0 rgba(194,161,94,0.85); }
+.rf-pill .pk { color: var(--fg-2); }
+.rf-pill .pop { color: var(--fg-4); }
+.rf-pill .pv { color: var(--p-done); font-weight: 500; }
+.rf-pill .iter { color: var(--p-sel); }
+.rf-pill.else { font-style: italic; color: var(--fg-4); }
+.rf-pill.else .pk { color: var(--fg-4); font-style: italic; }
+
+/* ── Loop region (translucent grouping layer, behind nodes) ──────────────── */
+.rf-region {
+  position: absolute;
+  border-radius: 12px;
+  z-index: 1;
+  pointer-events: none;
+}
+.rf-region.bounded {
+  background: rgba(194,161,94,0.04);
+  border: 1px dashed rgba(194,161,94,0.30);
+}
+.rf-region.collection {
+  background: rgba(194,161,94,0.035);
+  border: 1px dashed rgba(194,161,94,0.30);
+}
+.rf-region.exhausted {
+  background: rgba(194,161,94,0.045);
+  border: 1px dashed rgba(194,161,94,0.40);
+}
+.rf-region-head {
+  position: absolute;
+  top: -13px; left: 14px;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 23px; padding: 0 10px;
+  border-radius: 4px;
+  background: var(--bg-1);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.rf-region.bounded .rf-region-head    { border: 1px solid rgba(194,161,94,0.32); color: var(--p-sel); }
+.rf-region.collection .rf-region-head { border: 1px solid rgba(194,161,94,0.32); color: var(--p-teal); }
+.rf-region.exhausted .rf-region-head  { border: 1px solid rgba(194,161,94,0.42); color: var(--p-warn); }
+.rf-region-head .rh-glyph { font-size: 12px; line-height: 1; }
+.rf-region-head .rh-count { color: inherit; opacity: 0.78; }
+.rf-region-head .rh-name { color: var(--fg-3); font-weight: 400; padding-left: 2px; }
+
+/* exhausted/blocked banner pinned to the region */
+.rf-region-block {
+  position: absolute;
+  bottom: -14px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 23px; padding: 0 10px;
+  background: var(--bg-1); border: 1px solid rgba(194,161,94,0.45);
+  border-radius: 4px;
+  color: var(--p-warn); font-size: 10px; font-family: var(--font-mono);
+  white-space: nowrap; pointer-events: auto; cursor: pointer;
+  z-index: 8;
+}
+
+/* single-member badge (attached to a node corner) */
+.rf-badge {
+  position: absolute;
+  top: -11px; right: 8px;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 8px;
+  border-radius: 4px;
+  background: var(--bg-1);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  z-index: 6;
+}
+.rf-badge.collection { border: 1px solid rgba(194,161,94,0.32); color: var(--p-teal); }
+.rf-badge.bounded    { border: 1px solid rgba(194,161,94,0.32); color: var(--p-sel); }
+
+/* ── Edge segment-drag handles (revealed on hover/selection) ─────────────── */
+.rf-seg-handle {
+  position: absolute;
+  width: 13px; height: 13px;
+  transform: translate(-50%, -50%);
+  border-radius: 3px;
+  background: var(--bg-2);
+  border: 1.5px solid var(--p-sel);
+  z-index: 7;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+.rf-seg-handle.h { cursor: ew-resize; }
+.rf-seg-handle.v { cursor: ns-resize; }
+.rf-seg-handle::after {
+  content: ""; position: absolute; inset: 3px;
+  border-radius: 1px; background: var(--p-sel); opacity: 0.55;
+}
+.rf-endpoint {
+  position: absolute;
+  width: 10px; height: 10px; transform: translate(-50%,-50%);
+  border-radius: 50%;
+  background: var(--p-sel); border: 2px solid var(--bg-1);
+  z-index: 8; cursor: grab;
+  box-shadow: 0 0 0 3px rgba(194,161,94,0.22);
+}
+
+/* small floating annotation chips for spotlight callouts */
+.rf-anno {
+  position: absolute;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px;
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font-size: 10.5px; color: var(--fg-3); line-height: 1.4;
+  max-width: 220px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+  z-index: 9;
+}
+.rf-anno .an-key { color: var(--p-sel); font-family: var(--font-mono); font-size: 10px; }
+.rf-anno-line { position: absolute; z-index: 8; pointer-events: none; }
+
+/* ── Edge detail panel ───────────────────────────────────────────────────── */
+.rf-edge-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.rf-edge-head .reh-glyph {
+  width: 26px; height: 26px; border-radius: 6px;
+  background: var(--acc-bg); border: 1px solid var(--acc-border);
+  color: var(--acc); display: grid; place-items: center; flex-shrink: 0;
+}
+.rf-edge-route {
+  font-family: var(--font-mono); font-size: 12px; color: var(--fg);
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
+.rf-edge-route .ern-mid { color: var(--fg-4); }
+.rf-edge-route .ern-node { color: var(--fg); }
+.rf-edge-sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); margin-top: 2px; }
+
+/* when: builder */
+.rf-when {
+  display: grid;
+  grid-template-columns: 1fr 64px 1fr;
+  gap: 6px; align-items: start;
+}
+.rf-when.bool { grid-template-columns: 1fr auto; }
+.rf-when .input, .rf-when .select { font-family: var(--font-mono); font-size: 11.5px; }
+.rf-when-field-wrap { position: relative; }
+.rf-field-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--bg-0); border: 1px solid var(--line-strong);
+  border-radius: 6px; padding: 4px; z-index: 12;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.5);
+  max-height: 190px; overflow: auto;
+}
+.rf-field-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 4px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-2);
+}
+.rf-field-opt:hover { background: var(--bg-3); color: var(--fg); }
+.rf-field-opt .fo-type { margin-left: auto; font-size: 9.5px; color: var(--fg-4); }
+.rf-field-opt.on { color: var(--acc); }
+.rf-field-opt .fo-iter { color: #c2a15e; }
+
+/* boolean true/false toggle */
+.rf-bool {
+  display: inline-flex; background: var(--bg-1);
+  border: 1px solid var(--line-strong); border-radius: 6px; padding: 2px; gap: 2px;
+}
+.rf-bool button {
+  border: none; background: transparent; color: var(--fg-3);
+  font: inherit; font-family: var(--font-mono); font-size: 11.5px;
+  padding: 5px 14px; border-radius: 4px; cursor: pointer;
+}
+.rf-bool button.on { background: var(--acc); color: #04140d; font-weight: 600; }
+
+/* else toggle row */
+.rf-else-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; margin-top: 8px;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 6px;
+}
+.rf-else-row .er-txt { flex: 1; }
+.rf-else-row .er-name { font-size: 11.5px; color: var(--fg-2); }
+.rf-else-row .er-help { font-size: 10.5px; color: var(--fg-4); margin-top: 1px; line-height: 1.4; }
+
+/* trigger status row — DETAIL PANEL ONLY (never canvas) */
+.rf-trigger {
+  margin-top: 4px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+}
+.rf-trigger .tr-head {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--fg-3); margin-bottom: 8px;
+}
+.rf-trigger .tr-row {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-2);
+  padding: 3px 0;
+}
+.rf-trigger .tr-row .tr-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.rf-trigger .tr-row .tr-dot.fired { background: var(--st-done); }
+.rf-trigger .tr-row .tr-dot.not { background: var(--fg-5); }
+.rf-trigger .tr-row .tr-val { margin-left: auto; color: var(--fg-4); }
+.rf-trigger .tr-row .tr-val.fired { color: var(--st-done); }
+
+/* ── Node inspector — pooled inputs legibility ───────────────────────────── */
+.rf-insp-id {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+  background: var(--bg-1); border: 1px solid var(--line);
+  padding: 2px 7px; border-radius: 4px;
+}
+.rf-out-schema {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg-1);
+  overflow: hidden; margin-bottom: 8px;
+}
+.rf-out-schema .os-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+}
+.rf-out-schema .os-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); flex-shrink: 0; }
+.rf-out-schema .os-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg); }
+.rf-out-schema .os-type { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--fg-4); }
+.rf-out-schema .os-fields { padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 3px; }
+.rf-out-schema .os-field {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2);
+  padding: 2px 0;
+}
+.rf-out-schema .os-field .of-t { color: var(--fg-4); }
+.rf-out-schema .os-field .of-enum { color: var(--acc); }
+
+/* pooled input row */
+.rf-pool {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg-1);
+  padding: 9px 11px; margin-bottom: 6px;
+}
+.rf-pool .pl-top { display: flex; align-items: center; gap: 7px; }
+.rf-pool .pl-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg); }
+.rf-pool .pl-count {
+  margin-left: auto; font-family: var(--font-mono); font-size: 9.5px;
+  color: var(--fg-4); background: var(--bg-3); border: 1px solid var(--line-strong);
+  padding: 1px 6px; border-radius: 8px;
+}
+.rf-pool .pl-srcs {
+  margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.rf-pool .pl-src {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+}
+.rf-pool .pl-src .ps-arr { color: var(--fg-5); }
+.rf-pool .pl-src .ps-from { color: var(--fg-2); }
+.rf-pool.single .pl-srcs { border-top: none; padding-top: 4px; margin-top: 4px; }
+
+/* role/prompt editor block */
+.rf-role-tools {
+  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px;
+}
+.rf-tool-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px;
+  background: var(--bg-1); border: 1px solid var(--line-strong); border-radius: 5px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+}
+.rf-tool-chip svg { width: 10px; height: 10px; }
+
+/* ── Region inspector ────────────────────────────────────────────────────── */
+.rf-flavor-seg {
+  display: flex; gap: 6px; margin-bottom: 12px;
+}
+.rf-flavor-card {
+  flex: 1; padding: 9px 10px;
+  border-radius: 7px; border: 1px solid var(--line-strong); background: var(--bg-1);
+  cursor: pointer;
+}
+.rf-flavor-card.on.bounded { border-color: rgba(167,139,250,0.5); background: rgba(167,139,250,0.07); }
+.rf-flavor-card.on.collection { border-color: rgba(56,189,248,0.5); background: rgba(56,189,248,0.07); }
+.rf-flavor-card .fc-top { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--fg); }
+.rf-flavor-card .fc-glyph { font-family: var(--font-mono); }
+.rf-flavor-card.bounded .fc-glyph { color: #c2a15e; }
+.rf-flavor-card.collection .fc-glyph { color: #c2a15e; }
+.rf-flavor-card .fc-sub { font-size: 10.5px; color: var(--fg-4); margin-top: 3px; line-height: 1.4; }
+
+.rf-member {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin: 3px 0;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 6px;
+  font-size: 11.5px; color: var(--fg-2);
+}
+.rf-member .mb-grip { color: var(--fg-5); cursor: grab; font-size: 10px; }
+.rf-member .mb-mark { margin-left: auto; }
+
+/* start-node input image strip */
+.rf-start-imgs { display: flex; gap: 6px; margin-top: 8px; }
+.rf-img-chip {
+  width: 46px; height: 34px; border-radius: 5px;
+  border: 1px solid var(--line-strong); overflow: hidden; position: relative;
+  background: var(--bg-1);
+}
+.rf-img-chip .ic-stripe {
+  position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px);
+}
+.rf-img-chip .ic-tag {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  font-family: var(--font-mono); font-size: 7.5px; color: var(--fg-4);
+  background: rgba(10,12,16,0.7); padding: 1px 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* canvas hint chip (top-left, replaces edit toolbar tip in idle) */
+.rf-hint {
+  position: absolute; top: 14px; left: 14px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 11px;
+  background: rgba(20,23,29,0.92); backdrop-filter: blur(8px);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11px; color: var(--fg-3);
+  z-index: 8;
+}
+.rf-hint .rh-k {
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
+  background: var(--bg-3); border: 1px solid var(--line-strong);
+  padding: 1px 5px; border-radius: 3px;
+}
+
+/* spotlight frame label */
+.rf-spot {
+  position: absolute; inset: 0;
+  background-color: var(--bg-1);
+  background-image: radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 22px 22px;
+  padding: 56px 64px;
+  overflow: auto;
+}
+.rf-spot-title {
+  font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+.rf-spot-sub { font-size: 11.5px; color: var(--fg-3); margin-bottom: 28px; line-height: 1.5; max-width: 560px; }
+.rf-spot-grid { display: flex; flex-wrap: wrap; gap: 44px; align-items: flex-start; }
+.rf-spot-cell { display: flex; flex-direction: column; gap: 12px; }
+.rf-spot-caption { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); max-width: 200px; line-height: 1.5; }
+.rf-spot-stage {
+  position: relative;
+  background-color: var(--bg-1);
+  background-image: radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.rf-spot-panel {
+  width: 360px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+}
+
+/* ── Start / End pseudo-nodes — hairline, no band, naked play glyph ───────── */
+.rf-canvas .start-node, .rf-spot-stage .start-node {
+  background: var(--bg-1);
+  border: 1px solid var(--rf-hair);
+  border-left-color: var(--rf-hair);
+  box-shadow: none;
+}
+.rf-canvas .start-node:hover, .rf-spot-stage .start-node:hover { border-color: rgba(255,255,255,0.2); }
+.rf-canvas .start-node.selected, .rf-spot-stage .start-node.selected {
+  border-color: rgba(194,161,94,0.5); border-left-color: rgba(194,161,94,0.5);
+  box-shadow: 0 0 0 3px rgba(194,161,94,0.08);
+}
+.rf-canvas .start-node .sn-play, .rf-spot-stage .start-node .sn-play {
+  background: none; color: var(--p-run); width: auto; height: auto;
+}
+.rf-canvas .start-node .sn-label, .rf-spot-stage .start-node .sn-label { color: var(--fg-2); font-weight: 500; }
+.rf-canvas .start-node .node-handle.out, .rf-spot-stage .start-node .node-handle.out {
+  background: var(--p-run); border-color: var(--p-run);
+}
+
+.rf-canvas .end-node, .rf-spot-stage .end-node {
+  background: var(--bg-1);
+  border: 1px solid var(--rf-hair);
+  border-right-color: var(--rf-hair);
+  box-shadow: none;
+}
+.rf-canvas .end-node .en-square, .rf-spot-stage .end-node .en-square { background: var(--fg-4); }
+.rf-canvas .end-node.reached, .rf-spot-stage .end-node.reached {
+  border-color: rgba(194,161,94,0.45); border-right-color: rgba(194,161,94,0.45);
+}
+.rf-canvas .end-node.reached .en-square, .rf-spot-stage .end-node.reached .en-square { background: var(--p-done); }
+.rf-canvas .end-node.selected, .rf-spot-stage .end-node.selected {
+  border-color: rgba(194,161,94,0.5); border-right-color: rgba(194,161,94,0.5);
+  box-shadow: 0 0 0 3px rgba(194,161,94,0.08);
+}
+
+/* run overlay sits in canvas space (not the panned world) */
+.rf-canvas > .run-overlay { z-index: 9; }
+.rf-canvas .run-overlay .st-dot.blocked { background: var(--p-warn); }
+.rf-canvas .run-overlay .badge.blocked {
+  color: var(--p-warn); border-color: rgba(194,161,94,0.4); background: rgba(194,161,94,0.10);
+}
+.rf-canvas .halt-callout {
+  background: rgba(194,161,94,0.07); border-color: rgba(194,161,94,0.32); color: #d8be8a;
+}
+.rf-canvas .halt-callout .hc-title { color: var(--p-warn); }
+.rf-canvas .run-overlay .btn.highlight {
+  border-color: rgba(194,161,94,0.4); color: var(--p-warn); background: rgba(194,161,94,0.10);
+}

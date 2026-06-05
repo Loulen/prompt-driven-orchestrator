@@ -9,7 +9,6 @@
 <link rel="stylesheet" href="winners.css"/>
 <link rel="stylesheet" href="styles-v3.css"/>
 <link rel="stylesheet" href="refonte.css"/>
-<link rel="stylesheet" href="triggers.css"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -47,7 +46,6 @@
 <script type="text/babel" src="refonte-canvas.jsx"></script>
 <script type="text/babel" src="refonte-inspect.jsx"></script>
 <script type="text/babel" src="refonte-screens.jsx"></script>
-<script type="text/babel" src="triggers-screens.jsx"></script>
 
 <script type="text/babel" data-presets="env,react">
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -93,7 +91,7 @@ function MaestroApp() {
   return (
     <>
       <DesignCanvas minScale={0.05} maxScale={2}>
-        <DCSection id="loopHappy" title="Happy path A — Build &amp; run a conditional review loop" subtitle="The refonte canvas gestalt — hairline nodes (no status band, no pills) · per-document output dots · emergent inputs · flat condition labels · translucent loop region · edge detail panel. The node + UI language all the trigger screens build on.">
+        <DCSection id="rfHappy" title="Happy path — Build &amp; run a conditional review loop" subtitle="The whole refonte gestalt: slim cards · per-document output dots · emergent inputs · orthogonal wires · always-visible condition pills · translucent loop region">
           <DCArtboard id="rf-1" label="01 · Canvas — review loop, idle" width={ART_W} height={ART_H}>
             <RScreen1/>
           </DCArtboard>
@@ -107,49 +105,18 @@ function MaestroApp() {
             <RScreen4/>
           </DCArtboard>
         </DCSection>
-        <DCSection id="trigManage" title="Happy path B — Manage &amp; monitor triggers" subtitle="The three-tab strip (Runs · Triggers · Library) · hairline trigger rows with status dots, schedules and toggles · the fire-history debugging surface · triggered-run provenance · the session-counter status bar. Same hairline node language on the center canvas.">
-          <DCArtboard id="t-a1" label="05 · Triggers tab — populated" width={ART_W} height={ART_H}>
-            <T_A1/>
-          </DCArtboard>
-          <DCArtboard id="t-a2" label="06 · Triggers tab — empty" width={ART_W} height={ART_H}>
-            <T_A2/>
-          </DCArtboard>
-          <DCArtboard id="t-a3" label="07 · Trigger detail — fire history" width={ART_W} height={ART_H}>
-            <T_A3/>
-          </DCArtboard>
-          <DCArtboard id="t-a4" label="08 · Runs tab — provenance + near-cap counter" width={ART_W} height={ART_H}>
-            <T_A4/>
-          </DCArtboard>
-        </DCSection>
-        <DCSection id="trigCreate" title="Happy path C — Create a trigger" subtitle="The New Run modal's mode toggle frames everything below it. Trigger mode reveals the Name · Schedule · Guard · Overlap group (a hairline-outlined distinct block), with the prompt repurposed as an input template — and the reject state when a prompt-required pipeline has neither.">
-          <DCArtboard id="t-b1" label="09 · New Run modal — Trigger mode, populated" width={ART_W} height={ART_H}>
-            <T_B1/>
-          </DCArtboard>
-          <DCArtboard id="t-b2" label="10 · New Run modal — Trigger mode, reject" width={ART_W} height={ART_H}>
-            <T_B2/>
-          </DCArtboard>
-        </DCSection>
-        <DCSection id="spotlights" title="Component spotlights" subtitle="The pieces no single screen fully reveals — the refonte node system, plus the new trigger-only components across their states.">
-          <DCArtboard id="rf-5" label="11 · Node card variants" width={ART_W} height={ART_H}>
+        <DCSection id="rfSpot" title="Component spotlights" subtitle="Only what the happy path doesn't already show — node card variants · node inspector pooling · region inspector · edge shaping affordances">
+          <DCArtboard id="rf-5" label="05 · Node card variants" width={ART_W} height={ART_H}>
             <RScreen5/>
           </DCArtboard>
-          <DCArtboard id="rf-6" label="12 · Node inspector — pooling" width={ART_W} height={ART_H}>
+          <DCArtboard id="rf-6" label="06 · Node inspector — pooling" width={ART_W} height={ART_H}>
             <RScreen6/>
           </DCArtboard>
-          <DCArtboard id="rf-7" label="13 · Region inspector / header" width={ART_W} height={ART_H}>
+          <DCArtboard id="rf-7" label="07 · Region inspector / header" width={ART_W} height={ART_H}>
             <RScreen7/>
           </DCArtboard>
-          <DCArtboard id="rf-8" label="14 · Edge shaping interaction" width={ART_W} height={ART_H}>
+          <DCArtboard id="rf-8" label="08 · Edge shaping interaction" width={ART_W} height={ART_H}>
             <RScreen8/>
-          </DCArtboard>
-          <DCArtboard id="t-s1" label="15 · Session counter — normal · near-cap · at-cap" width={920} height={520}>
-            <T_SpotSessions/>
-          </DCArtboard>
-          <DCArtboard id="t-s2" label="16 · Trigger row — outcomes, toggle, hover actions" width={760} height={720}>
-            <T_SpotRow/>
-          </DCArtboard>
-          <DCArtboard id="t-s3" label="17 · Schedule chooser &amp; Guard contract" width={620} height={680}>
-            <T_SpotSchedGuard/>
           </DCArtboard>
         </DCSection>
       </DesignCanvas>

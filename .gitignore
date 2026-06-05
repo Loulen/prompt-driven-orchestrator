@@ -31,6 +31,10 @@ frontend/playwright/.cache/
 # Local design prompt scratchpad — not shared
 design-prompts/
 
+# Throwaway UI prototypes — local-only dev scaffolding, wired via the
+# main.tsx prototype gate (/?prototype=…). Never shared.
+frontend/src/prototype/
+
 # Reproduction / debugging screenshots dropped at the repo root
 /*.png
 

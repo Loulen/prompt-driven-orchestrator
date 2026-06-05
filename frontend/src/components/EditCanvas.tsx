@@ -45,8 +45,7 @@ interface EditNodeData {
   [key: string]: unknown;
 }
 
-// Exported for unit tests; co-located with the canvas it renders. Same allowance
-// as DagCanvas's StartNode/EndNode exports.
+// Exported for unit tests; co-located with the canvas it renders.
 export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   const isSelected = selection.kind === "node" && selection.id === id;

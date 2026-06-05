@@ -1,6 +1,15 @@
 import type { Node } from "@xyflow/react";
-import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState } from "../types";
-import { runReachedEnd } from "./dagCanvasUtils";
+import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+
+/**
+ * A run "reaches its end" when it terminates successfully (`completed`). At
+ * that point the start/end marker nodes pick up the same green "done" signal
+ * that standard nodes already show on completion. Failed/halted runs are not
+ * treated as reached — the end node keeps its neutral "blocked" colour.
+ */
+export function runReachedEnd(status: RunStatus): boolean {
+  return status === "completed";
+}
 
 export function statusForNode(
   nodeId: string,
@@ -11,11 +20,10 @@ export function statusForNode(
 
 /**
  * Whether a start/end marker should show the green "reached the end" cadre in
- * the inline run view (`EditCanvas`). Mirrors the `reached` flag DagCanvas's
- * `deriveNodes` set, so the intent of issue #105 survives in the view users
- * actually see. Only the start/end markers carry this — regular nodes always
- * report their own live status. It is gated on a live run: editing a
- * library/template pipeline (no run state) never colours the markers.
+ * the inline run view (`EditCanvas`), preserving the intent of issue #105 in
+ * the view users actually see. Only the start/end markers carry this — regular
+ * nodes always report their own live status. It is gated on a live run: editing
+ * a library/template pipeline (no run state) never colours the markers.
  */
 export function markerReached(
   nodeType: NodeType,

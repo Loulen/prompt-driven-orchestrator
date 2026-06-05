@@ -8,7 +8,6 @@ import { fetchRuns, fetchRun } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import type { RunListEntry, RunState } from "./types";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
-import DagCanvas from "./components/DagCanvas";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
 import ConflictModal from "./components/ConflictModal";
@@ -213,11 +212,6 @@ export default function App() {
     setInfoPanelOpen(false);
   }, []);
 
-  const handleSelectNodeInRun = useCallback((nodeId: string | null) => {
-    setSelectedNodeId(nodeId);
-    if (nodeId) setInfoPanelOpen(false);
-  }, []);
-
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -362,8 +356,6 @@ export default function App() {
     clearSaveError(saveErrorTab.id);
   }, [saveErrorTab, clearSaveError]);
 
-  const showRunDetail = !hasEditTab && selectedRun;
-
   return (
     <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
@@ -404,17 +396,6 @@ export default function App() {
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
                   runState={selectedRun}
-                />
-              </div>
-            ) : showRunDetail ? (
-              <div className="flex h-full min-w-0 flex-col">
-                <DagCanvas
-                  run={selectedRun}
-                  onSelectNode={handleSelectNodeInRun}
-                  selectedNodeId={selectedNodeId}
-                  infoOpen={infoPanelOpen}
-                  onToggleInfo={handleToggleInfo}
-                  onRetryAll={(newRunId) => setSelectedRunId(newRunId)}
                 />
               </div>
             ) : (

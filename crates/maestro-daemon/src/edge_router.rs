@@ -28,21 +28,26 @@ pub fn fired_edges<'a>(
         .with_fields(frontmatter.clone())
         .with_variables(vars.clone());
 
-    // First pass: which source ports had at least one guarded (`when:`) edge match?
+    // First pass: evaluate each guarded (`when:`) edge once, recording both the
+    // per-edge result and which source ports had at least one guarded match.
+    let mut guard_matched: Vec<bool> = Vec::with_capacity(outgoing.len());
     let mut matched_ports: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for edge in outgoing {
-        if let Some(when) = &edge.when {
-            if condition::evaluate_with_iter(when, &ctx) {
-                matched_ports.insert(edge.source.port.as_str());
-            }
+        let matched = edge
+            .when
+            .as_ref()
+            .is_some_and(|when| condition::evaluate_with_iter(when, &ctx));
+        if matched {
+            matched_ports.insert(edge.source.port.as_str());
         }
+        guard_matched.push(matched);
     }
 
-    // Second pass: collect the firing edges.
+    // Second pass: collect the firing edges, reusing the cached guard results.
     let mut fired = Vec::new();
-    for edge in outgoing {
-        let fires = if let Some(when) = &edge.when {
-            condition::evaluate_with_iter(when, &ctx)
+    for (edge, &matched) in outgoing.iter().zip(&guard_matched) {
+        let fires = if edge.when.is_some() {
+            matched
         } else if edge.is_else {
             // `else` fires iff no sibling on the same source port matched.
             !matched_ports.contains(edge.source.port.as_str())

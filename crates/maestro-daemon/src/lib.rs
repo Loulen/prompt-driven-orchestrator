@@ -1564,12 +1564,19 @@ async fn handle_node_completion(
     let frontmatter_fields =
         resolve_source_frontmatter(&pipeline, completed_node_id, source_iter, &artifacts_dir);
 
-    let actions = scheduler::evaluate_outgoing_edges_with_context(
+    // Per-node frontmatter for every completed producer, so convergence
+    // suppression (ADR-0011) can re-evaluate the conditional edges of upstream
+    // producers (e.g. a classifier whose `else` branch was suppressed) and avoid
+    // a silent stall at a `Merge` fed by that suppressed branch.
+    let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, run_state, &artifacts_dir);
+
+    let actions = scheduler::evaluate_outgoing_edges_full(
         &pipeline,
         run_state,
         completed_node_id,
         &resolved_vars,
         &frontmatter_fields,
+        &frontmatter_by_node,
     );
 
     let spawn_ctx = SpawnContext {
@@ -1919,6 +1926,26 @@ fn resolve_source_frontmatter(
         }
     }
     fields
+}
+
+/// Resolves the output frontmatter of every Completed node in `run_state`,
+/// keyed by node id. Used to feed convergence suppression (ADR-0011) so a
+/// `Merge` does not stall on a branch that an upstream conditional/`else` edge
+/// permanently suppressed.
+fn resolve_completed_frontmatter(
+    pipeline: &pipeline::PipelineDef,
+    run_state: &event_log::RunState,
+    artifacts_dir: &std::path::Path,
+) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+    let mut by_node = HashMap::new();
+    for (node_id, node_state) in &run_state.nodes {
+        if node_state.status != event_log::NodeStatus::Completed {
+            continue;
+        }
+        let fm = resolve_source_frontmatter(pipeline, node_id, node_state.iter, artifacts_dir);
+        by_node.insert(node_id.clone(), fm);
+    }
+    by_node
 }
 
 struct ImageFile {
@@ -4812,6 +4839,8 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         repo_root: &repo_root,
     };
 
+    let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
+
     for completed_node_id in &completed_node_ids {
         let source_iter = run_state
             .nodes
@@ -4822,12 +4851,13 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         let frontmatter_fields =
             resolve_source_frontmatter(&pipeline, completed_node_id, source_iter, &artifacts_dir);
 
-        let actions = scheduler::evaluate_outgoing_edges_with_context(
+        let actions = scheduler::evaluate_outgoing_edges_full(
             &pipeline,
             &run_state,
             completed_node_id,
             &resolved_vars,
             &frontmatter_fields,
+            &frontmatter_by_node,
         );
 
         for action in &actions {

@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Maestro · Node — 5 directions</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#0d0f13;
+  --stage:#0f1218;
+  --line:rgba(255,255,255,0.065);
+  --line-2:rgba(255,255,255,0.11);
+  --fg:#e9ebf0;
+  --fg-2:#a3a9b5;
+  --fg-3:#757b87;
+  --fg-4:#565c68;
+  --fg-5:#3a4049;
+  /* muted pastels (dark-mode safe, low chroma) */
+  --p-run:#9fb2d6;     /* periwinkle */
+  --p-done:#a3c6ab;    /* sage       */
+  --p-sel:#c2b4e0;     /* lavender   */
+  --p-warn:#d8bd95;    /* sand       */
+  --sans:"Geist",ui-sans-serif,system-ui,sans-serif;
+  --mono:"Geist Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background-color:var(--bg);
+  background-image:radial-gradient(circle, rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size:26px 26px;
+  color:var(--fg);
+  font-family:var(--sans);
+  font-size:13px;
+  -webkit-font-smoothing:antialiased;
+  letter-spacing:-0.005em;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:64px 48px 120px;}
+
+/* ── page header ── */
+.page-head{margin-bottom:56px;}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:var(--fg-4);}
+.page-head h1{font-size:26px;font-weight:500;letter-spacing:-0.02em;margin:14px 0 12px;color:var(--fg);}
+.page-head p{font-size:13.5px;line-height:1.65;color:var(--fg-2);max-width:620px;margin:0;}
+.constraints{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:20px;}
+.constraints span{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);display:inline-flex;align-items:center;gap:7px;}
+.constraints span::before{content:"";width:4px;height:4px;border-radius:50%;background:var(--p-done);opacity:.7;}
+
+/* ── variant block ── */
+.block{padding:34px 0;border-top:1px solid var(--line);}
+.block:first-of-type{border-top:none;}
+.bhead{display:flex;align-items:baseline;gap:14px;margin-bottom:26px;}
+.bnum{font-family:var(--mono);font-size:12px;color:var(--fg-4);}
+.bhead h2{font-size:16px;font-weight:500;letter-spacing:-0.015em;margin:0;color:var(--fg);}
+.bhead p{margin:0;font-size:12.5px;line-height:1.55;color:var(--fg-3);max-width:560px;}
+
+.brow{display:flex;gap:40px;align-items:stretch;flex-wrap:wrap;}
+.stage{
+  position:relative;width:500px;height:170px;flex:0 0 auto;
+  background:
+    radial-gradient(circle, rgba(255,255,255,0.028) 1px, transparent 1px),
+    var(--stage);
+  background-size:22px 22px, auto;
+  border:1px solid var(--line);
+  border-radius:14px;
+}
+.stage .at{position:absolute;}
+.stage .edge{position:absolute;left:0;top:0;pointer-events:none;}
+.inhint{position:absolute;font-family:var(--mono);font-size:10px;color:var(--fg-4);letter-spacing:0.01em;}
+.stage-tag{position:absolute;left:16px;bottom:12px;font-family:var(--mono);font-size:9.5px;letter-spacing:0.04em;color:var(--fg-5);}
+
+.states{flex:1;min-width:230px;display:flex;flex-direction:column;justify-content:center;gap:16px;}
+.state-row{display:flex;align-items:center;gap:18px;}
+.state-row .slabel{font-family:var(--mono);font-size:9.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-4);width:64px;flex:0 0 auto;text-align:right;}
+.state-row .holder{position:relative;}
+
+/* ════════════════ NODE — shared skeleton ════════════════ */
+.node{
+  position:relative;width:208px;height:36px;
+  display:flex;align-items:center;gap:9px;
+  padding:0 13px;box-sizing:border-box;
+  font-family:var(--sans);
+  --ac:var(--fg-3);--dot:#5b616d;--wash:transparent;
+}
+.node.pending{--ac:#828896;--dot:#5b616d;--wash:rgba(130,136,150,0.045);}
+.node.running{--ac:var(--p-run);--dot:var(--p-run);--wash:rgba(159,178,214,0.07);}
+.node.done   {--ac:var(--p-done);--dot:var(--p-done);--wash:rgba(163,198,171,0.07);}
+.node.sel    {--ac:var(--p-sel);--dot:var(--p-sel);--wash:rgba(194,180,224,0.08);}
+
+.nv-icon{display:inline-flex;color:var(--fg-3);flex:0 0 auto;}
+.node.running .nv-icon,.node.done .nv-icon,.node.sel .nv-icon{color:var(--ac);opacity:.92;}
+.nv-name{font-size:13px;font-weight:500;color:var(--fg-2);letter-spacing:-0.01em;white-space:nowrap;}
+.node.running .nv-name,.node.done .nv-name{color:var(--fg);}
+.node.sel .nv-name{color:#fff;}
+.nv-leader{flex:1;height:1px;}
+.nv-type{display:inline-flex;color:var(--fg-4);flex:0 0 auto;}
+.nv-typetext{display:none;font-family:var(--mono);font-size:10px;color:var(--fg-4);letter-spacing:0.02em;}
+.nv-sdot{display:none;width:5px;height:5px;border-radius:50%;background:var(--dot);flex:0 0 auto;}
+.nv-out{position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:9px;height:9px;border-radius:50%;
+  background:var(--bg);border:1.4px solid var(--fg-4);}
+.node.running .nv-out,.node.done .nv-out,.node.sel .nv-out{border-color:var(--ac);}
+.nv-rule{display:none;position:absolute;left:13px;right:13px;bottom:5px;height:1px;background:var(--line-2);}
+.brk{display:none;position:absolute;width:8px;height:8px;border:1px solid var(--line-2);}
+.brk.tl{left:5px;top:5px;border-right:none;border-bottom:none;}
+.brk.tr{right:5px;top:5px;border-left:none;border-bottom:none;}
+.brk.bl{left:5px;bottom:5px;border-right:none;border-top:none;}
+.brk.brr{right:5px;bottom:5px;border-left:none;border-top:none;}
+
+/* running breathing — opacity only, very quiet */
+@keyframes breathe{0%,100%{opacity:1;}50%{opacity:.4;}}
+.node.running .nv-sdot,.node.running .nv-out{animation:breathe 2.4s ease-in-out infinite;}
+
+/* ── V1 · Underline ── */
+.v1 .nv-rule{display:block;}
+.v1.running .nv-rule,.v1.done .nv-rule,.v1.sel .nv-rule{background:var(--ac);opacity:.5;}
+.v1 .nv-out{right:-2px;}
+
+/* ── V2 · Soft wash ── */
+.v2{background:var(--wash);border-radius:11px;}
+.v2 .nv-out{background:var(--dot);border:none;width:7px;height:7px;right:-3px;opacity:.9;}
+.v2.pending .nv-out{opacity:.55;}
+
+/* ── V3 · Hairline outline ── */
+.v3{border:1px solid var(--line-2);border-radius:10px;}
+.v3.running{border-color:rgba(159,178,214,0.42);}
+.v3.done{border-color:rgba(163,198,171,0.42);}
+.v3.sel{border-color:rgba(194,180,224,0.5);box-shadow:0 0 0 3px rgba(194,180,224,0.07);}
+
+/* ── V4 · Corner ticks ── */
+.v4{padding:0 15px;}
+.v4 .brk{display:block;}
+.v4 .nv-type{display:none;}
+.v4.running .brk{border-color:rgba(159,178,214,0.55);}
+.v4.done .brk{border-color:rgba(163,198,171,0.55);}
+.v4.sel .brk{border-color:rgba(194,180,224,0.6);}
+
+/* ── V5 · Typographic row ── */
+.v5{padding:0;height:28px;background:none;}
+.v5 .nv-icon{display:none;}
+.v5 .nv-sdot{display:inline-flex;}
+.v5 .nv-name{font-weight:500;color:var(--fg);}
+.v5 .nv-leader{display:block;flex:1;align-self:flex-end;margin:0 4px 6px;border-bottom:1px dotted var(--fg-5);height:0;}
+.v5 .nv-type{display:none;}
+.v5 .nv-typetext{display:inline-flex;}
+.v5 .nv-out{position:static;transform:none;width:7px;height:7px;background:var(--dot);border:none;margin-left:9px;}
+.v5.pending .nv-name{color:var(--fg-2);}
+
+.footnote{margin-top:48px;padding-top:28px;border-top:1px solid var(--line);font-size:12px;line-height:1.6;color:var(--fg-3);max-width:640px;}
+.footnote b{color:var(--fg-2);font-weight:500;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Maestro · pipeline node</div>
+    <h1>Five directions for the node</h1>
+    <p>The slim card felt heavy and loud. These five strip it back — naked icons, no status band, no pills, muted pastels carrying state. Each is shown wired in context (a produced output dot feeding the next node) and across its states.</p>
+    <div class="constraints">
+      <span>no left/right status band</span>
+      <span>no pills</span>
+      <span>naked icons, no containers</span>
+      <span>muted pastel state</span>
+      <span>not card-heavy</span>
+    </div>
+  </div>
+  <div id="blocks"></div>
+
+  <div class="footnote">
+    State is carried by a single muted pastel — <b>periwinkle</b> running, <b>sage</b> done, <b>lavender</b> selected — never a colored band. The code/doc marker and role glyph are drawn bare. My lean: <b>V1 (Underline)</b> or <b>V5 (Typographic)</b> read as the slickest and least card-like; <b>V3</b> is the safe middle if a clear hit-target is needed. Tell me which to take into the canvas.
+  </div>
+</div>
+
+<script>
+const ICON = {
+  agent: '<svg class="gi" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2.3 L10.3 7 L7 11.7 L3.7 7 Z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><circle cx="7" cy="7" r="1.05" fill="currentColor"/></svg>',
+  merge: '<svg class="gi" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2.6 v3.2 c0 2.4 1.8 3 4 3.6 M3 11.4 v-3.2 c0-2.4 1.8-3 4-3.6 M8.6 5 l2.4 -.6 M8.6 9 l2.4 .6" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  code: '<svg width="15" height="12" viewBox="0 0 16 12" fill="none"><path d="M5 2 L1.6 6 L5 10 M11 2 L14.4 6 L11 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  doc:  '<svg width="11" height="13" viewBox="0 0 12 14" fill="none"><path d="M2 1.6 h5 l3 3 V12.4 H2 Z M7 1.6 V4.6 h3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>',
+};
+
+function node(k, status, name, type, role){
+  const mark = type==='code'?ICON.code:ICON.doc;
+  return `<div class="node ${k} ${status}">
+    <span class="nv-sdot"></span>
+    <span class="nv-icon">${role==='merge'?ICON.merge:ICON.agent}</span>
+    <span class="nv-name">${name}</span>
+    <span class="nv-leader"></span>
+    <span class="nv-type">${mark}</span>
+    <span class="nv-typetext">${type}</span>
+    <span class="nv-out"></span>
+    <span class="nv-rule"></span>
+    <span class="brk tl"></span><span class="brk tr"></span><span class="brk bl"></span><span class="brk brr"></span>
+  </div>`;
+}
+
+function edgeSvg(){
+  return `<svg class="edge" width="500" height="170" viewBox="0 0 500 170">
+    <defs><marker id="ah" markerWidth="7" markerHeight="7" refX="5.4" refY="3" orient="auto">
+      <path d="M0 0 L6 3 L0 6 z" fill="rgba(233,235,240,0.28)"/></marker></defs>
+    <path d="M236 74 L250 74 Q256 74 256 80 L256 104 Q256 110 262 110 L276 110"
+      fill="none" stroke="rgba(233,235,240,0.18)" stroke-width="1.4" marker-end="url(#ah)"/>
+  </svg>`;
+}
+
+function stage(k){
+  return `<div class="stage">
+    ${edgeSvg()}
+    <div class="at" style="left:18px;top:56px;">${node(k,'done','Planner','doc','agent')}</div>
+    <div class="at" style="left:276px;top:92px;">${node(k,'running','Implementer','code','agent')}</div>
+    <div class="inhint" style="left:258px;top:120px;">plan</div>
+    <div class="stage-tag">in context · output dot → emergent input</div>
+  </div>`;
+}
+
+const VARIANTS = [
+  {k:'v1', name:'Underline',        blurb:'No container at all. A bare glyph, the name, and one hairline that carries status; the output dot rides the line.'},
+  {k:'v2', name:'Soft wash',        blurb:'The faintest pastel fill — no border, no band. Reads as a tag, not a card.'},
+  {k:'v3', name:'Hairline outline', blurb:'A thin full outline, transparent inside. State tints the line only.'},
+  {k:'v4', name:'Corner ticks',     blurb:'Four bracket corners hold the name. Precise, technical, almost invisible.'},
+  {k:'v5', name:'Typographic row',  blurb:'Pure text — a console / tree line. Leading status dot, dotted leader, trailing type.'},
+];
+
+const STATES = [['pending','pending'],['running','running'],['done','done'],['sel','selected']];
+
+document.getElementById('blocks').innerHTML = VARIANTS.map((v,i)=>`
+  <section class="block">
+    <div class="bhead">
+      <span class="bnum">0${i+1}</span>
+      <h2>${v.name}</h2>
+      <p>${v.blurb}</p>
+    </div>
+    <div class="brow">
+      ${stage(v.k)}
+      <div class="states">
+        ${STATES.map(([st,lbl])=>`<div class="state-row">
+          <span class="slabel">${lbl}</span>
+          <span class="holder">${node(v.k, st, 'Reviewer', 'doc', 'agent')}</span>
+        </div>`).join('')}
+      </div>
+    </div>
+  </section>
+`).join('');
+</script>
+</body>
+</html>

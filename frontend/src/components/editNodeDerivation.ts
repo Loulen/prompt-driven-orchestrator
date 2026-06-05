@@ -109,6 +109,11 @@ export function deriveEditNodes(
         nodeType: n.type,
         status,
         reached: markerReached(n.type, runState),
+        // Input images uploaded with the run surface on the start marker only
+        // (issue #145). They come from the projected run state, so template
+        // editing (no run state) leaves the start node image-free.
+        inputImages:
+          n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
         outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
         interactive: n.interactive,

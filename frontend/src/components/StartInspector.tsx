@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import type { StartNodeInfo } from "../types";
-import { fetchArtifact } from "../api";
+import { fetchArtifact, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import ImageLightbox from "./ImageLightbox";
 
 interface Props {
   startNode: StartNodeInfo;
@@ -13,6 +14,11 @@ interface Props {
 export default function StartInspector({ startNode, runId, nodeId }: Props) {
   const [inputText, setInputText] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  // URL of the input image currently shown fullscreen, or null (issue #145).
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  // Images uploaded with the run are stored in `_input/` alongside the prompt.
+  const inputImages = startNode.input_images ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +82,38 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
             <span className="text-fg-4">Loading input...</span>
           )}
         </pre>
+
+        {inputImages.length > 0 && (
+          <div className="mt-3" data-testid="start-inspector-images">
+            <div
+              className="mb-2 text-fg-3"
+              style={{ fontSize: "11px", fontWeight: 500 }}
+            >
+              Input images
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {inputImages.map((name) => {
+                const src = artifactUrl(runId, `_input/${name}`);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setLightboxSrc(src)}
+                    title={name}
+                    className="overflow-hidden rounded border border-line bg-bg-0 transition-opacity hover:opacity-80"
+                  >
+                    <img
+                      src={src}
+                      alt={name}
+                      data-testid="start-input-thumbnail"
+                      className="h-16 w-16 cursor-zoom-in object-cover"
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="border-t border-line px-3 py-2">
@@ -95,6 +133,10 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
           source={{ kind: "static", files: modalFiles }}
           onClose={() => setModalOpen(false)}
         />
+      )}
+
+      {lightboxSrc && (
+        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
     </aside>
   );

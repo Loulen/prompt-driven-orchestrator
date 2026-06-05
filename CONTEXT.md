@@ -371,6 +371,10 @@ Le runtime ne distingue pas (i) de (ii) : il pose le contenu utilisateur tel que
 
 L'input peut aussi être **construit interactivement** via un nœud d'entrée marqué `interactive: true` (cf. principe *Deliberate over autonomous*). Pattern typique : le user écrit un prompt brut court, attache la session du nœud d'entrée, l'agent grille jusqu'à un input structuré, le user "submit", le pipeline démarre vraiment.
 
+#### Images d'input
+
+Le user peut **téléverser des images** à côté du prompt texte (New Run modal). Le runtime les stocke dans `_input/` du Blackboard, à côté de `output.md`, et le préambule du nœud d'entrée les liste. Ces images sont **portées par le nœud Start** : le `StartNodeInfo` projeté expose `input_images` (les noms de fichiers, dans l'ordre de téléversement). L'UI les affiche en bandeau de vignettes sur la carte Start du canvas et en pleine taille (cliquables, lightbox) dans le StartInspector, aux côtés du prompt. Un Run sans image rend le nœud Start et le StartInspector à l'identique (prompt seul).
+
 ### `prompt_required` — pipeline runnable sans prompt
 
 Flag racine du pipeline YAML (à côté de `variables:`), **défaut `true`** (préserve le comportement actuel). Mis à `false`, le pipeline est *self-sufficient* : son nœud d'entrée sait trouver son propre travail (lire le backlog, `git diff main`, etc.). Rendu UI : case « Prompt required » cochée par défaut, décochable.

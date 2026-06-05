@@ -40,6 +40,9 @@ interface EditNodeData {
   status: NodeStatus;
   // True only for start/end markers on a completed run — see `markerReached`.
   reached?: boolean;
+  // Filenames of images uploaded with the run's input. Only the start marker
+  // surfaces these (issue #145); undefined/empty on every other node.
+  inputImages?: string[];
   [key: string]: unknown;
 }
 
@@ -58,6 +61,11 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
     : data.nodeType === "start" ? "text-acc"
     : data.nodeType === "end" ? "text-st-blocked"
     : "text-fg-3";
+  // Images uploaded with the run's input ride along on the Start marker only
+  // (issue #145). The canvas shows a compact, filename-tagged strip; the full
+  // thumbnails live in the StartInspector.
+  const inputImages =
+    data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
   return (
     <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
@@ -89,6 +97,32 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
+      {inputImages.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
+          {inputImages.map((name) => (
+            <div
+              key={name}
+              data-testid="start-node-image-chip"
+              title={name}
+              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
+            >
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage:
+                    "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px)",
+                }}
+              />
+              <div
+                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
+                style={{ fontSize: "7.5px" }}
+              >
+                {name}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {data.outputs.map((port, i) => (
         <PortRow
           key={`out-${port.name}`}

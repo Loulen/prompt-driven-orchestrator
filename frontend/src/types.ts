@@ -75,6 +75,9 @@ export interface StartNodeInfo {
   input_path: string;
   started_at: string;
   target_node_ids: string[];
+  // Filenames of images uploaded alongside the text prompt (stored in
+  // `_input/`). Empty when the run was launched without images (issue #145).
+  input_images: string[];
 }
 
 export interface EndPortStatus {

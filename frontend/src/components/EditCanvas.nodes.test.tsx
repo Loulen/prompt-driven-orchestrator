@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "./ui/tooltip";
@@ -24,15 +24,17 @@ interface MarkerOpts {
   nodeType: NodeType;
   reached?: boolean;
   status?: NodeStatus;
+  inputImages?: string[];
 }
 
-function markerProps({ nodeType, reached = false, status = "pending" }: MarkerOpts) {
+function markerProps({ nodeType, reached = false, status = "pending", inputImages }: MarkerOpts) {
   const data = {
     label: nodeType,
     nodeId: nodeType,
     nodeType,
     status,
     reached,
+    inputImages,
     inputs: nodeType === "end" ? [{ name: "in", side: "left" as const }] : [],
     outputs: nodeType === "start" ? [{ name: "out", side: "right" as const }] : [],
     interactive: false,
@@ -95,5 +97,34 @@ describe("EditNode start/end markers — green-on-complete (issue #105, inline r
     const icon = screen.getByTestId("node-icon-end").getAttribute("class");
     expect(icon).toContain("text-st-done");
     expect(icon).not.toContain("text-st-blocked");
+  });
+});
+
+describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
+  it("renders one image chip per uploaded image, tagged by filename", () => {
+    render(
+      <EditNode {...markerProps({ nodeType: "start", inputImages: ["ui-bug.png", "trace.png"] })} />,
+      { wrapper: Wrapper },
+    );
+    const strip = screen.getByTestId("start-node-images");
+    const chips = within(strip).getAllByTestId("start-node-image-chip");
+    expect(chips).toHaveLength(2);
+    expect(strip.textContent).toContain("ui-bug.png");
+    expect(strip.textContent).toContain("trace.png");
+  });
+
+  it("renders no image strip when the run has no input images", () => {
+    render(<EditNode {...markerProps({ nodeType: "start", inputImages: [] })} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.queryByTestId("start-node-images")).toBeNull();
+  });
+
+  it("renders no image strip on a non-start node even if images are passed", () => {
+    render(
+      <EditNode {...markerProps({ nodeType: "end", inputImages: ["ui-bug.png"] })} />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.queryByTestId("start-node-images")).toBeNull();
   });
 });

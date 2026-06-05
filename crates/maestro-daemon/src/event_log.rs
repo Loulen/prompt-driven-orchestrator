@@ -136,6 +136,11 @@ pub struct StartNodeInfo {
     pub input_path: String,
     pub started_at: String,
     pub target_node_ids: Vec<String>,
+    /// Filenames of the images uploaded alongside the text prompt (stored in
+    /// `_input/`). Empty when the run was launched without images. Surfaced on
+    /// the Start node and in the Start inspector (issue #145).
+    #[serde(default)]
+    pub input_images: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,10 +335,21 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                         state.source_branch = Some(sb.to_string());
                     }
 
+                    let input_images = payload
+                        .get("image_filenames")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
                     state.start_node = Some(StartNodeInfo {
                         input_path: "_input/output.md".to_string(),
                         started_at: event.ts.clone(),
                         target_node_ids: entry_node_ids(&state.edges, &state.node_defs),
+                        input_images,
                     });
 
                     if let Some(end_def) = state.node_defs.iter().find(|n| n.node_type == "end") {
@@ -1172,6 +1188,32 @@ mod tests {
         assert_eq!(start.input_path, "_input/output.md");
         assert_eq!(start.started_at, "2026-01-01T00:00:00.000Z");
         assert_eq!(start.target_node_ids, vec!["planner"]);
+        assert!(
+            start.input_images.is_empty(),
+            "a run with no uploaded images carries no input_images"
+        );
+    }
+
+    #[test]
+    fn start_node_carries_uploaded_input_images() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "linear",
+                "input": "look at these",
+                "image_filenames": ["ui-bug.png", "trace.png"],
+                "node_defs": [start_node_def(), end_node_def(), node_def("planner")],
+                "edges": [
+                    edge_info("start", "planner"),
+                    edge_info("planner", "end"),
+                ],
+            }),
+        )];
+
+        let state = project(&events).unwrap();
+        let start = state.start_node.as_ref().unwrap();
+        assert_eq!(start.input_images, vec!["ui-bug.png", "trace.png"]);
     }
 
     #[test]

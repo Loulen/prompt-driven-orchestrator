@@ -217,9 +217,9 @@ body {
   transition: transform 120ms;
   pointer-events: auto;
 }
-.port-dot:hover {
-  transform: scale(1.18);
-}
+/* The grow-on-hover transform is declared per side so it composes with the
+   side-specific centering translate; a bare .port-dot:hover would be shadowed
+   by these (higher specificity) and drop the centering, so it is omitted. */
 .port-dot.side-left {
   left: 0;
   top: 50%;

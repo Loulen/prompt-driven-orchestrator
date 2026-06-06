@@ -13,7 +13,7 @@ export interface SessionCount {
   live: number;
   cap: number;
 }
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "loop" | "for-each" | "merge";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "for-each" | "merge";
 
 export interface RunListEntry {
   run_id: string;

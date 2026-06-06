@@ -3,12 +3,6 @@ import type { NodeType } from "./types";
 const FIRST_CLASS_DESCRIPTIONS: Partial<
   Record<NodeType, Record<string, string>>
 > = {
-  loop: {
-    "input:in": "Starts the loop",
-    "input:break": "Forces immediate exit",
-    "output:body": "Fires once per iteration",
-    "output:done": "Fires when loop completes or max_iter reached",
-  },
   "for-each": {
     "input:in": "Artifact containing the items list",
     "input:break": "Stops launching new iterations",

@@ -38,16 +38,6 @@ function makePipeline(): PipelineDef {
         view: { x: 200, y: 100 },
       },
       {
-        id: "loop1",
-        name: "loop",
-        type: "loop",
-        inputs: [{ name: "in", repeated: false, side: "left" }],
-        outputs: [{ name: "body", repeated: false, side: "right" }],
-        interactive: false,
-        max_iter: 5,
-        view: { x: 300, y: 100 },
-      },
-      {
         id: "fe1",
         name: "foreach",
         type: "for-each",
@@ -121,12 +111,11 @@ describe("statusForNode", () => {
 });
 
 describe("deriveEditNodes — live status wiring (regression: node-card borders ignore run state)", () => {
-  it("forwards live status into every node type's data (regular / loop / for-each / merge)", () => {
+  it("forwards live status into every node type's data (regular / for-each / merge)", () => {
     const pipeline = makePipeline();
     const run = makeRunState({
       impl: "running",
       sw1: "completed",
-      loop1: "awaiting_user",
       fe1: "failed",
       m1: "completed",
     });
@@ -135,7 +124,6 @@ describe("deriveEditNodes — live status wiring (regression: node-card borders 
 
     expect((byId.impl as { status: NodeStatus }).status).toBe("running");
     expect((byId.sw1 as { status: NodeStatus }).status).toBe("completed");
-    expect((byId.loop1 as { status: NodeStatus }).status).toBe("awaiting_user");
     expect((byId.fe1 as { status: NodeStatus }).status).toBe("failed");
     expect((byId.m1 as { status: NodeStatus }).status).toBe("completed");
   });
@@ -149,12 +137,11 @@ describe("deriveEditNodes — live status wiring (regression: node-card borders 
 
   it("uses 'pending' for nodes that exist in the pipeline but not in run.nodes (newly added)", () => {
     const pipeline = makePipeline();
-    const run = makeRunState({ impl: "running" }); // sw1/loop1/fe1/m1 absent
+    const run = makeRunState({ impl: "running" }); // sw1/fe1/m1 absent
     const nodes = deriveEditNodes(pipeline, run);
     const byId = Object.fromEntries(nodes.map((n) => [n.id, n.data]));
     expect((byId.impl as { status: NodeStatus }).status).toBe("running");
     expect((byId.sw1 as { status: NodeStatus }).status).toBe("pending");
-    expect((byId.loop1 as { status: NodeStatus }).status).toBe("pending");
     expect((byId.fe1 as { status: NodeStatus }).status).toBe("pending");
     expect((byId.m1 as { status: NodeStatus }).status).toBe("pending");
   });
@@ -176,7 +163,6 @@ describe("markerReached", () => {
     const others: NodeType[] = [
       "doc-only",
       "code-mutating",
-      "loop",
       "for-each",
       "merge",
     ];

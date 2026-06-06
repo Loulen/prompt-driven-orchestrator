@@ -152,8 +152,6 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
-    if (n.type === "loop" && n.max_iter !== undefined && n.max_iter !== null)
-      node.max_iter = n.max_iter;
     if (n.type === "for-each" && n.over) node.over = n.over;
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {

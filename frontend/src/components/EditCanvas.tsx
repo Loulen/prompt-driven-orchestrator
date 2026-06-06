@@ -23,7 +23,6 @@ import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
-import { LoopEditNode } from "./LoopNode";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
@@ -183,12 +182,11 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
+const nodeTypes = { edit: EditNode, foreach: ForEachEditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
-  "loop": "loop",
   "for-each": "foreach",
   "merge": "merge",
 };
@@ -379,7 +377,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       // Structural nodes and single-declared-input nodes (e.g. End's `result`)
       // keep their declared, fixed-side handle — never re-anchor those.
       if (!targetDef || targetDef.inputs.length === 1) return;
-      if (targetDef.type === "merge" || targetDef.type === "loop" || targetDef.type === "for-each") {
+      if (targetDef.type === "merge" || targetDef.type === "for-each") {
         return;
       }
 
@@ -479,19 +477,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           id, name, type, interactive: false, view,
           inputs: [{ name: "branches", repeated: true, side: "left" }],
           outputs: [{ name: "merged", repeated: false, side: "right" }],
-        };
-        break;
-      case "loop":
-        newNode = {
-          id, name, type, interactive: false, view, max_iter: 5,
-          inputs: [
-            { name: "in", repeated: false, side: "left" },
-            { name: "break", repeated: false, side: "left" },
-          ],
-          outputs: [
-            { name: "body", repeated: false, side: "right" },
-            { name: "done", repeated: false, side: "right" },
-          ],
         };
         break;
       case "for-each":

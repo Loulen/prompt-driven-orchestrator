@@ -16,6 +16,7 @@ import {
   saveLibraryPipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
+import { materializeMissingRegions } from "../lib/loopRegions";
 
 export type SelectionKind = "node" | "edge" | "none";
 
@@ -514,6 +515,18 @@ export const useEditStore = create<EditState>((set, get) => ({
   addEdge: (edge: EdgeDef) => {
     set((s) => mutateActiveTab(s, (tab) => {
       tab.pipeline.edges = [...tab.pipeline.edges, edge];
+      // Auto-materialize a bounded loop region when this edge closes a cycle
+      // (ADR-0011 / #166): a drawn cycle is never accidentally unbounded. Only
+      // cycles not already covered by an existing `loops:` entry add a region;
+      // acyclic edges add nothing.
+      const newRegions = materializeMissingRegions(
+        tab.pipeline.nodes,
+        tab.pipeline.edges,
+        tab.pipeline.loops ?? [],
+      );
+      if (newRegions.length > 0) {
+        tab.pipeline.loops = [...(tab.pipeline.loops ?? []), ...newRegions];
+      }
     }));
   },
 

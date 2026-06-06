@@ -116,11 +116,13 @@ The created input is named after the source document.
     Read `.maestro/pipelines/edit-and-save-scenario.yaml` and confirm the edge
     `source: { node: alpha, port: out }`, `target: { node: beta, port: out }`.
 19. Click the **edge** between `alpha` and `beta` on the canvas. Assert:
-    - The **Node Inspector** opens on the right for the source node `alpha`
-      (not EdgeInspector — that component no longer exists).
-    - The inspector shows **`alpha`**'s name, type, prompt and **outputs**.
-    - The **output** port row named `out` is scrolled into view and briefly
-      highlighted; the row has `data-port="out"` in the DOM.
+    - The **edge detail panel** opens on the right (#147 / ADR-0011) — edge
+      click selects the edge (`kind: "edge"`, keyed by its `e-{i}` index), not
+      a node. (There is no per-edge source-node inspector; condition authoring
+      and routing live on the edge.)
+    - For this unconditional emergent edge, the panel surfaces the target
+      `beta`'s pooled input `out ← alpha` (the emergent input inherited from the
+      source document, #149/#153).
 20. Inspect `beta`'s card on the canvas. Assert it shows **no input dot**
     (`.port-pill.kind-input` is absent on the card) — the incoming arrow lands
     on the body.
@@ -132,19 +134,22 @@ The created input is named after the source document.
 22. With the `edit-and-save-scenario` pipeline open, assert the
     **EditToolbar** overlay is visible in the top-left corner of the canvas
     (`data-testid="edit-toolbar"`).
-23. Assert the toolbar contains the icon buttons (the **Switch** button was
-    removed — conditional routing lives on the edge, #147):
+23. Assert the toolbar contains the icon buttons. Both the **Switch** button
+    (conditional routing lives on the edge, #147) and the **Loop** button
+    (loops are regions auto-materialized from a drawn cycle, #148/#171) were
+    removed:
     - Add node (`data-testid="toolbar-add"`)
     - Library (`data-testid="toolbar-library"`)
-    - Loop (`data-testid="toolbar-loop"`)
+    - ForEach (`data-testid="toolbar-foreach"`) — present until #151 replaces
+      the ForEach node with a collection region
     - Merge (`data-testid="toolbar-merge"`)
-    - Assert **`toolbar-switch` is absent**.
+    - Assert **`toolbar-switch` is absent** and **`toolbar-loop` is absent**.
 24. Hover the Add node button. Assert a tooltip appears with text
     containing **"New node"**.
 25. Hover the Library button. Assert a tooltip appears with text
     containing **"Library"**.
-26. Hover the Loop button. Assert a tooltip appears with text
-    containing **"Loop node"**.
+26. Hover the ForEach button. Assert a tooltip appears with text
+    containing **"ForEach node"**. (There is no Loop button to hover — #171.)
 27. Hover the Merge button. Assert a tooltip appears with text
     containing **"Merge node"**.
 
@@ -170,10 +175,10 @@ The created input is named after the source document.
     "step 15: tab title still shows dirty indicator '•' (no silent auto-save)",
     "step 16: alpha.md on disk unchanged (no auto-save)",
     "step 18: drop-on-body created edge alpha.out → beta with emergent target port 'out'",
-    "step 19: edge click opens Node Inspector for source node alpha, out port highlighted with data-port attribute",
+    "step 19: edge click opens the edge detail panel (kind:edge, #147); panel surfaces target beta's pooled input out ← alpha",
     "step 20: beta card shows no input dot (emergent input)",
     "step 21: pane click clears selection",
-    "step 23: EditToolbar renders add/library/loop/merge buttons, no toolbar-switch",
+    "step 23: EditToolbar renders add/library/foreach/merge buttons, no toolbar-switch and no toolbar-loop",
     "step 24-27: tooltips fire on hover for each toolbar icon"
   ],
   "anomalies": [

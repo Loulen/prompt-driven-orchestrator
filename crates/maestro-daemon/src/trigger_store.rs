@@ -306,6 +306,112 @@ pub async fn set_next_fire(
     Ok(())
 }
 
+/// A partial config edit (#162). Every field is optional: `None` leaves the
+/// stored value untouched. `next_fire_at` is double-wrapped so the caller can
+/// distinguish "leave alone" (`None`) from "set to NULL" (`Some(None)`); the
+/// route recomputes it whenever the schedule changes.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateTrigger {
+    pub name: Option<String>,
+    pub target_repo: Option<Option<String>>,
+    pub source_branch: Option<Option<String>>,
+    pub input_template: Option<String>,
+    pub variables: Option<serde_json::Value>,
+    pub cron: Option<String>,
+    pub guard_command: Option<Option<String>>,
+    pub overlap_policy: Option<String>,
+    pub next_fire_at: Option<Option<String>>,
+}
+
+impl UpdateTrigger {
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.target_repo.is_none()
+            && self.source_branch.is_none()
+            && self.input_template.is_none()
+            && self.variables.is_none()
+            && self.cron.is_none()
+            && self.guard_command.is_none()
+            && self.overlap_policy.is_none()
+            && self.next_fire_at.is_none()
+    }
+}
+
+/// Apply a partial config edit to a Trigger. A no-op when no field is set.
+pub async fn update(
+    db: &SqlitePool,
+    trigger_id: &str,
+    edit: UpdateTrigger,
+) -> Result<(), sqlx::Error> {
+    if edit.is_empty() {
+        return Ok(());
+    }
+
+    // Build the SET clause field-by-field, then bind in the same order so the
+    // positional placeholders line up.
+    let mut sets: Vec<&str> = Vec::new();
+    if edit.name.is_some() {
+        sets.push("name = ?");
+    }
+    if edit.target_repo.is_some() {
+        sets.push("target_repo = ?");
+    }
+    if edit.source_branch.is_some() {
+        sets.push("source_branch = ?");
+    }
+    if edit.input_template.is_some() {
+        sets.push("input_template = ?");
+    }
+    if edit.variables.is_some() {
+        sets.push("variables = ?");
+    }
+    if edit.cron.is_some() {
+        sets.push("cron = ?");
+    }
+    if edit.guard_command.is_some() {
+        sets.push("guard_command = ?");
+    }
+    if edit.overlap_policy.is_some() {
+        sets.push("overlap_policy = ?");
+    }
+    if edit.next_fire_at.is_some() {
+        sets.push("next_fire_at = ?");
+    }
+
+    let sql = format!("UPDATE triggers SET {} WHERE id = ?", sets.join(", "));
+    let mut query = sqlx::query(&sql);
+    if let Some(v) = &edit.name {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.target_repo {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.source_branch {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.input_template {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.variables {
+        query = query.bind(serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
+    }
+    if let Some(v) = &edit.cron {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.guard_command {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.overlap_policy {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.next_fire_at {
+        query = query.bind(v.clone());
+    }
+    query = query.bind(trigger_id);
+    query.execute(db).await?;
+    Ok(())
+}
+
 /// Enable or disable a Trigger.
 pub async fn set_enabled(
     db: &SqlitePool,
@@ -496,6 +602,85 @@ mod tests {
             .unwrap()
             .next_fire_at
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn update_edits_config_fields_and_leaves_others_untouched() {
+        let db = test_db().await;
+        let t = create(&db, sample("editable", "0 9 * * *")).await.unwrap();
+
+        // Edit the schedule, input template and overlap policy; recompute the
+        // next fire. Fields left `None` keep their prior value.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                cron: Some("*/15 * * * *".to_string()),
+                input_template: Some("new instruction".to_string()),
+                overlap_policy: Some("allow".to_string()),
+                next_fire_at: Some(Some("2027-03-01T00:00:00.000Z".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let after = get(&db, &t.id).await.unwrap().unwrap();
+        assert_eq!(after.cron, "*/15 * * * *");
+        assert_eq!(after.input_template, "new instruction");
+        assert_eq!(after.overlap_policy, "allow");
+        assert_eq!(
+            after.next_fire_at.as_deref(),
+            Some("2027-03-01T00:00:00.000Z")
+        );
+        // Untouched fields survive.
+        assert_eq!(after.name, "editable");
+        assert_eq!(after.pipeline_id, "lib-pipe-1");
+        assert_eq!(after.target_repo.as_deref(), Some("/repos/foo"));
+        assert!(after.enabled);
+    }
+
+    #[tokio::test]
+    async fn update_can_clear_a_nullable_field() {
+        let db = test_db().await;
+        let mut s = sample("guarded", "0 9 * * *");
+        s.guard_command = Some("gh issue list".to_string());
+        let t = create(&db, s).await.unwrap();
+        assert_eq!(
+            get(&db, &t.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .guard_command
+                .as_deref(),
+            Some("gh issue list")
+        );
+
+        // Some(None) clears the guard to NULL; an unrelated edit leaves it alone.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                guard_command: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(get(&db, &t.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .guard_command
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn update_with_no_fields_is_a_noop() {
+        let db = test_db().await;
+        let t = create(&db, sample("stable", "0 9 * * *")).await.unwrap();
+        update(&db, &t.id, UpdateTrigger::default()).await.unwrap();
+        assert_eq!(get(&db, &t.id).await.unwrap().unwrap(), t);
     }
 
     #[tokio::test]

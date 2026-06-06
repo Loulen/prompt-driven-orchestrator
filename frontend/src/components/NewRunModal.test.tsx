@@ -19,12 +19,13 @@ vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
   createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+  updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
   listBranches: vi.fn().mockResolvedValue(["main", "dev", "feature-x"]),
   promotePipeline: vi.fn().mockResolvedValue({ id: "test-pipe", drifted: false }),
 }));
 
-const { validateRepo, listBranches, createRun, createTrigger, fetchPipelines, promotePipeline } = await import("../api");
+const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline } = await import("../api");
 
 const noop = () => {};
 
@@ -799,5 +800,123 @@ describe("NewRunModal — Trigger mode (#160)", () => {
         }),
       );
     });
+  });
+});
+
+describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
+  const sampleTrigger = {
+    id: "trg-9",
+    name: "Nightly audit",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    target_repo: "/home/user/project",
+    source_branch: "dev",
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: null,
+    overlap_policy: "allow",
+    enabled: true,
+    next_fire_at: null,
+    last_fired_at: null,
+    last_outcome: null,
+  };
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+  });
+
+  it("run-now opens in Run-now mode pre-filled from the trigger and creates a run (no guard)", async () => {
+    const onCreated = vi.fn();
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={onCreated}
+        prefillTrigger={{ trigger: sampleTrigger, mode: "run" }}
+      />,
+    );
+
+    // Run-now mode is active (creates a Run, not a Trigger).
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
+    });
+    // Prefilled repo + input.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/target repository/i)).toHaveValue("/home/user/project");
+    });
+    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("audit the codebase");
+
+    // Let the debounced repo validation resolve so the form is launchable.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pipeline_id: "p1",
+          input: "audit the codebase",
+          target_repo: "/home/user/project",
+        }),
+      );
+    });
+    // Run-now never creates or fires a guard.
+    expect(createTrigger).not.toHaveBeenCalled();
+    expect(updateTrigger).not.toHaveBeenCalled();
+  });
+
+  it("edit opens in Trigger mode pre-filled and PATCHes the trigger on submit", async () => {
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        prefillTrigger={{ trigger: sampleTrigger, mode: "edit" }}
+      />,
+    );
+
+    // Trigger mode with the existing config prefilled.
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("trigger-name-input")).toHaveValue("Nightly audit");
+    });
+    // The footer becomes a Save action (not "Create trigger").
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-trigger-button")).not.toBeInTheDocument();
+
+    // Let the debounced repo validation resolve so the form is submittable.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Edit the schedule and the input template.
+    fireEvent.click(screen.getByTestId("preset-hourly"));
+    fireEvent.change(screen.getByTestId("input-textarea"), {
+      target: { value: "audit harder" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({
+          name: "Nightly audit",
+          cron: "0 * * * *",
+          input_template: "audit harder",
+        }),
+      );
+    });
+    // Editing never creates a brand-new trigger.
+    expect(createTrigger).not.toHaveBeenCalled();
   });
 });

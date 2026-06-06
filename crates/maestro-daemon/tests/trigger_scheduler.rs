@@ -504,6 +504,135 @@ async fn create_trigger_rejects_invalid_cron() {
     assert_eq!(resp.status(), 400);
 }
 
+// --- #162: lifecycle management (GET one, PATCH, enable/disable, DELETE) ---
+
+async fn patch_trigger(
+    daemon: &TestDaemon,
+    trigger_id: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .patch(format!("{}/triggers/{}", daemon.url(), trigger_id))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn get_trigger_one(daemon: &TestDaemon, trigger_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/{}", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn get_single_trigger_returns_its_config() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = get_trigger_one(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"].as_str(), Some(trigger_id.as_str()));
+    assert_eq!(body["name"].as_str(), Some("audit"));
+    assert_eq!(body["cron"].as_str(), Some("0 9 * * *"));
+}
+
+#[tokio::test]
+async fn get_single_trigger_404_when_missing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = get_trigger_one(&daemon, "trg-nope").await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn patch_disable_then_enable_pauses_and_resumes_firing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "pausable", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Disable.
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], false);
+
+    // A disabled, forced-due Trigger does not fire.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a disabled Trigger must not fire"
+    );
+
+    // Re-enable.
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], true);
+}
+
+#[tokio::test]
+async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "editable", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let original_next = trigger["next_fire_at"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({
+            "cron": "*/15 * * * *",
+            "input_template": "do the new thing",
+            "overlap_policy": "allow",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let after = get_trigger(&daemon, &trigger_id).await;
+    assert_eq!(after["cron"].as_str(), Some("*/15 * * * *"));
+    assert_eq!(after["input_template"].as_str(), Some("do the new thing"));
+    assert_eq!(after["overlap_policy"].as_str(), Some("allow"));
+    // Changing the schedule recomputes next_fire_at forward from the new cron.
+    let new_next = after["next_fire_at"].as_str().unwrap();
+    assert_ne!(
+        new_next, original_next,
+        "a schedule edit must recompute next_fire_at"
+    );
+}
+
+#[tokio::test]
+async fn patch_rejects_an_invalid_cron() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "cron": "not a cron" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+    // The stored cron is unchanged.
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["cron"], "0 9 * * *");
+}
+
+#[tokio::test]
+async fn patch_missing_trigger_is_404() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = patch_trigger(&daemon, "trg-nope", serde_json::json!({ "enabled": false })).await;
+    assert_eq!(resp.status(), 404);
+}
+
 fn seed_prompt_required(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".maestro").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;

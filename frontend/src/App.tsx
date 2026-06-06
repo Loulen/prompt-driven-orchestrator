@@ -28,6 +28,8 @@ import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
 import EdgeDetailPanel from "./components/EdgeDetailPanel";
+import TriggerDetailPanel from "./components/TriggerDetailPanel";
+import type { TriggerPrefill } from "./components/NewRunModal";
 import { deriveEdgeTrigger } from "./lib/edgeTrigger";
 import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
@@ -135,6 +137,9 @@ export default function App() {
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
+  // When the New Run modal is opened from a Trigger (run-now / edit), this holds
+  // the source Trigger and the intended mode (#162).
+  const [triggerPrefill, setTriggerPrefill] = useState<TriggerPrefill | null>(null);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
   const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
   const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
@@ -183,6 +188,35 @@ export default function App() {
 
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
+
+  // The Trigger backing the right-panel detail view (#162). Shown when a Trigger
+  // is selected and no pipeline/run edit tab owns the canvas.
+  const selectedTrigger =
+    selectedTriggerId != null
+      ? triggers.find((t) => t.id === selectedTriggerId) ?? null
+      : null;
+
+  const openTriggerModal = useCallback((prefill: TriggerPrefill | null) => {
+    setTriggerPrefill(prefill);
+    setNewRunModalOpen(true);
+  }, []);
+
+  const handleSelectTrigger = useCallback(
+    (triggerId: string) => {
+      // Selecting a Trigger clears the run/node selection so the detail panel
+      // wins the right pane.
+      setSelectedTriggerId(triggerId);
+      setSelectedRunId(null);
+      setSelectedNodeId(null);
+      selectRun(null);
+    },
+    [selectRun],
+  );
+
+  const handleCloseNewRunModal = useCallback(() => {
+    setNewRunModalOpen(false);
+    setTriggerPrefill(null);
+  }, []);
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
     useInspectorTab(editActiveTabId, selectedRun?.status ?? null, isEditingRun);
@@ -276,6 +310,7 @@ export default function App() {
 
   const handleSelectRun = useCallback(
     async (runId: string) => {
+      setSelectedTriggerId(null);
       setSelectedRunId(runId);
       selectRun(runId);
       setSelectedNodeId(null);
@@ -311,10 +346,11 @@ export default function App() {
         loadPipelines();
         return;
       }
-      // Trigger lifecycle (#160): a create/delete refreshes the Triggers list;
-      // a fire also creates a Run, so refresh both.
+      // Trigger lifecycle (#160/#162): create/update/delete refreshes the
+      // Triggers list; a fire also creates a Run, so refresh both.
       if (
         msg.type === "trigger_created" ||
+        msg.type === "trigger_updated" ||
         msg.type === "trigger_deleted" ||
         msg.type === "trigger_fired"
       ) {
@@ -423,9 +459,11 @@ export default function App() {
               onLibraryPipelinesChanged={refreshLibraryPipelines}
               triggers={triggers}
               selectedTriggerId={selectedTriggerId}
-              onSelectTrigger={setSelectedTriggerId}
-              onNewTrigger={() => setNewRunModalOpen(true)}
+              onSelectTrigger={handleSelectTrigger}
+              onNewTrigger={() => openTriggerModal(null)}
               onTriggersChanged={refreshTriggers}
+              onRunNowTrigger={(t) => openTriggerModal({ trigger: t, mode: "run" })}
+              onEditTrigger={(t) => openTriggerModal({ trigger: t, mode: "edit" })}
             />
           </ResizablePanel>
 
@@ -460,7 +498,13 @@ export default function App() {
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right" className="panel-r">
-            {infoPanelOpen ? (
+            {selectedTrigger && !hasEditTab && !infoPanelOpen ? (
+              <TriggerDetailPanel
+                key={selectedTrigger.id}
+                trigger={selectedTrigger}
+                onSelectRun={handleSelectRun}
+              />
+            ) : infoPanelOpen ? (
               <PipelineInfoPanel
                 key={infoPanelInitialTab ?? "default"}
                 run={isEditingRun ? selectedRun : null}
@@ -550,8 +594,13 @@ export default function App() {
       <StatusBar status={status} sessions={sessions} />
       <NewRunModal
         open={newRunModalOpen}
-        onClose={() => setNewRunModalOpen(false)}
-        onCreated={handleRunCreated}
+        onClose={handleCloseNewRunModal}
+        onCreated={(runId) => {
+          handleCloseNewRunModal();
+          handleRunCreated(runId);
+        }}
+        prefillTrigger={triggerPrefill}
+        onTriggerSaved={refreshTriggers}
       />
       <ConflictModal
         open={conflictTab != null}

@@ -755,6 +755,204 @@ async fn delete_trigger(
     }
 }
 
+async fn get_trigger(
+    State(state): State<Arc<AppState>>,
+    AxumPath(trigger_id): AxumPath<String>,
+) -> Response {
+    match trigger_store::get(&state.db, &trigger_id).await {
+        Ok(Some(trigger)) => Json(trigger).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "trigger not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("failed to fetch trigger: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to fetch trigger" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// A partial Trigger edit (#162). Every field is optional; absent fields are
+/// left untouched. `enabled` toggles activation; the config fields cover the
+/// schedule, input template, and overlap policy per the acceptance criteria,
+/// plus name/repo/branch/guard/variables for completeness.
+#[derive(Deserialize)]
+struct PatchTriggerRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    cron: Option<String>,
+    #[serde(default)]
+    input_template: Option<String>,
+    #[serde(default)]
+    overlap_policy: Option<String>,
+    #[serde(default)]
+    target_repo: Option<Option<String>>,
+    #[serde(default)]
+    source_branch: Option<Option<String>>,
+    #[serde(default)]
+    guard_command: Option<Option<String>>,
+    #[serde(default)]
+    variables: Option<HashMap<String, serde_yaml::Value>>,
+}
+
+async fn patch_trigger(
+    State(state): State<Arc<AppState>>,
+    AxumPath(trigger_id): AxumPath<String>,
+    Json(req): Json<PatchTriggerRequest>,
+) -> Response {
+    // The Trigger must exist.
+    let existing = match trigger_store::get(&state.db, &trigger_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "trigger not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("failed to load trigger for patch: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to load trigger" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Name, when supplied, must not be blank (Sharp tool: fail at edit time).
+    if let Some(ref name) = req.name {
+        if name.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "trigger name must not be empty" })),
+            )
+                .into_response();
+        }
+    }
+
+    // A schedule edit re-validates the cron and recomputes the next fire forward.
+    let mut next_fire_at: Option<Option<String>> = None;
+    if let Some(ref cron) = req.cron {
+        match cron_schedule::CronSchedule::parse(cron) {
+            Ok(schedule) => {
+                let next = schedule
+                    .next_fire_after(chrono::Local::now())
+                    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                next_fire_at = Some(next);
+            }
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("invalid cron expression: {e}") })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Validate a target-repo edit (Some(Some(path)) means set; Some(None) clears).
+    if let Some(Some(ref repo)) = req.target_repo {
+        if let Err(msg) = validate_target_repo(repo) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
+    // Re-apply the fire_decision reject rule against the *resulting* config: if
+    // the pipeline requires a prompt and the edit would leave neither a guard
+    // nor an input template, refuse (mirrors create-time validation).
+    let resulting_guard = match &req.guard_command {
+        Some(g) => g.clone(),
+        None => existing.guard_command.clone(),
+    };
+    let resulting_input = req
+        .input_template
+        .clone()
+        .unwrap_or_else(|| existing.input_template.clone());
+    let prompt_required = trigger_prompt_required(&state, &existing);
+    if prompt_required
+        && resulting_guard.as_deref().unwrap_or("").trim().is_empty()
+        && resulting_input.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "this pipeline requires a prompt; add a guard, an input \
+                          template, or mark the pipeline prompt-not-required"
+            })),
+        )
+            .into_response();
+    }
+
+    let edit = trigger_store::UpdateTrigger {
+        name: req.name,
+        target_repo: req.target_repo,
+        source_branch: req.source_branch,
+        input_template: req.input_template,
+        variables: req
+            .variables
+            .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({}))),
+        cron: req.cron,
+        guard_command: req.guard_command,
+        overlap_policy: req.overlap_policy.map(|p| {
+            if p == "allow" {
+                "allow".to_string()
+            } else {
+                "skip".to_string()
+            }
+        }),
+        next_fire_at,
+    };
+
+    if let Err(e) = trigger_store::update(&state.db, &trigger_id, edit).await {
+        error!("failed to update trigger: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "failed to update trigger" })),
+        )
+            .into_response();
+    }
+
+    // Enable/disable is a dedicated column toggle.
+    if let Some(enabled) = req.enabled {
+        if let Err(e) = trigger_store::set_enabled(&state.db, &trigger_id, enabled).await {
+            error!("failed to toggle trigger enabled: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to update trigger" })),
+            )
+                .into_response();
+        }
+    }
+
+    match trigger_store::get(&state.db, &trigger_id).await {
+        Ok(Some(updated)) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "trigger_updated",
+                "trigger_id": trigger_id,
+            }));
+            Json(updated).into_response()
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "failed to reload trigger" })),
+        )
+            .into_response(),
+    }
+}
+
 async fn list_trigger_fires(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
@@ -837,7 +1035,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/triggers", get(list_triggers).post(create_trigger))
         .route(
             "/triggers/{trigger_id}",
-            axum::routing::delete(delete_trigger),
+            get(get_trigger).patch(patch_trigger).delete(delete_trigger),
         )
         .route("/triggers/{trigger_id}/fires", get(list_trigger_fires))
         .fallback(static_handler)

@@ -93,10 +93,18 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
                 return true;
             }
         }
-        if let Some(inputs) = node.get("inputs").and_then(|v| v.as_sequence()) {
-            if port_missing_side(inputs) {
-                return true;
-            }
+        // Inputs are emergent (#149): a *regular* node (doc-only / code-mutating)
+        // that still declares any input needs migration so the declared port is
+        // dropped (and a `repeated` flag migrated onto its edge). Structural
+        // nodes (for-each here; start/end/switch/loop/merge already `continue`d
+        // above) keep their required ports.
+        if node_type != "for-each"
+            && node
+                .get("inputs")
+                .and_then(|v| v.as_sequence())
+                .is_some_and(|s| !s.is_empty())
+        {
+            return true;
         }
         if let Some(outputs) = node.get("outputs").and_then(|v| v.as_sequence()) {
             if port_missing_side(outputs) {
@@ -211,6 +219,12 @@ pub fn migrate_pipeline_yaml(
         }
     }
 
+    // Inputs are emergent (#149): strip declared inputs from regular nodes,
+    // migrating any `repeated: true` flag onto the matching incoming edge so the
+    // accumulate-across-iterations behavior is preserved. Run before side
+    // backfill so we don't bother backfilling sides on inputs we're dropping.
+    drop_declared_inputs(&mut doc);
+
     let nodes_for_side = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut());
     if let Some(nodes_for_side) = nodes_for_side {
         for node in nodes_for_side.iter_mut() {
@@ -249,6 +263,92 @@ fn backfill_foreach_over(doc: &mut serde_yaml::Value) {
         if let Some(m) = node.as_mapping_mut() {
             if !m.contains_key(&over_key) {
                 m.insert(over_key.clone(), serde_yaml::Value::String("items".into()));
+            }
+        }
+    }
+}
+
+/// #149: inputs are emergent. Strip declared `inputs` from regular (doc-only /
+/// code-mutating) nodes. Structural nodes (start/end/merge/loop/for-each) keep
+/// their required ports. Any `repeated: true` declared input is migrated onto
+/// the matching incoming edge so loop accumulation is preserved.
+fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
+    // Pass 1: collect (node_id, input_name) pairs that carried `repeated: true`,
+    // and the set of regular node ids whose inputs we will drop.
+    let mut repeated_targets: Vec<(String, String)> = Vec::new();
+    let mut regular_node_ids: Vec<String> = Vec::new();
+
+    if let Some(nodes) = doc.get("nodes").and_then(|n| n.as_sequence()) {
+        for node in nodes {
+            let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if matches!(node_type, "start" | "end" | "switch" | "merge" | "loop" | "for-each") {
+                continue;
+            }
+            let Some(node_id) = node.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            regular_node_ids.push(node_id.to_string());
+            if let Some(inputs) = node.get("inputs").and_then(|v| v.as_sequence()) {
+                for port in inputs {
+                    let is_repeated = port
+                        .get("repeated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_repeated {
+                        if let Some(name) = port.get("name").and_then(|v| v.as_str()) {
+                            repeated_targets.push((node_id.to_string(), name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Pass 2: migrate `repeated` onto matching edges.
+    if !repeated_targets.is_empty() {
+        if let Some(edges) = doc.get_mut("edges").and_then(|e| e.as_sequence_mut()) {
+            for edge in edges.iter_mut() {
+                let matches = edge
+                    .get("target")
+                    .and_then(|t| t.as_mapping())
+                    .map(|m| {
+                        let tn = m
+                            .get(serde_yaml::Value::String("node".into()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let tp = m
+                            .get(serde_yaml::Value::String("port".into()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        repeated_targets
+                            .iter()
+                            .any(|(n, p)| n == tn && p == tp)
+                    })
+                    .unwrap_or(false);
+                if matches {
+                    if let Some(m) = edge.as_mapping_mut() {
+                        m.insert(
+                            serde_yaml::Value::String("repeated".into()),
+                            serde_yaml::Value::Bool(true),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Pass 3: drop the declared `inputs` key from regular nodes.
+    if let Some(nodes) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+        for node in nodes.iter_mut() {
+            let node_id = node
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if regular_node_ids.contains(&node_id) {
+                if let Some(m) = node.as_mapping_mut() {
+                    m.remove(serde_yaml::Value::String("inputs".into()));
+                }
             }
         }
     }
@@ -705,9 +805,6 @@ nodes:
   - id: aBcD1234
     name: implementer
     type: code-mutating
-    inputs:
-      - name: review
-        side: left
     outputs:
       - name: code
         side: right
@@ -719,8 +816,133 @@ nodes:
       - name: result
 edges: []
 "#;
+        // A canonical pipeline (nanoid ids, no declared inputs on regular nodes —
+        // inputs are emergent per #149) is already migrated: a no-op.
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
         assert!(!result.migrated);
+    }
+
+    #[test]
+    fn drops_declared_inputs_on_regular_nodes() {
+        // #149: inputs are emergent (derived from edges). The migrator strips the
+        // now-redundant declared `inputs` from doc-only / code-mutating nodes.
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: aBcD1234
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+        side: left
+    outputs:
+      - name: plan
+        side: right
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: task }
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated);
+
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        let nodes = parsed["nodes"].as_sequence().unwrap();
+        let planner = nodes
+            .iter()
+            .find(|n| n["name"].as_str() == Some("planner"))
+            .unwrap();
+        // Declared inputs are gone; outputs are kept.
+        assert!(
+            planner.get("inputs").is_none()
+                || planner["inputs"].as_sequence().is_some_and(|s| s.is_empty()),
+            "regular node should have no declared inputs after migration"
+        );
+        assert!(planner["outputs"].as_sequence().is_some());
+        // The End node keeps its structural `result` input.
+        let end = nodes
+            .iter()
+            .find(|n| n["type"].as_str() == Some("end"))
+            .unwrap();
+        assert!(end["inputs"].as_sequence().is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn migrates_repeated_input_flag_onto_edge() {
+        // #149: behavior preservation — a `repeated: true` declared input becomes
+        // `repeated: true` on the matching incoming edge so accumulation survives.
+        let yaml = r#"
+name: cycle
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: aBcD1234
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+        side: right
+  - id: eFgH5678
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: reviews
+        side: left
+        repeated: true
+    outputs:
+      - name: code
+        side: right
+edges:
+  - source: { node: aBcD1234, port: review }
+    target: { node: eFgH5678, port: reviews }
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated);
+
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        let edges = parsed["edges"].as_sequence().unwrap();
+        let edge = edges
+            .iter()
+            .find(|e| e["target"]["port"].as_str() == Some("reviews"))
+            .unwrap();
+        assert_eq!(
+            edge["repeated"].as_bool(),
+            Some(true),
+            "repeated should migrate from the input port onto the edge"
+        );
+
+        // And the declared input is dropped.
+        let nodes = parsed["nodes"].as_sequence().unwrap();
+        let implementer = nodes
+            .iter()
+            .find(|n| n["name"].as_str() == Some("implementer"))
+            .unwrap();
+        assert!(
+            implementer.get("inputs").is_none()
+                || implementer["inputs"]
+                    .as_sequence()
+                    .is_some_and(|s| s.is_empty()),
+            "implementer should have no declared inputs after migration"
+        );
     }
 
     #[test]
@@ -840,7 +1062,9 @@ edges: []
     }
 
     #[test]
-    fn backfills_port_side_defaults() {
+    fn backfills_output_port_side_defaults() {
+        // Output ports get a default `side: right` on migration. Declared inputs
+        // are dropped (emergent, #149) so there are no input sides to backfill.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -865,17 +1089,21 @@ edges: []
             .iter()
             .find(|n| n["name"].as_str() == Some("worker"))
             .unwrap();
-        let inputs = worker["inputs"].as_sequence().unwrap();
         let outputs = worker["outputs"].as_sequence().unwrap();
 
-        assert_eq!(inputs[0]["side"].as_str().unwrap(), "left");
-        assert_eq!(inputs[1]["side"].as_str().unwrap(), "left");
+        assert!(
+            worker.get("inputs").is_none()
+                || worker["inputs"].as_sequence().is_some_and(|s| s.is_empty()),
+            "declared inputs are dropped (emergent)"
+        );
         assert_eq!(outputs[0]["side"].as_str().unwrap(), "right");
         assert_eq!(outputs[1]["side"].as_str().unwrap(), "right");
     }
 
     #[test]
-    fn preserves_existing_port_side() {
+    fn preserves_existing_output_port_side() {
+        // An explicit output `side` is never overwritten by migration. Declared
+        // inputs are dropped regardless (emergent, #149).
         let yaml = r#"
 name: test
 version: "1.0"
@@ -893,14 +1121,13 @@ nodes:
   - id: aBcD1234
     name: worker
     type: doc-only
-    inputs:
-      - name: task
-        side: bottom
     outputs:
       - name: plan
         side: top
 edges: []
 "#;
+        // No declared inputs on the regular node and an explicit output side:
+        // already canonical, so a no-op.
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
         assert!(!result.migrated);
     }
@@ -1325,6 +1552,7 @@ edges:
             reason: None,
             when: None,
             is_else: false,
+            repeated: false,
         }
     }
 

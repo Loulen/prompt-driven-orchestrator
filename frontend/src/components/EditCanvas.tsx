@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import {
   ReactFlow,
   Background,
+  Handle,
+  Position,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -69,33 +71,36 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
 
   return (
     <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
-      {data.inputs.map((port, i) => (
-        <PortRow
-          key={`in-${port.name}`}
-          portName={port.name}
-          kind="input"
-          side={port.side}
-          index={i}
-          total={data.inputs.length}
-          description={port.description}
-          isDrop={isDropTarget}
-        />
-      ))}
+      {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
+          on the node body. A single invisible target handle covers the card so a
+          drop creates/pools an input by name (inherited from the source). The
+          declared `result` input on the End node keeps its handle id so routing
+          to End still resolves. */}
+      <Handle
+        id={data.inputs.length === 1 ? data.inputs[0].name : undefined}
+        type="target"
+        position={Position.Left}
+        isConnectableStart={false}
+        className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          borderRadius: 6,
+          transform: "none",
+          border: "none",
+          background: "transparent",
+          opacity: isDropTarget ? 1 : 0,
+        }}
+      />
+      {/* Slim card (#149): type icon + name + code/doc marker only. The node id
+          and the amber interactive badge are intentionally dropped from the
+          card. */}
       <div className="flex items-center gap-2">
         <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
-        {data.interactive && (
-          <span
-            className="rounded bg-st-await-bg px-1 font-mono text-st-await"
-            style={{ fontSize: "9px" }}
-          >
-            interactive
-          </span>
-        )}
         <CodeDocMarker type={data.nodeType} />
-      </div>
-      <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
-        {data.nodeId}
       </div>
       {inputImages.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
@@ -236,7 +241,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       const sourceNode = pipeline.nodes.find((n) => n.id === connection.source);
       const targetNode = pipeline.nodes.find((n) => n.id === connection.target);
       const sourcePort = connection.sourceHandle ?? sourceNode?.outputs[0]?.name ?? "out";
-      const targetPort = connection.targetHandle ?? targetNode?.inputs[0]?.name ?? "in";
+      // Inputs are emergent (#149): dropping on a node's body creates an input
+      // named after the SOURCE document. Structural nodes (merge/loop/for-each)
+      // still expose declared target handles, so honour an explicit
+      // `targetHandle`; otherwise the emergent name is inherited from the source.
+      const targetPort = connection.targetHandle ?? targetNode?.inputs[0]?.name ?? sourcePort;
 
       addEdgeToStore({
         source: { node: connection.source, port: sourcePort },

@@ -100,6 +100,49 @@ describe("EditNode start/end markers — green-on-complete (issue #105, inline r
   });
 });
 
+describe("EditNode slim card (issue #149)", () => {
+  function workProps(overrides: Partial<{ interactive: boolean }> = {}) {
+    const data = {
+      label: "rewrite_section",
+      nodeId: "nd_4f2a",
+      nodeType: "code-mutating" as NodeType,
+      status: "pending" as NodeStatus,
+      reached: false,
+      inputs: [],
+      outputs: [{ name: "out", side: "right" as const }],
+      interactive: overrides.interactive ?? false,
+    };
+    return {
+      ...markerProps({ nodeType: "code-mutating" }),
+      id: "nd_4f2a",
+      data,
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it("shows the node name and the code/doc marker", () => {
+    render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+    expect(screen.getByText("rewrite_section")).toBeTruthy();
+    expect(screen.getByTestId("code-doc-marker")).toBeTruthy();
+  });
+
+  it("does not render the node id on the card", () => {
+    const { container } = render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+    // The slim card drops the node id (#149).
+    expect(container.textContent).not.toContain("nd_4f2a");
+  });
+
+  it("does not render the interactive badge on the card", () => {
+    render(<EditNode {...workProps({ interactive: true })} />, { wrapper: Wrapper });
+    // The amber interactive badge is removed from the card (#149).
+    expect(screen.queryByText("interactive")).toBeNull();
+  });
+
+  it("renders no input dots (inputs are emergent — #149)", () => {
+    const { container } = render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+    expect(container.querySelectorAll(".port-pill.kind-input")).toHaveLength(0);
+  });
+});
+
 describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
   it("renders one image chip per uploaded image, tagged by filename", () => {
     render(

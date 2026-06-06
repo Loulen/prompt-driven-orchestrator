@@ -76,6 +76,7 @@ mod tests {
             reason: None,
             when: None,
             is_else: false,
+            repeated: false,
         }
     }
 

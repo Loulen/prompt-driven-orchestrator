@@ -139,6 +139,12 @@ pub struct EdgeDef {
     /// same source port matched (ADR-0011). Mutually exclusive with `when:`.
     #[serde(default, rename = "else", skip_serializing_if = "is_false")]
     pub is_else: bool,
+    /// `repeated: true` marks an edge whose source artifact accumulates across
+    /// iterations: the resolver globs `iter-*` and pools every match into the
+    /// emergent input. Loop accumulation ("read all laps") lives on the edge,
+    /// not on a declared input port (ADR-0011 / #149).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub repeated: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1297,6 +1303,64 @@ edges:
         );
         let result = parse_pipeline(&yaml).unwrap();
         assert!(result.pipeline.edges[0].when.is_some());
+    }
+
+    #[test]
+    fn parses_repeated_flag_on_edge() {
+        // `repeated` is an edge property (ADR-0011 / #149): it marks an edge whose
+        // source artifact accumulates across iterations (glob `iter-*`). It lives
+        // on the edge, not on a declared input port.
+        let yaml = with_start_end(
+            r#"
+name: repeated-edge
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: reviews }
+    repeated: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.edges[0].repeated);
+        // Round-trips: re-serializing keeps the flag.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        assert!(reparsed.edges[0].repeated);
+    }
+
+    #[test]
+    fn edge_repeated_defaults_to_false() {
+        let yaml = with_start_end(
+            r#"
+name: plain-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(!result.pipeline.edges[0].repeated);
     }
 
     #[test]

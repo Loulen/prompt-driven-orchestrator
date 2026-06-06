@@ -74,8 +74,10 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             continue;
         }
 
-        let target_port = ctx.node.inputs.iter().find(|p| p.name == edge.target.port);
-        let repeated = target_port.is_some_and(|p| p.repeated);
+        // `repeated` lives on the edge (#149): inputs are emergent, derived from
+        // incoming edges, so the accumulate-across-iterations flag rides the edge
+        // rather than a declared input port.
+        let repeated = edge.repeated;
 
         let source_node = &edge.source.node;
         let is_start = ctx
@@ -633,6 +635,7 @@ mod tests {
             reason: None,
             when: None,
             is_else: false,
+            repeated: false,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -646,6 +649,98 @@ mod tests {
             inputs[0].path,
             PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
         );
+    }
+
+    #[test]
+    fn emergent_input_from_edge_with_no_declared_port() {
+        // #149: the implementer declares NO inputs; its input is emergent from
+        // the incoming edge. The preamble must still enumerate it.
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes.push(NodeDef {
+            id: "implementer".into(),
+            name: "implementer".into(),
+            node_type: NodeType::CodeMutating,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        });
+        pipeline.edges.push(EdgeDef {
+            source: EdgeEndpoint {
+                node: "planner".into(),
+                port: "plan".into(),
+            },
+            target: EdgeEndpoint {
+                node: "implementer".into(),
+                port: "plan".into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+        });
+
+        let node = &pipeline.nodes[1];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let inputs = resolve_input_paths(&ctx);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].port_name, "plan");
+        assert_eq!(
+            inputs[0].path,
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
+        );
+    }
+
+    #[test]
+    fn repeated_flag_read_off_edge_in_preamble() {
+        // #149: `repeated` (accumulate across iterations) lives on the EDGE, not
+        // on a declared input port. The preamble globs `iter-*` accordingly.
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes.push(NodeDef {
+            id: "implementer".into(),
+            name: "implementer".into(),
+            node_type: NodeType::CodeMutating,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        });
+        pipeline.edges.push(EdgeDef {
+            source: EdgeEndpoint {
+                node: "planner".into(),
+                port: "plan".into(),
+            },
+            target: EdgeEndpoint {
+                node: "implementer".into(),
+                port: "plans".into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: true,
+        });
+
+        let node = &pipeline.nodes[1];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let inputs = resolve_input_paths(&ctx);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].port_name, "plans");
+        assert!(inputs[0].repeated, "repeated comes from the edge");
+        assert_eq!(
+            inputs[0].path,
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-*/plan/output.md")
+        );
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("`plans` (accumulated)"));
     }
 
     #[test]
@@ -788,6 +883,7 @@ mod tests {
                     reason: None,
                     when: None,
                     is_else: false,
+                    repeated: false,
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -801,6 +897,7 @@ mod tests {
                     reason: None,
                     when: None,
                     is_else: false,
+                    repeated: false,
                 },
             ],
         };

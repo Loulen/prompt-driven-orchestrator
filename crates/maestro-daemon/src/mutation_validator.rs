@@ -251,6 +251,7 @@ mod tests {
             reason: None,
             when: None,
             is_else: false,
+            repeated: false,
         });
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 

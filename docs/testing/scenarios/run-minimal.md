@@ -17,22 +17,21 @@
   isn't already there, the agent creates it before driving the UI:
 
   ```yaml
+  # Inputs are emergent (#149): the `only` node declares OUTPUTS only. Its input
+  # is derived from the incoming edge and named after the source document
+  # (`user_prompt`). The End node keeps its structural `result` input.
   name: run-minimal-scenario
   version: "1.0"
   nodes:
     - id: start
       name: Start
       type: start
-      inputs: []
       outputs:
         - name: user_prompt
       view: { x: 0, y: 100 }
     - id: xCsiuWj7
       name: only
       type: doc-only
-      inputs:
-        - name: in
-          side: left
       outputs:
         - name: out
           side: top
@@ -43,11 +42,10 @@
       inputs:
         - name: result
           side: left
-      outputs: []
       view: { x: 400, y: 100 }
   edges:
     - source: { node: start, port: user_prompt }
-      target: { node: xCsiuWj7, port: in }
+      target: { node: xCsiuWj7, port: user_prompt }
     - source: { node: xCsiuWj7, port: out }
       target: { node: end, port: result }
   ```
@@ -83,13 +81,14 @@ After selecting a Run in step 2, assert:
   - "Termination reasons" section lists the `result` port with status
     **"pending"** (no edge has fired yet).
 
-### Step 0c — Start handle connected to first node (refs #49)
+### Step 0c — Start handle connected to first node (refs #49, #149)
 
 After selecting a Run (step 2), assert:
 
-- The edge from Start (`sourceHandle: "user_prompt"`) to `only`
-  (`targetHandle: "in"`) is visually rendered — no missing-edge gap between
-  the Start circle and the `only` node.
+- The edge from Start (`sourceHandle: "user_prompt"`) to `only` is visually
+  rendered — no missing-edge gap between the Start circle and the `only` node.
+  The arrow lands on the `only` **card body** (emergent input, #149): there is
+  **no input dot** to terminate on.
 - The Start node uses **TriangleHandle** for its output port (not a plain
   `<Handle>` without an `id`).
 
@@ -237,56 +236,46 @@ After the run completes (step 7):
    At minimum `_input.md` is present; depending on what claude wrote, an
    `only.md` artifact may also be there.
 
-### Step 5c — Inputs/Outputs sections visible (refs #27)
+### Step 5c — Inputs/Outputs sections visible (refs #27, #149)
 
 After selecting the running (or completed) node `only` in the DAG, the right
 panel should show **Inputs** and **Outputs** sections below the terminal
 preview.  Assert:
 
-- **Inputs** section lists port `in` with a status dot (green if the file
-  exists, grey if not).
+- **Inputs** section lists the **emergent** input `user_prompt` (#149: derived
+  from the incoming Start edge, named after the source document — NOT a declared
+  `in` port) with a status dot (green if the file exists, grey if not).
 - **Outputs** section lists port `out`.  Once the node completes and writes
   `only/iter-1/out.md`, the status dot turns green and a file-size badge
   appears.
 - Each port row displays a truncated artifact path.
 
-### Step 5d — Click output port card → modal contains MAESTRO_RUN_MINIMAL_OK (refs #27 #33)
+### Step 5d — Click output artifact → modal contains MAESTRO_RUN_MINIMAL_OK (refs #27 #33 #149)
 
 Once step 6 confirms the node completed and the artifact exists:
 
-1. Click **anywhere on the `out` output port row** (`button.port-row`) — not
-   just the "↗" icon. The entire card is the click target when files exist.
+1. Click **anywhere on the `out` output port row** in the inspector — not just
+   the "↗" icon. The entire row is the click target when files exist.
 2. Assert the **MarkdownArtifactModal** opens (`.artifact-markdown` visible).
 3. The modal body must contain the string **`MAESTRO_RUN_MINIMAL_OK`**.
 4. If the output file has YAML frontmatter, a frontmatter card is displayed
    above the markdown body.
 5. Close the modal via the **X** button, **Escape** key, or backdrop click.
-6. Verify that the `in` input port row (no files exist) renders as a
-   non-interactive `<div>` — no pointer cursor, no hover effect.
 
-### Step 1c — Edit-this-run toggle + save indicator (refs #28 #35 #39)
+### Step 5f — Slim card + output dot on the canvas (refs #149)
 
-9. With the Run still visible (any status), click the **"Edit this run"**
-   button on the run overlay. Assert:
-   - The **AddPalette** appears (buttons to add `code-mutating` / `doc-only`
-     nodes are visible).
-   - The right panel swaps to the **editor inspector** (node inspector form
-     instead of terminal preview).
-   - A footnote reading **"Editing run-scoped copy · template unchanged"**
-     is visible beneath the run overlay.
-   - The **TabBar** is visible above the canvas with the run-scoped tab.
-   - Both **Start** and **End** nodes remain visible on the edit canvas
-     (they are non-deletable and always present).
-9b. Make any edit (e.g. change the node prompt). Assert:
-   - The tab title is prefixed with **`•`** (dirty indicator).
-   - The **Save** button in the TabBar is enabled.
-   Click **Save**. Assert:
-   - The **`•`** prefix disappears from the tab title.
-   - **"Saved Xs ago"** text appears near the Save button.
-10. Click **"Stop editing"** (or the same toggle again). Assert:
-    - The **AddPalette** disappears.
-    - The right panel returns to the **NodeDetailPanel** (terminal preview).
-    - The **"Edit this run"** button is visible again on the overlay.
+Inspect the `only` node's card on the DAG canvas:
+
+- The card is **slim**: a type icon, the node **name** (`only`), and a
+  **code/doc marker** — with **no** node-id text and **no** amber
+  `interactive` badge on the card.
+- The output `out` is a **green output dot** (drag-source); its name shows on
+  hover. There is **no input dot** on the card — the Start arrow lands on the
+  body. Assert `.port-pill.kind-input` is absent on the `only` card.
+
+> The obsolete "Edit this run" / Run↔Edit mode-toggle step was removed (#146
+> unified the canvas; #149). The Save-indicator flow is covered by the
+> `edit-and-save` scenario.
 
 ## Negative checks
 
@@ -316,11 +305,13 @@ Once step 6 confirms the node completed and the artifact exists:
 {
   "verdict": "PASS" | "FAIL",
   "evidence": [
-    "step 0c: Start→only edge visually rendered with TriangleHandle",
+    "step 0c: Start→only edge rendered; arrow lands on body (no input dot)",
     "step 0d: Initial Prompt section collapsed by default, toggles on click",
     "step 0e: terminal preview wraps long lines without horizontal scroll",
     "step 4: tmux session 'maestro-<run_id>-only-iter-1' present",
     "step 5: pane shows claude TUI (trust dialog → chat view)",
+    "step 5c: Inputs section lists emergent input 'user_prompt' (not declared 'in')",
+    "step 5f: 'only' renders as a slim card with a green output dot and no input dot",
     "step 6: pane contains 'MAESTRO_RUN_MINIMAL_OK'",
     "step 7: UI shows node 'only' as completed"
   ],

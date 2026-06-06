@@ -81,6 +81,7 @@ mod tests {
             reason: None,
             when: when.map(|s| serde_yaml::from_str(s).unwrap()),
             is_else,
+            repeated: false,
         }
     }
 

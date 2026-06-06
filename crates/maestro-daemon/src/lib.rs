@@ -9651,6 +9651,7 @@ mod tests {
                 reason: None,
                 when: None,
                 is_else: false,
+                repeated: false,
             }],
         };
 
@@ -9697,6 +9698,7 @@ mod tests {
                 reason: None,
                 when: None,
                 is_else: false,
+                repeated: false,
             }],
         };
 
@@ -10533,6 +10535,7 @@ edges: []
                 reason: None,
                 when: None,
                 is_else: false,
+                repeated: false,
             }],
         };
 
@@ -10617,6 +10620,7 @@ edges: []
                 reason: None,
                 when: None,
                 is_else: false,
+                repeated: false,
             }],
         };
 

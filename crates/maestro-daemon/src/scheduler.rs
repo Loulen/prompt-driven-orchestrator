@@ -1276,6 +1276,7 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -1298,6 +1299,7 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1319,6 +1321,7 @@ mod tests {
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1344,6 +1347,7 @@ mod tests {
                 make_edge("planner", "plan", "impl-a", "plan"),
                 make_edge("planner", "plan", "impl-b", "plan"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1370,6 +1374,7 @@ mod tests {
                 make_edge("impl-a", "summary", "merger", "summary-a"),
                 make_edge("impl-b", "summary", "merger", "summary-b"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1405,6 +1410,7 @@ mod tests {
                 make_edge("b", "out", "d", "in-b"),
                 make_edge("c", "out", "d", "in-c"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1426,6 +1432,7 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1449,6 +1456,7 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1479,6 +1487,7 @@ mod tests {
                 "review",
                 "Blocked after {iter} iterations on {node-id}",
             )],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1520,6 +1529,7 @@ mod tests {
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1544,6 +1554,7 @@ mod tests {
                 make_node("reviewer", &["code"], &["review"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1579,6 +1590,7 @@ mod tests {
                 make_edge("a", "out", "b", "in"),
                 make_edge("a", "out", "c", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1629,6 +1641,7 @@ mod tests {
                 ),
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1690,6 +1703,7 @@ mod tests {
                 ),
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1771,6 +1785,7 @@ mod tests {
                 make_edge("security", "review", "merge1", "branches"),
                 make_edge("backlog", "note", "merge1", "branches"),
             ],
+            loops: Vec::new(),
         }
     }
 
@@ -1907,6 +1922,7 @@ mod tests {
                 make_edge("b", "out", "merge1", "branches"),
                 make_end_edge("merge1", "merged", "done"),
             ],
+            loops: Vec::new(),
         }
     }
 
@@ -1975,6 +1991,7 @@ mod tests {
                 make_edge("mid", "out", "merge1", "branches"),
                 make_end_edge("merge1", "merged", "done"),
             ],
+            loops: Vec::new(),
         }
     }
 
@@ -2055,6 +2072,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "merged-done"),
                 make_end_edge("classifier", "triage", "direct-done"),
             ],
+            loops: Vec::new(),
         }
     }
 
@@ -2141,6 +2159,7 @@ mod tests {
                 make_edge("security", "review", "merge1", "branches"),
                 make_end_edge("merge1", "merged", "done"),
             ],
+            loops: Vec::new(),
         }
     }
 
@@ -2235,6 +2254,7 @@ mod tests {
                 make_end_node(),
             ],
             edges: vec![make_end_edge("reviewer", "review", "Run halted")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2320,6 +2340,7 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2365,6 +2386,7 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2408,6 +2430,7 @@ mod tests {
                 make_node("downstream", &["in"], &["out"]),
             ],
             edges: vec![make_edge("sw", "pass", "downstream", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2463,6 +2486,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2538,6 +2562,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2595,6 +2620,7 @@ mod tests {
                 make_edge("sw", "pass", "end", "result"),
                 make_edge("sw", "default", "rework", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2646,6 +2672,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("sw", "default", "rework", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2709,6 +2736,7 @@ mod tests {
                 make_edge("sw", "first", "first-handler", "in"),
                 make_edge("sw", "second", "second-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2765,6 +2793,7 @@ mod tests {
                 make_edge("sw", "high", "high-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2822,6 +2851,7 @@ mod tests {
                 make_edge("b", "out", "sw", "in"),
                 make_edge("sw", "pass", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2865,6 +2895,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2985,6 +3016,7 @@ mod tests {
                 make_edge("entry", "out", "loop1", "in"),
                 make_edge("loop1", "body", "worker", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -3008,6 +3040,7 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3044,6 +3077,7 @@ mod tests {
                 make_edge("impl", "out", "sw", "in"),
                 make_edge("sw", "pass", "loop1", "break"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3075,6 +3109,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("sw", "default", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3129,6 +3164,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3176,6 +3212,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3235,6 +3272,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3309,6 +3347,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3356,6 +3395,7 @@ mod tests {
                 make_edge("impl", "out", "reviewer", "in"),
                 make_edge("reviewer", "review", "loop1", "break"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3401,6 +3441,7 @@ mod tests {
                 make_edge("tester", "out", "loop1", "break"),
                 make_edge("loop1", "done", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3479,6 +3520,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -3512,6 +3554,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -3540,6 +3583,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -3566,6 +3610,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
             edges: vec![],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -3589,6 +3634,7 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let mut state = empty_run_state();
         state
@@ -3617,6 +3663,7 @@ mod tests {
                 make_edge("loop1", "body", "a", "in"),
                 make_edge("loop1", "body", "b", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -3709,6 +3756,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3758,6 +3806,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3822,6 +3871,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "break"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3870,6 +3920,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3931,6 +3982,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3980,6 +4032,7 @@ mod tests {
                 make_node("worker", &["in"], &["out"]),
             ],
             edges: vec![make_edge("fe1", "body", "worker", "in")],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -4041,6 +4094,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4101,6 +4155,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4358,6 +4413,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let state = paused_run_state();
@@ -4376,6 +4432,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         // While paused: nothing
@@ -4406,6 +4463,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = paused_run_state();
@@ -4438,6 +4496,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         // Planner completed → implementer is ready, but run is paused
@@ -4532,6 +4591,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4556,6 +4616,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4578,6 +4639,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4616,6 +4678,7 @@ edges:
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         // a is completed → b should be proposed exactly once
@@ -4656,6 +4719,7 @@ edges:
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4715,6 +4779,7 @@ edges:
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         // Fresh state: only entry nodes (no upstream) should be proposed
@@ -4745,6 +4810,7 @@ edges:
                 make_edge("a", "out", "b", "in"),
                 make_edge("a", "out", "c", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4787,6 +4853,7 @@ edges:
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4824,6 +4891,7 @@ edges:
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4890,6 +4958,7 @@ edges:
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "worker", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -4928,6 +4997,7 @@ edges:
                 make_edge("worker", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4974,6 +5044,7 @@ edges:
                 make_edge("a", "out", "b", "in"),
                 make_edge("b", "out", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut queue = TickQueue::new();
@@ -5055,6 +5126,7 @@ edges:
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut queue = TickQueue::new();
@@ -5109,6 +5181,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -5124,6 +5197,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -5139,6 +5213,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();

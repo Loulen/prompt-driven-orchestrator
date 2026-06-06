@@ -204,6 +204,31 @@ pub struct VariableDef {
     pub default: serde_yaml::Value,
 }
 
+/// The kind of a named loop region (ADR-0011 / #148). `Bounded` loops carry an
+/// iteration counter and a `max_iter`; they are born by auto-detection of a
+/// cycle so no cycle is ever accidentally unbounded. (`Collection` — ex-ForEach,
+/// `over: <field>` — is deferred to #151 and not modeled here.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopKind {
+    Bounded,
+}
+
+/// A named bounded loop region (ADR-0011 / #148). Replaces the `Loop` node:
+/// the loop is identified by `id`, its body is the explicit `members` list
+/// (>= 1 node; a single self-looping member is valid), and the iteration
+/// counter is region-wide, keyed by `id`. `max_iter` caps re-entry; an
+/// `iter >= max` exit edge routes the exhaustion, otherwise the region blocks
+/// "exhausted — unrouted" (never a silent stall).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRegion {
+    pub id: String,
+    pub kind: LoopKind,
+    pub members: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iter: Option<serde_yaml::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub name: String,
@@ -214,6 +239,10 @@ pub struct PipelineDef {
     pub nodes: Vec<NodeDef>,
     #[serde(default)]
     pub edges: Vec<EdgeDef>,
+    /// Named bounded loop regions (ADR-0011 / #148). Absent on pipelines with no
+    /// loops; round-trips when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loops: Vec<LoopRegion>,
 }
 
 fn infer_variable_type(val: &serde_yaml::Value) -> VariableType {
@@ -463,7 +492,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
+    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges", "loops"];
     if let Some(mapping) = raw.as_mapping() {
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {
@@ -1342,6 +1371,44 @@ edges:
                 .iter()
                 .map(|d| &d.message)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn parses_bounded_loop_region_block() {
+        // ADR-0011 / #148: a loop is a named entry of the `loops:` block —
+        // `id` + `kind: bounded` + `members` (>=1) + `max_iter`. It is no longer
+        // a node.
+        let yaml = with_start_end(
+            r#"
+name: with-region
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+  - id: ab000002
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [ab000001, ab000002]
+    max_iter: 3
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.loops.len(), 1);
+        let region = &result.pipeline.loops[0];
+        assert_eq!(region.id, "review_loop");
+        assert_eq!(region.kind, LoopKind::Bounded);
+        assert_eq!(region.members, vec!["ab000001", "ab000002"]);
+        assert_eq!(
+            region.max_iter,
+            Some(serde_yaml::Value::Number(serde_yaml::Number::from(3)))
         );
     }
 

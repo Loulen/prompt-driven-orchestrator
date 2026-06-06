@@ -498,6 +498,7 @@ mod tests {
                 over: None,
             }],
             edges: vec![],
+            loops: Vec::new(),
         }
     }
 
@@ -905,6 +906,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            loops: Vec::new(),
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -977,6 +979,7 @@ mod tests {
                 over: None,
             }],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let node = &pipeline.nodes[0];
@@ -1125,6 +1128,7 @@ mod tests {
                 over: None,
             }],
             edges: vec![],
+            loops: Vec::new(),
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1171,6 +1175,7 @@ mod tests {
                 over: None,
             }],
             edges: vec![],
+            loops: Vec::new(),
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1212,6 +1217,7 @@ mod tests {
                 over: None,
             }],
             edges: vec![],
+            loops: Vec::new(),
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

@@ -9654,6 +9654,7 @@ mod tests {
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -9702,6 +9703,7 @@ mod tests {
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");
@@ -10540,6 +10542,7 @@ edges: []
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let ctx = SpawnContext {
@@ -10626,6 +10629,7 @@ edges: []
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let ctx = SpawnContext {

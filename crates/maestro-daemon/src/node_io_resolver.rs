@@ -366,6 +366,7 @@ mod tests {
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         }
     }
 
@@ -521,6 +522,7 @@ mod tests {
                 repeated: true,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 4);
@@ -660,6 +662,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            loops: Vec::new(),
         };
 
         for dir_name in ["a", "b"] {
@@ -739,6 +742,7 @@ mod tests {
                 repeated: false,
                 ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 1);
@@ -812,6 +816,7 @@ mod tests {
                 mk_node("sink", false),
             ],
             edges: vec![mk_edge("a"), mk_edge("b")],
+            loops: Vec::new(),
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1);
@@ -888,6 +893,7 @@ mod tests {
                 mk_node("sink", None),
             ],
             edges: vec![mk_edge("planner", "plan"), mk_edge("designer", "spec")],
+            loops: Vec::new(),
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1);

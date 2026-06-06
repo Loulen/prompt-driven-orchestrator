@@ -115,6 +115,7 @@ mod tests {
             variables: HashMap::new(),
             nodes,
             edges: vec![],
+            loops: Vec::new(),
         }
     }
 

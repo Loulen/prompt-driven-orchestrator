@@ -4,9 +4,10 @@ import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
-import { fetchRuns, fetchRun, fetchTriggers } from "./api";
+import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import type { RunListEntry, RunState, Trigger } from "./types";
+import type { RunListEntry, RunState, Trigger, SessionCount } from "./types";
+import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
@@ -58,6 +59,20 @@ function useRuns() {
   }, []);
 
   return { runs, refresh };
+}
+
+function useSessions() {
+  const [sessions, setSessions] = useState<SessionCount>({ live: 0, cap: 0 });
+
+  const refresh = useCallback(async () => {
+    try {
+      setSessions(await fetchSessions());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { sessions, refresh };
 }
 
 function useTriggers() {
@@ -113,6 +128,7 @@ export default function App() {
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
   const { entries: libraryPipelines, refresh: refreshLibraryPipelines } = useLibraryPipelines();
   const { runs, refresh: refreshRuns } = useRuns();
+  const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -231,10 +247,11 @@ export default function App() {
     if (!mountedRef.current) {
       mountedRef.current = true;
       refreshRuns();
+      refreshSessions();
       refreshTriggers();
       useRecentReposStore.getState().refresh();
     }
-  }, [refreshRuns, refreshTriggers]);
+  }, [refreshRuns, refreshSessions, refreshTriggers]);
 
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
@@ -313,8 +330,11 @@ export default function App() {
       }
       refreshRuns();
       refreshRun();
+      // Node start/complete/fail/waiting transitions change the live session
+      // count (#159) — keep the status-bar counter current.
+      refreshSessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshTriggers, reloadPipeline, loadPipelines, closeRunPipeline]);
+  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, reloadPipeline, loadPipelines, closeRunPipeline]);
 
   // Detect: active tab is a run whose library twin (matched by id, then name)
   // diverges from the run snapshot — pipeline or prompts, the same comparison
@@ -527,7 +547,7 @@ export default function App() {
           </ResizablePanel>
         </ResizablePanelGroup>
       </main>
-      <StatusBar status={status} />
+      <StatusBar status={status} sessions={sessions} />
       <NewRunModal
         open={newRunModalOpen}
         onClose={() => setNewRunModalOpen(false)}
@@ -647,7 +667,13 @@ const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = 
   disconnected: { dot: "bg-st-failed", label: "Daemon: disconnected" },
 };
 
-function StatusBar({ status }: { status: ConnectionStatus }) {
+function StatusBar({
+  status,
+  sessions,
+}: {
+  status: ConnectionStatus;
+  sessions: SessionCount;
+}) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
 
   return (
@@ -660,6 +686,7 @@ function StatusBar({ status }: { status: ConnectionStatus }) {
         {label}
       </span>
       <span className="flex-1" />
+      <SessionCounter live={sessions.live} cap={sessions.cap} />
       <span>v0.1.0</span>
     </footer>
   );

@@ -1,3 +1,4 @@
+pub mod admission;
 mod blackboard;
 #[allow(dead_code)]
 mod condition;
@@ -783,6 +784,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines", post(create_pipeline))
         .route("/runs", post(create_run))
         .route("/runs", get(list_runs))
+        .route("/sessions", get(sessions))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
@@ -1046,6 +1048,30 @@ async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
             .context("failed to load run ids")?;
 
     Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Count the live NodeRun sessions across *all* runs (admission control, #159).
+///
+/// Projects every run from the event log and delegates the count to
+/// [`admission::count_live_node_sessions`]. Pipeline Manager sessions are not
+/// nodes, so they are excluded by construction.
+async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
+    let run_ids = match load_all_run_ids(db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("admission: failed to load run ids: {e}");
+            return 0;
+        }
+    };
+    let mut states = Vec::with_capacity(run_ids.len());
+    for run_id in run_ids {
+        if let Ok(events) = load_events(db, &run_id).await {
+            if let Some(state) = event_log::project(&events) {
+                states.push(state);
+            }
+        }
+    }
+    admission::count_live_node_sessions(states.iter())
 }
 
 // --- Trigger scheduler ---
@@ -1918,6 +1944,33 @@ async fn spawn_node(
     iter: i64,
 ) {
     let run_id = spawn_ctx.run_id;
+
+    // Admission control (#159): bound the number of live NodeRun sessions
+    // daemon-wide. If admitting one more would exceed the cap, the node enters
+    // `waiting` and holds no session; `retry_waiting_nodes` re-drives it once a
+    // slot frees. Checked first so a throttled node creates no worktree.
+    let cap = admission::configured_cap();
+    let live = count_global_live_sessions(&state.db).await;
+    if !admission::can_admit(live, cap) {
+        let waiting = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeWaiting,
+            node_id: Some(node.id.clone()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({ "live_sessions": live, "cap": cap })),
+        };
+        if let Err(e) = append_event(state, &waiting).await {
+            error!("failed to append node_waiting for {}: {e}", node.id);
+        }
+        info!(
+            "node {} throttled into waiting ({live}/{cap} sessions live)",
+            node.id
+        );
+        return;
+    }
+
     let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
 
@@ -2323,6 +2376,66 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
         ready.len(),
         loop_seed_actions.len()
     );
+}
+
+/// Re-drive nodes throttled into `waiting` by the session cap, across *all*
+/// runs (admission control, #159).
+///
+/// Called whenever a slot may have freed (a node completed/failed/stopped, or a
+/// run ended). Because the cap is daemon-wide, a slot freed in one Run can let a
+/// `waiting` node in a *different* Run start, so this scans every run.
+/// `spawn_node` re-checks admission per node, so a node that still can't get a
+/// slot simply stays `waiting`.
+async fn retry_waiting_nodes(state: &AppState) {
+    let run_ids = match load_all_run_ids(&state.db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("retry_waiting_nodes: failed to load run ids: {e}");
+            return;
+        }
+    };
+    for run_id in run_ids {
+        let Some((events, run_state)) = reload_run_state(state, &run_id).await else {
+            continue;
+        };
+        if run_state.status != event_log::RunStatus::Running
+            && run_state.status != event_log::RunStatus::AwaitingUser
+        {
+            continue;
+        }
+        let waiting = scheduler_dispatcher::waiting_nodes(&run_state);
+        if waiting.is_empty() {
+            continue;
+        }
+
+        let repo_root = effective_repo_root(state, &run_state);
+        let pipeline_path =
+            resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+            continue;
+        };
+        let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+            continue;
+        };
+        let pipeline = parse_result.pipeline;
+        let resolved_vars = resolve_run_variables(&pipeline, &events);
+        let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
+        let artifacts_dir = worktree_dir.join(".maestro").join("artifacts");
+        let spawn_ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id: &run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &worktree_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: &repo_root,
+        };
+        for rs in &waiting {
+            if let Some(node) = pipeline.nodes.iter().find(|n| n.id == rs.node_id) {
+                spawn_node(state, &spawn_ctx, node, rs.iter).await;
+            }
+        }
+    }
 }
 
 async fn maybe_complete_run(
@@ -2934,6 +3047,15 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
+/// `GET /sessions` — the live NodeRun-session count and the configured cap,
+/// for the bottom status-bar counter (admission control, #159). Manager
+/// sessions are excluded by construction (they are not nodes).
+async fn sessions(State(state): State<Arc<AppState>>) -> Response {
+    let live = count_global_live_sessions(&state.db).await;
+    let cap = admission::configured_cap();
+    Json(serde_json::json!({ "live": live, "cap": cap })).into_response()
+}
+
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
@@ -3438,12 +3560,18 @@ async fn run_stale_detection(state: &AppState) {
             match detection {
                 stale_detector::Detection::SessionDied => {
                     info!("Stale detector: node {node_id} in run {run_id} — session died");
+                    // The session is gone: its slot freed. Re-drive throttled
+                    // `waiting` nodes across all runs (#159).
+                    retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
                     info!(
                         "Stale detector: node {node_id} in run {run_id} — auto-completing (idle + valid outputs)"
                     );
                     spawn_ready_after_event(state, run_id).await;
+                    // The node completed: its slot freed. Re-drive throttled
+                    // `waiting` nodes across all runs (#159).
+                    retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::Stale => {
                     info!(
@@ -3959,6 +4087,9 @@ async fn handle_merge_resolver_done(
         }
 
         spawn_ready_after_event(state, run_id).await;
+        // A node just finished: a session slot may have freed. Re-drive any
+        // throttled `waiting` nodes across all runs (#159).
+        retry_waiting_nodes(state).await;
 
         // Check run completion (same logic as node_done)
         let events = match load_events(&state.db, run_id).await {
@@ -4196,6 +4327,9 @@ async fn node_done(
     }
 
     spawn_ready_after_event(&state, &run_id).await;
+    // A node just finished: a session slot may have freed. Re-drive any
+    // throttled `waiting` nodes across all runs (#159).
+    retry_waiting_nodes(&state).await;
 
     // Check run completion
     let events = match load_events(&state.db, &run_id).await {
@@ -4282,6 +4416,10 @@ async fn node_fail(
     if let Err(e) = append_event(&state, &run_failed).await {
         error!("failed to append run_failed: {e}");
     }
+
+    // The run failed: its other NodeRun sessions will be reaped, freeing slots.
+    // Re-drive throttled `waiting` nodes in other runs (#159).
+    retry_waiting_nodes(&state).await;
 
     info!("Node {node_id} failed in run {run_id}");
     (StatusCode::OK, "ok").into_response()
@@ -4445,6 +4583,10 @@ async fn node_stop(
             error!("failed to append event: {e}");
         }
     }
+
+    // Stopping a running node freed its session slot. Re-drive throttled
+    // `waiting` nodes across all runs (#159).
+    retry_waiting_nodes(&state).await;
 
     info!("node_stop: stopped {node_id} iter {iter} in run {run_id}");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -4759,6 +4901,9 @@ async fn run_command(
 
             // Dispatch downstream nodes
             spawn_ready_after_event(&state, &run_id).await;
+            // The interactive node completed: its session slot freed. Re-drive
+            // throttled `waiting` nodes across all runs (#159).
+            retry_waiting_nodes(&state).await;
 
             // Check run completion
             let events = match load_events(&state.db, &run_id).await {
@@ -6773,6 +6918,64 @@ mod tests {
             .unwrap();
         let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sessions_endpoint_reports_live_count_and_cap() {
+        // The status-bar counter (#159) reads `GET /sessions`: the live
+        // NodeRun-session count and the configured cap. A single running node
+        // counts as one live session.
+        let state = test_state().await;
+        let run_id = "sessions-run";
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["live"], 1, "one running node = one live session");
+        assert!(
+            json["cap"].as_u64().unwrap() >= 1,
+            "cap should be a positive integer"
+        );
     }
 
     #[tokio::test]

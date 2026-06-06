@@ -4,6 +4,15 @@ export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" |
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
 }
+
+/**
+ * Live NodeRun-session count and the configured global cap, for the bottom
+ * status-bar counter (#159 / ADR-0012). Manager sessions are excluded.
+ */
+export interface SessionCount {
+  live: number;
+  cap: number;
+}
 export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "loop" | "for-each" | "merge";
 
 export interface RunListEntry {

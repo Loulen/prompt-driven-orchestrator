@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, SessionCount } from "./types";
 
 const BASE = "";
 
@@ -15,6 +15,12 @@ async function throwStructuredSaveError(resp: Response, fallback: string): Promi
 export async function fetchRuns(): Promise<RunListEntry[]> {
   const resp = await fetch(`${BASE}/runs`);
   if (!resp.ok) throw new Error(`GET /runs failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function fetchSessions(): Promise<SessionCount> {
+  const resp = await fetch(`${BASE}/sessions`);
+  if (!resp.ok) throw new Error(`GET /sessions failed: ${resp.status}`);
   return resp.json();
 }
 

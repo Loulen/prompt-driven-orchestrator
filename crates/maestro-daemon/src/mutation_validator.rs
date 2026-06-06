@@ -28,6 +28,7 @@ pub fn validate_run_mutation(
 
         if *status != event_log::NodeStatus::Pending {
             let status_str = match status {
+                event_log::NodeStatus::Waiting => "waiting",
                 event_log::NodeStatus::Running => "running",
                 event_log::NodeStatus::Completed => "completed",
                 event_log::NodeStatus::Failed => "failed",

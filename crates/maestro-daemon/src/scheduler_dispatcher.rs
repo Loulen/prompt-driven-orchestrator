@@ -19,6 +19,27 @@ pub fn compute_ready_to_spawn(pipeline: &PipelineDef, run_state: &RunState) -> V
         .collect()
 }
 
+/// Nodes currently throttled into the `Waiting` state for this run.
+///
+/// These already exist in the run state (so [`compute_ready_to_spawn`] skips
+/// them) but hold no session yet. The dispatcher retries them against the
+/// session cap whenever a slot may have freed (admission control, #159).
+pub fn waiting_nodes(run_state: &RunState) -> Vec<ReadySpawn> {
+    let mut waiting: Vec<ReadySpawn> = run_state
+        .nodes
+        .values()
+        .filter(|n| n.status == NodeStatus::Waiting)
+        .map(|n| ReadySpawn {
+            node_id: n.node_id.clone(),
+            iter: n.iter,
+        })
+        .collect();
+    // Deterministic order so retries are reproducible regardless of HashMap
+    // iteration order.
+    waiting.sort_by(|a, b| a.node_id.cmp(&b.node_id).then(a.iter.cmp(&b.iter)));
+    waiting
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +118,45 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
         }
+    }
+
+    fn waiting_node(id: &str, iter: i64) -> NodeState {
+        NodeState {
+            node_id: id.into(),
+            status: NodeStatus::Waiting,
+            iter,
+            started_at: None,
+            completed_at: None,
+            failure_reason: None,
+            iterations: Vec::new(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn waiting_nodes_returns_throttled_nodes_in_deterministic_order() {
+        let mut state = empty_run_state();
+        state.nodes.insert("zed".into(), waiting_node("zed", 2));
+        state.nodes.insert("abe".into(), waiting_node("abe", 1));
+        state.nodes.insert("runner".into(), running_node("runner"));
+        state.nodes.insert("done".into(), completed_node("done"));
+
+        let waiting = waiting_nodes(&state);
+        assert_eq!(
+            waiting,
+            vec![
+                ReadySpawn {
+                    node_id: "abe".into(),
+                    iter: 1,
+                },
+                ReadySpawn {
+                    node_id: "zed".into(),
+                    iter: 2,
+                },
+            ],
+            "only Waiting nodes, sorted, with their preserved iter"
+        );
     }
 
     fn completed_node(id: &str) -> NodeState {

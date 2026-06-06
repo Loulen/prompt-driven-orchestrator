@@ -39,6 +39,9 @@ pub struct NodeDefInfo {
 pub enum EventKind {
     RunStarted,
     NodeStarted,
+    /// The node is ready to run but throttled by the global session cap: it
+    /// holds no tmux session yet and waits for an admission slot (#159).
+    NodeWaiting,
     NodeAwaitingUser,
     NodeCompleted,
     NodeFailed,
@@ -99,6 +102,10 @@ pub enum RunStatus {
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Pending,
+    /// Throttled by the global session cap: the node is ready to run but no
+    /// admission slot is free, so it has *not* spawned a tmux session yet. It
+    /// transitions to `Running` once a slot frees (admission control, #159).
+    Waiting,
     Running,
     AwaitingUser,
     Completed,
@@ -374,6 +381,31 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                                 .collect(),
                         });
                     }
+                }
+            }
+            EventKind::NodeWaiting => {
+                // Throttled by the session cap: the node is ready but holds no
+                // session yet. Mark it `Waiting`; a later `NodeStarted` promotes
+                // it to `Running`. No iteration row is opened — the node has not
+                // started executing.
+                if let Some(ref node_id) = event.node_id {
+                    let iter = event.iter.unwrap_or(1);
+                    let node = state
+                        .nodes
+                        .entry(node_id.clone())
+                        .or_insert_with(|| NodeState {
+                            node_id: node_id.clone(),
+                            status: NodeStatus::Waiting,
+                            iter,
+                            started_at: None,
+                            completed_at: None,
+                            failure_reason: None,
+                            iterations: Vec::new(),
+                            frontmatter_retries: 0,
+                            frontmatter_violations: Vec::new(),
+                        });
+                    node.status = NodeStatus::Waiting;
+                    node.iter = iter;
                 }
             }
             EventKind::NodeStarted => {
@@ -967,6 +999,29 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Running);
         assert_eq!(state.nodes["planner"].status, NodeStatus::Running);
+    }
+
+    #[test]
+    fn projects_throttled_node_as_waiting_then_running() {
+        // A node throttled by the cap enters `waiting`; once a slot frees it is
+        // spawned and `node_started` transitions it to `running`.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "capped" }),
+            ),
+            make_event(EventKind::NodeWaiting, Some("worker"), Some(1)),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Waiting);
+        // A run with only a waiting node is still considered Running overall.
+        assert_eq!(state.status, RunStatus::Running);
+
+        let mut events = events;
+        events.push(make_event(EventKind::NodeStarted, Some("worker"), Some(1)));
+        let state = project(&events).unwrap();
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Running);
     }
 
     #[test]

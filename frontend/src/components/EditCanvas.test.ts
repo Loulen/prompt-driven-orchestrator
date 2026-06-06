@@ -8,7 +8,7 @@ import {
   markerReached,
   statusForNode,
 } from "./editNodeDerivation";
-import type { NodeStatus, NodeType, PipelineDef, RunState, RunStatus } from "../types";
+import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 
 function makePipeline(): PipelineDef {
   return {
@@ -446,6 +446,59 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
     const edges = deriveEditEdges(pipeline);
     expect(edges[0].data?.label).toBeUndefined();
     expect(edges[0].data?.isConditional).toBe(false);
+  });
+});
+
+describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
+  function emergentPipeline(targetSide?: PortSide): PipelineDef {
+    return {
+      name: "anchor",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "src",
+          name: "src",
+          type: "doc-only",
+          inputs: [],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "dst",
+          name: "dst",
+          // Emergent: no declared inputs, so the arrow lands on the body (#149).
+          type: "code-mutating",
+          inputs: [],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "src", port: "out" },
+          target: { node: "dst", port: "out" },
+          target_side: targetSide,
+        },
+      ],
+    };
+  }
+
+  it("binds an emergent incoming edge to the chosen side's body handle", () => {
+    const edges = deriveEditEdges(emergentPipeline("right"));
+    expect(edges[0].targetHandle).toBe("__anchor:right");
+  });
+
+  it("defaults to the left body handle when no target_side is set (legacy anchoring)", () => {
+    const edges = deriveEditEdges(emergentPipeline(undefined));
+    expect(edges[0].targetHandle).toBe("__anchor:left");
+  });
+
+  it("forwards the chosen side to the edge so the route arrives from it (no forced left->right)", () => {
+    const edges = deriveEditEdges(emergentPipeline("top"));
+    expect(edges[0].data?.targetSide).toBe("top");
   });
 });
 

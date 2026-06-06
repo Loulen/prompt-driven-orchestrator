@@ -180,6 +180,12 @@ pub struct EdgeDef {
     /// Pinned absolute waypoints (#154). Only meaningful when `mode == Manual`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waypoints: Option<Vec<EdgeWaypoint>>,
+    /// The target card side this incoming edge anchors on (#168). Like
+    /// `mode`/`waypoints` this is *layout*, not semantics: it persists so a
+    /// shared workflow keeps its arrow arrival sides, but is excluded from the
+    /// semantic pipeline-diff. Absent ⇒ left (legacy anchoring), never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_side: Option<PortSide>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1559,6 +1565,70 @@ edges:
         let redge = &reparsed.edges[0];
         assert_eq!(redge.mode, Some(EdgeRouteMode::Manual));
         assert_eq!(redge.waypoints.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parses_edge_target_side_and_round_trips() {
+        // #168: the incoming-edge anchor side is layout — it persists in the
+        // file so a shared workflow keeps its arrow arrival sides, and the
+        // daemon parses + re-serializes it without drift.
+        let yaml = with_start_end(
+            r#"
+name: anchored-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+    target_side: top
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.edges[0].target_side, Some(PortSide::Top));
+
+        // Round-trips: re-serialize, re-parse — the anchor side survives.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.edges[0].target_side, Some(PortSide::Top));
+    }
+
+    #[test]
+    fn edge_target_side_defaults_to_none() {
+        // An edge without an explicit anchor side parses with `target_side: None`
+        // (legacy left anchoring is the canvas default, never written to file).
+        let yaml = with_start_end(
+            r#"
+name: unanchored-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.edges[0].target_side, None);
+        // Absent ⇒ never serialized (clean file, round-trips by absence).
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(!serialized.contains("target_side"));
     }
 
     #[test]

@@ -1047,6 +1047,41 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).not.toContain("waypoints:");
   });
 
+  it("serializes an edge's target_side so the drop-position anchor survives reload (#168)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "code-mutating",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          target_side: "top",
+        },
+      ]),
+    );
+    expect(yaml).toContain("target_side: top");
+  });
+
+  it("omits target_side for a left-anchored (legacy) edge (#168)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "code-mutating",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+        },
+      ]),
+    );
+    expect(yaml).not.toContain("target_side:");
+  });
+
   it("serializes multi-field frontmatter with all fields at same depth", () => {
     const node: NodeDef = {
       id: "multi", name: "multi", type: "doc-only",

@@ -146,6 +146,12 @@ Le tracé d'une edge est **orthogonal** (connecteur à angle droit) : l'auto-rou
 
 `mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur routage ou les positions de leurs nœuds comparent **égaux** (déplacer un nœud ou bouger un waypoint ne marque jamais le pipeline « modifié »). Cf. #154, design screen 14.
 
+### Ancrage de l'edge entrante — `target_side` (#168)
+
+Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur un dot d'input déclaré mais **sur le corps** du nœud cible. `target_side` mémorise **de quel côté** (`left` / `right` / `top` / `bottom`) la flèche s'ancre : la règle décidée est *le côté de la carte cible le plus proche du point de dépôt*. Le routage orthogonal arrive alors par ce côté (plus de gauche-vers-droite forcé). Absent ⇒ `left` (ancrage historique), jamais écrit.
+
+`target_side` est du **layout, pas de la sémantique** (au même titre que `mode`/`waypoints`/`view`) : il persiste dans le fichier (l'arrivée des flèches voyage avec un workflow partagé) mais est exclu du diff sémantique. Les ports **déclarés** (l'input `result` du nœud `End`, les ports des nœuds structurels `merge` / `loop` / `for-each`) gardent leur côté fixe et **ne sont pas** affectés par l'ancrage au dépôt.
+
 ---
 
 ## Blackboard

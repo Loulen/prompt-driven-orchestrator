@@ -17,12 +17,19 @@ import {
   deleteWaypoint,
 } from "../lib/edgePath";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeWaypoint } from "../types";
+import type { EdgeWaypoint, PortSide } from "../types";
 
 export interface OrthogonalEdgeData extends Record<string, unknown> {
   edgeIndex: number;
   mode?: "auto" | "manual" | null;
   waypoints?: EdgeWaypoint[] | null;
+  /**
+   * The target card side the incoming arrow anchors on (#168). Layout, mirrors
+   * `EdgeDef.target_side`. xyflow already derives the arrival geometry from the
+   * bound side-handle's `Position`, so this is carried mainly for inspection and
+   * round-tripping; the route arrives from this side, not always the left.
+   */
+  targetSide?: PortSide;
   isConditional: boolean;
   isElse: boolean;
   label?: string;

@@ -141,6 +141,16 @@ describe("EditNode slim card (issue #149)", () => {
     const { container } = render(<EditNode {...workProps()} />, { wrapper: Wrapper });
     expect(container.querySelectorAll(".port-pill.kind-input")).toHaveLength(0);
   });
+
+  it("renders a body-covering target handle on each side so an edge can anchor by drop position (#168)", () => {
+    const { container } = render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+    const handleIds = Array.from(
+      container.querySelectorAll(".react-flow__handle"),
+    ).map((h) => h.getAttribute("data-handleid"));
+    for (const side of ["left", "right", "top", "bottom"]) {
+      expect(handleIds).toContain(`__anchor:${side}`);
+    }
+  });
 });
 
 describe("EditNode Start marker — input images on the canvas (issue #145)", () => {

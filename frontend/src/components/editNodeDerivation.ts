@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
+import { anchorHandleId } from "../lib/anchorSide";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -352,19 +353,32 @@ export function edgeIndexFromId(edgeId: string): number | null {
  *
  * - Structural nodes (merge / loop / for-each) render an id'd target handle per
  *   declared input via `PortPill`, so the edge keeps its declared port name.
- * - Regular `edit` nodes (doc-only / code-mutating / start / end) render a
- *   single body-covering target handle whose id is the lone declared input name
- *   or `undefined` when none is declared. Inputs are EMERGENT (#149): after
- *   migration regular nodes declare none, so the handle is id-less and the edge
- *   must target `null` to bind to it. The End node keeps its declared `result`
- *   input, so its handle stays id'd and the edge keeps `result`.
+ * - Structural nodes (merge / loop / for-each) render an id'd target handle per
+ *   declared input via `PortPill`, so the edge keeps its declared port name.
+ * - Regular `edit` nodes with a single declared input (e.g. the End node's
+ *   `result`) keep that declared, side-fixed handle — those ports are
+ *   unaffected by anchoring (#168).
+ * - Emergent regular `edit` nodes (doc-only / code-mutating; 0 declared inputs,
+ *   ADR-0011 / #149) render one body-covering target handle PER SIDE. The edge
+ *   binds to the handle for its chosen `target_side` (#168) so the arrow anchors
+ *   and routes from that side; absent a `target_side`, it binds to the left
+ *   handle, reproducing the legacy left-anchored behaviour.
  */
-function resolveTargetHandle(target: PipelineDef["nodes"][number], declaredPort: string): string | null {
+function resolveTargetHandle(
+  target: PipelineDef["nodes"][number],
+  declaredPort: string,
+  targetSide: PortSide | null | undefined,
+): string | null {
   if (target.type === "merge" || target.type === "loop" || target.type === "for-each") {
     return declaredPort || null;
   }
-  // Mirrors the slim card's body handle id rule in EditCanvas.tsx.
-  return target.inputs.length === 1 ? target.inputs[0].name : null;
+  // A single declared input owns a fixed-side handle; declared ports are
+  // unaffected by drop-position anchoring.
+  if (target.inputs.length === 1) {
+    return target.inputs[0].name;
+  }
+  // Emergent body: anchor on the chosen side (default left = legacy).
+  return anchorHandleId(targetSide ?? "left");
 }
 
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
@@ -373,8 +387,12 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
+    // The persisted anchor side (#168). Only meaningful for an emergent body
+    // target; declared/structural handles ignore it. Defaults to `left` so an
+    // un-anchored edge keeps the legacy left arrival.
+    const targetSide: PortSide = e.target_side ?? "left";
     const targetHandle = targetNode
-      ? resolveTargetHandle(targetNode, e.target.port)
+      ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
     const isElse = e.else === true;
     const hasWhen = e.when != null && Object.keys(e.when).length > 0;
@@ -409,6 +427,7 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         edgeIndex: i,
         mode: e.mode ?? null,
         waypoints,
+        targetSide,
         isConditional,
         isElse,
         label,

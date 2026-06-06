@@ -302,6 +302,15 @@ export interface EdgeDef {
   mode?: EdgeRouteMode | null;
   /** Pinned absolute waypoints (#154). Only meaningful when `mode === "manual"`. */
   waypoints?: EdgeWaypoint[] | null;
+  /**
+   * The target card side the incoming arrow anchors on (#168). When an edge is
+   * dropped on an emergent node body (ADR-0011 / #149), the arrow anchors on the
+   * side nearest the drop point rather than always the left. Like `mode`/
+   * `waypoints` this is LAYOUT, not semantics: it persists in the file (so a
+   * shared workflow keeps its arrow arrival sides) but is excluded from the
+   * semantic pipeline-diff. Absent ⇒ left (legacy anchoring).
+   */
+  target_side?: PortSide | null;
 }
 
 /**

@@ -2331,7 +2331,7 @@ async fn create_run_core(
 
     spawn_ready_after_event(state, &run_id).await;
 
-    let needs_name = req.name.as_ref().map_or(true, |n| n.is_empty());
+    let needs_name = req.name.as_ref().is_none_or(|n| n.is_empty());
     spawn_manager_session(state, &run_id, &worktree_dir, needs_name);
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);

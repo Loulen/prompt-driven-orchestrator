@@ -341,9 +341,7 @@ pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String 
 
 pub fn build_manager_preamble(run_id: &str, daemon_url: &str, needs_name: bool) -> String {
     let auto_name_instruction = if needs_name {
-        format!(
-            "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n"
-        )
+        "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n".to_string()
     } else {
         String::new()
     };

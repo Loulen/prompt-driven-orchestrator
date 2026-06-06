@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::event_log::{NodeStatus, RunState};
 use crate::pipeline::{NodeType, PipelineDef};
@@ -149,6 +149,145 @@ pub fn compute_body_subgraph(
     }
 
     Ok(body)
+}
+
+/// Detects the cycles in a pipeline's edge graph (ADR-0011 / #148).
+///
+/// A *cycle* is either a strongly-connected component of two or more nodes, or a
+/// single node carrying a self-edge (a node looping on itself is a valid bounded
+/// region of one member). Each returned cycle is the set of its member node ids,
+/// ordered by their position in `pipeline.nodes` for determinism. The list of
+/// cycles is itself ordered by the position of each cycle's first member.
+///
+/// This is the topological signature a bounded loop region is auto-materialized
+/// from, so that no cycle is ever accidentally unbounded.
+pub fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
+    // Index nodes for stable ordering and adjacency by id.
+    let order: HashMap<&str, usize> = pipeline
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+
+    // Adjacency list (source -> targets), restricted to known nodes.
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut has_self_edge: HashSet<&str> = HashSet::new();
+    for edge in &pipeline.edges {
+        let (s, t) = (edge.source.node.as_str(), edge.target.node.as_str());
+        if !order.contains_key(s) || !order.contains_key(t) {
+            continue;
+        }
+        if s == t {
+            has_self_edge.insert(s);
+        }
+        adj.entry(s).or_default().push(t);
+    }
+
+    // Tarjan's strongly-connected-components, iterative-friendly via recursion on
+    // a bounded graph (pipelines are small).
+    struct Tarjan<'a> {
+        adj: &'a HashMap<&'a str, Vec<&'a str>>,
+        index: HashMap<&'a str, usize>,
+        lowlink: HashMap<&'a str, usize>,
+        on_stack: HashSet<&'a str>,
+        stack: Vec<&'a str>,
+        next_index: usize,
+        sccs: Vec<Vec<&'a str>>,
+    }
+
+    impl<'a> Tarjan<'a> {
+        fn strongconnect(&mut self, v: &'a str) {
+            self.index.insert(v, self.next_index);
+            self.lowlink.insert(v, self.next_index);
+            self.next_index += 1;
+            self.stack.push(v);
+            self.on_stack.insert(v);
+
+            if let Some(targets) = self.adj.get(v) {
+                for &w in targets {
+                    if !self.index.contains_key(w) {
+                        self.strongconnect(w);
+                        let low_w = self.lowlink[w];
+                        let low_v = self.lowlink[v];
+                        self.lowlink.insert(v, low_v.min(low_w));
+                    } else if self.on_stack.contains(w) {
+                        let idx_w = self.index[w];
+                        let low_v = self.lowlink[v];
+                        self.lowlink.insert(v, low_v.min(idx_w));
+                    }
+                }
+            }
+
+            if self.lowlink[v] == self.index[v] {
+                let mut component = Vec::new();
+                while let Some(w) = self.stack.pop() {
+                    self.on_stack.remove(w);
+                    component.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                self.sccs.push(component);
+            }
+        }
+    }
+
+    let mut tarjan = Tarjan {
+        adj: &adj,
+        index: HashMap::new(),
+        lowlink: HashMap::new(),
+        on_stack: HashSet::new(),
+        stack: Vec::new(),
+        next_index: 0,
+        sccs: Vec::new(),
+    };
+    for node in &pipeline.nodes {
+        let id = node.id.as_str();
+        if !tarjan.index.contains_key(id) {
+            tarjan.strongconnect(id);
+        }
+    }
+
+    // Keep components that are cyclic: size >= 2, or a single self-edged node.
+    let mut cycles: Vec<Vec<String>> = tarjan
+        .sccs
+        .into_iter()
+        .filter(|comp| comp.len() >= 2 || comp.first().is_some_and(|n| has_self_edge.contains(n)))
+        .map(|mut comp| {
+            comp.sort_by_key(|id| order.get(id).copied().unwrap_or(usize::MAX));
+            comp.into_iter().map(String::from).collect()
+        })
+        .collect();
+
+    // Order cycles by their first member's node position.
+    cycles.sort_by_key(|members| {
+        members
+            .first()
+            .and_then(|id| order.get(id.as_str()).copied())
+            .unwrap_or(usize::MAX)
+    });
+
+    cycles
+}
+
+/// Identifies the *entry* node of a loop region (ADR-0011 / #148): the member
+/// that has an incoming edge from a node outside the region. The entry is the
+/// node re-spawned once per lap.
+///
+/// Returns the first such member in `members` order, or `None` if no member is
+/// fed from outside (a closed island — degenerate, no defined entry).
+pub fn region_entry(pipeline: &PipelineDef, members: &[String]) -> Option<String> {
+    let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
+    members
+        .iter()
+        .find(|m| {
+            pipeline
+                .edges
+                .iter()
+                .any(|e| e.target.node == **m && !member_set.contains(e.source.node.as_str()))
+        })
+        .cloned()
 }
 
 /// Returns the set of all nodes transitively reachable from `node_id` by
@@ -917,5 +1056,94 @@ mod tests {
         state.nodes.insert("impl".into(), completed_node("impl"));
         state.nodes.insert("sw".into(), completed_node("sw"));
         assert_eq!(nodes_remaining(&pipeline, &state), 1);
+    }
+
+    #[test]
+    fn detect_cycles_finds_a_two_node_cycle() {
+        // ADR-0011 / #148: a bounded loop is born by auto-detection of a cycle.
+        // implementer -> reviewer -> implementer is one cycle of two members.
+        let pipeline = make_pipeline(
+            vec![
+                make_node("impl", NodeType::CodeMutating, &["review"], &["code"]),
+                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+            ],
+            vec![
+                make_edge("impl", "code", "rev", "code"),
+                make_edge("rev", "review", "impl", "review"),
+            ],
+        );
+
+        let cycles = detect_cycles(&pipeline);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0], vec!["impl".to_string(), "rev".to_string()]);
+    }
+
+    #[test]
+    fn detect_cycles_finds_a_self_edge() {
+        // A self-looping member is a valid bounded region of ONE member
+        // (ADR-0011 / #148: self-edge included).
+        let pipeline = make_pipeline(
+            vec![
+                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
+                make_node(
+                    "worker",
+                    NodeType::CodeMutating,
+                    &["seed", "again"],
+                    &["out"],
+                ),
+                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+            ],
+            vec![
+                make_edge("a", "out", "worker", "seed"),
+                make_edge("worker", "out", "worker", "again"),
+                make_edge("worker", "out", "b", "in"),
+            ],
+        );
+
+        let cycles = detect_cycles(&pipeline);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0], vec!["worker".to_string()]);
+    }
+
+    #[test]
+    fn detect_cycles_ignores_acyclic_graph() {
+        // A pure DAG has no cycles — nothing to auto-materialize.
+        let pipeline = make_pipeline(
+            vec![
+                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
+            ],
+            vec![
+                make_edge("a", "out", "b", "in"),
+                make_edge("b", "out", "c", "in"),
+            ],
+        );
+        assert!(detect_cycles(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn region_entry_is_the_member_fed_from_outside() {
+        // The region entry is the member with an incoming edge from a non-member
+        // (the node where the loop is entered, re-spawned once per lap).
+        let members = vec!["impl".to_string(), "rev".to_string()];
+        let pipeline = make_pipeline(
+            vec![
+                make_node("start", NodeType::Start, &[], &["user_prompt"]),
+                make_node(
+                    "impl",
+                    NodeType::CodeMutating,
+                    &["task", "review"],
+                    &["code"],
+                ),
+                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+            ],
+            vec![
+                make_edge("start", "user_prompt", "impl", "task"),
+                make_edge("impl", "code", "rev", "code"),
+                make_edge("rev", "review", "impl", "review"),
+            ],
+        );
+        assert_eq!(region_entry(&pipeline, &members), Some("impl".to_string()));
     }
 }

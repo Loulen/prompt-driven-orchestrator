@@ -95,6 +95,34 @@ async fn create_trigger(daemon: &TestDaemon, name: &str, cron: &str) -> serde_js
     resp.json().await.unwrap()
 }
 
+/// Create a Trigger with a guard command (and no static input template, so the
+/// guard's stdout is the only input source).
+async fn create_trigger_with_guard(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    guard_command: &str,
+) -> serde_json::Value {
+    let body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "guard_command": guard_command,
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers (guarded) should succeed"
+    );
+    resp.json().await.unwrap()
+}
+
 async fn list_runs(daemon: &TestDaemon) -> Vec<serde_json::Value> {
     reqwest::Client::new()
         .get(format!("{}/runs", daemon.url()))
@@ -104,6 +132,32 @@ async fn list_runs(daemon: &TestDaemon) -> Vec<serde_json::Value> {
         .json()
         .await
         .unwrap()
+}
+
+async fn list_fires(daemon: &TestDaemon, trigger_id: &str) -> Vec<serde_json::Value> {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/{}/fires", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn get_trigger(daemon: &TestDaemon, trigger_id: &str) -> serde_json::Value {
+    let triggers: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/triggers", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    triggers
+        .into_iter()
+        .find(|t| t["id"].as_str() == Some(trigger_id))
+        .expect("trigger should exist")
 }
 
 #[tokio::test]
@@ -227,6 +281,188 @@ async fn missed_slots_are_forward_only_no_backfill() {
     );
 
     cleanup_runs(&daemon).await;
+    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
+}
+
+/// The resolved Run input is recorded in the `run_started` event payload; this
+/// reads it back so a test can assert what input a guarded fire produced.
+async fn run_started_input(daemon: &TestDaemon, run_id: &str) -> String {
+    let events: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/runs/{}/events", daemon.url(), run_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    events
+        .iter()
+        .find(|e| e["kind"].as_str() == Some("run_started"))
+        .and_then(|e| e["payload"]["input"].as_str())
+        .expect("run_started event with an input")
+        .to_string()
+}
+
+#[tokio::test]
+async fn guard_exit_zero_fires_with_stdout_as_input() {
+    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Guard exits 0 and prints work to do; its stdout becomes the Run input.
+    let trigger =
+        create_trigger_with_guard(&daemon, "fixer", "* * * * *", "printf 'issue-42'").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1, "guard exit 0 must fire a Run");
+    let run_id = runs[0]["run_id"].as_str().unwrap();
+    assert_eq!(
+        run_started_input(&daemon, run_id).await,
+        "issue-42",
+        "the guard stdout must be the Run input"
+    );
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
+}
+
+#[tokio::test]
+async fn guard_exit_nonzero_skips_without_firing() {
+    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Guard exits non-zero: no work to do, so no Run is created.
+    let trigger = create_trigger_with_guard(&daemon, "no-work", "* * * * *", "exit 3").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a non-zero guard must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
+
+    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
+}
+
+#[tokio::test]
+async fn guard_timeout_records_guard_error_and_skips() {
+    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
+    // Shrink the guard timeout so a hung guard times out fast in the test.
+    std::env::set_var(maestro_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV, "200");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A guard that never returns: the hard timeout classifies it as an error,
+    // records `guard-error`, and no Run is created.
+    let trigger = create_trigger_with_guard(&daemon, "hung-guard", "* * * * *", "sleep 30").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a timed-out guard must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("guard-error"),
+        "a guard timeout must record a guard-error outcome"
+    );
+
+    std::env::remove_var(maestro_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV);
+    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
+}
+
+#[tokio::test]
+async fn dangling_pipeline_reference_yields_error_outcome_and_stops_firing() {
+    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "audit", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // The pipeline is deleted out from under the Trigger (renamed/removed).
+    std::fs::remove_file(
+        daemon
+            .repo_root()
+            .join(".maestro")
+            .join("pipelines")
+            .join(format!("{PIPELINE_NAME}.yaml")),
+    )
+    .unwrap();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a dangling pipeline must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("error"),
+        "a dangling pipeline must record an error outcome"
+    );
+    // The Trigger stops firing: next_fire is cleared, last_outcome shows error.
+    let t = get_trigger(&daemon, &trigger_id).await;
+    assert!(
+        t["next_fire_at"].is_null(),
+        "a dangling-ref Trigger must stop firing (next_fire cleared)"
+    );
+    assert_eq!(t["last_outcome"].as_str(), Some("error"));
+
+    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
+}
+
+#[tokio::test]
+async fn dangling_target_repo_reference_yields_error_outcome() {
+    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A target repo that does not exist at fire time (deleted/renamed).
+    let body = serde_json::json!({
+        "name": "ghost-repo",
+        "pipeline_id": PIPELINE_NAME,
+        "cron": "* * * * *",
+        "input_template": "audit",
+        "target_repo": daemon.repo_root().to_string_lossy(),
+    });
+    let created: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let trigger_id = created["id"].as_str().unwrap().to_string();
+
+    // Remove the git repo so the target_repo no longer validates.
+    std::fs::remove_dir_all(daemon.repo_root().join(".git")).unwrap();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a dangling target repo must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
+
     std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 

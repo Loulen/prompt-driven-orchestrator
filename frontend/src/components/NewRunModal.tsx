@@ -23,14 +23,15 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   const [autoName, setAutoName] = useState(true);
   const [input, setInput] = useState("");
   const [overrides, setOverrides] = useState<Record<string, string>>({});
-  // Trigger mode (#160): the same modal creates a Trigger via a [Run now |
-  // Trigger] toggle. Schedule-only in this slice (no guard yet, #161).
+  // Trigger mode: the same modal creates a Trigger via a [Run now | Trigger]
+  // toggle. Schedule (#160) plus an optional guard command (#161).
   const [mode, setMode] = useState<"run" | "trigger">("run");
   const [triggerName, setTriggerName] = useState("");
   const [cronPresetId, setCronPresetId] = useState<CronPresetId>("daily");
   const [dailyHour, setDailyHour] = useState(9);
   const [dailyMinute, setDailyMinute] = useState(0);
   const [rawCron, setRawCron] = useState("");
+  const [guardCommand, setGuardCommand] = useState("");
   const [varsOpen, setVarsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -287,11 +288,28 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
       ? rawCron.trim()
       : presetToCron(cronPresetId, { hour: dailyHour, minute: dailyMinute });
 
-  // Trigger creation needs a name, a pipeline, a valid repo and a cron. The
-  // empty-input + prompt-required reject is enforced server-side and surfaced
-  // inline (CONTEXT.md → Trigger), so we don't pre-block it here.
-  const canCreateTrigger =
-    repoValid && selectedPipeline && triggerName.trim().length > 0 && resolvedCron.length > 0;
+  // The fire_decision reject rule, mirrored client-side: a prompt-required
+  // pipeline whose resolved input would be empty (no guard, no input template)
+  // is a misconfiguration. We pre-block Create and explain why, in addition to
+  // the authoritative server-side reject (CONTEXT.md → Trigger; #161).
+  const triggerInputRejectReason =
+    mode === "trigger" &&
+    selectedPipeline &&
+    !promptOptional &&
+    guardCommand.trim().length === 0 &&
+    input.trim().length === 0
+      ? "This pipeline requires a prompt. Add a guard command, an input template, or mark the pipeline prompt-not-required."
+      : null;
+
+  // Trigger creation needs a name, a pipeline, a valid repo and a cron, and a
+  // resolvable input when the pipeline requires a prompt.
+  const canCreateTrigger = Boolean(
+    repoValid &&
+      selectedPipeline &&
+      triggerName.trim().length > 0 &&
+      resolvedCron.length > 0 &&
+      !triggerInputRejectReason,
+  );
 
   const handleCreateTrigger = useCallback(async () => {
     if (!selectedPipeline || !canCreateTrigger) return;
@@ -313,12 +331,14 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
         pipeline_id: selectedPipeline.id,
         cron: resolvedCron,
         input_template: input.trim() || undefined,
+        guard_command: guardCommand.trim() || undefined,
         target_repo: targetRepo.trim() || undefined,
         source_branch: sourceBranch || undefined,
         variables,
       });
       setTriggerName("");
       setInput("");
+      setGuardCommand("");
       setOverrides({});
       setMode("run");
       onClose();
@@ -334,6 +354,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     triggerName,
     resolvedCron,
     input,
+    guardCommand,
     targetRepo,
     sourceBranch,
     flushPendingSaves,
@@ -706,6 +727,26 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                     Triggers fire only while the daemon is running (best-effort in v1).
                   </span>
                 </div>
+
+                {/* Guard command (Trigger mode only, #161) */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+                    Guard command (optional)
+                  </label>
+                  <textarea
+                    className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                    style={{ fontSize: "12px" }}
+                    rows={2}
+                    placeholder="e.g. gh issue list --label ready-for-agent"
+                    value={guardCommand}
+                    onChange={(e) => setGuardCommand(e.target.value)}
+                    data-testid="guard-command-input"
+                  />
+                  <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                    Runs before each fire from the target repo. Exit 0 fires (its stdout becomes the
+                    Run input); a non-zero exit skips. Bounded by a 60s timeout.
+                  </span>
+                </div>
               </div>
             )}
 
@@ -876,6 +917,16 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {mode === "trigger" && triggerInputRejectReason && !error && (
+            <div
+              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+              style={{ fontSize: "11.5px" }}
+              data-testid="trigger-reject-reason"
+            >
+              {triggerInputRejectReason}
             </div>
           )}
 

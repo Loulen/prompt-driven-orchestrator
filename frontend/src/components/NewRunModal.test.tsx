@@ -744,4 +744,60 @@ describe("NewRunModal — Trigger mode (#160)", () => {
       expect(screen.getByText(/requires a prompt/i)).toBeInTheDocument();
     });
   });
+
+  it("disables Create and shows the reason when a prompt-required pipeline has no guard or input (#161)", async () => {
+    // A pipeline that requires a prompt; with no guard and no input template,
+    // the modal must disable Create and explain why, mirroring the server reject.
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Needs Prompt", scope: "repo", prompt_required: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bad" },
+    });
+
+    expect(screen.getByTestId("create-trigger-button")).toBeDisabled();
+    expect(screen.getByText(/requires a prompt/i)).toBeInTheDocument();
+
+    // Adding a guard command resolves the misconfiguration.
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+    expect(screen.getByTestId("create-trigger-button")).not.toBeDisabled();
+  });
+
+  it("exposes a guard command field with its contract helper text (#161)", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("guard-command-input")).toBeInTheDocument();
+    // The contract is explained inline so a correct guard can be written
+    // without reading docs (exit 0 fires, non-zero skips, stdout = input).
+    expect(screen.getByText(/exit 0 fires/i)).toBeInTheDocument();
+    expect(screen.getByText(/stdout/i)).toBeInTheDocument();
+  });
+
+  it("passes the guard command to createTrigger (#161)", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Fixer" },
+    });
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list --label ready-for-agent" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Fixer",
+          guard_command: "gh issue list --label ready-for-agent",
+        }),
+      );
+    });
+  });
 });

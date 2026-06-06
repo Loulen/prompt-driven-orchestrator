@@ -9,6 +9,7 @@ mod event_log;
 mod fire_decision;
 mod frontmatter_parser;
 pub mod graph_resolver;
+mod guard_runner;
 pub mod library_store;
 #[allow(dead_code)]
 mod loop_region;
@@ -1086,24 +1087,54 @@ async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
     false
 }
 
+/// Load a Trigger's target pipeline yaml from the library (falling back to a
+/// pipeline file under the repo). `None` means a dangling pipeline reference.
+fn trigger_pipeline_yaml(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
+    library_store::pipelines::get_yaml(&state.repo_root, &trigger.pipeline_id).or_else(|| {
+        std::fs::read_to_string(resolve_pipeline_path(
+            &state.repo_root,
+            &trigger.pipeline_id,
+        ))
+        .ok()
+    })
+}
+
 /// Resolve the target pipeline's `prompt_required` flag for a Trigger; defaults
 /// to `true` (and treats a missing/unparseable pipeline as such) so a dangling
 /// reference rejects rather than fires blind.
 fn trigger_prompt_required(state: &AppState, trigger: &trigger_store::Trigger) -> bool {
-    let yaml =
-        library_store::pipelines::get_yaml(&state.repo_root, &trigger.pipeline_id).or_else(|| {
-            std::fs::read_to_string(resolve_pipeline_path(
-                &state.repo_root,
-                &trigger.pipeline_id,
-            ))
-            .ok()
-        });
-    match yaml {
+    match trigger_pipeline_yaml(state, trigger) {
         Some(y) => pipeline::parse_pipeline(&y)
             .map(|r| r.pipeline.prompt_required)
             .unwrap_or(true),
         None => true,
     }
+}
+
+/// Check a Trigger's external references before firing. Returns an error reason
+/// if the pipeline or the target repo is dangling (deleted/renamed since the
+/// Trigger was created), so the scheduler can surface an error outcome and stop
+/// firing rather than rot silently (*Sharp tool*; ADR-0012).
+fn trigger_dangling_reason(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
+    if trigger_pipeline_yaml(state, trigger).is_none() {
+        return Some(format!("pipeline not found: {}", trigger.pipeline_id));
+    }
+    if let Some(ref repo) = trigger.target_repo {
+        if let Err(msg) = validate_target_repo(repo) {
+            return Some(msg);
+        }
+    }
+    None
+}
+
+/// Resolve the working directory a guard runs in: the Trigger's target repo when
+/// set, otherwise the daemon's repo root.
+fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> PathBuf {
+    trigger
+        .target_repo
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.repo_root.clone())
 }
 
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
@@ -1120,10 +1151,35 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
     let now = chrono::Utc::now();
 
     for trigger in due {
+        // A dangling pipeline/repo reference: surface an error outcome and stop
+        // firing (clear next_fire) rather than rot silently or auto-delete.
+        if let Some(reason) = trigger_dangling_reason(state, &trigger) {
+            let _ = trigger_store::set_next_fire(&state.db, &trigger.id, None).await;
+            let record = trigger_store::FireRecord {
+                outcome: "error".to_string(),
+                reason: Some(reason),
+                run_id: None,
+            };
+            record_and_broadcast_fire(state, &trigger.id, &record).await;
+            continue;
+        }
+
         let has_live = trigger_has_live_run(&state.db, &trigger.id).await;
         let prompt_required = trigger_prompt_required(state, &trigger);
-        // Cron-only slice: no guard execution yet (#161).
-        let plan = trigger_scheduler::plan_tick(&trigger, now, has_live, None, prompt_required);
+
+        // Run the guard (if any) off the tick, bounded by a hard timeout, but
+        // only when overlap wouldn't already skip — never spend a guard run on a
+        // tick we'd skip anyway.
+        let overlap_skips = has_live && trigger.overlap_policy != "allow";
+        let guard = match (&trigger.guard_command, overlap_skips) {
+            (Some(cmd), false) if !cmd.trim().is_empty() => {
+                let cwd = trigger_guard_cwd(state, &trigger);
+                Some(guard_runner::run_guard(cmd, &cwd, guard_runner::guard_timeout()).await)
+            }
+            _ => None,
+        };
+
+        let plan = trigger_scheduler::plan_tick(&trigger, now, has_live, guard, prompt_required);
 
         // Recompute the next fire (forward-only).
         if let Err(e) =
@@ -6562,6 +6618,7 @@ fn create_worktree(
 }
 
 // Re-export tmux_session_manager public items that existing tests reference.
+pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
 // --- Static file serving ---

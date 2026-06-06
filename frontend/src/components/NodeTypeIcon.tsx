@@ -1,4 +1,4 @@
-import { User, RefreshCw, GitMerge, Play, Square, Code, FileText } from "lucide-react";
+import { User, GitMerge, Play, Square, Code, FileText } from "lucide-react";
 import { ForEachIcon } from "./ForEachNode";
 import type { NodeType } from "../types";
 
@@ -10,8 +10,6 @@ interface IconProps {
 
 export function NodeTypeIcon({ type, size = 14, className }: IconProps) {
   switch (type) {
-    case "loop":
-      return <RefreshCw data-testid="node-icon-loop" size={size} className={className} />;
     case "for-each":
       return <span data-testid="node-icon-foreach" className={className}><ForEachIcon /></span>;
     case "merge":

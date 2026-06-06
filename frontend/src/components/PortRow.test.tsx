@@ -55,7 +55,7 @@ describe("PortRow", () => {
         side="right"
         index={0}
         total={1}
-        nodeType="loop"
+        nodeType="for-each"
       />,
       { wrapper: Wrapper },
     );

@@ -59,26 +59,6 @@ export function deriveEditNodes(
         },
       };
     }
-    if (n.type === "loop") {
-      return {
-        id: n.id,
-        type: "loop",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          status,
-          maxIter: n.max_iter ?? 5,
-          ports: [
-            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as PortSide })),
-            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as PortSide })),
-          ],
-        },
-      };
-    }
     if (n.type === "for-each") {
       return {
         id: n.id,
@@ -367,7 +347,7 @@ function resolveTargetHandle(
   declaredPort: string,
   targetSide: PortSide | null | undefined,
 ): string | null {
-  if (target.type === "merge" || target.type === "loop" || target.type === "for-each") {
+  if (target.type === "merge" || target.type === "for-each") {
     return declaredPort || null;
   }
   // A single declared input owns a fixed-side handle; declared ports are

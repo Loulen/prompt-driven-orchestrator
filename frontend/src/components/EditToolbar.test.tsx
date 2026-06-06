@@ -29,23 +29,19 @@ describe("EditToolbar", () => {
     renderToolbar();
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-library")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-loop")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-merge")).toBeInTheDocument();
     // The Switch node was removed (ADR-0011): conditional routing now lives on
     // the edge, authored via the edge detail panel (#147).
     expect(screen.queryByTestId("toolbar-switch")).toBeNull();
+    // The legacy Loop node was removed (#171): loops are expressed as a
+    // `loops:` region, created by drawing a cycle (#166) — not a toolbar add.
+    expect(screen.queryByTestId("toolbar-loop")).toBeNull();
   });
 
   it("add button calls onAddNode with code-mutating", () => {
     renderToolbar();
     fireEvent.click(screen.getByTestId("toolbar-add"));
     expect(onAddNode).toHaveBeenCalledWith("code-mutating");
-  });
-
-  it("loop button calls onAddNode with loop", () => {
-    renderToolbar();
-    fireEvent.click(screen.getByTestId("toolbar-loop"));
-    expect(onAddNode).toHaveBeenCalledWith("loop");
   });
 
   it("merge button calls onAddNode with merge", () => {
@@ -74,21 +70,6 @@ describe("EditToolbar", () => {
     });
 
     fireEvent.pointerDown(screen.getByTestId("toolbar-library"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
-    });
-
-    await user.hover(screen.getByTestId("toolbar-loop"));
-    await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Loop node");
-    });
-
-    fireEvent.pointerDown(screen.getByTestId("toolbar-loop"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
-    });
-
-    fireEvent.pointerDown(screen.getByTestId("toolbar-loop"));
     await waitFor(() => {
       expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
     });

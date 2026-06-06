@@ -19,7 +19,6 @@ import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
-import LoopInspector from "./components/LoopInspector";
 import ForEachInspector from "./components/ForEachInspector";
 import MergeInspector from "./components/MergeInspector";
 import PipelineInspector from "./components/PipelineInspector";
@@ -201,7 +200,6 @@ export default function App() {
 
   function inspectorEditPane() {
     switch (editNodeType) {
-      case "loop": return <LoopInspector />;
       case "for-each": return <ForEachInspector />;
       case "merge": return <MergeInspector />;
       default: return (

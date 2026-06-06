@@ -4,7 +4,7 @@ export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" |
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
 }
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "loop" | "for-each" | "merge";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "for-each" | "merge";
 
 export interface RunListEntry {
   run_id: string;

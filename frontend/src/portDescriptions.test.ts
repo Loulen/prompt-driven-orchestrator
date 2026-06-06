@@ -2,10 +2,6 @@ import { describe, it, expect } from "vitest";
 import { getPortDescription } from "./portDescriptions";
 
 describe("getPortDescription", () => {
-  it("returns hardcoded description for loop input:in", () => {
-    expect(getPortDescription("loop", "input", "in")).toBe("Starts the loop");
-  });
-
   it("returns hardcoded description for foreach output:body", () => {
     expect(getPortDescription("for-each", "output", "body")).toBe(
       "Fires once per item, in parallel",
@@ -30,7 +26,7 @@ describe("getPortDescription", () => {
 
   it("prefers hardcoded over yaml description", () => {
     expect(
-      getPortDescription("loop", "input", "in", "custom desc"),
-    ).toBe("Starts the loop");
+      getPortDescription("for-each", "output", "body", "custom desc"),
+    ).toBe("Fires once per item, in parallel");
   });
 });

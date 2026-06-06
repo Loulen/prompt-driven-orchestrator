@@ -195,6 +195,21 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     return edge;
   });
 
+  // Named bounded loop regions (ADR-0011 / #148). Emitted only when present so
+  // loop-less pipelines stay clean and round-trip identically.
+  if (p.loops && p.loops.length > 0) {
+    obj.loops = p.loops.map((r) => {
+      const region: Record<string, unknown> = {
+        id: r.id,
+        kind: r.kind,
+        members: r.members,
+      };
+      if (r.max_iter !== undefined && r.max_iter !== null)
+        region.max_iter = r.max_iter;
+      return region;
+    });
+  }
+
   return obj;
 }
 

@@ -253,12 +253,35 @@ export interface EdgeDef {
   waypoints?: EdgeWaypoint[] | null;
 }
 
+/**
+ * The kind of a named loop region (ADR-0011 / #148). `bounded` regions carry an
+ * iteration counter and a `max_iter`; they are born by auto-detection of a cycle
+ * so no cycle is ever accidentally unbounded.
+ */
+export type LoopKind = "bounded";
+
+/**
+ * A named bounded loop region (ADR-0011 / #148). Replaces the `loop` node: the
+ * loop is identified by `id`, its body is the explicit `members` list (>= 1
+ * node), and the iteration counter is region-wide, keyed by `id`. The canvas
+ * renders it as a translucent box (>= 2 members) or a compact badge (1 member)
+ * with a `↻ X/Y` header.
+ */
+export interface LoopRegion {
+  id: string;
+  kind: LoopKind;
+  members: string[];
+  max_iter?: number | string | null;
+}
+
 export interface PipelineDef {
   name: string;
   version?: string | null;
   variables: Record<string, VariableDef>;
   nodes: NodeDef[];
   edges: EdgeDef[];
+  /** Named bounded loop regions (ADR-0011 / #148). Absent when there are none. */
+  loops?: LoopRegion[];
 }
 
 export interface PipelineDetail {

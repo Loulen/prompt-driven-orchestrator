@@ -779,6 +779,35 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("type: end");
   });
 
+  it("serializes a bounded loops: region block (ADR-0011 / #148)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const rev: NodeDef = {
+      id: "rev", name: "reviewer", type: "doc-only",
+      inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }],
+      interactive: false, view: { x: 300, y: 0 },
+    };
+    const pipeline = makeFullPipeline([impl, rev]);
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 },
+    ];
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("loops:");
+    expect(yaml).toContain("id: review_loop");
+    expect(yaml).toContain("kind: bounded");
+    expect(yaml).toContain("max_iter: 3");
+    // members listed
+    expect(yaml).toMatch(/members:/);
+  });
+
+  it("omits the loops: block when there are no regions", () => {
+    const yaml = serializePipeline(makeFullPipeline([]));
+    expect(yaml).not.toContain("loops:");
+  });
+
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "doc-only",

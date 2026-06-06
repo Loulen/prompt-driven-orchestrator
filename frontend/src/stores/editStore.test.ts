@@ -123,6 +123,123 @@ describe("addNode", () => {
   });
 });
 
+describe("addEdge auto-materializes a bounded loop region on a cycle (ADR-0011 / #166)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+
+  it("materializes a bounded region over both members when a back-edge closes a two-node cycle", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    // Forward edge a -> b already exists; drawing b -> a closes the cycle.
+    seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+
+    useEditStore.getState().addEdge(edge("bbbb2222", "aaaa1111"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    const region = tab.pipeline.loops![0];
+    expect(region.kind).toBe("bounded");
+    expect(new Set(region.members)).toEqual(new Set(["aaaa1111", "bbbb2222"]));
+  });
+
+  it("creates no region for an acyclic edge", () => {
+    const a = makeNode({ id: "aaaa1111", name: "first" });
+    const b = makeNode({ id: "bbbb2222", name: "second" });
+    seedTabWithPipeline(makePipeline([a, b]));
+
+    useEditStore.getState().addEdge(edge("aaaa1111", "bbbb2222"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+  });
+
+  it("materializes a single-member region for a self-edge", () => {
+    const a = makeNode({ id: "aaaa1111", name: "self-looper" });
+    seedTabWithPipeline(makePipeline([a]));
+
+    useEditStore.getState().addEdge(edge("aaaa1111", "aaaa1111"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].members).toEqual(["aaaa1111"]);
+    expect(tab.pipeline.loops![0].kind).toBe("bounded");
+  });
+
+  it("does not add a second region when a cycle's member set is already covered", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [a, b],
+      [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    // The {a,b} cycle is already a named region.
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    // Draw a redundant edge among the same members (still the same SCC).
+    useEditStore.getState().addEdge(edge("aaaa1111", "bbbb2222"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].id).toBe("review_loop");
+  });
+
+  it("uses a deterministic generated id matching the daemon's loop-<hash> form", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+
+    useEditStore.getState().addEdge(edge("bbbb2222", "aaaa1111"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    // Deterministic FNV-1a over the sorted members, matching the daemon's
+    // `loop_region::generated_region_id` so the editor and engine agree on the
+    // region id for the same member set.
+    expect(tab.pipeline.loops![0].id).toBe("loop-aae2153b41ac0dfd");
+    expect(tab.pipeline.loops![0].max_iter).toBe(5);
+  });
+
+  it("serializes the auto-materialized region into the loops: YAML block", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+
+    useEditStore.getState().addEdge(edge("bbbb2222", "aaaa1111"));
+
+    const yaml = serializePipeline(useEditStore.getState().openTabs[0].pipeline);
+    expect(yaml).toContain("loops:");
+    expect(yaml).toContain("id: loop-aae2153b41ac0dfd");
+    expect(yaml).toContain("kind: bounded");
+    expect(yaml).toContain("max_iter: 5");
+    expect(yaml).toContain("aaaa1111");
+    expect(yaml).toContain("bbbb2222");
+  });
+
+  it("captures every member of a three-node cycle, ordered by node position", () => {
+    const a = makeNode({ id: "aaaa1111", name: "a" });
+    const b = makeNode({ id: "bbbb2222", name: "b" });
+    const c = makeNode({ id: "cccc3333", name: "c" });
+    // a -> b -> c already wired; closing c -> a forms a 3-node SCC.
+    seedTabWithPipeline(
+      makePipeline([a, b, c], [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "cccc3333")]),
+    );
+
+    useEditStore.getState().addEdge(edge("cccc3333", "aaaa1111"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    // Ordered by node position (nodes array order), for deterministic YAML.
+    expect(tab.pipeline.loops![0].members).toEqual([
+      "aaaa1111",
+      "bbbb2222",
+      "cccc3333",
+    ]);
+  });
+});
+
 describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
   it("selects an edge by index", () => {
     useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 2 });

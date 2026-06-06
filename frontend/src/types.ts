@@ -13,7 +13,10 @@ export interface SessionCount {
   live: number;
   cap: number;
 }
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "for-each" | "merge";
+// `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
+// loop region, not a node. The backend keeps the variant only to migrate old
+// YAML into a region. `loop` was likewise removed in #171.
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge";
 
 export interface RunListEntry {
   run_id: string;
@@ -324,24 +327,29 @@ export interface EdgeDef {
 }
 
 /**
- * The kind of a named loop region (ADR-0011 / #148). `bounded` regions carry an
- * iteration counter and a `max_iter`; they are born by auto-detection of a cycle
- * so no cycle is ever accidentally unbounded.
+ * The kind of a named loop region (ADR-0011 / #148, #151). `bounded` regions
+ * carry an iteration counter and a `max_iter`; they are born by auto-detection
+ * of a cycle so no cycle is ever accidentally unbounded. `collection` regions
+ * (ex-ForEach) carry an `over: <field>` driver and fan the member(s) out in
+ * parallel, one lap per item, barriering on completion.
  */
-export type LoopKind = "bounded";
+export type LoopKind = "bounded" | "collection";
 
 /**
- * A named bounded loop region (ADR-0011 / #148). Replaces the `loop` node: the
- * loop is identified by `id`, its body is the explicit `members` list (>= 1
- * node), and the iteration counter is region-wide, keyed by `id`. The canvas
- * renders it as a translucent box (>= 2 members) or a compact badge (1 member)
- * with a `↻ X/Y` header.
+ * A named loop region (ADR-0011 / #148, #151). Replaces the `loop` and `ForEach`
+ * nodes: the loop is identified by `id`, its body is the explicit `members` list
+ * (>= 1 node). A `bounded` region has a region-wide iteration counter keyed by
+ * `id` and renders with a `↻ X/Y` header. A `collection` region fans `over` a
+ * list and renders with a `⇉ N items` badge. The canvas draws either as a
+ * translucent box (>= 2 members) or a compact badge (1 member).
  */
 export interface LoopRegion {
   id: string;
   kind: LoopKind;
   members: string[];
   max_iter?: number | string | null;
+  /** The frontmatter field a `collection` region fans out over (#151). */
+  over?: string | null;
 }
 
 export interface PipelineDef {

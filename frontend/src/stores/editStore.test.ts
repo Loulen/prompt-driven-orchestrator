@@ -448,107 +448,9 @@ describe("serializePipeline (via save) emits structural node fields", () => {
     expect(yaml).not.toMatch(/max_iter/);
   });
 
-  it("includes over in YAML for for-each nodes", async () => {
-    const foreachNode: NodeDef = {
-      id: "fe1",
-      name: "per-item",
-      type: "for-each",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "body", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-      over: "issues",
-    };
-    seedTabWithPipeline(makePipeline([foreachNode]));
-
-    await useEditStore.getState().save("test-tab");
-
-    const yaml = mockSavePipeline.mock.calls[0][1];
-    expect(yaml).toMatch(/over:\s*issues/);
-  });
-
-  it("does not emit over when it is null", async () => {
-    const foreachNode: NodeDef = {
-      id: "fe1",
-      name: "per-item",
-      type: "for-each",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "body", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-      over: null,
-    };
-    seedTabWithPipeline(makePipeline([foreachNode]));
-
-    await useEditStore.getState().save("test-tab");
-
-    const yaml = mockSavePipeline.mock.calls[0][1];
-    expect(yaml).not.toMatch(/over:/);
-  });
-});
-
-describe("deleteEdge resets ForEach over on in-port disconnection", () => {
-  it("resets over to null when the in-edge of a ForEach node is deleted", () => {
-    const foreachNode: NodeDef = {
-      id: "fe1",
-      name: "ForEach",
-      type: "for-each",
-      inputs: [{ name: "in", repeated: false }, { name: "break", repeated: false }],
-      outputs: [{ name: "body", repeated: false }, { name: "done", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-      over: "issues",
-    };
-    const upstream: NodeDef = {
-      id: "src",
-      name: "Source",
-      type: "doc-only",
-      inputs: [],
-      outputs: [{ name: "out", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-    };
-    const edges: EdgeDef[] = [
-      { source: { node: "src", port: "out" }, target: { node: "fe1", port: "in" } },
-    ];
-    seedTabWithPipeline(makePipeline([upstream, foreachNode], edges));
-
-    useEditStore.getState().deleteEdge(0);
-
-    const node = useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "fe1");
-    expect(node?.over).toBeNull();
-  });
-
-  it("does not reset over when a non-in edge is deleted from a ForEach node", () => {
-    const foreachNode: NodeDef = {
-      id: "fe1",
-      name: "ForEach",
-      type: "for-each",
-      inputs: [{ name: "in", repeated: false }, { name: "break", repeated: false }],
-      outputs: [{ name: "body", repeated: false }, { name: "done", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-      over: "issues",
-    };
-    const downstream: NodeDef = {
-      id: "dst",
-      name: "Dest",
-      type: "doc-only",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [],
-      interactive: false,
-      view: { x: 0, y: 0 },
-    };
-    const edges: EdgeDef[] = [
-      { source: { node: "fe1", port: "body" }, target: { node: "dst", port: "in" } },
-    ];
-    seedTabWithPipeline(makePipeline([foreachNode, downstream], edges));
-
-    useEditStore.getState().deleteEdge(0);
-
-    const node = useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "fe1");
-    expect(node?.over).toBe("issues");
-  });
+  // ForEach-node `over` serialization and `over`-reset-on-edge-delete tests were
+  // removed with the ForEach node type (#151): a collection's `over` driver now
+  // lives on the `loops:` region, not on any node.
 });
 
 describe("save error storage", () => {
@@ -1362,36 +1264,11 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges[1].source.port).toBe("out");
   });
 
-  it("clears for-each over when deleting a port causes in-edge removal", () => {
-    const nodeA = makeNode({
-      id: "aaaaaaaa",
-      outputs: [{ name: "items", repeated: false }],
-    });
-    const foreachNode: NodeDef = {
-      id: "fe1",
-      name: "ForEach",
-      type: "for-each",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "body", repeated: false }],
-      interactive: false,
-      view: { x: 0, y: 0 },
-      over: "issues",
-    };
-    const edge: EdgeDef = {
-      source: { node: "aaaaaaaa", port: "items" },
-      target: { node: "fe1", port: "in" },
-    };
-    seedTabWithPipeline(makePipeline([nodeA, foreachNode], [edge]));
-
-    useEditStore.getState().updateNode("aaaaaaaa", {
-      outputs: [],
-    });
-
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.pipeline.edges).toHaveLength(0);
-    const fe = tab.pipeline.nodes.find((n) => n.id === "fe1");
-    expect(fe?.over).toBeNull();
-  });
+  // The "clears for-each over when deleting a port causes in-edge removal" test
+  // was removed with the ForEach node type (#151) — its `over`-clearing side
+  // effect no longer exists (a collection's `over` lives on the region). The
+  // cascade-delete-edge-on-port-removal behaviour is covered by its own test
+  // above.
 
   it("does not rename when old port name still exists in new array", () => {
     const node = makeNode({

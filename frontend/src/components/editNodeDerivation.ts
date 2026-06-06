@@ -40,8 +40,17 @@ export function deriveEditNodes(
   pipeline: PipelineDef,
   runState: RunState | null | undefined,
 ): Node[] {
+  // Single-member collection regions (#151) render as a compact `⇉ ...` badge
+  // on the member's card (no box). Pre-compute the badge text keyed by member.
+  const collectionBadgeByMember = new Map<string, string>();
+  for (const region of deriveLoopRegions(pipeline, runState)) {
+    if (region.kind === "collection" && region.badgeMemberId != null) {
+      collectionBadgeByMember.set(region.badgeMemberId, `⇉ ${region.counterText}`);
+    }
+  }
   return pipeline.nodes.map((n, i) => {
     const status = statusForNode(n.id, runState);
+    const collectionBadge = collectionBadgeByMember.get(n.id);
     if (n.type === "merge") {
       return {
         id: n.id,
@@ -56,25 +65,6 @@ export function deriveEditNodes(
           status,
           inputSide: n.inputs[0]?.side ?? "left",
           outputSide: n.outputs[0]?.side ?? "right",
-        },
-      };
-    }
-    if (n.type === "for-each") {
-      return {
-        id: n.id,
-        type: "foreach",
-        position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          status,
-          ports: [
-            ...n.inputs.map((p) => ({ name: p.name, kind: "input" as const, side: (p.side ?? "left") as PortSide })),
-            ...n.outputs.map((p) => ({ name: p.name, kind: "output" as const, side: (p.side ?? "right") as PortSide })),
-          ],
         },
       };
     }
@@ -99,6 +89,9 @@ export function deriveEditNodes(
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
         outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
         interactive: n.interactive,
+        // Compact `⇉ ...` badge for the single member of a collection region
+        // (#151). Absent on non-member nodes. Undefined ⇒ no badge.
+        collectionBadge,
       },
     };
   });
@@ -176,9 +169,21 @@ export function deriveLoopRegions(
       : 0;
     const maxNum =
       typeof region.max_iter === "number" ? region.max_iter : null;
+    // A collection region (#151) never "exhausts" — the lap count is the
+    // collection size, not a bounded cap. Its counter reads the fan-out (`N
+    // items`), not a `i/N` loop counter; idle shows the `over` driver.
+    const isCollection = region.kind === "collection";
     const exhausted =
-      live && maxNum != null && currentIter >= maxNum;
-    const counterText = live ? `${currentIter}/${maxText}` : `max ${maxText}`;
+      !isCollection && live && maxNum != null && currentIter >= maxNum;
+    const counterText = isCollection
+      ? live
+        ? `${currentIter} items`
+        : region.over
+          ? `over ${region.over}`
+          : "items"
+      : live
+        ? `${currentIter}/${maxText}`
+        : `max ${maxText}`;
 
     if (members.length === 1) {
       layouts.push({
@@ -331,8 +336,8 @@ export function edgeIndexFromId(edgeId: string): number | null {
  * `targetHandle` matches no rendered handle (`getEdgePosition` → error 008), so
  * the id here must mirror what the target node renders:
  *
- * - Structural nodes (merge / loop / for-each) render an id'd target handle per
- *   declared input via `PortPill`, so the edge keeps its declared port name.
+ * - Structural nodes (merge) render an id'd target handle per declared input
+ *   via `PortPill`, so the edge keeps its declared port name.
  * - Regular `edit` nodes with a single declared input (e.g. the End node's
  *   `result`) keep that declared, side-fixed handle — those ports are
  *   unaffected by anchoring (#168).
@@ -347,7 +352,7 @@ function resolveTargetHandle(
   declaredPort: string,
   targetSide: PortSide | null | undefined,
 ): string | null {
-  if (target.type === "merge" || target.type === "for-each") {
+  if (target.type === "merge") {
     return declaredPort || null;
   }
   // A single declared input owns a fixed-side handle; declared ports are

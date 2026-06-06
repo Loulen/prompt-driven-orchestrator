@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { getPortDescription } from "./portDescriptions";
 
 describe("getPortDescription", () => {
-  it("returns hardcoded description for foreach output:body", () => {
-    expect(getPortDescription("for-each", "output", "body")).toBe(
-      "Fires once per item, in parallel",
+  it("returns hardcoded description for merge output:merged", () => {
+    expect(getPortDescription("merge", "output", "merged")).toBe(
+      "Result artifact after merge",
     );
   });
 
@@ -25,8 +25,10 @@ describe("getPortDescription", () => {
   });
 
   it("prefers hardcoded over yaml description", () => {
+    // ForEach is retired (#151); merge is the remaining first-class node whose
+    // hardcoded port description wins over a YAML one.
     expect(
-      getPortDescription("for-each", "output", "body", "custom desc"),
-    ).toBe("Fires once per item, in parallel");
+      getPortDescription("merge", "input", "branches", "custom desc"),
+    ).toBe("Accumulates all incoming branches");
   });
 });

@@ -1,5 +1,4 @@
 import { User, GitMerge, Play, Square, Code, FileText } from "lucide-react";
-import { ForEachIcon } from "./ForEachNode";
 import type { NodeType } from "../types";
 
 interface IconProps {
@@ -10,8 +9,6 @@ interface IconProps {
 
 export function NodeTypeIcon({ type, size = 14, className }: IconProps) {
   switch (type) {
-    case "for-each":
-      return <span data-testid="node-icon-foreach" className={className}><ForEachIcon /></span>;
     case "merge":
       return <GitMerge data-testid="node-icon-merge" size={size} className={className} />;
     case "start":

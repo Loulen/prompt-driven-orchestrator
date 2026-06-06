@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { deriveEditEdges, runReachedEnd } from "./editNodeDerivation";
-import type { NodeDef, NodeType, PipelineDef, RunStatus } from "../types";
+import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, runReachedEnd } from "./editNodeDerivation";
+import type { LoopRegion, NodeDef, NodeType, PipelineDef, RunStatus } from "../types";
 
 describe("runReachedEnd", () => {
   it("is true only when the run completed successfully", () => {
@@ -104,5 +104,80 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("__anchor:top");
     expect(edges[1].targetHandle).toBe("__anchor:bottom");
+  });
+});
+
+describe("deriveLoopRegions — collection regions (#151)", () => {
+  function node(id: string, type: NodeType, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type,
+      inputs: [],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+      view: { x: 200, y: 200 },
+    };
+  }
+
+  function pipelineWith(nodes: NodeDef[], loops: LoopRegion[]): PipelineDef {
+    return { name: "p", variables: {}, nodes, edges: [], loops };
+  }
+
+  it("renders a single-member collection as a `⇉ N items` badge, not a box", () => {
+    // A single-member collection region (the common case — one Fixer per issue)
+    // renders as a compact badge on the member card with the fan-out glyph `⇉`,
+    // NOT a box and NOT the `↻` loop glyph.
+    const p = pipelineWith(
+      [node("fixer", "code-mutating", ["fix"])],
+      [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
+    );
+    const regions = deriveLoopRegions(p, null);
+    expect(regions).toHaveLength(1);
+    const r = regions[0];
+    expect(r.kind).toBe("collection");
+    expect(r.box).toBeNull();
+    expect(r.badgeMemberId).toBe("fixer");
+    // Idle (no run): the badge shows the collection driver (`over <field>`),
+    // never a `↻ i/max` loop counter.
+    expect(r.counterText).toBe("over issues");
+    expect(r.counterText).not.toContain("/");
+    // A collection never exhausts (the lap count is the collection size).
+    expect(r.exhausted).toBe(false);
+  });
+
+  it("renders a multi-member collection as a box", () => {
+    const p = pipelineWith(
+      [node("fix-a", "code-mutating", ["a"]), node("fix-b", "code-mutating", ["b"])],
+      [{ id: "per-issue", kind: "collection", over: "issues", members: ["fix-a", "fix-b"] }],
+    );
+    const regions = deriveLoopRegions(p, null);
+    expect(regions[0].kind).toBe("collection");
+    expect(regions[0].box).not.toBeNull();
+    expect(regions[0].badgeMemberId).toBeNull();
+  });
+
+  it("attaches a `⇉` collection badge to the single member's card", () => {
+    // The single-member collection's member card carries a `collectionBadge`
+    // (the `⇉ ...` text) so the canvas can render the compact badge on the card
+    // rather than a box.
+    const p = pipelineWith(
+      [node("fixer", "code-mutating", ["fix"])],
+      [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
+    );
+    const cards = deriveEditNodes(p, null);
+    const fixer = cards.find((c) => c.id === "fixer")!;
+    expect(fixer.data.collectionBadge).toContain("⇉");
+    expect(fixer.data.collectionBadge).toContain("over issues");
+  });
+
+  it("does not attach a collection badge to a node that is no member", () => {
+    const p = pipelineWith(
+      [node("fixer", "code-mutating", ["fix"]), node("other", "doc-only", ["x"])],
+      [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
+    );
+    const cards = deriveEditNodes(p, null);
+    const other = cards.find((c) => c.id === "other")!;
+    expect(other.data.collectionBadge).toBeUndefined();
   });
 });

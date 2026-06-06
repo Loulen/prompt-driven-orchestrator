@@ -20,11 +20,11 @@ import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
+import { collectionFanoutNudges } from "../lib/loopRegions";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
-import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
@@ -58,6 +58,9 @@ interface EditNodeData {
   // Filenames of images uploaded with the run's input. Only the start marker
   // surfaces these (issue #145); undefined/empty on every other node.
   inputImages?: string[];
+  // Compact `⇉ ...` badge when this node is the single member of a collection
+  // region (#151). Absent on non-member nodes.
+  collectionBadge?: string;
   [key: string]: unknown;
 }
 
@@ -140,6 +143,16 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
         <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
         <CodeDocMarker type={data.nodeType} />
+        {data.collectionBadge && (
+          <span
+            data-testid="collection-badge"
+            className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
+            style={{ fontSize: 10, lineHeight: "16px" }}
+            title="collection region — fans out one lap per item"
+          >
+            {data.collectionBadge}
+          </span>
+        )}
       </div>
       {inputImages.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
@@ -182,12 +195,11 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, foreach: ForEachEditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
+const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
-  "for-each": "foreach",
   "merge": "merge",
 };
 
@@ -296,9 +308,9 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       const targetNode = pipeline.nodes.find((n) => n.id === connection.target);
       const sourcePort = connection.sourceHandle ?? sourceNode?.outputs[0]?.name ?? "out";
       // Inputs are emergent (#149): dropping on a node's body creates an input
-      // named after the SOURCE document. Structural nodes (merge/loop/for-each)
-      // still expose declared target handles, so honour an explicit
-      // `targetHandle`; otherwise the emergent name is inherited from the source.
+      // named after the SOURCE document. Structural nodes (merge) still expose
+      // declared target handles, so honour an explicit `targetHandle`; otherwise
+      // the emergent name is inherited from the source.
       // The body anchor handles (#168) are LAYOUT, not semantic ports — ignore
       // them here so the emergent input name still comes from the source.
       const declaredHandle = anchorsByDropOnBody(connection.targetHandle)
@@ -377,7 +389,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       // Structural nodes and single-declared-input nodes (e.g. End's `result`)
       // keep their declared, fixed-side handle — never re-anchor those.
       if (!targetDef || targetDef.inputs.length === 1) return;
-      if (targetDef.type === "merge" || targetDef.type === "for-each") {
+      if (targetDef.type === "merge") {
         return;
       }
 
@@ -402,19 +414,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const diagnostics = useMemo(() => {
     if (!tab) return [];
     const base = tab.diagnostics ?? [];
-    const extra: string[] = [];
-    for (const n of tab.pipeline.nodes) {
-      if (n.type !== "for-each" || n.over) continue;
-      const hasInEdge = tab.pipeline.edges.some(
-        (e) => e.target.node === n.id && e.target.port === "in",
-      );
-      if (hasInEdge) {
-        extra.push(
-          `ForEach node "${n.name ?? n.id}" has an "in" edge but no "over" field set. Select the node and choose which list field to iterate.`,
-        );
-      }
-    }
-    return [...base, ...extra];
+    return [...base, ...collectionFanoutNudges(tab.pipeline)];
   }, [tab]);
 
   if (!tab || !pipeline) {
@@ -477,19 +477,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           id, name, type, interactive: false, view,
           inputs: [{ name: "branches", repeated: true, side: "left" }],
           outputs: [{ name: "merged", repeated: false, side: "right" }],
-        };
-        break;
-      case "for-each":
-        newNode = {
-          id, name, type, interactive: false, view,
-          inputs: [
-            { name: "in", repeated: false, side: "left" },
-            { name: "break", repeated: false, side: "left" },
-          ],
-          outputs: [
-            { name: "body", repeated: false, side: "right" },
-            { name: "done", repeated: false, side: "right" },
-          ],
         };
         break;
       default:

@@ -39,10 +39,10 @@ function makePipeline(): PipelineDef {
       },
       {
         id: "fe1",
-        name: "foreach",
-        type: "for-each",
+        name: "fixer",
+        type: "code-mutating",
         inputs: [{ name: "in", repeated: false, side: "left" }],
-        outputs: [{ name: "body", repeated: false, side: "right" }],
+        outputs: [{ name: "fix", repeated: false, side: "right" }],
         interactive: false,
         view: { x: 400, y: 100 },
       },
@@ -111,7 +111,7 @@ describe("statusForNode", () => {
 });
 
 describe("deriveEditNodes — live status wiring (regression: node-card borders ignore run state)", () => {
-  it("forwards live status into every node type's data (regular / for-each / merge)", () => {
+  it("forwards live status into every node type's data (regular / merge)", () => {
     const pipeline = makePipeline();
     const run = makeRunState({
       impl: "running",
@@ -163,7 +163,6 @@ describe("markerReached", () => {
     const others: NodeType[] = [
       "doc-only",
       "code-mutating",
-      "for-each",
       "merge",
     ];
     for (const t of others) expect(markerReached(t, run)).toBe(false);

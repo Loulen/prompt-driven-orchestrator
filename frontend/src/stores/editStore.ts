@@ -152,7 +152,8 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
-    if (n.type === "for-each" && n.over) node.over = n.over;
+    // A collection's `over` driver now lives on the `loops:` region, not on any
+    // node (#151) — no node-level `over` serialization.
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
@@ -319,15 +320,6 @@ function edgeReferencesNode(edge: EdgeDef, nodeId: string): boolean {
   return "node" in edge.target && (edge.target as { node: string }).node === nodeId;
 }
 
-function cleanEdgeSideEffects(tab: OpenPipeline, edge: EdgeDef): void {
-  if (edge.target.port === "in") {
-    const targetNode = tab.pipeline.nodes.find((n) => n.id === edge.target.node);
-    if (targetNode?.type === "for-each") {
-      targetNode.over = null;
-    }
-  }
-}
-
 function propagatePortChangesToEdges(
   tab: OpenPipeline,
   nodeId: string,
@@ -358,9 +350,9 @@ function propagatePortChangesToEdges(
       kept.push({ ...edge, [edgeSide]: { ...edge[edgeSide], port: renamed } });
     } else if (newPortNames.has(edge[edgeSide].port)) {
       kept.push(edge);
-    } else {
-      cleanEdgeSideEffects(tab, edge);
     }
+    // else: the port the edge referenced is gone — drop the edge (no node-side
+    // effect since ForEach `over` clearing was retired with the node type, #151).
   }
   tab.pipeline.edges = kept;
 }
@@ -549,11 +541,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   deleteEdge: (index: number) => {
     set((s) => ({
       ...mutateActiveTab(s, (tab) => {
-        const deletedEdge = tab.pipeline.edges[index];
         tab.pipeline.edges = tab.pipeline.edges.filter((_, i) => i !== index);
-        if (deletedEdge) {
-          cleanEdgeSideEffects(tab, deletedEdge);
-        }
       }),
       selection: { kind: "none" as const, id: null },
     }));

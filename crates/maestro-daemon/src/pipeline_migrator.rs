@@ -81,11 +81,13 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     if nodes_contain_type(nodes, "loop") {
         return true;
     }
+    // ForEach nodes are dissolved into a `loops:` collection region + rewired
+    // body edges (#151); the ForEach node type is retired.
+    if nodes_contain_type(nodes, "for-each") {
+        return true;
+    }
     for node in nodes {
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if node_type == "for-each" && node.get("over").is_none() {
-            return true;
-        }
         if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
             continue;
         }
@@ -150,6 +152,10 @@ pub fn migrate_pipeline_yaml(
     // Dissolve Loop nodes into a `loops:` region + rewired body edges (#148),
     // also before id-rewriting so members/edges reference the original ids.
     dissolve_loops(&mut doc)?;
+
+    // Dissolve ForEach nodes into a `loops:` collection region + rewired body
+    // edges (#151), also before id-rewriting.
+    dissolve_foreaches(&mut doc)?;
 
     let nodes = doc
         .get_mut("nodes")
@@ -242,7 +248,6 @@ pub fn migrate_pipeline_yaml(
     }
 
     inject_start_end_nodes(&mut doc);
-    backfill_foreach_over(&mut doc);
 
     let yaml_text =
         serde_yaml::to_string(&doc).map_err(|e| format!("YAML serialize error: {e}"))?;
@@ -254,26 +259,267 @@ pub fn migrate_pipeline_yaml(
     })
 }
 
-fn backfill_foreach_over(doc: &mut serde_yaml::Value) {
-    let nodes = match doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
-        Some(seq) => seq,
-        None => return,
+/// Dissolves `ForEach` nodes into a `loops:` collection region plus rewired body
+/// edges (ADR-0011 / #151). For each ForEach node `FE` with `over: O`:
+///
+/// - `members` = the body subgraph reachable from `FE.body`'s target (the entry),
+///   stopping at other control nodes. `entry` = the target of `FE.body`.
+/// - `U.p -> FE.in` followed by `FE.body -> E.q` becomes `U.p -> E.q` (the
+///   collection is entered directly at its body entry).
+/// - `FE.done -> D.r` becomes the **barrier** edge `T.o -> D.r`, where `T` is the
+///   body terminal (the member with no outgoing edge to another member) and `o`
+///   its first output port. The region's outgoing edges fire once when all items
+///   finish, preserving `done -> Merge` convergence (ADR-0006).
+/// - the ForEach node is removed and a `{ id, kind: collection, over, members }`
+///   entry is appended to the pipeline's `loops:` block (no `max_iter`).
+fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
+    let nodes = match doc.get("nodes").and_then(|n| n.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => return Ok(()),
     };
-    let over_key = serde_yaml::Value::String("over".into());
-    for node in nodes.iter_mut() {
-        let is_foreach = node
+
+    // Collect ForEach nodes: id -> (name, over).
+    let mut fe_ids: HashSet<String> = HashSet::new();
+    let mut fe_meta: HashMap<String, (String, String)> = HashMap::new();
+    for node in &nodes {
+        let is_fe = node
             .get("type")
             .and_then(|v| v.as_str())
             .is_some_and(|t| t == "for-each");
-        if !is_foreach {
+        if !is_fe {
             continue;
         }
-        if let Some(m) = node.as_mapping_mut() {
-            if !m.contains_key(&over_key) {
-                m.insert(over_key.clone(), serde_yaml::Value::String("items".into()));
+        let id = match node.get("id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return Err("for-each node missing 'id'".into()),
+        };
+        let name = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&id)
+            .to_string();
+        // `over` defaults to `items` when absent (legacy ForEach default).
+        let over = node
+            .get("over")
+            .and_then(|v| v.as_str())
+            .unwrap_or("items")
+            .to_string();
+        fe_ids.insert(id.clone());
+        fe_meta.insert(id, (name, over));
+    }
+
+    if fe_ids.is_empty() {
+        return Ok(());
+    }
+
+    let edges = match doc.get("edges").and_then(|e| e.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => Vec::new(),
+    };
+
+    let endpoint = edge_endpoint;
+    let mk_endpoint = |node: &str, port: &str| -> serde_yaml::Value {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(
+            serde_yaml::Value::String("node".into()),
+            serde_yaml::Value::String(node.to_string()),
+        );
+        m.insert(
+            serde_yaml::Value::String("port".into()),
+            serde_yaml::Value::String(port.to_string()),
+        );
+        serde_yaml::Value::Mapping(m)
+    };
+
+    // Per-ForEach wiring: entry (body target), upstream-in edges, done targets.
+    let mut fe_entry: HashMap<String, (String, String)> = HashMap::new();
+    let mut fe_in_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut fe_done_targets: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+    for edge in &edges {
+        let src = endpoint(edge, "source");
+        let tgt = endpoint(edge, "target");
+        if let Some((snode, sport)) = &src {
+            if fe_ids.contains(snode) {
+                match sport.as_str() {
+                    "body" => {
+                        if let Some((tnode, tport)) = &tgt {
+                            fe_entry.insert(snode.clone(), (tnode.clone(), tport.clone()));
+                        }
+                    }
+                    "done" => {
+                        if let Some((tnode, tport)) = &tgt {
+                            fe_done_targets
+                                .entry(snode.clone())
+                                .or_default()
+                                .push((tnode.clone(), tport.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some((tnode, tport)) = &tgt {
+            if fe_ids.contains(tnode) && tport == "in" {
+                if let Some(s) = &src {
+                    fe_in_sources
+                        .entry(tnode.clone())
+                        .or_default()
+                        .push(s.clone());
+                }
             }
         }
     }
+
+    // Rebuild the edge list, dropping every edge touching a ForEach port and
+    // emitting the rewired equivalents.
+    let mut new_edges: Vec<serde_yaml::Value> = Vec::new();
+    for edge in &edges {
+        let src = endpoint(edge, "source");
+        let tgt = endpoint(edge, "target");
+        let touches_fe = src.as_ref().is_some_and(|(n, _)| fe_ids.contains(n))
+            || tgt.as_ref().is_some_and(|(n, _)| fe_ids.contains(n));
+        if !touches_fe {
+            new_edges.push(edge.clone());
+        }
+    }
+
+    let mut regions: Vec<serde_yaml::Value> = Vec::new();
+    for fe_id in &fe_ids {
+        let entry = match fe_entry.get(fe_id) {
+            Some(e) => e.clone(),
+            None => continue, // ForEach with no body — nothing to enter
+        };
+
+        let members = body_members(&edges, fe_id, &entry.0, &fe_ids);
+
+        // Entering edge: U.p -> FE.in  +  FE.body -> E.q  ==>  U.p -> E.q.
+        if let Some(sources) = fe_in_sources.get(fe_id) {
+            for (unode, uport) in sources {
+                let mut m = serde_yaml::Mapping::new();
+                m.insert(
+                    serde_yaml::Value::String("source".into()),
+                    mk_endpoint(unode, uport),
+                );
+                m.insert(
+                    serde_yaml::Value::String("target".into()),
+                    mk_endpoint(&entry.0, &entry.1),
+                );
+                new_edges.push(serde_yaml::Value::Mapping(m));
+            }
+        }
+
+        // Barrier edge: FE.done -> D.r  ==>  T.o -> D.r, where T is the body
+        // terminal (a member with no outgoing edge to another member) and o its
+        // first output port.
+        let (terminal, out_port) = body_terminal(&nodes, &edges, &members, &fe_ids);
+        if let Some(done_targets) = fe_done_targets.get(fe_id) {
+            for (dnode, dport) in done_targets {
+                let mut m = serde_yaml::Mapping::new();
+                m.insert(
+                    serde_yaml::Value::String("source".into()),
+                    mk_endpoint(&terminal, &out_port),
+                );
+                m.insert(
+                    serde_yaml::Value::String("target".into()),
+                    mk_endpoint(dnode, dport),
+                );
+                new_edges.push(serde_yaml::Value::Mapping(m));
+            }
+        }
+
+        let (name, over) = fe_meta.get(fe_id).cloned().unwrap_or_default();
+        let mut region = serde_yaml::Mapping::new();
+        region.insert(
+            serde_yaml::Value::String("id".into()),
+            serde_yaml::Value::String(name),
+        );
+        region.insert(
+            serde_yaml::Value::String("kind".into()),
+            serde_yaml::Value::String("collection".into()),
+        );
+        region.insert(
+            serde_yaml::Value::String("over".into()),
+            serde_yaml::Value::String(over),
+        );
+        region.insert(
+            serde_yaml::Value::String("members".into()),
+            serde_yaml::Value::Sequence(members.into_iter().map(serde_yaml::Value::String).collect()),
+        );
+        regions.push(serde_yaml::Value::Mapping(region));
+    }
+
+    // Remove ForEach nodes.
+    if let Some(nodes_mut) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+        nodes_mut.retain(|n| {
+            n.get("type")
+                .and_then(|v| v.as_str())
+                .is_none_or(|t| t != "for-each")
+        });
+    }
+
+    if let Some(m) = doc.as_mapping_mut() {
+        m.insert(
+            serde_yaml::Value::String("edges".into()),
+            serde_yaml::Value::Sequence(new_edges),
+        );
+        if !regions.is_empty() {
+            // Append to any existing `loops:` (e.g. a Loop region migrated first).
+            let mut all = match m.get(serde_yaml::Value::String("loops".into())) {
+                Some(serde_yaml::Value::Sequence(s)) => s.clone(),
+                _ => Vec::new(),
+            };
+            all.extend(regions);
+            m.insert(
+                serde_yaml::Value::String("loops".into()),
+                serde_yaml::Value::Sequence(all),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Picks the body terminal of a collection region: the member with no outgoing
+/// edge to another member (a sink within the region), and its first output port.
+/// For a single-member region this is the member itself. The terminal feeds the
+/// barrier edge to each done-target. Falls back to the first member / output
+/// `out` when ambiguous (sharp tool — deterministic, never panics).
+fn body_terminal(
+    nodes: &[serde_yaml::Value],
+    edges: &[serde_yaml::Value],
+    members: &[String],
+    fe_ids: &HashSet<String>,
+) -> (String, String) {
+    let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
+    let endpoint = edge_endpoint;
+
+    let terminal = members
+        .iter()
+        .find(|m| {
+            // A terminal has no outgoing edge to another member (its output
+            // leaves the region or dangles).
+            !edges.iter().any(|e| {
+                let src = endpoint(e, "source");
+                let tgt = endpoint(e, "target");
+                matches!((&src, &tgt), (Some((s, _)), Some((t, _)))
+                    if s == *m && member_set.contains(t.as_str()) && !fe_ids.contains(t))
+            })
+        })
+        .or_else(|| members.last())
+        .cloned()
+        .unwrap_or_default();
+
+    let out_port = nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(terminal.as_str()))
+        .and_then(|n| n.get("outputs").and_then(|v| v.as_sequence()))
+        .and_then(|outs| outs.first())
+        .and_then(|p| p.get("name").and_then(|v| v.as_str()))
+        .unwrap_or("out")
+        .to_string();
+
+    (terminal, out_port)
 }
 
 /// #149: inputs are emergent. Strip declared `inputs` from regular (doc-only /
@@ -1986,7 +2232,10 @@ edges:
     // --- ForEach `over` migration tests (issue #65) ---
 
     #[test]
-    fn migrates_foreach_without_over_to_over_items() {
+    fn migrates_foreach_without_over_defaults_to_items() {
+        // ADR-0011 / #151: a ForEach node without an explicit `over` dissolves
+        // into a collection region whose `over` defaults to `items` (the legacy
+        // ForEach default). The ForEach node itself is gone.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1996,7 +2245,14 @@ nodes:
     type: start
     outputs:
       - name: user_prompt
+        side: right
   - id: aBcD1234
+    name: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
     name: per-issue
     type: for-each
     inputs:
@@ -2009,29 +2265,48 @@ nodes:
         side: right
       - name: done
         side: right
+  - id: wRkR5678
+    name: worker
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
   - id: end
     name: End
     type: end
     inputs:
       - name: result
-edges: []
+        side: left
+edges:
+  - source: { node: aBcD1234, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: wRkR5678, port: in }
+  - source: { node: feNODE01, port: done }
+    target: { node: end, port: result }
 "#;
-        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        assert!(result.migrated);
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
-        let nodes = parsed["nodes"].as_sequence().unwrap();
-        let fe = nodes
-            .iter()
-            .find(|n| n["type"].as_str() == Some("for-each"))
-            .unwrap();
-        assert_eq!(fe["over"].as_str().unwrap(), "items");
+        let parsed = migrate_str_and_parse(yaml);
+        assert!(
+            !parsed
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::ForEach),
+            "ForEach node must be dissolved"
+        );
+        assert_eq!(parsed.loops.len(), 1);
+        assert_eq!(parsed.loops[0].kind, pipeline::LoopKind::Collection);
+        assert_eq!(parsed.loops[0].over.as_deref(), Some("items"));
     }
 
     #[test]
-    fn foreach_with_existing_over_not_overwritten() {
+    fn migrates_foreach_node_to_collection_region() {
+        // ADR-0011 / #151: a ForEach node dissolves into a `loops:` collection
+        // entry (kind: collection + over) + rewired body edges. The lister ->
+        // FE(over: issues) -> worker, FE.done -> end shape must produce a
+        // single-member collection region whose member is the body node, with the
+        // ForEach node and its ports gone.
         let yaml = r#"
-name: test
+name: foreach-migrate
 version: "1.0"
 nodes:
   - id: start
@@ -2039,7 +2314,120 @@ nodes:
     type: start
     outputs:
       - name: user_prompt
+        side: right
   - id: aBcD1234
+    name: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
+    name: per-issue
+    type: for-each
+    over: issues
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: wRkR5678
+    name: worker
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: task }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: wRkR5678, port: in }
+  - source: { node: feNODE01, port: done }
+    target: { node: end, port: result }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        // No ForEach node may remain, nor any edge referencing it.
+        assert!(
+            !parsed
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::ForEach),
+            "no ForEach node may remain after migration"
+        );
+        assert!(
+            !parsed
+                .edges
+                .iter()
+                .any(|e| e.source.node == "feNODE01" || e.target.node == "feNODE01"),
+            "no edge may reference the dissolved ForEach node"
+        );
+
+        // Exactly one collection region, single member = the body node `worker`,
+        // over = issues, no max_iter.
+        assert_eq!(parsed.loops.len(), 1, "one collection region expected");
+        let region = &parsed.loops[0];
+        assert_eq!(region.kind, pipeline::LoopKind::Collection);
+        assert_eq!(region.over.as_deref(), Some("issues"));
+        assert_eq!(region.members, vec!["wRkR5678".to_string()]);
+        assert_eq!(region.max_iter, None);
+
+        // The entering edge enters the member directly: lister:plan -> worker.
+        assert!(
+            parsed.edges.iter().any(|e| {
+                e.source.node == "aBcD1234" && e.target.node == "wRkR5678"
+            }),
+            "entering edge should land on the member directly"
+        );
+        // The barrier edge leaves the member to the done target: worker -> end.
+        assert!(
+            parsed.edges.iter().any(|e| {
+                e.source.node == "wRkR5678" && e.target.node == "end"
+            }),
+            "barrier edge should leave the member to the done target"
+        );
+
+        // Idempotent: migrating the result again is a no-op.
+        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        let second =
+            migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
+        assert!(!second.migrated, "foreach migration must be idempotent");
+    }
+
+    #[test]
+    fn migrate_str_and_parse_rejects_foreach() {
+        // Helper guard: after migration there must be no ForEach node left, which
+        // `migrate_str_and_parse` already enforces via parse. This documents that
+        // the ForEach node type is retired (ADR-0011 / #151).
+        let yaml = r#"
+name: foreach-empty-over
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+  - id: aBcD1234
+    name: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
     name: per-issue
     type: for-each
     over: tasks
@@ -2053,18 +2441,29 @@ nodes:
         side: right
       - name: done
         side: right
+  - id: wRkR5678
+    name: worker
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
   - id: end
     name: End
     type: end
     inputs:
       - name: result
-edges: []
+        side: left
+edges:
+  - source: { node: aBcD1234, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: wRkR5678, port: in }
+  - source: { node: feNODE01, port: done }
+    target: { node: end, port: result }
 "#;
-        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        assert!(
-            !result.migrated,
-            "pipeline with over already set should not need migration"
-        );
+        let parsed = migrate_str_and_parse(yaml);
+        let region = &parsed.loops[0];
+        assert_eq!(region.over.as_deref(), Some("tasks"));
     }
 
     // --- Real fixtures: Switch → guarded edges (issue #144) ---

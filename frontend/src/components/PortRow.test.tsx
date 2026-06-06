@@ -50,16 +50,16 @@ describe("PortRow", () => {
   it("uses hardcoded description for first-class node ports", () => {
     render(
       <PortRow
-        portName="body"
-        kind="output"
-        side="right"
+        portName="branches"
+        kind="input"
+        side="left"
         index={0}
         total={1}
-        nodeType="for-each"
+        nodeType="merge"
       />,
       { wrapper: Wrapper },
     );
-    const row = screen.getByTestId("port-output-body");
+    const row = screen.getByTestId("port-input-branches");
     expect(row).toBeInTheDocument();
   });
 

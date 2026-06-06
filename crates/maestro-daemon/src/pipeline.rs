@@ -210,22 +210,27 @@ pub struct VariableDef {
     pub default: serde_yaml::Value,
 }
 
-/// The kind of a named loop region (ADR-0011 / #148). `Bounded` loops carry an
-/// iteration counter and a `max_iter`; they are born by auto-detection of a
-/// cycle so no cycle is ever accidentally unbounded. (`Collection` — ex-ForEach,
-/// `over: <field>` — is deferred to #151 and not modeled here.)
+/// The kind of a named loop region (ADR-0011 / #148, #151). `Bounded` loops
+/// carry an iteration counter and a `max_iter`; they are born by auto-detection
+/// of a cycle so no cycle is ever accidentally unbounded. `Collection` loops
+/// (ex-ForEach) carry an `over: <field>` driver naming a list in the entering
+/// artifact's frontmatter; they fan the member(s) out in parallel (one lap per
+/// item) and their outgoing edges fire once on the barrier (all items finished).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopKind {
     Bounded,
+    Collection,
 }
 
-/// A named bounded loop region (ADR-0011 / #148). Replaces the `Loop` node:
-/// the loop is identified by `id`, its body is the explicit `members` list
-/// (>= 1 node; a single self-looping member is valid), and the iteration
-/// counter is region-wide, keyed by `id`. `max_iter` caps re-entry; an
-/// `iter >= max` exit edge routes the exhaustion, otherwise the region blocks
-/// "exhausted — unrouted" (never a silent stall).
+/// A named loop region (ADR-0011 / #148, #151). Replaces the `Loop` and
+/// `ForEach` nodes: the loop is identified by `id`, its body is the explicit
+/// `members` list (>= 1 node; a single self-looping member is valid). A
+/// `bounded` region (`max_iter`) has a region-wide iteration counter keyed by
+/// `id`; an `iter >= max` exit edge routes the exhaustion, otherwise it blocks
+/// "exhausted — unrouted" (never a silent stall). A `collection` region (`over`)
+/// fans the member(s) out in parallel, one lap per item of the named list, and
+/// barriers — its outgoing edges fire once when all items finish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopRegion {
     pub id: String,
@@ -233,6 +238,10 @@ pub struct LoopRegion {
     pub members: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iter: Option<serde_yaml::Value>,
+    /// The frontmatter field naming the list a `collection` region fans out over
+    /// (ADR-0011 / #151). `None` for a `bounded` region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub over: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1431,6 +1440,53 @@ loops:
             region.max_iter,
             Some(serde_yaml::Value::Number(serde_yaml::Number::from(3)))
         );
+    }
+
+    #[test]
+    fn parses_collection_loop_region_block_and_round_trips() {
+        // ADR-0011 / #151: a collection loop region (ex-ForEach) is a named entry
+        // of the `loops:` block — `id` + `kind: collection` + `over: <field>` +
+        // `members` (>=1). It carries no `max_iter` (the lap count is the
+        // collection size). The `over` driver and `kind` must round-trip.
+        let yaml = with_start_end(
+            r#"
+name: with-collection
+nodes:
+  - id: ab000001
+    name: triage
+    type: doc-only
+    outputs:
+      - name: plan
+        frontmatter:
+          issues:
+            type: list
+  - id: ab000002
+    name: fixer
+    type: code-mutating
+    outputs:
+      - name: fix
+loops:
+  - id: per-issue
+    kind: collection
+    over: issues
+    members: [ab000002]
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.loops.len(), 1);
+        let region = &result.pipeline.loops[0];
+        assert_eq!(region.id, "per-issue");
+        assert_eq!(region.kind, LoopKind::Collection);
+        assert_eq!(region.over.as_deref(), Some("issues"));
+        assert_eq!(region.members, vec!["ab000002"]);
+        assert_eq!(region.max_iter, None);
+
+        // Round-trips: re-serialize, re-parse — the collection driver survives.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed = parse_pipeline(&serialized).unwrap();
+        let r = &reparsed.pipeline.loops[0];
+        assert_eq!(r.kind, LoopKind::Collection);
+        assert_eq!(r.over.as_deref(), Some("issues"));
     }
 
     #[test]

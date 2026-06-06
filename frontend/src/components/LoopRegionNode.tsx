@@ -26,6 +26,8 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const accent = data.exhausted
     ? "var(--color-st-blocked)"
     : "var(--color-acc)";
+  // `⇉` (fan-out) for a collection region, `↻` (loop) for a bounded one.
+  const glyph = data.kind === "collection" ? "⇉" : "↻";
   return (
     <div
       data-testid="loop-region"
@@ -57,7 +59,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         }}
       >
         <span className="loop-region-glyph" style={{ fontSize: 12, lineHeight: 1 }}>
-          ↻
+          {glyph}
         </span>
         <span className="loop-region-count" style={{ opacity: 0.85 }}>
           {data.counterText}

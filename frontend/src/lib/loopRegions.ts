@@ -1,4 +1,4 @@
-import type { EdgeDef, LoopRegion, NodeDef } from "../types";
+import type { EdgeDef, LoopRegion, NodeDef, PipelineDef } from "../types";
 
 /**
  * Default iteration cap for an auto-materialized bounded region, so a drawn
@@ -133,4 +133,43 @@ export function materializeMissingRegions(
     });
   }
   return out;
+}
+
+/**
+ * Info-only nudges (ADR-0001 sharp tool, never auto-wraps) suggesting a
+ * collection fan-out (#151): when a `list`-typed output port feeds a downstream
+ * node that is NOT already a member of a collection region, offer the explicit
+ * "fan out over a collection" gesture. The nudge never blocks and never wraps
+ * automatically — a `collection` region is born only by the user's explicit
+ * gesture (unlike a `bounded` region, which auto-materializes on a drawn cycle).
+ */
+export function collectionFanoutNudges(pipeline: PipelineDef): string[] {
+  const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
+  const collectionMembers = new Set<string>();
+  for (const region of pipeline.loops ?? []) {
+    if (region.kind === "collection") {
+      for (const m of region.members) collectionMembers.add(m);
+    }
+  }
+
+  const nudges: string[] = [];
+  const seenTargets = new Set<string>();
+  for (const edge of pipeline.edges) {
+    const src = byId.get(edge.source.node);
+    if (!src) continue;
+    const port = src.outputs.find((p) => p.name === edge.source.port);
+    const isList = port?.frontmatter?.[port.name]?.type === "list"
+      || Object.values(port?.frontmatter ?? {}).some((f) => f.type === "list");
+    if (!isList) continue;
+    const target = edge.target.node;
+    if (collectionMembers.has(target)) continue; // already fanned out
+    if (seenTargets.has(target)) continue;
+    seenTargets.add(target);
+    const targetNode = byId.get(target);
+    nudges.push(
+      `"${src.name ?? src.id}" emits a list into "${targetNode?.name ?? target}". ` +
+        `Select the member(s) and choose "fan out over a collection" to run one lap per item.`,
+    );
+  }
+  return nudges;
 }

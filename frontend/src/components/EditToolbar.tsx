@@ -1,5 +1,4 @@
 import { Plus, GitMerge, Info } from "lucide-react";
-import { ForEachIcon } from "./ForEachNode";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -34,15 +33,9 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
 
       <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} getDropPosition={getDropPosition} />
 
-      <Tooltip content="ForEach node">
-        <button
-          data-testid="toolbar-foreach"
-          onClick={() => onAddNode("for-each")}
-          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
-        >
-          <ForEachIcon />
-        </button>
-      </Tooltip>
+      {/* No ForEach add-button: a fan-out is a `collection` loop region (#151),
+          created by selecting the member(s) and fanning out over a list field,
+          not by adding a node. Mirrors the Loop button removal (#171). */}
 
       <Tooltip content="Merge node">
         <button

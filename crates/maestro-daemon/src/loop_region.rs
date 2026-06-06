@@ -107,6 +107,7 @@ pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
             kind: LoopKind::Bounded,
             members: cycle,
             max_iter: Some(serde_yaml::Value::Number(DEFAULT_MAX_ITER.into())),
+            over: None,
         });
     }
     out
@@ -226,6 +227,106 @@ pub fn exhaustion_outcome(
     }
 }
 
+// ── Collection region engine (ADR-0011 / #151) ───────────────────────────────
+//
+// A `collection` region (ex-ForEach) carries an `over: <field>` driver naming a
+// list in the entering artifact's frontmatter. It fans the region entry out **in
+// parallel**, one lap per item; the region's outgoing edges fire **once, on the
+// barrier** — when every item finishes — preserving `done → Merge` convergence
+// (ADR-0006). An empty collection fires the barrier immediately with zero
+// item-artifacts. The model concept is the named loop; "region" is the canvas
+// rendering.
+
+/// Resolves a collection region's driver list from the entering artifact's
+/// frontmatter. The list is the value of the region's `over` field; a missing or
+/// non-list field resolves to the empty collection (sharp tool, ADR-0001 — no
+/// error; an empty collection simply fires the barrier immediately). Mirrors the
+/// legacy `scheduler::foreach_resolve_collection` so the collection region and
+/// the retired ForEach node agree on resolution.
+pub fn resolve_collection(
+    region: &LoopRegion,
+    frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> Vec<serde_yaml::Value> {
+    let over = match region.over.as_deref() {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+    frontmatter
+        .get(over)
+        .and_then(|v| v.as_sequence())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The fan-out plan for a collection region (ADR-0011 / #151). `total` is the
+/// collection size (number of laps); `entry` is the region member spawned once
+/// per item; `items` is the resolved driver list (deposited so each lap reads its
+/// own item). An empty collection has `total == 0` and no entry spawns — the
+/// caller fires the barrier immediately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionFanout {
+    pub total: i64,
+    pub entry: String,
+    pub items: Vec<serde_yaml::Value>,
+}
+
+/// Plans the parallel fan-out of a collection region from the entering artifact's
+/// frontmatter (ADR-0011 / #151). Resolves the `over` list, then designates the
+/// region entry (the member fed from outside the region; for the common
+/// single-member collection that is the lone member) as the node spawned **once
+/// per item**, at laps `1..=total`. An empty collection yields `total == 0` and
+/// no spawns; the caller fires the barrier immediately.
+pub fn collection_fanout(
+    pipeline: &PipelineDef,
+    region: &LoopRegion,
+    frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> CollectionFanout {
+    let items = resolve_collection(region, frontmatter);
+    let total = items.len() as i64;
+    let entry = match graph_resolver::region_entry(pipeline, &region.members) {
+        Some(e) => e,
+        None => region.members.first().cloned().unwrap_or_default(),
+    };
+    CollectionFanout {
+        total,
+        entry,
+        items,
+    }
+}
+
+/// True once every item-lap of a collection region has completed (ADR-0011 /
+/// #151) — the **barrier**. `total` is the collection size; `completed_iters` is
+/// the set of laps whose every member has finished. The barrier is reached when
+/// laps `1..=total` are all complete. An empty collection (`total == 0`) is
+/// barriered by definition (vacuously), so the caller fires immediately.
+pub fn collection_barrier_reached(total: i64, completed_iters: &std::collections::HashSet<i64>) -> bool {
+    if total == 0 {
+        return true;
+    }
+    (1..=total).all(|i| completed_iters.contains(&i))
+}
+
+/// The external targets a collection region's barrier fires into (ADR-0011 /
+/// #151): the edges leaving the region (member → non-member). Fired **once**, in
+/// edge order, de-duplicated — preserving `done → Merge` convergence (ADR-0006).
+/// Collection-region outgoing edges are unconditional barriers (the lap count is
+/// the collection, not a guard), so every member→non-member edge fires.
+pub fn collection_barrier_targets(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<String> {
+    let member_set: std::collections::HashSet<&str> =
+        region.members.iter().map(String::as_str).collect();
+    let mut targets: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for edge in &pipeline.edges {
+        if member_set.contains(edge.source.node.as_str())
+            && !member_set.contains(edge.target.node.as_str())
+            && seen.insert(edge.target.node.clone())
+        {
+            targets.push(edge.target.node.clone());
+        }
+    }
+    targets
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +407,7 @@ mod tests {
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
             max_iter: Some(serde_yaml::Value::Number(3.into())),
+            over: None,
         };
         (pipeline, region)
     }
@@ -419,6 +521,7 @@ mod tests {
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
             max_iter: Some(serde_yaml::Value::Number(3.into())),
+            over: None,
         };
         (pipeline, region)
     }
@@ -529,6 +632,7 @@ mod tests {
             kind: LoopKind::Bounded,
             members: vec!["worker".into()],
             max_iter: Some(serde_yaml::Value::Number(4.into())),
+            over: None,
         };
         let runtime = RegionRuntime::new(4);
         assert_eq!(
@@ -581,6 +685,7 @@ mod tests {
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
             max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+            over: None,
         };
         (pipeline, region)
     }
@@ -683,5 +788,139 @@ mod tests {
         let (laps, outcome) = run_region(&pipeline, &region, 3, &["FAIL", "FAIL", "FAIL"]);
         assert_eq!(laps, 3);
         assert_eq!(outcome, "exhausted-unrouted");
+    }
+
+    // ── Collection region engine (ADR-0011 / #151) ──────────────────────────
+
+    /// triage -> fixer (single-member collection over `issues`) -> merge -> end.
+    /// The barrier edge leaves the region (fixer:fix -> merge:branches).
+    fn collection_fanout_merge() -> (PipelineDef, LoopRegion) {
+        let pipeline = PipelineDef {
+            name: "cfm".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("triage", &["task"], &["plan"]),
+                node("fixer", &["in"], &["fix"]),
+                {
+                    let mut m = node("merge", &["branches"], &["merged"]);
+                    m.node_type = NodeType::Merge;
+                    m
+                },
+                node("end", &["result"], &[]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "triage", "task"),
+                edge("triage", "plan", "fixer", "in"),
+                edge("fixer", "fix", "merge", "branches"),
+                edge("merge", "merged", "end", "result"),
+            ],
+            loops: vec![],
+            prompt_required: true,
+        };
+        let region = LoopRegion {
+            id: "per-issue".into(),
+            kind: LoopKind::Collection,
+            members: vec!["fixer".into()],
+            max_iter: None,
+            over: Some("issues".into()),
+        };
+        (pipeline, region)
+    }
+
+    fn issues(names: &[&str]) -> std::collections::HashMap<String, serde_yaml::Value> {
+        let mut fm = std::collections::HashMap::new();
+        fm.insert(
+            "issues".into(),
+            serde_yaml::Value::Sequence(
+                names
+                    .iter()
+                    .map(|n| serde_yaml::Value::String((*n).into()))
+                    .collect(),
+            ),
+        );
+        fm
+    }
+
+    #[test]
+    fn collection_fans_out_one_lap_per_item_at_the_entry() {
+        // A 3-item collection plans 3 laps; the entry is the single member
+        // `fixer` (fed from outside the region). Each item becomes one parallel
+        // lap of the entry.
+        let (pipeline, region) = collection_fanout_merge();
+        let fm = issues(&["a", "b", "c"]);
+        let plan = collection_fanout(&pipeline, &region, &fm);
+        assert_eq!(plan.total, 3);
+        assert_eq!(plan.entry, "fixer");
+        assert_eq!(plan.items.len(), 3);
+    }
+
+    #[test]
+    fn collection_resolves_over_from_entering_frontmatter() {
+        // `resolve_collection` reads the `over` field's list from the entering
+        // artifact's frontmatter.
+        let (_pipeline, region) = collection_fanout_merge();
+        let fm = issues(&["x", "y"]);
+        let items = resolve_collection(&region, &fm);
+        assert_eq!(
+            items,
+            vec![
+                serde_yaml::Value::String("x".into()),
+                serde_yaml::Value::String("y".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_collection_fans_out_zero_items() {
+        // An empty `issues: []` resolves to total 0 — no entry spawns; the caller
+        // fires the barrier immediately.
+        let (pipeline, region) = collection_fanout_merge();
+        let mut fm = std::collections::HashMap::new();
+        fm.insert("issues".into(), serde_yaml::Value::Sequence(vec![]));
+        let plan = collection_fanout(&pipeline, &region, &fm);
+        assert_eq!(plan.total, 0);
+        assert!(plan.items.is_empty());
+    }
+
+    #[test]
+    fn missing_over_field_is_an_empty_collection() {
+        // A missing `over` field (sharp tool, ADR-0001): empty collection, no
+        // error — the barrier fires immediately.
+        let (pipeline, region) = collection_fanout_merge();
+        let plan = collection_fanout(&pipeline, &region, &Default::default());
+        assert_eq!(plan.total, 0);
+    }
+
+    #[test]
+    fn barrier_is_reached_only_when_all_item_laps_complete() {
+        // The barrier (outgoing edges fire once) is reached only when laps 1..=N
+        // have all completed — not on the first item.
+        let mut done: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        done.insert(1);
+        assert!(!collection_barrier_reached(3, &done), "1/3 not barriered");
+        done.insert(2);
+        assert!(!collection_barrier_reached(3, &done), "2/3 not barriered");
+        done.insert(3);
+        assert!(collection_barrier_reached(3, &done), "3/3 barriered");
+    }
+
+    #[test]
+    fn empty_collection_barrier_is_reached_immediately() {
+        // total 0 ⇒ barrier vacuously reached, fires immediately with zero
+        // item-artifacts.
+        assert!(collection_barrier_reached(0, &Default::default()));
+    }
+
+    #[test]
+    fn barrier_fires_once_into_the_merge_target() {
+        // The region's single outgoing edge (fixer:fix -> merge:branches) leaves
+        // the region: the barrier fires once into `merge`, preserving the
+        // done -> Merge convergence (ADR-0006). The intra-region entering edge
+        // (triage -> fixer) is NOT a barrier target.
+        let (pipeline, region) = collection_fanout_merge();
+        let targets = collection_barrier_targets(&pipeline, &region);
+        assert_eq!(targets, vec!["merge".to_string()]);
     }
 }

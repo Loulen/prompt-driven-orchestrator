@@ -7,6 +7,8 @@ mod frontmatter_parser;
 pub mod graph_resolver;
 pub mod library_store;
 #[allow(dead_code)]
+mod loop_region;
+#[allow(dead_code)]
 mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;

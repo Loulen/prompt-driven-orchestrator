@@ -8,7 +8,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import { routeOrthogonal, type Point, type Rect } from "../lib/orthogonalRouter";
-import { pathToSvg, segmentHandles, dragSegment } from "../lib/edgePath";
+import { pathToSvg, segmentHandles, dragSegment, reanchorWaypoints } from "../lib/edgePath";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeWaypoint } from "../types";
 
@@ -72,9 +72,17 @@ export default function OrthogonalEdge({
 
   const points: Point[] = useMemo(() => {
     if (mode === "manual" && waypoints && waypoints.length > 0) {
-      // Pinned route: endpoints follow the (re-anchorable) handles, the
-      // interior follows the persisted absolute waypoints.
-      return [sourcePt, ...waypoints.map((w) => ({ x: w.x, y: w.y })), targetPt];
+      // Pinned route: endpoints follow their nodes, the interior follows the
+      // persisted absolute waypoints. Re-anchor the endpoint-adjacent waypoints
+      // against the live endpoints so every segment stays axis-aligned when a
+      // connected node moves (#165) — and the pill, keyed off the midpoint,
+      // stays centered on the re-routed path.
+      const anchored = reanchorWaypoints(
+        sourcePt,
+        targetPt,
+        waypoints.map((w) => ({ x: w.x, y: w.y })),
+      );
+      return [sourcePt, ...anchored, targetPt];
     }
     return routeOrthogonal({ source: sourcePt, target: targetPt, obstacles });
     // eslint-disable-next-line react-hooks/exhaustive-deps

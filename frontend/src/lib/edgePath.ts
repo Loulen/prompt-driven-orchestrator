@@ -103,3 +103,63 @@ export function dragSegment(
 
   return result;
 }
+
+/**
+ * Re-anchors persisted manual waypoints against the current endpoints so that
+ * `[source, ...waypoints, target]` stays orthogonal after a connected node
+ * moves (#165). Waypoints are stored as absolute coordinates pinned to the
+ * endpoint positions at drag time; when an endpoint follows its node, the
+ * segment between it and the adjacent (stale) waypoint would otherwise go
+ * diagonal.
+ *
+ * The fix only touches the two endpoint-adjacent waypoints. The first segment's
+ * orientation is read from the interior chain (`w0 -> w1` alternates with
+ * `source -> w0`), so the source-adjacent waypoint follows the source on the
+ * shared axis; symmetric at the target end. Interior waypoints are left
+ * untouched, preserving the user's shaping.
+ */
+export function reanchorWaypoints(
+  source: Point,
+  target: Point,
+  waypoints: Point[],
+): Point[] {
+  const out = waypoints.map((p) => ({ ...p }));
+  if (out.length === 0) return out;
+
+  // A single waypoint is an L-bend touching both endpoints, so it has no
+  // interior chain to read orientation from. The two orthogonal elbows are
+  // {source.x, target.y} (vertical-then-horizontal) and {target.x, source.y}
+  // (horizontal-then-vertical); keep the user's shape by snapping to whichever
+  // the stale waypoint is closer to.
+  if (out.length === 1) {
+    const w = out[0];
+    const vh = { x: source.x, y: target.y };
+    const hv = { x: target.x, y: source.y };
+    const dVh = Math.abs(w.x - vh.x) + Math.abs(w.y - vh.y);
+    const dHv = Math.abs(w.x - hv.x) + Math.abs(w.y - hv.y);
+    out[0] = dVh <= dHv ? vh : hv;
+    return out;
+  }
+
+  const first = out[0];
+  const second = out[1];
+  // `w0 -> w1` horizontal ⇒ `source -> w0` is vertical (share x); else share y.
+  const firstSegHorizontal = Math.abs(first.y - second.y) < 1e-6;
+  if (firstSegHorizontal) {
+    first.x = source.x;
+  } else {
+    first.y = source.y;
+  }
+
+  const last = out[out.length - 1];
+  const penultimate = out[out.length - 2];
+  // `wn-1 -> wn` horizontal ⇒ `wn -> target` is vertical (share x); else share y.
+  const lastSegHorizontal = Math.abs(last.y - penultimate.y) < 1e-6;
+  if (lastSegHorizontal) {
+    last.x = target.x;
+  } else {
+    last.y = target.y;
+  }
+
+  return out;
+}

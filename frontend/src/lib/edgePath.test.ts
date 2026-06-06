@@ -78,4 +78,40 @@ describe("dragSegment", () => {
     expect(pinned[0]).toEqual({ x: 0, y: 0 });
     expect(pinned[1].y).toBe(30);
   });
+
+  it("keeps both endpoints anchored when the dragged segment touches both (straight 2-point edge)", () => {
+    // A straight aligned edge renders as exactly two points (one segment that
+    // touches source and target). Dragging it must pin a route without moving
+    // either node-anchored endpoint — a bend is inserted on each side.
+    const straight: Point[] = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ];
+    const pinned = dragSegment(straight, 0, 30);
+
+    // Both endpoints stay put.
+    expect(pinned[0]).toEqual({ x: 0, y: 0 });
+    expect(pinned[pinned.length - 1]).toEqual({ x: 200, y: 0 });
+    // The interior run now sits at the dragged coordinate.
+    expect(pinned[1]).toEqual({ x: 0, y: 30 });
+    expect(pinned[2]).toEqual({ x: 200, y: 30 });
+    // And the whole path stays orthogonal.
+    for (let i = 1; i < pinned.length; i++) {
+      const dx = Math.abs(pinned[i].x - pinned[i - 1].x);
+      const dy = Math.abs(pinned[i].y - pinned[i - 1].y);
+      expect(dx < 1e-6 || dy < 1e-6).toBe(true);
+    }
+  });
+
+  it("keeps both endpoints anchored for a vertical 2-point edge", () => {
+    const straight: Point[] = [
+      { x: 0, y: 0 },
+      { x: 0, y: 200 },
+    ];
+    const pinned = dragSegment(straight, 0, 40);
+    expect(pinned[0]).toEqual({ x: 0, y: 0 });
+    expect(pinned[pinned.length - 1]).toEqual({ x: 0, y: 200 });
+    expect(pinned[1]).toEqual({ x: 40, y: 0 });
+    expect(pinned[2]).toEqual({ x: 40, y: 200 });
+  });
 });

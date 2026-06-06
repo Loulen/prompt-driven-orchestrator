@@ -60,9 +60,11 @@ export function segmentHandles(points: Point[]): SegmentHandle[] {
  * Drags segment `segmentIndex` along its perpendicular axis to `coord`,
  * returning the new orthogonal polyline. A horizontal segment moves in `y`, a
  * vertical segment in `x`. Graph endpoints (the first and last point) stay
- * anchored to their node: when the dragged segment touches an endpoint, a new
- * bend point is inserted so the endpoint keeps its position and the path stays
- * right-angled. This is what turns the first manual drag into pinned waypoints.
+ * anchored to their node: an endpoint can't move, so a new bend is inserted
+ * beside it that carries `coord` on the moving axis while the endpoint keeps
+ * its position, leaving the path right-angled. When the dragged segment touches
+ * an endpoint at both ends (e.g. a straight two-point edge), a bend is inserted
+ * on each side. This is what turns the first manual drag into pinned waypoints.
  */
 export function dragSegment(
   points: Point[],
@@ -73,41 +75,31 @@ export function dragSegment(
   const result = points.map((p) => ({ ...p }));
   const aIdx = segmentIndex;
   const bIdx = segmentIndex + 1;
-  const a = result[aIdx];
-  const b = result[bIdx];
-  const horizontal = Math.abs(a.y - b.y) < 1e-6;
+  const horizontal = Math.abs(result[aIdx].y - result[bIdx].y) < 1e-6;
+  // The axis the drag moves the segment along: a horizontal segment slides in
+  // y, a vertical one in x. The other axis is fixed for each segment end.
+  const axis: "x" | "y" = horizontal ? "y" : "x";
+  const fixed: "x" | "y" = horizontal ? "x" : "y";
 
   const lastIdx = result.length - 1;
-  const aIsEndpoint = aIdx === 0 || aIdx === lastIdx;
-  const bIsEndpoint = bIdx === 0 || bIdx === lastIdx;
+  const isEndpoint = (i: number) => i === 0 || i === lastIdx;
 
-  if (horizontal) {
-    // Move the segment in y. Anchored endpoints can't move, so insert a bend.
-    if (aIsEndpoint) {
-      result.splice(bIdx, 0, { x: a.x, y: coord });
-      // b shifted right by one; move the (new) far end of the segment too.
-      result[bIdx + 1].y = coord;
-    } else {
-      a.y = coord;
-      if (bIsEndpoint) {
-        result.splice(bIdx, 0, { x: b.x, y: coord });
-      } else {
-        b.y = coord;
-      }
-    }
+  // Move the `b` end first so inserting a bend before it doesn't shift `a`'s
+  // index. For an anchored endpoint, insert a bend carrying the endpoint's
+  // fixed coordinate at the new `coord`; for an interior point, slide it.
+  const bEnd = result[bIdx];
+  if (isEndpoint(bIdx)) {
+    result.splice(bIdx, 0, { ...bEnd, [axis]: coord, [fixed]: bEnd[fixed] });
   } else {
-    // Vertical segment: move in x.
-    if (aIsEndpoint) {
-      result.splice(bIdx, 0, { x: coord, y: a.y });
-      result[bIdx + 1].x = coord;
-    } else {
-      a.x = coord;
-      if (bIsEndpoint) {
-        result.splice(bIdx, 0, { x: coord, y: b.y });
-      } else {
-        b.x = coord;
-      }
-    }
+    bEnd[axis] = coord;
   }
+
+  const aEnd = result[aIdx];
+  if (isEndpoint(aIdx)) {
+    result.splice(aIdx + 1, 0, { ...aEnd, [axis]: coord, [fixed]: aEnd[fixed] });
+  } else {
+    aEnd[axis] = coord;
+  }
+
   return result;
 }

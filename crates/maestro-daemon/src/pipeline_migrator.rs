@@ -281,7 +281,10 @@ fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
     if let Some(nodes) = doc.get("nodes").and_then(|n| n.as_sequence()) {
         for node in nodes {
             let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if matches!(node_type, "start" | "end" | "switch" | "merge" | "loop" | "for-each") {
+            if matches!(
+                node_type,
+                "start" | "end" | "switch" | "merge" | "loop" | "for-each"
+            ) {
                 continue;
             }
             let Some(node_id) = node.get("id").and_then(|v| v.as_str()) else {
@@ -320,9 +323,7 @@ fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
                             .get(serde_yaml::Value::String("port".into()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        repeated_targets
-                            .iter()
-                            .any(|(n, p)| n == tn && p == tp)
+                        repeated_targets.iter().any(|(n, p)| n == tn && p == tp)
                     })
                     .unwrap_or(false);
                 if matches {
@@ -865,7 +866,9 @@ edges:
         // Declared inputs are gone; outputs are kept.
         assert!(
             planner.get("inputs").is_none()
-                || planner["inputs"].as_sequence().is_some_and(|s| s.is_empty()),
+                || planner["inputs"]
+                    .as_sequence()
+                    .is_some_and(|s| s.is_empty()),
             "regular node should have no declared inputs after migration"
         );
         assert!(planner["outputs"].as_sequence().is_some());

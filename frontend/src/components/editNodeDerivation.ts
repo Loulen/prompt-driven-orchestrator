@@ -181,11 +181,38 @@ export function edgeIndexFromId(edgeId: string): number | null {
   return Number(m[1]);
 }
 
+/**
+ * Resolves the xyflow `targetHandle` id an incoming edge must use so the arrow
+ * actually anchors to the node it lands on. xyflow drops an edge whose
+ * `targetHandle` matches no rendered handle (`getEdgePosition` → error 008), so
+ * the id here must mirror what the target node renders:
+ *
+ * - Structural nodes (merge / loop / for-each) render an id'd target handle per
+ *   declared input via `PortPill`, so the edge keeps its declared port name.
+ * - Regular `edit` nodes (doc-only / code-mutating / start / end) render a
+ *   single body-covering target handle whose id is the lone declared input name
+ *   or `undefined` when none is declared. Inputs are EMERGENT (#149): after
+ *   migration regular nodes declare none, so the handle is id-less and the edge
+ *   must target `null` to bind to it. The End node keeps its declared `result`
+ *   input, so its handle stays id'd and the edge keeps `result`.
+ */
+function resolveTargetHandle(target: PipelineDef["nodes"][number], declaredPort: string): string | null {
+  if (target.type === "merge" || target.type === "loop" || target.type === "for-each") {
+    return declaredPort || null;
+  }
+  // Mirrors the slim card's body handle id rule in EditCanvas.tsx.
+  return target.inputs.length === 1 ? target.inputs[0].name : null;
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
+    const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
+    const targetHandle = targetNode
+      ? resolveTargetHandle(targetNode, e.target.port)
+      : e.target.port || null;
     const isElse = e.else === true;
     const hasWhen = e.when != null && Object.keys(e.when).length > 0;
     const isConditional = isElse || hasWhen;
@@ -208,7 +235,7 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       source: e.source.node,
       target: e.target.node,
       sourceHandle: e.source.port || null,
-      targetHandle: e.target.port || null,
+      targetHandle,
       type: "default",
       label,
       labelShowBg: isConditional,

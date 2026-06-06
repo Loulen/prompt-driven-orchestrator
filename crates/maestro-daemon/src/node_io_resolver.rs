@@ -800,7 +800,11 @@ mod tests {
             name: "pool".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![mk_node("a", true), mk_node("b", true), mk_node("sink", false)],
+            nodes: vec![
+                mk_node("a", true),
+                mk_node("b", true),
+                mk_node("sink", false),
+            ],
             edges: vec![mk_edge("a"), mk_edge("b")],
         };
 

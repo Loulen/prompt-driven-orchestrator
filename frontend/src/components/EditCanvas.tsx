@@ -16,13 +16,14 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
+import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopEditNode } from "./LoopNode";
+import { LoopRegionNode } from "./LoopRegionNode";
 import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
@@ -144,7 +145,7 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
+const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -219,10 +220,38 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     setLibraryBinding(tab.id, pipelineSync.entry.id, pipelineSync.entry.scope);
   }, [tab, pipelineSync.entry, setLibraryBinding]);
 
-  const derivedNodes = useMemo(
-    () => (pipeline ? deriveEditNodes(pipeline, activeRunState) : []),
-    [pipeline, activeRunState],
-  );
+  const derivedNodes = useMemo(() => {
+    if (!pipeline) return [];
+    const cards = deriveEditNodes(pipeline, activeRunState);
+    // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
+    // their member cards. We back each multi-member region with a decorative,
+    // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
+    // single-member regions render as a badge on the member card (no box). The
+    // region nodes are prepended and pinned to a low zIndex so member cards stay
+    // clickable on top.
+    const regionNodes: Node[] = deriveLoopRegions(pipeline, activeRunState)
+      .filter((r) => r.box != null)
+      .map((r) => ({
+        id: `region-${r.id}`,
+        type: "loopRegion",
+        position: { x: r.box!.x, y: r.box!.y },
+        data: {
+          regionId: r.id,
+          kind: r.kind,
+          counterText: r.counterText,
+          exhausted: r.exhausted,
+          width: r.box!.width,
+          height: r.box!.height,
+        },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        focusable: false,
+        zIndex: 0,
+        style: { zIndex: 0 },
+      }));
+    return [...regionNodes, ...cards];
+  }, [pipeline, activeRunState]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -269,6 +298,8 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const handleNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.preventDefault();
+      // Loop-region boxes are decorative, not pipeline nodes — no context menu.
+      if (node.type === "loopRegion") return;
       const nodeDef = pipeline?.nodes.find((n) => n.id === node.id);
       if (nodeDef?.type === "start" || nodeDef?.type === "end") return;
       setContextMenu({
@@ -459,6 +490,9 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodeClick={(_event, node) => {
+            // Region boxes are decorative; clicking one is a no-op (they fall
+            // back to the pane selection path via their pass-through body).
+            if (node.type === "loopRegion") return;
             setSelection({ kind: "node", id: node.id });
             onCloseInfo?.();
           }}

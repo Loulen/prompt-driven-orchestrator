@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
-import type { EdgeWaypoint, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 
 /**
@@ -121,6 +121,125 @@ export function deriveEditNodes(
       },
     };
   });
+}
+
+/**
+ * Layout + label for a bounded loop region (ADR-0011 / #148) rendered on the
+ * canvas. The region is the named `loops:` entry — NOT a node. A region with
+ * >= 2 members renders as a translucent box enclosing its members; a single-
+ * member region renders as a compact badge on that member's card. The
+ * `counterText` reads `max N` before a run and `i/N` once a run is live (where
+ * `i` is the region-wide iteration, taken as the max `iter` across the member
+ * nodes — the daemon stamps every member with the region iter for the lap).
+ */
+export interface LoopRegionLayout {
+  id: string;
+  kind: LoopRegion["kind"];
+  /** Region members that actually exist as nodes, in pipeline order. */
+  memberIds: string[];
+  /** `↻` counter text, e.g. `max 3` (idle) or `2/3` (running). */
+  counterText: string;
+  /** True once the region has reached `max_iter` on a live run. */
+  exhausted: boolean;
+  /** Translucent-box geometry. Present iff `kind` renders as a box (>= 2 members). */
+  box: { x: number; y: number; width: number; height: number } | null;
+  /** Single-member badge anchor (the member's id). Present iff exactly 1 member. */
+  badgeMemberId: string | null;
+}
+
+// Approximate slim-card footprint (px) used to bound the region box around its
+// members. Cards auto-size; this is the padding-inclusive envelope the box
+// must clear. Mirrors the `minWidth: 160` slim card in EditCanvas.
+const CARD_W = 180;
+const CARD_H = 54;
+// Inset of the translucent box around the member extent. Leaves room for the
+// `↻ X/Y` header pinned to the box's top edge (see refonte.css .rf-region-head).
+const REGION_PAD = 26;
+const REGION_PAD_TOP = 30;
+
+function regionMaxIterText(maxIter: LoopRegion["max_iter"]): string {
+  if (maxIter == null) return "∞";
+  // A `$var` reference (string) is shown verbatim; a number is shown as-is.
+  return String(maxIter);
+}
+
+/**
+ * Derives the on-canvas layout for every bounded loop region in the pipeline.
+ * Regions whose members are all missing (e.g. mid-edit deletion) are dropped.
+ */
+export function deriveLoopRegions(
+  pipeline: PipelineDef,
+  runState: RunState | null | undefined,
+): LoopRegionLayout[] {
+  const regions = pipeline.loops ?? [];
+  const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
+  // A present run state means the region has executed and member iters are
+  // meaningful (`i/N`); template editing passes `null` and renders `max N`.
+  const live = runState != null;
+
+  const layouts: LoopRegionLayout[] = [];
+  for (const region of regions) {
+    const members = region.members
+      .map((id) => byId.get(id))
+      .filter((n): n is NonNullable<typeof n> => n != null);
+    if (members.length === 0) continue;
+
+    const maxText = regionMaxIterText(region.max_iter);
+    // Region-wide current iter: the daemon stamps each member node with the
+    // region's iteration, so the live lap is the max iter across members.
+    const currentIter = live
+      ? members.reduce(
+          (max, n) => Math.max(max, runState?.nodes[n.id]?.iter ?? 0),
+          0,
+        )
+      : 0;
+    const maxNum =
+      typeof region.max_iter === "number" ? region.max_iter : null;
+    const exhausted =
+      live && maxNum != null && currentIter >= maxNum;
+    const counterText = live ? `${currentIter}/${maxText}` : `max ${maxText}`;
+
+    if (members.length === 1) {
+      layouts.push({
+        id: region.id,
+        kind: region.kind,
+        memberIds: members.map((n) => n.id),
+        counterText,
+        exhausted,
+        box: null,
+        badgeMemberId: members[0].id,
+      });
+      continue;
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of members) {
+      const x = n.view?.x ?? 200;
+      const y = n.view?.y ?? 200;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + CARD_W);
+      maxY = Math.max(maxY, y + CARD_H);
+    }
+    layouts.push({
+      id: region.id,
+      kind: region.kind,
+      memberIds: members.map((n) => n.id),
+      counterText,
+      exhausted,
+      badgeMemberId: null,
+      box: {
+        x: minX - REGION_PAD,
+        y: minY - REGION_PAD_TOP,
+        width: maxX - minX + REGION_PAD * 2,
+        height: maxY - minY + REGION_PAD_TOP + REGION_PAD,
+      },
+    });
+  }
+  return layouts;
 }
 
 const OP_SYMBOLS: Record<string, string> = {

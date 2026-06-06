@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   deriveEditEdges,
   deriveEditNodes,
+  deriveLoopRegions,
   formatWhenPill,
   markerReached,
   statusForNode,
@@ -444,5 +445,118 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
     const edges = deriveEditEdges(pipeline);
     expect(edges[0].data?.label).toBeUndefined();
     expect(edges[0].data?.isConditional).toBe(false);
+  });
+});
+
+describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () => {
+  function regionPipeline(maxIter: number | string | null = 3): PipelineDef {
+    return {
+      name: "loop-region-review-loop",
+      version: "1.0",
+      variables: {},
+      nodes: [
+        {
+          id: "start",
+          name: "Start",
+          type: "start",
+          inputs: [],
+          outputs: [{ name: "user_prompt", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 0, y: 200 },
+        },
+        {
+          id: "impl",
+          name: "implementer",
+          type: "code-mutating",
+          inputs: [],
+          outputs: [{ name: "code", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 280, y: 200 },
+        },
+        {
+          id: "rev",
+          name: "reviewer",
+          type: "doc-only",
+          inputs: [],
+          outputs: [{ name: "review", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 560, y: 200 },
+        },
+        {
+          id: "end",
+          name: "End",
+          type: "end",
+          inputs: [{ name: "result", repeated: false, side: "left" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 880, y: 200 },
+        },
+      ],
+      edges: [],
+      loops: [
+        { id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: maxIter },
+      ],
+    };
+  }
+
+  it("derives one box region enclosing both members with a `max N` counter (idle)", () => {
+    const regions = deriveLoopRegions(regionPipeline(3), null);
+    expect(regions).toHaveLength(1);
+    const r = regions[0];
+    expect(r.id).toBe("review_loop");
+    expect(r.kind).toBe("bounded");
+    expect(r.memberIds).toEqual(["impl", "rev"]);
+    expect(r.counterText).toBe("max 3");
+    expect(r.exhausted).toBe(false);
+    expect(r.badgeMemberId).toBeNull();
+    expect(r.box).not.toBeNull();
+    // Box brackets the member extent (impl at x=280, rev at x=560+card) with pad.
+    expect(r.box!.x).toBeLessThan(280);
+    expect(r.box!.y).toBeLessThan(200);
+    expect(r.box!.width).toBeGreaterThan(560 - 280);
+    expect(r.box!.height).toBeGreaterThan(0);
+  });
+
+  it("advances the counter to `i/N` on a live run, taking the max member iter", () => {
+    const run = makeRunState({ impl: "running", rev: "pending" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 1;
+    const regions = deriveLoopRegions(regionPipeline(3), run);
+    expect(regions[0].counterText).toBe("2/3");
+    expect(regions[0].exhausted).toBe(false);
+  });
+
+  it("marks the region exhausted at max_iter on a live run", () => {
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 3;
+    run.nodes.rev.iter = 3;
+    const regions = deriveLoopRegions(regionPipeline(3), run);
+    expect(regions[0].counterText).toBe("3/3");
+    expect(regions[0].exhausted).toBe(true);
+  });
+
+  it("renders a single-member region as a badge, not a box", () => {
+    const p = regionPipeline(3);
+    p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
+    const regions = deriveLoopRegions(p, null);
+    expect(regions[0].box).toBeNull();
+    expect(regions[0].badgeMemberId).toBe("impl");
+  });
+
+  it("shows a $var max_iter verbatim", () => {
+    const regions = deriveLoopRegions(regionPipeline("$max_review"), null);
+    expect(regions[0].counterText).toBe("max $max_review");
+  });
+
+  it("drops a region whose members are all missing", () => {
+    const p = regionPipeline(3);
+    p.loops = [{ id: "ghost", kind: "bounded", members: ["nope1", "nope2"], max_iter: 3 }];
+    expect(deriveLoopRegions(p, null)).toHaveLength(0);
+  });
+
+  it("returns no regions when the pipeline has no loops block", () => {
+    const p = regionPipeline(3);
+    delete p.loops;
+    expect(deriveLoopRegions(p, null)).toHaveLength(0);
   });
 });

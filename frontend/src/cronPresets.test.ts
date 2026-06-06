@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presetToCron, cronToPreset, humanizeCron, CRON_PRESETS } from "./cronPresets";
+import { presetToCron, cronToPreset, humanizeCron, parseDailyTime, CRON_PRESETS } from "./cronPresets";
 
 describe("cronPresets", () => {
   it("compiles the every-15-min preset to a cron expression", () => {
@@ -33,6 +33,14 @@ describe("cronPresets", () => {
 
   it("falls back to the raw expression for unknown schedules", () => {
     expect(humanizeCron("17 3 * * 1")).toBe("17 3 * * 1");
+  });
+
+  it("parses a daily cron's time-of-day, tolerating irregular whitespace", () => {
+    expect(parseDailyTime("30 18 * * *")).toEqual({ hour: 18, minute: 30 });
+    // Same normalization as cronToPreset: extra spaces still parse.
+    expect(parseDailyTime("0  9 * * *")).toEqual({ hour: 9, minute: 0 });
+    expect(parseDailyTime("*/15 * * * *")).toBeNull();
+    expect(parseDailyTime("17 3 * * 1")).toBeNull();
   });
 
   it("exposes the selectable presets", () => {

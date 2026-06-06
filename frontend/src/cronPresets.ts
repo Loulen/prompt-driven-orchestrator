@@ -49,15 +49,27 @@ export function cronToPreset(cron: string): CronPresetId {
   return "custom";
 }
 
+/**
+ * Extract the daily preset's time-of-day from a cron expression, or `null` if
+ * it isn't a daily cron. Whitespace is normalized the same way `cronToPreset`
+ * does, so any cron `cronToPreset` calls `daily` yields a non-null time here.
+ */
+export function parseDailyTime(cron: string): DailyTime | null {
+  const norm = cron.trim().replace(/\s+/g, " ");
+  const m = norm.match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
+  if (!m) return null;
+  return { hour: Number(m[2]), minute: Number(m[1]) };
+}
+
 /** A short human-readable label for a cron expression (UI rows). */
 export function humanizeCron(cron: string): string {
   const norm = cron.trim().replace(/\s+/g, " ");
   if (norm === "*/15 * * * *") return "every 15 min";
   if (norm === "0 * * * *") return "hourly";
-  const daily = norm.match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
+  const daily = parseDailyTime(norm);
   if (daily) {
-    const minute = daily[1].padStart(2, "0");
-    const hour = daily[2].padStart(2, "0");
+    const hour = String(daily.hour).padStart(2, "0");
+    const minute = String(daily.minute).padStart(2, "0");
     return `daily at ${hour}:${minute}`;
   }
   return norm;

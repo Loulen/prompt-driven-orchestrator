@@ -5,7 +5,7 @@ import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipelin
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
-import { CRON_PRESETS, presetToCron, cronToPreset, type CronPresetId } from "../cronPresets";
+import { CRON_PRESETS, presetToCron, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -127,10 +127,10 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
       if (preset === "custom") {
         setRawCron(trigger.cron);
       } else if (preset === "daily") {
-        const m = trigger.cron.trim().match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
-        if (m) {
-          setDailyMinute(Number(m[1]));
-          setDailyHour(Number(m[2]));
+        const time = parseDailyTime(trigger.cron);
+        if (time) {
+          setDailyMinute(time.minute);
+          setDailyHour(time.hour);
         }
       }
     } else {

@@ -225,6 +225,12 @@ export interface EdgeDef {
   when?: Record<string, unknown> | null;
   /** `else: true` marks a fallback edge (fires iff no sibling matched). */
   else?: boolean;
+  /**
+   * `repeated: true` marks an edge whose source artifact accumulates across
+   * iterations (glob `iter-*`). Loop accumulation ("read all laps") lives on
+   * the edge, not on a declared input port (ADR-0011 / #149).
+   */
+  repeated?: boolean;
 }
 
 export interface PipelineDef {

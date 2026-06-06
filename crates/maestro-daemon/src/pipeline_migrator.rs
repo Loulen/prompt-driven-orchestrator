@@ -77,6 +77,10 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     if nodes_contain_type(nodes, "switch") {
         return true;
     }
+    // Loop nodes are dissolved into a `loops:` region + rewired body edges (#148).
+    if nodes_contain_type(nodes, "loop") {
+        return true;
+    }
     for node in nodes {
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if node_type == "for-each" && node.get("over").is_none() {
@@ -142,6 +146,10 @@ pub fn migrate_pipeline_yaml(
     // Dissolve Switch nodes into guarded edges (ADR-0011) before id-rewriting,
     // so the rewritten edges still reference the original node ids.
     dissolve_switches(&mut doc)?;
+
+    // Dissolve Loop nodes into a `loops:` region + rewired body edges (#148),
+    // also before id-rewriting so members/edges reference the original ids.
+    dissolve_loops(&mut doc)?;
 
     let nodes = doc
         .get_mut("nodes")
@@ -654,6 +662,331 @@ fn dissolve_switches(doc: &mut serde_yaml::Value) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Extracts an edge endpoint's `(node, port)` for the given side key
+/// (`"source"` / `"target"`). Returns `None` if the endpoint is malformed.
+fn edge_endpoint(edge: &serde_yaml::Value, key: &str) -> Option<(String, String)> {
+    let ep = edge.get(key)?.as_mapping()?;
+    let node = ep
+        .get(serde_yaml::Value::String("node".into()))?
+        .as_str()?
+        .to_string();
+    let port = ep
+        .get(serde_yaml::Value::String("port".into()))?
+        .as_str()?
+        .to_string();
+    Some((node, port))
+}
+
+/// Dissolves `Loop` nodes into a `loops:` region plus rewired body edges
+/// (ADR-0011 / #148). For each Loop node `L`:
+///
+/// - `members` = the body subgraph (nodes reachable from `L.body` until they
+///   route back to `L`'s `break`/`done`). `entry` = the target of `L.body`.
+/// - `U.p -> L.in` followed by `L.body -> E.q` becomes `U.p -> E.q` (the loop is
+///   entered directly at its body entry).
+/// - each break/exit edge `X.p -> L.break [when W]` paired with each completion
+///   edge `L.done -> D.r` becomes the exhaustion/exit edge `X.p -> D.r [when W]`,
+///   plus the continuation back-edge `X.p -> E.q [else]` (loop again when the
+///   exit guard is false). When the break edge is unconditional, only the exit
+///   edge is emitted (the loop always leaves).
+/// - the Loop node is removed and a `{ id, kind: bounded, members, max_iter }`
+///   entry is appended to the pipeline's `loops:` block.
+fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
+    let nodes = match doc.get("nodes").and_then(|n| n.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => return Ok(()),
+    };
+
+    // Collect loop nodes: id -> (name, max_iter).
+    let mut loop_ids: HashSet<String> = HashSet::new();
+    let mut loop_meta: HashMap<String, (String, Option<serde_yaml::Value>)> = HashMap::new();
+    for node in &nodes {
+        let is_loop = node
+            .get("type")
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| t == "loop");
+        if !is_loop {
+            continue;
+        }
+        let id = match node.get("id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return Err("loop node missing 'id'".into()),
+        };
+        let name = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&id)
+            .to_string();
+        let max_iter = node.get("max_iter").cloned();
+        loop_ids.insert(id.clone());
+        loop_meta.insert(id, (name, max_iter));
+    }
+
+    if loop_ids.is_empty() {
+        return Ok(());
+    }
+
+    let edges = match doc.get("edges").and_then(|e| e.as_sequence()) {
+        Some(seq) => seq.clone(),
+        None => Vec::new(),
+    };
+
+    let endpoint = edge_endpoint;
+    let mk_endpoint = |node: &str, port: &str| -> serde_yaml::Value {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(
+            serde_yaml::Value::String("node".into()),
+            serde_yaml::Value::String(node.to_string()),
+        );
+        m.insert(
+            serde_yaml::Value::String("port".into()),
+            serde_yaml::Value::String(port.to_string()),
+        );
+        serde_yaml::Value::Mapping(m)
+    };
+
+    // Per-loop wiring: entry (body target), upstream-in edges, break edges,
+    // done edges.
+    let mut loop_entry: HashMap<String, (String, String)> = HashMap::new(); // loop -> (entry node, entry port)
+    let mut loop_in_sources: HashMap<String, Vec<(String, String)>> = HashMap::new(); // loop -> [(U node, U port)]
+    let mut loop_break_edges: HashMap<String, Vec<serde_yaml::Value>> = HashMap::new();
+    let mut loop_done_targets: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+    for edge in &edges {
+        let src = endpoint(edge, "source");
+        let tgt = endpoint(edge, "target");
+        if let Some((snode, sport)) = &src {
+            if loop_ids.contains(snode) {
+                match sport.as_str() {
+                    "body" => {
+                        if let Some((tnode, tport)) = &tgt {
+                            loop_entry.insert(snode.clone(), (tnode.clone(), tport.clone()));
+                        }
+                    }
+                    "done" => {
+                        if let Some((tnode, tport)) = &tgt {
+                            loop_done_targets
+                                .entry(snode.clone())
+                                .or_default()
+                                .push((tnode.clone(), tport.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some((tnode, tport)) = &tgt {
+            if loop_ids.contains(tnode) {
+                match tport.as_str() {
+                    "in" => {
+                        if let Some(s) = &src {
+                            loop_in_sources
+                                .entry(tnode.clone())
+                                .or_default()
+                                .push(s.clone());
+                        }
+                    }
+                    "break" => {
+                        loop_break_edges
+                            .entry(tnode.clone())
+                            .or_default()
+                            .push(edge.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Rebuild the edge list, dropping every edge touching a loop port and
+    // emitting the rewired equivalents.
+    let mut new_edges: Vec<serde_yaml::Value> = Vec::new();
+    for edge in &edges {
+        let src = endpoint(edge, "source");
+        let tgt = endpoint(edge, "target");
+        let touches_loop = src.as_ref().is_some_and(|(n, _)| loop_ids.contains(n))
+            || tgt.as_ref().is_some_and(|(n, _)| loop_ids.contains(n));
+        if !touches_loop {
+            new_edges.push(edge.clone());
+        }
+    }
+
+    for loop_id in &loop_ids {
+        let entry = match loop_entry.get(loop_id) {
+            Some(e) => e.clone(),
+            None => continue, // loop with no body — nothing to enter
+        };
+
+        // U.p -> L.in  +  L.body -> E.q   ==>   U.p -> E.q
+        if let Some(sources) = loop_in_sources.get(loop_id) {
+            for (unode, uport) in sources {
+                let mut m = serde_yaml::Mapping::new();
+                m.insert(
+                    serde_yaml::Value::String("source".into()),
+                    mk_endpoint(unode, uport),
+                );
+                m.insert(
+                    serde_yaml::Value::String("target".into()),
+                    mk_endpoint(&entry.0, &entry.1),
+                );
+                new_edges.push(serde_yaml::Value::Mapping(m));
+            }
+        }
+
+        // X.p -> L.break [when W]  +  L.done -> D.r   ==>
+        //   X.p -> D.r [when W]                (exit / exhaustion route)
+        //   X.p -> E.q [else]                  (continuation back-edge, if W)
+        let done_targets = loop_done_targets.get(loop_id).cloned().unwrap_or_default();
+        if let Some(break_edges) = loop_break_edges.get(loop_id) {
+            for be in break_edges {
+                let bsrc = match endpoint(be, "source") {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let when = be.get("when").cloned();
+                let reason = be.get("reason").cloned();
+
+                for (dnode, dport) in &done_targets {
+                    let mut m = serde_yaml::Mapping::new();
+                    m.insert(
+                        serde_yaml::Value::String("source".into()),
+                        mk_endpoint(&bsrc.0, &bsrc.1),
+                    );
+                    m.insert(
+                        serde_yaml::Value::String("target".into()),
+                        mk_endpoint(dnode, dport),
+                    );
+                    if let Some(w) = &when {
+                        m.insert(serde_yaml::Value::String("when".into()), w.clone());
+                    }
+                    if let Some(r) = &reason {
+                        m.insert(serde_yaml::Value::String("reason".into()), r.clone());
+                    }
+                    new_edges.push(serde_yaml::Value::Mapping(m));
+                }
+
+                // Continuation back-edge (loop again when the guard is false). Only
+                // needed when the break edge is guarded; an unconditional break
+                // always leaves the loop.
+                if when.is_some() {
+                    let mut m = serde_yaml::Mapping::new();
+                    m.insert(
+                        serde_yaml::Value::String("source".into()),
+                        mk_endpoint(&bsrc.0, &bsrc.1),
+                    );
+                    m.insert(
+                        serde_yaml::Value::String("target".into()),
+                        mk_endpoint(&entry.0, &entry.1),
+                    );
+                    m.insert(
+                        serde_yaml::Value::String("else".into()),
+                        serde_yaml::Value::Bool(true),
+                    );
+                    new_edges.push(serde_yaml::Value::Mapping(m));
+                }
+            }
+        }
+    }
+
+    // Compute members (body subgraph) for each loop from the *rewired* graph is
+    // tricky; instead derive them from the original edges: BFS from each loop's
+    // entry, following edges, stopping at the loop node and at other loops.
+    let mut regions: Vec<serde_yaml::Value> = Vec::new();
+    for loop_id in &loop_ids {
+        let entry = match loop_entry.get(loop_id) {
+            Some(e) => e.0.clone(),
+            None => continue,
+        };
+        let members = body_members(&edges, loop_id, &entry, &loop_ids);
+        let (name, max_iter) = loop_meta.get(loop_id).cloned().unwrap_or_default();
+
+        let mut region = serde_yaml::Mapping::new();
+        region.insert(
+            serde_yaml::Value::String("id".into()),
+            serde_yaml::Value::String(name),
+        );
+        region.insert(
+            serde_yaml::Value::String("kind".into()),
+            serde_yaml::Value::String("bounded".into()),
+        );
+        region.insert(
+            serde_yaml::Value::String("members".into()),
+            serde_yaml::Value::Sequence(
+                members.into_iter().map(serde_yaml::Value::String).collect(),
+            ),
+        );
+        if let Some(mi) = max_iter {
+            region.insert(serde_yaml::Value::String("max_iter".into()), mi);
+        }
+        regions.push(serde_yaml::Value::Mapping(region));
+    }
+
+    // Remove loop nodes.
+    if let Some(nodes_mut) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+        nodes_mut.retain(|n| {
+            n.get("type")
+                .and_then(|v| v.as_str())
+                .is_none_or(|t| t != "loop")
+        });
+    }
+
+    if let Some(m) = doc.as_mapping_mut() {
+        m.insert(
+            serde_yaml::Value::String("edges".into()),
+            serde_yaml::Value::Sequence(new_edges),
+        );
+        if !regions.is_empty() {
+            m.insert(
+                serde_yaml::Value::String("loops".into()),
+                serde_yaml::Value::Sequence(regions),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// BFS the body subgraph of a loop from its entry, following edges, stopping at
+/// the loop node itself and at any other loop. Returns members sorted for a
+/// stable migration output.
+fn body_members(
+    edges: &[serde_yaml::Value],
+    loop_id: &str,
+    entry: &str,
+    loop_ids: &HashSet<String>,
+) -> Vec<String> {
+    let endpoint = edge_endpoint;
+    let mut members: HashSet<String> = HashSet::new();
+    let mut queue = vec![entry.to_string()];
+    while let Some(current) = queue.pop() {
+        if current == loop_id || (loop_ids.contains(&current) && current != entry) {
+            continue;
+        }
+        if !members.insert(current.clone()) {
+            continue;
+        }
+        for edge in edges {
+            if let Some((snode, _)) = endpoint(edge, "source") {
+                if snode != current {
+                    continue;
+                }
+                if let Some((tnode, _)) = endpoint(edge, "target") {
+                    // Don't traverse into the loop control node or other loops.
+                    if tnode == loop_id || loop_ids.contains(&tnode) {
+                        continue;
+                    }
+                    if !members.contains(&tnode) {
+                        queue.push(tnode);
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<String> = members.into_iter().collect();
+    out.sort();
+    out
 }
 
 pub fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String> {
@@ -1752,6 +2085,60 @@ edges: []
             "no edge may reference a Switch node"
         );
         parsed
+    }
+
+    #[test]
+    fn migrates_loop_node_to_bounded_region() {
+        // ADR-0011 / #148: a Loop node dissolves into a `loops:` entry + rewired
+        // body edges. The review-loop fixture (start -> loop -> body -> ...) must
+        // produce a bounded region whose members are the body nodes, with the
+        // Loop node and its ports gone.
+        let yaml = include_str!("../../../.maestro/pipelines/review-loop.yaml");
+        let parsed = migrate_str_and_parse(yaml);
+
+        // No Loop node may remain, nor any edge referencing it.
+        assert!(
+            !parsed.nodes.iter().any(|n| n.node_type == NodeType::Loop),
+            "no Loop node may remain after migration"
+        );
+
+        // Exactly one bounded region, members = the two body nodes, max_iter 3.
+        assert_eq!(parsed.loops.len(), 1, "one bounded region expected");
+        let region = &parsed.loops[0];
+        assert_eq!(region.kind, pipeline::LoopKind::Bounded);
+        let mut members = region.members.clone();
+        members.sort();
+        assert_eq!(
+            members,
+            vec!["Qws9KzRZ".to_string(), "XBG5Cxkn".to_string()]
+        );
+        assert_eq!(
+            region.max_iter,
+            Some(serde_yaml::Value::Number(serde_yaml::Number::from(3)))
+        );
+
+        // No edge may reference the dissolved loop's ports.
+        assert!(
+            !parsed
+                .edges
+                .iter()
+                .any(|e| e.source.node == "qdtXejYS" || e.target.node == "qdtXejYS"),
+            "no edge may reference the dissolved Loop node"
+        );
+
+        // The region matches what cycle auto-detection would find on the rewired
+        // graph (the back-edge makes the loop a real cycle).
+        let cycles = crate::graph_resolver::detect_cycles(&parsed);
+        assert_eq!(cycles.len(), 1, "rewired graph has exactly one cycle");
+        let mut cyc = cycles[0].clone();
+        cyc.sort();
+        assert_eq!(cyc, members);
+
+        // Idempotent: migrating the result again is a no-op.
+        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+        let second =
+            migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
+        assert!(!second.migrated, "loop migration must be idempotent");
     }
 
     #[test]

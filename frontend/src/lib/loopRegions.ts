@@ -158,8 +158,9 @@ export function collectionFanoutNudges(pipeline: PipelineDef): string[] {
     const src = byId.get(edge.source.node);
     if (!src) continue;
     const port = src.outputs.find((p) => p.name === edge.source.port);
-    const isList = port?.frontmatter?.[port.name]?.type === "list"
-      || Object.values(port?.frontmatter ?? {}).some((f) => f.type === "list");
+    // The output is "list-typed" when any of its declared frontmatter fields is
+    // a `list` (the frontmatter map is keyed by field name, not port name).
+    const isList = Object.values(port?.frontmatter ?? {}).some((f) => f.type === "list");
     if (!isList) continue;
     const target = edge.target.node;
     if (collectionMembers.has(target)) continue; // already fanned out

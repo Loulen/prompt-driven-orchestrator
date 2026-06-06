@@ -30,6 +30,16 @@ pub enum NodeType {
     Merge,
 }
 
+impl NodeType {
+    /// A *regular* node (doc-only / code-mutating) declares no inputs: its inputs
+    /// are emergent, derived from incoming edges and named after the edge target
+    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/for-each/
+    /// merge) keep their required, declared input ports.
+    pub fn has_emergent_inputs(&self) -> bool {
+        matches!(self, NodeType::DocOnly | NodeType::CodeMutating)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FrontmatterFieldDecl {
     #[serde(rename = "type")]
@@ -445,6 +455,12 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let node_ids: std::collections::HashSet<&str> =
         pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
+    // `role` is "source" or "target". For the target side of an edge that lands
+    // on a *regular* node, the input is emergent (#149): the node declares no
+    // inputs, so any target port is valid by construction (it names the emergent
+    // input). We only validate the port against declared ports for outputs and
+    // for structural-node inputs (start/end/switch/loop/for-each/merge), which
+    // keep their required, declared ports.
     let check_endpoint = |endpoint: &EdgeEndpoint,
                           role: &str,
                           get_ports: fn(&NodeDef) -> &[Port]|
@@ -463,6 +479,10 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
             .iter()
             .find(|n| n.id == endpoint.node)
             .unwrap();
+        // Skip the declared-port check for emergent inputs (regular-node targets).
+        if role == "target" && node.node_type.has_emergent_inputs() {
+            return None;
+        }
         if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
             return Some(Diagnostic {
                 severity: Severity::Warning,
@@ -1176,7 +1196,12 @@ edges:
     }
 
     #[test]
-    fn warns_on_port_name_typo() {
+    fn warns_on_source_port_typo_but_not_emergent_target() {
+        // Outputs stay declared, so a source-port typo is still a warning. Inputs
+        // on a regular (doc-only / code-mutating) node are emergent (#149): the
+        // input is derived from the edge and named after the target port, so any
+        // target port is valid by construction — no false-positive "target port
+        // not found" diagnostic (regression guard for run-minimal / edit-and-save).
         let yaml = with_start_end(
             r#"
 name: bad-port
@@ -1189,11 +1214,9 @@ nodes:
   - id: ab000002
     name: implementer
     type: doc-only
-    inputs:
-      - name: plan
 edges:
   - source: { node: ab000001, port: plaan }
-    target: { node: ab000002, port: plaan }
+    target: { node: ab000002, port: anything }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1205,9 +1228,57 @@ edges:
         assert!(warnings
             .iter()
             .any(|w| w.contains("source port 'plaan' not found")));
-        assert!(warnings
+        assert!(
+            !warnings.iter().any(|w| w.contains("target port")),
+            "emergent input on a regular node must not warn on target port; got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_structural_target_port_typo() {
+        // Structural nodes (here: the End node's `result` input) keep their
+        // declared, required ports — a target-port typo on them is still a warning.
+        let yaml = r#"
+name: bad-structural-target
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: only
+    type: doc-only
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: user_prompt }
+  - source: { node: ab000001, port: out }
+    target: { node: end, port: resullt }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let warnings: Vec<&str> = result
+            .diagnostics
             .iter()
-            .any(|w| w.contains("target port 'plaan' not found")));
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("target port 'resullt' not found")),
+            "structural End-node target typo should warn; got: {warnings:?}"
+        );
+        // The canonical emergent Start->only edge must NOT warn (the #149 regression).
+        assert!(
+            !warnings.iter().any(|w| w.contains("user_prompt")),
+            "emergent Start->only edge must not warn; got: {warnings:?}"
+        );
     }
 
     #[test]

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, FolderGit2, GitBranch, ImagePlus, Sparkles, Star, X } from "lucide-react";
+import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Sparkles, Star, X } from "lucide-react";
 import type { PipelineListEntry } from "../types";
-import { createRun, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
+import { createRun, createTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
+import { CRON_PRESETS, presetToCron, type CronPresetId } from "../cronPresets";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -22,6 +23,14 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   const [autoName, setAutoName] = useState(true);
   const [input, setInput] = useState("");
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  // Trigger mode (#160): the same modal creates a Trigger via a [Run now |
+  // Trigger] toggle. Schedule-only in this slice (no guard yet, #161).
+  const [mode, setMode] = useState<"run" | "trigger">("run");
+  const [triggerName, setTriggerName] = useState("");
+  const [cronPresetId, setCronPresetId] = useState<CronPresetId>("daily");
+  const [dailyHour, setDailyHour] = useState(9);
+  const [dailyMinute, setDailyMinute] = useState(0);
+  const [rawCron, setRawCron] = useState("");
   const [varsOpen, setVarsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -271,6 +280,66 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
 
   const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt;
 
+  // The cron expression the Trigger will be created with: a compiled preset or
+  // the raw escape-hatch expression.
+  const resolvedCron =
+    cronPresetId === "custom"
+      ? rawCron.trim()
+      : presetToCron(cronPresetId, { hour: dailyHour, minute: dailyMinute });
+
+  // Trigger creation needs a name, a pipeline, a valid repo and a cron. The
+  // empty-input + prompt-required reject is enforced server-side and surfaced
+  // inline (CONTEXT.md → Trigger), so we don't pre-block it here.
+  const canCreateTrigger =
+    repoValid && selectedPipeline && triggerName.trim().length > 0 && resolvedCron.length > 0;
+
+  const handleCreateTrigger = useCallback(async () => {
+    if (!selectedPipeline || !canCreateTrigger) return;
+    setSubmitting(true);
+    setError(null);
+
+    const variables: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(overrides)) {
+      const decl = selectedPipeline.variables[key];
+      if (!decl) continue;
+      if (val === String(decl.default)) continue;
+      variables[key] = parseVariableValue(val, decl.var_type);
+    }
+
+    try {
+      await flushPendingSaves();
+      await createTrigger({
+        name: triggerName.trim(),
+        pipeline_id: selectedPipeline.id,
+        cron: resolvedCron,
+        input_template: input.trim() || undefined,
+        target_repo: targetRepo.trim() || undefined,
+        source_branch: sourceBranch || undefined,
+        variables,
+      });
+      setTriggerName("");
+      setInput("");
+      setOverrides({});
+      setMode("run");
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create trigger");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    selectedPipeline,
+    canCreateTrigger,
+    overrides,
+    triggerName,
+    resolvedCron,
+    input,
+    targetRepo,
+    sourceBranch,
+    flushPendingSaves,
+    onClose,
+  ]);
+
   let repoBorderClass = "border-line-strong focus:border-acc";
   if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
   else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
@@ -288,9 +357,40 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-            New Run
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="font-semibold text-fg" style={{ fontSize: "13.5px" }}>
+              {mode === "run" ? "New Run" : "New Trigger"}
+            </h2>
+            {/* [Run now | Trigger] toggle (#160) */}
+            <div
+              role="tablist"
+              className="flex rounded-md border border-line-strong bg-bg-3 p-0.5"
+              style={{ fontSize: "11px" }}
+            >
+              <button
+                role="tab"
+                aria-selected={mode === "run"}
+                onClick={() => setMode("run")}
+                className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                  mode === "run" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
+                }`}
+                data-testid="mode-run"
+              >
+                Run now
+              </button>
+              <button
+                role="tab"
+                aria-selected={mode === "trigger"}
+                onClick={() => setMode("trigger")}
+                className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                  mode === "trigger" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
+                }`}
+                data-testid="mode-trigger"
+              >
+                Trigger
+              </button>
+            </div>
+          </div>
           <button
             onClick={onClose}
             className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
@@ -504,14 +604,119 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
           {/* ── WHAT ── */}
           <div className="flex flex-col gap-3 py-4">
             <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
-              What
+              {mode === "trigger" ? "When" : "What"}
             </span>
+
+            {/* Schedule (Trigger mode only, #160) */}
+            {mode === "trigger" && (
+              <div className="flex flex-col gap-3 pb-1">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+                    Trigger name
+                  </label>
+                  <input
+                    className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                    style={{ fontSize: "12px" }}
+                    placeholder="e.g. Nightly audit"
+                    value={triggerName}
+                    onChange={(e) => setTriggerName(e.target.value)}
+                    data-testid="trigger-name-input"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+                    Schedule
+                  </label>
+                  <div className="flex flex-wrap gap-1">
+                    {CRON_PRESETS.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => setCronPresetId(p.id)}
+                        className={`rounded border px-2 py-1 font-medium transition-colors ${
+                          cronPresetId === p.id
+                            ? "border-acc bg-acc-bg text-acc"
+                            : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
+                        }`}
+                        style={{ fontSize: "11px" }}
+                        data-testid={`preset-${p.id}`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setCronPresetId("custom")}
+                      className={`rounded border px-2 py-1 font-medium transition-colors ${
+                        cronPresetId === "custom"
+                          ? "border-acc bg-acc-bg text-acc"
+                          : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
+                      }`}
+                      style={{ fontSize: "11px" }}
+                      data-testid="preset-custom"
+                    >
+                      Custom cron
+                    </button>
+                  </div>
+
+                  {cronPresetId === "daily" && (
+                    <div className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
+                      <Clock size={12} className="text-fg-4" />
+                      <span className="text-fg-3">at</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={dailyHour}
+                        onChange={(e) =>
+                          setDailyHour(Math.max(0, Math.min(23, Number(e.target.value) || 0)))
+                        }
+                        className="w-12 rounded border border-line-strong bg-bg-3 px-1 py-0.5 text-fg focus:border-acc focus:outline-none"
+                        data-testid="daily-hour"
+                      />
+                      <span className="text-fg-3">:</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={59}
+                        value={dailyMinute}
+                        onChange={(e) =>
+                          setDailyMinute(Math.max(0, Math.min(59, Number(e.target.value) || 0)))
+                        }
+                        className="w-12 rounded border border-line-strong bg-bg-3 px-1 py-0.5 text-fg focus:border-acc focus:outline-none"
+                        data-testid="daily-minute"
+                      />
+                    </div>
+                  )}
+
+                  {cronPresetId === "custom" && (
+                    <input
+                      className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                      style={{ fontSize: "12px" }}
+                      placeholder="*/15 * * * *  (min hour dom month dow)"
+                      value={rawCron}
+                      onChange={(e) => setRawCron(e.target.value)}
+                      data-testid="raw-cron-input"
+                    />
+                  )}
+
+                  <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+                    cron: {resolvedCron || "—"}
+                  </span>
+                  <span className="text-fg-4" style={{ fontSize: "10px" }}>
+                    Triggers fire only while the daemon is running (best-effort in v1).
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-1.5">
               <label
                 className="font-medium text-fg-2"
                 style={{ fontSize: "11.5px" }}
               >
-                Prompt{promptOptional ? " (optional)" : ""}
+                {mode === "trigger"
+                  ? "Input template (optional)"
+                  : `Prompt${promptOptional ? " (optional)" : ""}`}
               </label>
               <textarea
                 className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
@@ -524,7 +729,9 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                 data-testid="input-textarea"
               />
               <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                {promptOptional
+                {mode === "trigger"
+                  ? "Passed as the Run's input each time the trigger fires. Required unless the pipeline is prompt-not-required."
+                  : promptOptional
                   ? "This pipeline runs without a prompt — anything you enter is passed as additional info."
                   : "Free-text prompt, an issue link, or a mix."}
               </span>
@@ -692,16 +899,29 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
           >
             Cancel
           </button>
-          <button
-            onClick={handleLaunch}
-            disabled={submitting || !canLaunch}
-            className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
-            data-testid="launch-button"
-          >
-            <Sparkles size={12} />
-            {submitting ? "Launching…" : "Launch"}
-          </button>
+          {mode === "run" ? (
+            <button
+              onClick={handleLaunch}
+              disabled={submitting || !canLaunch}
+              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+              style={{ fontSize: "11.5px" }}
+              data-testid="launch-button"
+            >
+              <Sparkles size={12} />
+              {submitting ? "Launching…" : "Launch"}
+            </button>
+          ) : (
+            <button
+              onClick={handleCreateTrigger}
+              disabled={submitting || !canCreateTrigger}
+              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+              style={{ fontSize: "11.5px" }}
+              data-testid="create-trigger-button"
+            >
+              <Clock size={12} />
+              {submitting ? "Creating…" : "Create trigger"}
+            </button>
+          )}
         </div>
       </div>
     </div>

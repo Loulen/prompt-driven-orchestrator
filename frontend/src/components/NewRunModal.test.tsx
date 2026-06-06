@@ -18,12 +18,13 @@ const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListE
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
   createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
+  createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
   listBranches: vi.fn().mockResolvedValue(["main", "dev", "feature-x"]),
   promotePipeline: vi.fn().mockResolvedValue({ id: "test-pipe", drifted: false }),
 }));
 
-const { validateRepo, listBranches, createRun, fetchPipelines, promotePipeline } = await import("../api");
+const { validateRepo, listBranches, createRun, createTrigger, fetchPipelines, promotePipeline } = await import("../api");
 
 const noop = () => {};
 
@@ -652,5 +653,95 @@ describe("NewRunModal run name field", () => {
 
     const labels = screen.getAllByText(/^(Name|Pipeline|Input)$/);
     expect(labels[0].textContent).toBe("Name");
+  });
+});
+
+describe("NewRunModal — Trigger mode (#160)", () => {
+  async function selectPipelineAndRepo() {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+  }
+
+  it("offers a [Run now | Trigger] toggle and defaults to Run now", () => {
+    renderModal();
+    expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("switches the footer action to Create trigger in Trigger mode", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("launch-button")).not.toBeInTheDocument();
+  });
+
+  it("exposes schedule presets and a raw cron escape hatch", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("preset-every_15_min")).toBeInTheDocument();
+    expect(screen.getByTestId("preset-hourly")).toBeInTheDocument();
+    expect(screen.getByTestId("preset-daily")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("preset-custom"));
+    expect(screen.getByTestId("raw-cron-input")).toBeInTheDocument();
+  });
+
+  it("relabels the prompt field as an optional input template in Trigger mode", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByText(/input template \(optional\)/i)).toBeInTheDocument();
+  });
+
+  it("creates a trigger with the compiled cron and chosen pipeline", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Nightly audit" },
+    });
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Nightly audit",
+          pipeline_id: "p1",
+          cron: "*/15 * * * *",
+          target_repo: "/home/user/project",
+        }),
+      );
+    });
+  });
+
+  it("keeps Create trigger disabled until a name is entered", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("create-trigger-button")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Audit" },
+    });
+    expect(screen.getByTestId("create-trigger-button")).not.toBeDisabled();
+  });
+
+  it("surfaces the server reject reason inline", async () => {
+    await selectPipelineAndRepo();
+    vi.mocked(createTrigger).mockRejectedValueOnce(
+      new Error("this pipeline requires a prompt; add a guard, an input template, ..."),
+    );
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bad" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/requires a prompt/i)).toBeInTheDocument();
+    });
   });
 });

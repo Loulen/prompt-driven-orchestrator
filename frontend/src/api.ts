@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire } from "./types";
 
 const BASE = "";
 
@@ -208,6 +208,54 @@ export async function createRun(req: CreateRunRequest): Promise<CreateRunRespons
     const body = await resp.json().catch(() => null);
     throw new Error(body?.error ?? `POST /runs failed: ${resp.status}`);
   }
+  return resp.json();
+}
+
+// --- Triggers (#160) ---
+
+export interface CreateTriggerRequest {
+  name: string;
+  pipeline_id: string;
+  cron: string;
+  input_template?: string;
+  target_repo?: string;
+  source_branch?: string;
+  variables?: Record<string, unknown>;
+  guard_command?: string;
+  overlap_policy?: string;
+}
+
+export async function fetchTriggers(): Promise<Trigger[]> {
+  const resp = await fetch(`${BASE}/triggers`);
+  if (!resp.ok) throw new Error(`GET /triggers failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function createTrigger(req: CreateTriggerRequest): Promise<Trigger> {
+  const resp = await fetch(`${BASE}/triggers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `POST /triggers failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function deleteTrigger(triggerId: string): Promise<void> {
+  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok && resp.status !== 404) {
+    throw new Error(`DELETE /triggers/${triggerId} failed: ${resp.status}`);
+  }
+}
+
+export async function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
+  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}/fires`);
+  if (!resp.ok) throw new Error(`GET /triggers/${triggerId}/fires failed: ${resp.status}`);
   return resp.json();
 }
 

@@ -33,7 +33,13 @@ export function useDaemonSocket() {
       ws.addEventListener("message", (e) => {
         try {
           const msg: WsMessage = JSON.parse(e.data);
-          if (msg.type === "event" || msg.type === "pipeline_changed") {
+          if (
+            msg.type === "event" ||
+            msg.type === "pipeline_changed" ||
+            msg.type === "trigger_created" ||
+            msg.type === "trigger_fired" ||
+            msg.type === "trigger_deleted"
+          ) {
             for (const listener of listenersRef.current) {
               listener(msg);
             }

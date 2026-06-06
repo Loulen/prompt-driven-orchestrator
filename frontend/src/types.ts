@@ -12,6 +12,40 @@ export interface RunListEntry {
   status: RunStatus;
   started_at: string | null;
   name?: string | null;
+  /** Provenance: the id of the Trigger that created this Run, if any (#160). */
+  triggered_by?: string | null;
+}
+
+/**
+ * A persisted Trigger (#160 / ADR-0012): a cron schedule bound to a run
+ * template. Cron-only in this slice — `guard_command` is reserved for #161.
+ */
+export interface Trigger {
+  id: string;
+  name: string;
+  pipeline_id: string;
+  pipeline_name: string;
+  target_repo?: string | null;
+  source_branch?: string | null;
+  input_template: string;
+  variables: Record<string, unknown>;
+  cron: string;
+  guard_command?: string | null;
+  overlap_policy: string;
+  enabled: boolean;
+  next_fire_at?: string | null;
+  last_fired_at?: string | null;
+  last_outcome?: string | null;
+}
+
+/** One audit row in a Trigger's fire history (`trigger_fires`). */
+export interface TriggerFire {
+  id: number;
+  trigger_id: string;
+  ts: string;
+  outcome: string;
+  reason?: string | null;
+  run_id?: string | null;
 }
 
 export interface IterationInfo {
@@ -148,11 +182,22 @@ export interface DaemonEvent {
 }
 
 export interface WsMessage {
-  type: "ready" | "heartbeat" | "event" | "pipeline_changed";
+  type:
+    | "ready"
+    | "heartbeat"
+    | "event"
+    | "pipeline_changed"
+    | "trigger_created"
+    | "trigger_fired"
+    | "trigger_deleted";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;
   ts?: string;
+  /** Set on trigger_* messages (#160). */
+  trigger_id?: string;
+  outcome?: string;
+  run_id?: string | null;
 }
 
 export type EditScope = null | "run";

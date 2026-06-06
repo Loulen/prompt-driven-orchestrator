@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Plus, Star, Trash2, ChevronDown, ChevronRight } from "lucide-react";
-import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope } from "../types";
+import { Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
+import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, forgetRun, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
+import TriggersListPanel from "./TriggersListPanel";
+
+type LeftTab = "runs" | "triggers" | "library";
 
 const STATUS_STYLES: Record<RunStatus, { dot: string }> = {
   running: { dot: "bg-st-running" },
@@ -31,6 +34,12 @@ interface Props {
   onNewRun: () => void;
   libraryPipelines: LibraryPipelineEntry[];
   onLibraryPipelinesChanged: () => void;
+  /** Triggers (#160). Optional so existing callers/tests keep working. */
+  triggers?: Trigger[];
+  selectedTriggerId?: string | null;
+  onSelectTrigger?: (triggerId: string) => void;
+  onNewTrigger?: () => void;
+  onTriggersChanged?: () => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -40,13 +49,17 @@ export default function UnifiedLeftPanel({
   onNewRun,
   libraryPipelines,
   onLibraryPipelinesChanged,
+  triggers = [],
+  selectedTriggerId = null,
+  onSelectTrigger,
+  onNewTrigger,
+  onTriggersChanged,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<LeftTab>("runs");
   const [confirmCleanup, setConfirmCleanup] = useState<
     { runId: string; status: RunStatus } | null
   >(null);
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
-  const [runsExpanded, setRunsExpanded] = useState(true);
-  const [libraryExpanded, setLibraryExpanded] = useState(true);
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -114,32 +127,52 @@ export default function UnifiedLeftPanel({
     setDeleteTarget(null);
   }
 
+  const tabs: { id: LeftTab; label: string }[] = [
+    { id: "runs", label: "Runs" },
+    { id: "triggers", label: "Triggers" },
+    { id: "library", label: "Library" },
+  ];
+
   return (
     <aside className="flex h-full flex-col bg-bg-2">
-      {/* Runs section */}
-      <div
-        className="flex h-[36px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        <button
-          onClick={() => setRunsExpanded(!runsExpanded)}
-          className="mr-1.5 flex cursor-pointer items-center text-fg-4"
-        >
-          {runsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </button>
-        Runs
-        <button
-          onClick={onNewRun}
-          className="ml-auto flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
-          style={{ fontSize: "10.5px" }}
-        >
-          <Plus size={10} />
-          New Run
-        </button>
+      {/* Three-tab strip: Runs · Triggers · Library (#160) */}
+      <div role="tablist" className="flex h-[36px] shrink-0 items-stretch border-b border-line">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex-1 cursor-pointer border-b-2 font-medium transition-colors ${
+              activeTab === tab.id
+                ? "border-acc text-fg"
+                : "border-transparent text-fg-4 hover:text-fg-2"
+            }`}
+            style={{ fontSize: "11.5px" }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      {runsExpanded && (
-        <div className="flex-shrink-0 overflow-y-auto" style={{ maxHeight: "50%" }}>
+      {/* Runs pane */}
+      {activeTab === "runs" && (
+        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
+          <div
+            className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
+            style={{ fontSize: "11.5px" }}
+          >
+            Runs
+            <button
+              onClick={onNewRun}
+              className="ml-auto flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+              style={{ fontSize: "10.5px" }}
+            >
+              <Plus size={10} />
+              New Run
+            </button>
+          </div>
+        <div className="flex-1 overflow-y-auto">
           {runs.length === 0 && (
             <div
               className="px-3 py-4 text-center text-fg-4"
@@ -193,11 +226,29 @@ export default function UnifiedLeftPanel({
                     </div>
                   )}
                   <div
-                    className="truncate font-mono text-fg-4"
+                    className="flex items-center gap-1.5 truncate font-mono text-fg-4"
                     style={{ fontSize: "10px" }}
-                    data-testid="run-pipeline-name"
                   >
-                    {run.pipeline_name}
+                    <span className="truncate" data-testid="run-pipeline-name">
+                      {run.pipeline_name}
+                    </span>
+                    {run.triggered_by && (
+                      <span
+                        role="button"
+                        title="Created by a trigger — open the Triggers tab"
+                        className="flex shrink-0 cursor-pointer items-center gap-0.5 rounded border border-acc px-1 text-acc"
+                        style={{ fontSize: "9px" }}
+                        data-testid="run-trigger-badge"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
+                          setActiveTab("triggers");
+                        }}
+                      >
+                        <Zap size={8} />
+                        trigger
+                      </span>
+                    )}
                   </div>
                 </div>
                 {!isRenaming && (
@@ -248,19 +299,29 @@ export default function UnifiedLeftPanel({
             );
           })}
         </div>
+        </div>
       )}
 
-      {/* Library / Pipelines section */}
+      {/* Triggers pane (#160) */}
+      {activeTab === "triggers" && (
+        <div className="min-h-0 flex-1" role="tabpanel">
+          <TriggersListPanel
+            triggers={triggers}
+            selectedTriggerId={selectedTriggerId}
+            onSelectTrigger={onSelectTrigger ?? (() => {})}
+            onNewTrigger={onNewTrigger ?? (() => {})}
+            onTriggersChanged={onTriggersChanged ?? (() => {})}
+          />
+        </div>
+      )}
+
+      {/* Library pane */}
+      {activeTab === "library" && (
+        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
       <div
-        className="flex h-[36px] shrink-0 items-center border-b border-t border-line px-3 font-medium text-fg-2"
+        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
       >
-        <button
-          onClick={() => setLibraryExpanded(!libraryExpanded)}
-          className="mr-1.5 flex cursor-pointer items-center text-fg-4"
-        >
-          {libraryExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </button>
         Library
         <button
           onClick={() => setShowNewModal(true)}
@@ -271,7 +332,6 @@ export default function UnifiedLeftPanel({
         </button>
       </div>
 
-      {libraryExpanded && (
         <div className="flex-1 overflow-y-auto">
           {pipelines.length === 0 && libraryPipelines.length === 0 && (
             <div
@@ -394,6 +454,7 @@ export default function UnifiedLeftPanel({
                 </span>
               </div>
             ))}
+        </div>
         </div>
       )}
 

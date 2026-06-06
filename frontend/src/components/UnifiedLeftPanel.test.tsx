@@ -14,6 +14,7 @@ vi.mock("../api", () => ({
   renameRun: vi.fn().mockResolvedValue(undefined),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
+  deleteTrigger: vi.fn().mockResolvedValue(undefined),
   fetchPipelines: vi.fn().mockResolvedValue([]),
 }));
 
@@ -144,5 +145,69 @@ describe("UnifiedLeftPanel run display labels", () => {
     expect(mockRenameRun).not.toHaveBeenCalled();
     expect(screen.queryByTestId("rename-input")).not.toBeInTheDocument();
     expect(screen.getByTestId("run-display-label").textContent).toBe("Keep");
+  });
+});
+
+describe("UnifiedLeftPanel three-tab strip", () => {
+  it("renders Runs, Triggers and Library tabs", () => {
+    renderPanel();
+    expect(screen.getByRole("tab", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Triggers" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Library" })).toBeInTheDocument();
+  });
+
+  it("defaults to the Runs tab", () => {
+    renderPanel();
+    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+  });
+
+  it("switches to the Triggers tab and shows its empty state", () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
+    expect(screen.getByText(/no triggers yet/i)).toBeInTheDocument();
+  });
+
+  it("shows a provenance badge on a triggered run row", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-trig", pipeline_name: "auditor", status: "running", started_at: null, triggered_by: "trg-1" },
+    ];
+    renderPanel({ runs });
+    expect(screen.getByTestId("run-trigger-badge")).toBeInTheDocument();
+  });
+
+  it("does not show a provenance badge on a manual run row", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-manual", pipeline_name: "auditor", status: "running", started_at: null },
+    ];
+    renderPanel({ runs });
+    expect(screen.queryByTestId("run-trigger-badge")).not.toBeInTheDocument();
+  });
+
+  it("renders trigger rows on the Triggers tab", () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+        triggers={[
+          {
+            id: "trg-1",
+            name: "Nightly audit",
+            pipeline_id: "auditor",
+            pipeline_name: "Auditor",
+            input_template: "",
+            variables: {},
+            cron: "0 9 * * *",
+            overlap_policy: "skip",
+            enabled: true,
+          },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
+    expect(screen.getByText("Nightly audit")).toBeInTheDocument();
   });
 });

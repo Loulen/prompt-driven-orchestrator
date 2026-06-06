@@ -4,9 +4,9 @@ import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
-import { fetchRuns, fetchRun } from "./api";
+import { fetchRuns, fetchRun, fetchTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import type { RunListEntry, RunState } from "./types";
+import type { RunListEntry, RunState, Trigger } from "./types";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
@@ -60,6 +60,20 @@ function useRuns() {
   return { runs, refresh };
 }
 
+function useTriggers() {
+  const [triggers, setTriggers] = useState<Trigger[]>([]);
+
+  const refresh = useCallback(async () => {
+    try {
+      setTriggers(await fetchTriggers());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { triggers, refresh };
+}
+
 function useSelectedRun() {
   const [run, setRun] = useState<RunState | null>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -99,6 +113,8 @@ export default function App() {
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
   const { entries: libraryPipelines, refresh: refreshLibraryPipelines } = useLibraryPipelines();
   const { runs, refresh: refreshRuns } = useRuns();
+  const { triggers, refresh: refreshTriggers } = useTriggers();
+  const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -215,9 +231,10 @@ export default function App() {
     if (!mountedRef.current) {
       mountedRef.current = true;
       refreshRuns();
+      refreshTriggers();
       useRecentReposStore.getState().refresh();
     }
-  }, [refreshRuns]);
+  }, [refreshRuns, refreshTriggers]);
 
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
@@ -277,6 +294,17 @@ export default function App() {
         loadPipelines();
         return;
       }
+      // Trigger lifecycle (#160): a create/delete refreshes the Triggers list;
+      // a fire also creates a Run, so refresh both.
+      if (
+        msg.type === "trigger_created" ||
+        msg.type === "trigger_deleted" ||
+        msg.type === "trigger_fired"
+      ) {
+        refreshTriggers();
+        if (msg.type === "trigger_fired") refreshRuns();
+        return;
+      }
       // The run's on-disk worktree (and pipeline.yaml) is deleted on archive,
       // so any open tab for that run is now backed by nothing. Prune it before
       // the next flushPendingSaves tries to PUT into a 404.
@@ -286,7 +314,7 @@ export default function App() {
       refreshRuns();
       refreshRun();
     });
-  }, [subscribe, refreshRuns, refreshRun, reloadPipeline, loadPipelines, closeRunPipeline]);
+  }, [subscribe, refreshRuns, refreshRun, refreshTriggers, reloadPipeline, loadPipelines, closeRunPipeline]);
 
   // Detect: active tab is a run whose library twin (matched by id, then name)
   // diverges from the run snapshot — pipeline or prompts, the same comparison
@@ -373,6 +401,11 @@ export default function App() {
               onNewRun={() => setNewRunModalOpen(true)}
               libraryPipelines={libraryPipelines}
               onLibraryPipelinesChanged={refreshLibraryPipelines}
+              triggers={triggers}
+              selectedTriggerId={selectedTriggerId}
+              onSelectTrigger={setSelectedTriggerId}
+              onNewTrigger={() => setNewRunModalOpen(true)}
+              onTriggersChanged={refreshTriggers}
             />
           </ResizablePanel>
 

@@ -19,7 +19,8 @@ export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 //   - fields the canvas serializer doesn't round-trip.
 // Layout is stripped from both sides before comparison:
 //   - node `view: { x, y }` — node positions,
-//   - edge `mode` + `waypoints` — orthogonal routing / manual pins (#154).
+//   - edge `mode` + `waypoints` — orthogonal routing / manual pins (#154),
+//   - edge `target_side` — incoming-edge anchor side / drop position (#168).
 // Library pipelines don't carry layout, and even a starred local pipeline can
 // be freely rearranged (move a node, pin an edge route) without that
 // registering as "diverged". Layout travels in the file (so a shared workflow
@@ -41,6 +42,8 @@ function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
     for (const edge of edges) {
       delete edge.mode;
       delete edge.waypoints;
+      // #168: the incoming-edge anchor side is layout, like routing.
+      delete edge.target_side;
     }
   }
   return obj;

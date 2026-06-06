@@ -11,10 +11,11 @@ import {
   type Edge,
   type NodeProps,
   type Connection,
+  type FinalConnectionState,
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
+import type { NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
@@ -33,6 +34,17 @@ import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import PipelineStar from "./PipelineStar";
 import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
+import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide } from "../lib/anchorSide";
+
+// The four emergent body anchor handles (#168), each pinned to its side-centre
+// with the matching xyflow `Position` so a bound incoming edge arrives from that
+// side. `transform` re-centres the 1px handle on the edge midpoint.
+const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CSSProperties }[] = [
+  { side: "left", position: Position.Left, style: { left: 0, top: "50%", transform: "translateY(-50%)" } },
+  { side: "right", position: Position.Right, style: { right: 0, top: "50%", transform: "translateY(-50%)" } },
+  { side: "top", position: Position.Top, style: { top: 0, left: "50%", transform: "translateX(-50%)" } },
+  { side: "bottom", position: Position.Bottom, style: { bottom: 0, left: "50%", transform: "translateX(-50%)" } },
+];
 
 interface EditNodeData {
   label: string;
@@ -74,10 +86,10 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   return (
     <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
-          on the node body. A single invisible target handle covers the card so a
-          drop creates/pools an input by name (inherited from the source). The
-          declared `result` input on the End node keeps its handle id so routing
-          to End still resolves. */}
+          on the node body. A single invisible target handle covers the card and
+          carries the drop highlight. The declared `result` input on the End node
+          keeps its handle id so routing to End still resolves; emergent nodes
+          render the highlight handle id-less. */}
       <Handle
         id={data.inputs.length === 1 ? data.inputs[0].name : undefined}
         type="target"
@@ -96,6 +108,32 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
           opacity: isDropTarget ? 1 : 0,
         }}
       />
+      {/* Anchor-by-drop-position (#168): an emergent node also renders one
+          invisible side-centre target handle PER SIDE. An incoming edge binds to
+          the handle for its persisted `target_side`, so xyflow anchors the arrow
+          and derives the arrival geometry from that side (no forced left->right).
+          Declared-input nodes (e.g. End's `result`) keep their fixed-side handle
+          and never grow these. */}
+      {data.inputs.length !== 1 &&
+        ANCHOR_HANDLE_SIDES.map(({ side, position, style }) => (
+          <Handle
+            key={`anchor-${side}`}
+            id={anchorHandleId(side)}
+            type="target"
+            position={position}
+            isConnectableStart={false}
+            className="emergent-anchor-target"
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              border: "none",
+              background: "transparent",
+              opacity: 0,
+              ...style,
+            }}
+          />
+        ))}
       {/* Slim card (#149): type icon + name + code/doc marker only. The node id
           and the amber interactive badge are intentionally dropped from the
           card. */}
@@ -175,6 +213,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const deleteNode = useEditStore((s) => s.deleteNode);
   const duplicateNode = useEditStore((s) => s.duplicateNode);
   const deleteEdge = useEditStore((s) => s.deleteEdge);
+  const updateEdge = useEditStore((s) => s.updateEdge);
   const addNodeToStore = useEditStore((s) => s.addNode);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -246,6 +285,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
 
+  // Index the just-drawn edge will occupy, captured at `onConnect` and consumed
+  // by `onConnectEnd` to stamp the drop-position anchor side (#168). The edge is
+  // appended, so its index is the edge count at draw time.
+  const pendingEdgeIndexRef = useRef<number | null>(null);
+
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) return;
@@ -257,8 +301,14 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       // named after the SOURCE document. Structural nodes (merge/loop/for-each)
       // still expose declared target handles, so honour an explicit
       // `targetHandle`; otherwise the emergent name is inherited from the source.
-      const targetPort = connection.targetHandle ?? targetNode?.inputs[0]?.name ?? sourcePort;
+      // The body anchor handles (#168) are LAYOUT, not semantic ports — ignore
+      // them here so the emergent input name still comes from the source.
+      const declaredHandle = anchorsByDropOnBody(connection.targetHandle)
+        ? null
+        : connection.targetHandle;
+      const targetPort = declaredHandle ?? targetNode?.inputs[0]?.name ?? sourcePort;
 
+      pendingEdgeIndexRef.current = pipeline.edges.length;
       addEdgeToStore({
         source: { node: connection.source, port: sourcePort },
         target: { node: connection.target, port: targetPort },
@@ -309,10 +359,45 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   );
 
   const onConnectStart = useCallback(() => setIsDraggingEdge(true), []);
-  const onConnectEnd = useCallback(() => {
-    setIsDraggingEdge(false);
-    setHoveredNodeId(null);
-  }, []);
+  const onConnectEnd = useCallback(
+    (_event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      setIsDraggingEdge(false);
+      setHoveredNodeId(null);
+
+      // Anchor the just-drawn edge on the target side nearest the drop (#168).
+      // Only emergent bodies (no single declared input) anchor by drop position;
+      // declared/structural ports keep their fixed side. The edge `onConnect`
+      // appended is at `pendingEdgeIndexRef`.
+      const edgeIndex = pendingEdgeIndexRef.current;
+      pendingEdgeIndexRef.current = null;
+      if (edgeIndex == null) return;
+
+      const toNode = connectionState.toNode;
+      const drop = connectionState.to;
+      if (!toNode || !drop) return;
+      const targetDef = pipeline?.nodes.find((n) => n.id === toNode.id);
+      // Structural nodes and single-declared-input nodes (e.g. End's `result`)
+      // keep their declared, fixed-side handle — never re-anchor those.
+      if (!targetDef || targetDef.inputs.length === 1) return;
+      if (targetDef.type === "merge" || targetDef.type === "loop" || targetDef.type === "for-each") {
+        return;
+      }
+
+      const rect = {
+        x: toNode.internals.positionAbsolute.x,
+        y: toNode.internals.positionAbsolute.y,
+        width: toNode.measured.width ?? 0,
+        height: toNode.measured.height ?? 0,
+      };
+      if (rect.width === 0 || rect.height === 0) return;
+      const side = chooseAnchorSide(drop, rect);
+      // Left is the legacy default; only persist when the drop chose another side
+      // so an ordinary left-side drop stays clean in the file.
+      if (side === "left") return;
+      updateEdge(edgeIndex, { target_side: side });
+    },
+    [pipeline, updateEdge],
+  );
   const onNodeMouseEnter = useCallback((_: ReactMouseEvent, node: Node) => setHoveredNodeId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredNodeId(null), []);
 

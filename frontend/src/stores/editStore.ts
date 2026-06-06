@@ -197,6 +197,12 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       edge.mode = "manual";
       edge.waypoints = e.waypoints.map((w) => ({ x: w.x, y: w.y }));
     }
+    // Drop-position anchor side (#168). Layout, like mode/waypoints: persists so
+    // a shared workflow keeps its arrow arrival sides. `left` is the legacy
+    // default and round-trips by absence, so emit only the other three sides.
+    if (e.target_side && e.target_side !== "left") {
+      edge.target_side = e.target_side;
+    }
     return edge;
   });
 

@@ -38,15 +38,17 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     return { name: "p", variables: {}, nodes, edges };
   }
 
-  it("nulls the targetHandle for an emergent input on a regular node so the arrow binds to the body", () => {
-    // After migration a regular node declares NO inputs; its body handle is
-    // id-less. The edge must target `null` or xyflow drops it (error 008).
+  it("binds an emergent incoming edge to a side body handle, defaulting to left (#149/#168)", () => {
+    // After migration a regular node declares NO inputs; its body renders one
+    // id'd target handle per side (#168). An un-anchored edge binds to the left
+    // handle (legacy anchoring) — a real rendered handle, so xyflow keeps the
+    // edge (no error 008).
     const p = pipeline(
       [node("src", "doc-only", [], ["plan"]), node("dst", "code-mutating", [], ["code"])],
       [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
     );
     const edges = deriveEditEdges(p);
-    expect(edges[0].targetHandle).toBeNull();
+    expect(edges[0].targetHandle).toBe("__anchor:left");
     expect(edges[0].sourceHandle).toBe("plan");
   });
 
@@ -68,7 +70,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].targetHandle).toBe("branches");
   });
 
-  it("nulls the targetHandle when two same-named edges pool into one body input", () => {
+  it("binds both same-named edges to a side body handle when they pool into one body input (default left)", () => {
     const p = pipeline(
       [
         node("a", "doc-only", [], ["plan"]),
@@ -81,7 +83,26 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
       ],
     );
     const edges = deriveEditEdges(p);
-    expect(edges[0].targetHandle).toBeNull();
-    expect(edges[1].targetHandle).toBeNull();
+    expect(edges[0].targetHandle).toBe("__anchor:left");
+    expect(edges[1].targetHandle).toBe("__anchor:left");
+  });
+
+  it("anchors each pooled edge on its own persisted side (#168)", () => {
+    // Two edges pool into the same emergent body but may arrive from different
+    // sides; each keeps its own anchor.
+    const p = pipeline(
+      [
+        node("a", "doc-only", [], ["plan"]),
+        node("b", "doc-only", [], ["plan"]),
+        node("dst", "code-mutating", [], ["code"]),
+      ],
+      [
+        { source: { node: "a", port: "plan" }, target: { node: "dst", port: "plan" }, target_side: "top" },
+        { source: { node: "b", port: "plan" }, target: { node: "dst", port: "plan" }, target_side: "bottom" },
+      ],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].targetHandle).toBe("__anchor:top");
+    expect(edges[1].targetHandle).toBe("__anchor:bottom");
   });
 });

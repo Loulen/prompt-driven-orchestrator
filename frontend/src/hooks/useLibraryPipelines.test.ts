@@ -92,6 +92,22 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
 
+  // #168: the incoming-edge anchor side is LAYOUT (like mode/waypoints), so
+  // re-anchoring an arrow on a different side must not count as divergence.
+  it("ignores edge target_side so re-anchoring an arrow doesn't count as divergence", () => {
+    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+      source: { node: "a", port: "out" },
+      target: { node: "b", port: "in" },
+      ...over,
+    });
+    const a = def({ nodes: [node("a"), node("b")], edges: [e()] });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [e({ target_side: "top" })],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
   it("still flags a real edge difference (target change) despite routing exclusion", () => {
     const base = { source: { node: "a", port: "out" } };
     const a = def({

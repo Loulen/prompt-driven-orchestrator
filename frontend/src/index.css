@@ -194,6 +194,81 @@ body {
   transform: translate(-50%, -50%);
 }
 
+/* Output port dot (#170) — plain filled green dot straddling the node border.
+   No standing label; the port name floats next to the cursor on hover. Reuses
+   the .react-flow__handle override so xyflow's default styling is neutralised.
+   (refs docs/design/project/refonte.css §"Output connection dots") */
+.react-flow__handle.port-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  min-width: 0;
+  min-height: 0;
+}
+.port-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-st-done);
+  border: 1.4px solid var(--color-st-done);
+  z-index: 5;
+  cursor: crosshair;
+  transition: transform 120ms;
+  pointer-events: auto;
+}
+.port-dot:hover {
+  transform: scale(1.18);
+}
+.port-dot.side-left {
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.port-dot.side-left:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+}
+.port-dot.side-right {
+  left: 100%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.port-dot.side-right:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+}
+.port-dot.side-top {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.port-dot.side-top:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+}
+.port-dot.side-bottom {
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.port-dot.side-bottom:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+}
+
+/* Cursor-relative floating label — never intercepts pointer events, so an
+   edge can still be dragged out of the dot underneath it (#170). */
+.port-dot-lbl {
+  background: var(--color-bg-0);
+  border: 1px solid var(--color-line-strong);
+  color: var(--color-fg-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  z-index: 7;
+}
+
 /* Drop-target highlight — amber, only on input pills of hovered node
    (refs docs/design/project/winners.css §2, .port-pill.is-drop) */
 .port-pill.is-drop {

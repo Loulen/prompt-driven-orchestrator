@@ -3,6 +3,7 @@ import type { NodeType, PortSide } from "../types";
 import { getPortDescription } from "../portDescriptions";
 import { Tooltip } from "./ui/tooltip";
 import PortPill from "./PortPill";
+import OutputPortDot from "./OutputPortDot";
 
 interface PortRowProps {
   portName: string;
@@ -27,6 +28,18 @@ export default function PortRow({
   isDrop,
   children,
 }: PortRowProps) {
+  // Output ports render as plain filled dots with a cursor-relative hover label
+  // instead of an always-visible pill (#170). The dot is the xyflow source
+  // Handle, so an edge can be dragged straight out of it.
+  if (kind === "output") {
+    return (
+      <div data-testid={`port-output-${portName}`} style={{ fontSize: "10px" }}>
+        {children}
+        <OutputPortDot id={portName} side={side} index={index} total={total} />
+      </div>
+    );
+  }
+
   const tooltipContent = nodeType
     ? getPortDescription(nodeType, kind, portName, description)
     : description ?? portName;

@@ -435,6 +435,10 @@ Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script option
 
 **Un firing = un Run.** Maestro ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
 
+**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `MAESTRO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable plus tard, #129), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
+
+**Références cassées** : si le pipeline (library) ou le repo cible d'un Trigger a été supprimé/renommé depuis la création, le Trigger **ne fire plus et affiche un `last_outcome` d'erreur** (« pipeline not found ») dans l'onglet — pas d'auto-suppression, pas de pourrissement silencieux (*Sharp tool* : on surface, on ne masque pas).
+
 **Résolution de l'input du Run déclenché**, dans l'ordre : `stdout` du guard (s'il existe et non-vide) → `input_template` statique du Trigger → rien. Si l'input résolu est vide *et* que le pipeline a `prompt_required: true`, le Trigger est **rejeté à la création** (erreur claire : « ce pipeline exige un prompt ; ajoute un guard, un input template, ou passe le pipeline en prompt-not-required »). Échec loud au config-time plutôt qu'un nœud d'entrée paumé toutes les 15 min. (Le guard prime quand présent ; pas de merge template+stdout en v1 — `echo` ton texte statique dans le guard si tu veux les deux.)
 
 ### Idempotence — déléguée au monde extérieur

@@ -353,8 +353,6 @@ export function edgeIndexFromId(edgeId: string): number | null {
  *
  * - Structural nodes (merge / loop / for-each) render an id'd target handle per
  *   declared input via `PortPill`, so the edge keeps its declared port name.
- * - Structural nodes (merge / loop / for-each) render an id'd target handle per
- *   declared input via `PortPill`, so the edge keeps its declared port name.
  * - Regular `edit` nodes with a single declared input (e.g. the End node's
  *   `result`) keep that declared, side-fixed handle — those ports are
  *   unaffected by anchoring (#168).

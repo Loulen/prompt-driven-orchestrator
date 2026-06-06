@@ -47,8 +47,10 @@ export function anchorsByDropOnBody(handleId: string | null | undefined): boolea
  *
  * The drop point may land inside the card or anywhere around it; we compare the
  * perpendicular distance to each of the four edges and pick the smallest. Ties
- * (e.g. a drop exactly on a corner) resolve in left, right, top, bottom order,
- * keeping the legacy left-anchored behaviour as the stable default.
+ * (equidistant edges) resolve in left, right, top, bottom order, so left wins
+ * over right and the horizontal sides win over the vertical ones. (The overall
+ * legacy left default is preserved by the caller, which persists a chosen side
+ * only when it is NOT left — see `EditCanvas.onConnectEnd`.)
  */
 export function chooseAnchorSide(
   drop: { x: number; y: number },

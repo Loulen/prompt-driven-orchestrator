@@ -16,7 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, edgeIndexFromId } from "./editNodeDerivation";
+import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
@@ -224,32 +224,13 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState);
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
-    // their member cards. We back each multi-member region with a decorative,
+    // their member cards. Each multi-member region is backed by a decorative,
     // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
     // single-member regions render as a badge on the member card (no box). The
-    // region nodes are prepended and pinned to a low zIndex so member cards stay
-    // clickable on top.
-    const regionNodes: Node[] = deriveLoopRegions(pipeline, activeRunState)
-      .filter((r) => r.box != null)
-      .map((r) => ({
-        id: `region-${r.id}`,
-        type: "loopRegion",
-        position: { x: r.box!.x, y: r.box!.y },
-        data: {
-          regionId: r.id,
-          kind: r.kind,
-          counterText: r.counterText,
-          exhausted: r.exhausted,
-          width: r.box!.width,
-          height: r.box!.height,
-        },
-        draggable: false,
-        selectable: false,
-        connectable: false,
-        focusable: false,
-        zIndex: 0,
-        style: { zIndex: 0 },
-      }));
+    // region nodes are prepended, pinned to a low zIndex behind the member
+    // cards, and given `pointer-events: none` so edges crossing the box stay
+    // clickable (#167).
+    const regionNodes: Node[] = buildLoopRegionNodes(pipeline, activeRunState);
     return [...regionNodes, ...cards];
   }, [pipeline, activeRunState]);
   const derivedEdges = useMemo(

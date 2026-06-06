@@ -242,6 +242,52 @@ export function deriveLoopRegions(
   return layouts;
 }
 
+/**
+ * Builds the decorative xyflow `loopRegion` nodes that back each box-form
+ * bounded region (ADR-0011 / #148). One node per `>= 2`-member region; single-
+ * member regions render as a badge on the member card (no box) and produce no
+ * node here.
+ *
+ * The region box sits BEHIND the member cards and must never intercept pointer
+ * events: an edge whose path crosses the box has to stay clickable/selectable
+ * (#167). xyflow gives every node wrapper `pointer-events: all` whenever the
+ * canvas registers node mouse handlers (it does, for the drag-highlight), so
+ * pinning the inner div to `pointer-events: none` is not enough — the wrapper
+ * still swallows the click. We override the wrapper's pointer-events to `none`
+ * via the node's own `style` (xyflow spreads `node.style` AFTER its own
+ * `pointerEvents`, so this wins without `!important`). The region header keeps
+ * its own `pointer-events: auto` and stays clickable as a descendant.
+ */
+export function buildLoopRegionNodes(
+  pipeline: PipelineDef,
+  runState: RunState | null | undefined,
+): Node[] {
+  return deriveLoopRegions(pipeline, runState)
+    .filter((r) => r.box != null)
+    .map((r) => ({
+      id: `region-${r.id}`,
+      type: "loopRegion",
+      position: { x: r.box!.x, y: r.box!.y },
+      data: {
+        regionId: r.id,
+        kind: r.kind,
+        counterText: r.counterText,
+        exhausted: r.exhausted,
+        width: r.box!.width,
+        height: r.box!.height,
+      },
+      draggable: false,
+      selectable: false,
+      connectable: false,
+      focusable: false,
+      zIndex: 0,
+      // `pointerEvents: "none"` defeats xyflow's wrapper-level `all` so edges
+      // under the box remain clickable (#167); `zIndex: 0` keeps the box behind
+      // the member cards.
+      style: { zIndex: 0, pointerEvents: "none" },
+    }));
+}
+
 const OP_SYMBOLS: Record<string, string> = {
   eq: "=",
   neq: "!=",

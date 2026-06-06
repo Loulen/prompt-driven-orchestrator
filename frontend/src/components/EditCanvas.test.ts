@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildLoopRegionNodes,
   deriveEditEdges,
   deriveEditNodes,
   deriveLoopRegions,
@@ -558,5 +559,70 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
     const p = regionPipeline(3);
     delete p.loops;
     expect(deriveLoopRegions(p, null)).toHaveLength(0);
+  });
+});
+
+describe("buildLoopRegionNodes — region box must not intercept edge clicks (issue #167)", () => {
+  function regionPipeline(): PipelineDef {
+    return {
+      name: "loop-region-review-loop",
+      version: "1.0",
+      variables: {},
+      nodes: [
+        {
+          id: "impl",
+          name: "implementer",
+          type: "code-mutating",
+          inputs: [],
+          outputs: [{ name: "code", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 280, y: 200 },
+        },
+        {
+          id: "rev",
+          name: "reviewer",
+          type: "doc-only",
+          inputs: [],
+          outputs: [{ name: "review", repeated: false, side: "right" }],
+          interactive: false,
+          view: { x: 560, y: 200 },
+        },
+      ],
+      edges: [],
+      loops: [{ id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 }],
+    };
+  }
+
+  it("renders the box region as a `loopRegion` node positioned at the box origin", () => {
+    const nodes = buildLoopRegionNodes(regionPipeline(), null);
+    expect(nodes).toHaveLength(1);
+    const region = nodes[0];
+    expect(region.id).toBe("region-review_loop");
+    expect(region.type).toBe("loopRegion");
+    expect(region.position.x).toBeLessThan(280);
+    expect(region.position.y).toBeLessThan(200);
+  });
+
+  it("disables pointer events on the region node so edges underneath stay clickable", () => {
+    // Root cause (#167): xyflow gives the node wrapper `pointer-events: all`
+    // whenever the canvas registers node mouse handlers, so the box swallows
+    // clicks meant for the edges it overlaps. The node spec must override that
+    // back to `none`. xyflow spreads `node.style` after its own pointerEvents,
+    // so this is the override that wins.
+    const region = buildLoopRegionNodes(regionPipeline(), null)[0];
+    expect((region.style as { pointerEvents?: string }).pointerEvents).toBe("none");
+  });
+
+  it("keeps the region non-selectable, non-draggable, and non-focusable (decorative only)", () => {
+    const region = buildLoopRegionNodes(regionPipeline(), null)[0];
+    expect(region.selectable).toBe(false);
+    expect(region.draggable).toBe(false);
+    expect(region.focusable).toBe(false);
+  });
+
+  it("produces no region node for a single-member region (badge form, no box)", () => {
+    const p = regionPipeline();
+    p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
+    expect(buildLoopRegionNodes(p, null)).toHaveLength(0);
   });
 });

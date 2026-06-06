@@ -815,6 +815,9 @@ struct PipelineListEntry {
     node_count: usize,
     modified: Option<String>,
     variables: HashMap<String, PipelineVariableInfo>,
+    /// Whether a manual Run must supply a non-empty prompt (#158). Surfaced so
+    /// the New Run modal can make the prompt field optional.
+    prompt_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     drifted: Option<bool>,
 }
@@ -857,7 +860,7 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
                 dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             });
 
-        let (name, node_count, variables) = match std::fs::read_to_string(&path) {
+        let (name, node_count, variables, prompt_required) = match std::fs::read_to_string(&path) {
             Ok(yaml) => match pipeline::parse_pipeline(&yaml) {
                 Ok(r) => {
                     let vars: HashMap<String, PipelineVariableInfo> = r
@@ -875,11 +878,16 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
                             )
                         })
                         .collect();
-                    (r.pipeline.name.clone(), r.pipeline.nodes.len(), vars)
+                    (
+                        r.pipeline.name.clone(),
+                        r.pipeline.nodes.len(),
+                        vars,
+                        r.pipeline.prompt_required,
+                    )
                 }
-                Err(_) => (file_stem.clone(), 0, HashMap::new()),
+                Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
             },
-            Err(_) => (file_stem.clone(), 0, HashMap::new()),
+            Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
         };
 
         entries.push(PipelineListEntry {
@@ -890,6 +898,7 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
             node_count,
             modified,
             variables,
+            prompt_required,
             drifted: None,
         });
     }
@@ -2140,6 +2149,18 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
     create_run_core(&state, parsed_req, images).await
 }
 
+/// Validate the user input against the pipeline's `prompt_required` flag (#158).
+///
+/// A prompt-required pipeline (the default) rejects whitespace-only input; a
+/// prompt-optional pipeline accepts empty input (the entry node sources its own
+/// work) and treats a provided prompt as additional info.
+fn validate_run_input(prompt_required: bool, input: &str) -> Result<(), String> {
+    if prompt_required && input.trim().is_empty() {
+        return Err("this pipeline requires a prompt: input must not be empty".to_string());
+    }
+    Ok(())
+}
+
 async fn create_run_core(
     state: &AppState,
     req: CreateRunRequest,
@@ -2227,6 +2248,16 @@ async fn create_run_core(
     }
 
     let pipeline = parse_result.pipeline;
+
+    // Empty input is allowed only for prompt-optional pipelines (#158).
+    if let Err(msg) = validate_run_input(pipeline.prompt_required, &req.input) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
     let run_id = event_log::generate_run_id();
 
     let edge_infos: Vec<event_log::EdgeInfo> =
@@ -7593,6 +7624,46 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
+    async fn list_pipelines_exposes_prompt_required_flag() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Default pipeline (prompt_required absent => true).
+        write_test_pipeline(tmp.path(), "required-pipe");
+        // Prompt-optional pipeline.
+        let pipelines_dir = tmp.path().join(".maestro").join("pipelines");
+        let yaml = format!(
+            "name: optional-pipe\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        std::fs::write(pipelines_dir.join("optional-pipe.yaml"), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+        let required = list.iter().find(|p| p["id"] == "required-pipe").unwrap();
+        assert_eq!(required["prompt_required"], serde_json::json!(true));
+        let optional = list.iter().find(|p| p["id"] == "optional-pipe").unwrap();
+        assert_eq!(optional["prompt_required"], serde_json::json!(false));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn list_pipelines_empty_when_no_dir() {
         let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
@@ -9657,6 +9728,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -9706,6 +9778,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");
@@ -10545,6 +10618,7 @@ edges: []
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let ctx = SpawnContext {
@@ -10632,6 +10706,7 @@ edges: []
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let ctx = SpawnContext {
@@ -11721,5 +11796,29 @@ edges:
             .unwrap();
         let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
         assert_eq!(repos, vec!["/repo/real"]);
+    }
+
+    // --- prompt-optional run creation (#158) ---
+
+    #[test]
+    fn prompt_required_pipeline_rejects_empty_input() {
+        assert!(validate_run_input(true, "").is_err());
+        assert!(validate_run_input(true, "   \n\t ").is_err());
+    }
+
+    #[test]
+    fn prompt_required_pipeline_accepts_non_empty_input() {
+        assert!(validate_run_input(true, "fix the auth bug").is_ok());
+    }
+
+    #[test]
+    fn prompt_optional_pipeline_accepts_empty_input() {
+        assert!(validate_run_input(false, "").is_ok());
+        assert!(validate_run_input(false, "   ").is_ok());
+    }
+
+    #[test]
+    fn prompt_optional_pipeline_still_accepts_a_prompt() {
+        assert!(validate_run_input(false, "extra context").is_ok());
     }
 }

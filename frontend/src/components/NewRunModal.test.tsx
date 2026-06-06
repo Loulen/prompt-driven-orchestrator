@@ -301,6 +301,51 @@ describe("NewRunModal — multi-repo form flow", () => {
     expect(screen.queryByLabelText(/source branch/i)).not.toBeInTheDocument();
   });
 
+  it("keeps Launch disabled with an empty prompt for a prompt-required pipeline", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Required Pipeline", scope: "repo", prompt_required: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const launchButton = screen.getByRole("button", { name: /launch/i });
+    expect(launchButton).toBeDisabled();
+  });
+
+  it("enables Launch with an empty prompt for a prompt-optional pipeline", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => {
+      const launchButton = screen.getByRole("button", { name: /launch/i });
+      expect(launchButton).toBeEnabled();
+    });
+  });
+
+  it("launches a prompt-optional pipeline with empty input", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled();
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ pipeline: "Optional Pipeline", input: "" }),
+      );
+    });
+  });
+
   it("clears branches when repo path changes", async () => {
     renderModal();
     await enterValidRepo();

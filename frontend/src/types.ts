@@ -174,6 +174,12 @@ export interface PipelineListEntry {
   node_count: number;
   modified: string | null;
   variables: Record<string, PipelineVariableInfo>;
+  /**
+   * Whether a manual Run must supply a non-empty prompt (#158). Defaults to
+   * `true` when absent; the New Run modal makes the prompt field optional when
+   * this is `false`.
+   */
+  prompt_required?: boolean;
   drifted?: boolean | null;
 }
 
@@ -282,6 +288,13 @@ export interface PipelineDef {
   edges: EdgeDef[];
   /** Named bounded loop regions (ADR-0011 / #148). Absent when there are none. */
   loops?: LoopRegion[];
+  /**
+   * Whether a manual Run must supply a non-empty prompt (#158). Defaults to
+   * `true` (prompt mandatory) and is omitted from YAML in that case. When
+   * `false`, a Run may start with empty input and a provided prompt is treated
+   * as additional info.
+   */
+  prompt_required?: boolean;
 }
 
 export interface PipelineDetail {

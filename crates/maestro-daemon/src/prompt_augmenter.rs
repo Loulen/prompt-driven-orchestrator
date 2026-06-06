@@ -7,6 +7,10 @@ pub struct InputResolution {
     pub port_name: String,
     pub path: PathBuf,
     pub repeated: bool,
+    /// True when this input is sourced from the Start node's user prompt
+    /// (`_input/output.md`). The entry node's prompt label adapts to
+    /// `prompt_required` (#158).
+    pub from_start: bool,
 }
 
 pub struct OutputDeclaration {
@@ -66,6 +70,16 @@ pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     images
 }
 
+/// Whether the Start-sourced user prompt (`_input/output.md`) carries any
+/// non-whitespace content. Used to adapt the entry-node preamble for
+/// prompt-optional pipelines (#158).
+fn start_input_has_content(artifacts_dir: &Path) -> bool {
+    match std::fs::read_to_string(crate::blackboard::input_path(artifacts_dir)) {
+        Ok(text) => !text.trim().is_empty(),
+        Err(_) => false,
+    }
+}
+
 pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     let mut inputs = Vec::new();
 
@@ -107,6 +121,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             port_name: edge.target.port.clone(),
             path,
             repeated,
+            from_start: is_start,
         });
     }
 
@@ -115,6 +130,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             port_name: "task".into(),
             path: crate::blackboard::input_path(ctx.artifacts_dir),
             repeated: false,
+            from_start: true,
         });
     }
 
@@ -167,7 +183,28 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push_str("No inputs.\n\n");
     } else {
         for input in &inputs {
-            if input.repeated {
+            // Entry-node prompt adapts to `prompt_required` (#158): when the
+            // pipeline is prompt-optional and no prompt was supplied, the node
+            // must source its own work; when a prompt is supplied it is merely
+            // additional info layered on the node's own brief.
+            if input.from_start && !ctx.pipeline.prompt_required {
+                if start_input_has_content(ctx.artifacts_dir) {
+                    preamble.push_str(&format!(
+                        "- `{}` (additional info): read `{}`. \
+                         This is supplementary context — your role prompt below is the primary brief.\n",
+                        input.port_name,
+                        input.path.display()
+                    ));
+                } else {
+                    preamble.push_str(&format!(
+                        "- `{}`: No prompt was provided for this run. \
+                         Source your own work from your role prompt below \
+                         (an empty `{}` is expected).\n",
+                        input.port_name,
+                        input.path.display()
+                    ));
+                }
+            } else if input.repeated {
                 preamble.push_str(&format!(
                     "- `{}` (accumulated): read all files matching `{}`\n",
                     input.port_name,
@@ -497,6 +534,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -905,6 +943,7 @@ mod tests {
                 },
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -978,6 +1017,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let node = &pipeline.nodes[0];
@@ -1127,6 +1167,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1174,6 +1215,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1216,6 +1258,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1296,5 +1339,75 @@ mod tests {
             !preamble.contains("Input Images"),
             "preamble should not contain Input Images section when no images"
         );
+    }
+
+    // --- entry-node preamble adapts to prompt_required (#158) ---
+
+    /// Build a `_input/output.md` artifact with the given content under a fresh
+    /// temp artifacts dir, returning the dir (kept alive by the TempDir guard).
+    fn artifacts_with_input(content: Option<&str>) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let input_dir = tmp.path().join("_input");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        if let Some(text) = content {
+            std::fs::write(input_dir.join("output.md"), text).unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn entry_preamble_tells_node_to_source_own_work_when_prompt_optional_and_empty() {
+        let mut pipeline = sample_pipeline();
+        pipeline.prompt_required = false;
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let tmp = artifacts_with_input(None);
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.artifacts_dir = tmp.path();
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("No prompt was provided"),
+            "entry node with no prompt should be told to source its own work; got:\n{preamble}"
+        );
+    }
+
+    #[test]
+    fn entry_preamble_labels_input_as_additional_info_when_prompt_optional_and_present() {
+        let mut pipeline = sample_pipeline();
+        pipeline.prompt_required = false;
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let tmp = artifacts_with_input(Some("some extra context"));
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.artifacts_dir = tmp.path();
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("additional info"),
+            "a prompt on a prompt-optional pipeline should be labelled additional info; got:\n{preamble}"
+        );
+        assert!(
+            !preamble.contains("No prompt was provided"),
+            "must not claim the prompt is missing when input is present"
+        );
+    }
+
+    #[test]
+    fn entry_preamble_unchanged_for_prompt_required_pipeline() {
+        // The default (prompt-required) keeps the plain input label — neither the
+        // "additional info" nor the "source your own work" wording leaks in.
+        let pipeline = sample_pipeline();
+        assert!(pipeline.prompt_required);
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let tmp = artifacts_with_input(Some("do the task"));
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.artifacts_dir = tmp.path();
+
+        let preamble = build_preamble(&ctx);
+        assert!(!preamble.contains("No prompt was provided"));
+        assert!(!preamble.contains("additional info"));
+        assert!(preamble.contains("## Inputs"));
     }
 }

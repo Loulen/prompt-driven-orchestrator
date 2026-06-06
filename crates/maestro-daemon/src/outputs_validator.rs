@@ -266,6 +266,7 @@ mod tests {
             nodes,
             edges: Vec::new(),
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 

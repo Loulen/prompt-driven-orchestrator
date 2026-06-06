@@ -1909,6 +1909,7 @@ edges:
                 make_edge("impl-b", "out", "reviewer", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
         assert_eq!(diags.len(), 1);
@@ -1935,6 +1936,7 @@ edges:
                 make_edge("merger", "merged", "downstream", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(
@@ -1953,6 +1955,7 @@ edges:
             nodes: vec![make_cm_node("impl-a"), make_doc_node("reviewer")],
             edges: vec![make_edge("impl-a", "out", "reviewer", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());
@@ -1974,6 +1977,7 @@ edges:
                 make_edge("plan-b", "out", "summary", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());

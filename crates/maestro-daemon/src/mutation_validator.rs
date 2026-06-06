@@ -116,6 +116,7 @@ mod tests {
             nodes,
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 

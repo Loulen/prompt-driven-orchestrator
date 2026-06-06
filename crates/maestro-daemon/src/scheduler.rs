@@ -1277,6 +1277,7 @@ mod tests {
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let state = empty_run_state();
@@ -1300,6 +1301,7 @@ mod tests {
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1322,6 +1324,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1348,6 +1351,7 @@ mod tests {
                 make_edge("planner", "plan", "impl-b", "plan"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1375,6 +1379,7 @@ mod tests {
                 make_edge("impl-b", "summary", "merger", "summary-b"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1411,6 +1416,7 @@ mod tests {
                 make_edge("c", "out", "d", "in-c"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1433,6 +1439,7 @@ mod tests {
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1457,6 +1464,7 @@ mod tests {
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1488,6 +1496,7 @@ mod tests {
                 "Blocked after {iter} iterations on {node-id}",
             )],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1530,6 +1539,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1555,6 +1565,7 @@ mod tests {
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1591,6 +1602,7 @@ mod tests {
                 make_edge("a", "out", "c", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1642,6 +1654,7 @@ mod tests {
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1704,6 +1717,7 @@ mod tests {
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -1786,6 +1800,7 @@ mod tests {
                 make_edge("backlog", "note", "merge1", "branches"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -1923,6 +1938,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -1992,6 +2008,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -2073,6 +2090,7 @@ mod tests {
                 make_end_edge("classifier", "triage", "direct-done"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -2160,6 +2178,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -2255,6 +2274,7 @@ mod tests {
             ],
             edges: vec![make_end_edge("reviewer", "review", "Run halted")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2341,6 +2361,7 @@ mod tests {
                 make_edge("sw", "default", "c-default", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2387,6 +2408,7 @@ mod tests {
                 make_edge("sw", "default", "c-default", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2431,6 +2453,7 @@ mod tests {
             ],
             edges: vec![make_edge("sw", "pass", "downstream", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2487,6 +2510,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2563,6 +2587,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2621,6 +2646,7 @@ mod tests {
                 make_edge("sw", "default", "rework", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2673,6 +2699,7 @@ mod tests {
                 make_edge("sw", "default", "rework", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2737,6 +2764,7 @@ mod tests {
                 make_edge("sw", "second", "second-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2794,6 +2822,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2852,6 +2881,7 @@ mod tests {
                 make_edge("sw", "pass", "downstream", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -2896,6 +2926,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3017,6 +3048,7 @@ mod tests {
                 make_edge("loop1", "body", "worker", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let state = empty_run_state();
@@ -3041,6 +3073,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3078,6 +3111,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3110,6 +3144,7 @@ mod tests {
                 make_edge("sw", "default", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3165,6 +3200,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3213,6 +3249,7 @@ mod tests {
                 make_edge("loop1", "done", "downstream", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3273,6 +3310,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3348,6 +3386,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3396,6 +3435,7 @@ mod tests {
                 make_edge("reviewer", "review", "loop1", "break"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3442,6 +3482,7 @@ mod tests {
                 make_edge("loop1", "done", "downstream", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3521,6 +3562,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let state = empty_run_state();
 
@@ -3555,6 +3597,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let state = empty_run_state();
 
@@ -3584,6 +3627,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -3611,6 +3655,7 @@ mod tests {
             nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let state = empty_run_state();
 
@@ -3635,6 +3680,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let mut state = empty_run_state();
         state
@@ -3664,6 +3710,7 @@ mod tests {
                 make_edge("loop1", "body", "b", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
         let state = empty_run_state();
 
@@ -3757,6 +3804,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3807,6 +3855,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3872,6 +3921,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3921,6 +3971,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -3983,6 +4034,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4033,6 +4085,7 @@ mod tests {
             ],
             edges: vec![make_edge("fe1", "body", "worker", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let state = empty_run_state();
@@ -4095,6 +4148,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4156,6 +4210,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4414,6 +4469,7 @@ edges:
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let state = paused_run_state();
@@ -4433,6 +4489,7 @@ edges:
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         // While paused: nothing
@@ -4464,6 +4521,7 @@ edges:
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = paused_run_state();
@@ -4497,6 +4555,7 @@ edges:
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         // Planner completed → implementer is ready, but run is paused
@@ -4592,6 +4651,7 @@ edges:
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4617,6 +4677,7 @@ edges:
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4640,6 +4701,7 @@ edges:
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4679,6 +4741,7 @@ edges:
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         // a is completed → b should be proposed exactly once
@@ -4720,6 +4783,7 @@ edges:
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4780,6 +4844,7 @@ edges:
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         // Fresh state: only entry nodes (no upstream) should be proposed
@@ -4811,6 +4876,7 @@ edges:
                 make_edge("a", "out", "c", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4854,6 +4920,7 @@ edges:
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4892,6 +4959,7 @@ edges:
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -4959,6 +5027,7 @@ edges:
                 make_edge("loop1", "body", "worker", "in"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let state = empty_run_state();
@@ -4998,6 +5067,7 @@ edges:
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -5045,6 +5115,7 @@ edges:
                 make_edge("b", "out", "end", "result"),
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut queue = TickQueue::new();
@@ -5127,6 +5198,7 @@ edges:
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut queue = TickQueue::new();
@@ -5182,6 +5254,7 @@ edges:
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -5198,6 +5271,7 @@ edges:
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();
@@ -5214,6 +5288,7 @@ edges:
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let mut state = empty_run_state();

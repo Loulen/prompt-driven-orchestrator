@@ -808,6 +808,23 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).not.toContain("loops:");
   });
 
+  it("emits prompt_required: false for prompt-optional pipelines (#158)", () => {
+    const pipeline = makeFullPipeline([]);
+    pipeline.prompt_required = false;
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("prompt_required: false");
+  });
+
+  it("omits prompt_required when prompt-required (the default, #158)", () => {
+    const requiredExplicit = makeFullPipeline([]);
+    requiredExplicit.prompt_required = true;
+    expect(serializePipeline(requiredExplicit)).not.toContain("prompt_required");
+
+    // Absent flag is the prompt-required default → still omitted.
+    const absent = makeFullPipeline([]);
+    expect(serializePipeline(absent)).not.toContain("prompt_required");
+  });
+
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "doc-only",

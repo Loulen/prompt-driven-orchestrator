@@ -125,6 +125,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         // First call: planner is ready (entry node, no state yet)

@@ -111,6 +111,19 @@ export default function PipelineInspector({
           />
         </Field>
 
+        {/* Prompt-required toggle (#158). Checked by default — unchecking lets a
+            Run launch without a prompt; the entry node sources its own work. */}
+        <label className="flex items-center gap-2 text-fg-2" style={{ fontSize: "11px" }}>
+          <input
+            type="checkbox"
+            className="accent-acc"
+            checked={pipeline.prompt_required !== false}
+            onChange={(e) => updateMeta({ prompt_required: e.target.checked })}
+            data-testid="prompt-required-checkbox"
+          />
+          Prompt required
+        </label>
+
         {isInLibrary && (
           <Field label="Library scope">
             <div className="flex gap-1" data-testid="pipeline-inspector-scope">

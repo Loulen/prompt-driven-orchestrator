@@ -243,6 +243,21 @@ pub struct PipelineDef {
     /// loops; round-trips when present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loops: Vec<LoopRegion>,
+    /// Whether a manual Run must be launched with a non-empty user prompt (#158).
+    /// Defaults to `true` (the prompt is mandatory) and is omitted from YAML in
+    /// that case, so prompt-required pipelines stay clean. When `false`, a Run
+    /// may start with empty input and a provided prompt is treated as additional
+    /// info rather than the sole source of work.
+    #[serde(default = "default_prompt_required", skip_serializing_if = "is_true")]
+    pub prompt_required: bool,
+}
+
+fn default_prompt_required() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 fn infer_variable_type(val: &serde_yaml::Value) -> VariableType {
@@ -3166,5 +3181,51 @@ edges:
         assert_eq!(tester.outputs[0].port_type, PortType::ImageList);
         assert_eq!(tester.outputs[1].name, "result");
         assert_eq!(tester.outputs[1].port_type, PortType::Markdown);
+    }
+
+    // --- prompt_required (#158) ---
+
+    #[test]
+    fn prompt_required_defaults_to_true_when_absent() {
+        let yaml = with_start_end(
+            r#"
+name: no-flag
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.prompt_required);
+    }
+
+    #[test]
+    fn prompt_required_false_round_trips() {
+        let yaml = with_start_end(
+            r#"
+name: optional-prompt
+prompt_required: false
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(!result.pipeline.prompt_required);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        assert!(!result2.pipeline.prompt_required);
+    }
+
+    #[test]
+    fn prompt_required_true_is_not_serialized() {
+        // The default round-trips by absence, keeping prompt-required pipelines
+        // (the common case) clean in YAML — same convention as `loops`.
+        let yaml = with_start_end(
+            r#"
+name: default-flag
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(!serialized.contains("prompt_required"));
     }
 }

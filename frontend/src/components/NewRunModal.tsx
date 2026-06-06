@@ -223,8 +223,14 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     }
   }, [loadPipelines]);
 
+  // A prompt-optional pipeline (#158) may launch with an empty prompt; the
+  // entry node sources its own work. Prompt-required (the default) still demands
+  // non-empty input.
+  const promptOptional = selectedPipeline?.prompt_required === false;
+  const hasRequiredPrompt = promptOptional || Boolean(input.trim());
+
   const handleLaunch = useCallback(async () => {
-    if (!repoValid || !selectedPipeline || !input.trim()) return;
+    if (!repoValid || !selectedPipeline || !hasRequiredPrompt) return;
     setSubmitting(true);
     setError(null);
 
@@ -261,9 +267,9 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, refreshRecentRepos]);
 
-  const canLaunch = repoValid && selectedPipeline && input.trim();
+  const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt;
 
   let repoBorderClass = "border-line-strong focus:border-acc";
   if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
@@ -505,7 +511,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                 className="font-medium text-fg-2"
                 style={{ fontSize: "11.5px" }}
               >
-                Prompt
+                Prompt{promptOptional ? " (optional)" : ""}
               </label>
               <textarea
                 className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
@@ -518,7 +524,9 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
                 data-testid="input-textarea"
               />
               <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                Free-text prompt, an issue link, or a mix.
+                {promptOptional
+                  ? "This pipeline runs without a prompt — anything you enter is passed as additional info."
+                  : "Free-text prompt, an issue link, or a mix."}
               </span>
             </div>
 

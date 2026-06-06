@@ -299,6 +299,7 @@ mod tests {
                 edge("rev", "review", "impl", "review"),
             ],
             loops: vec![],
+            prompt_required: true,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -411,6 +412,7 @@ mod tests {
                 },
             ],
             loops: vec![],
+            prompt_required: true,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -520,6 +522,7 @@ mod tests {
                 edge("worker", "out", "worker", "again"),
             ],
             loops: vec![],
+            prompt_required: true,
         };
         let region = LoopRegion {
             id: "spin".into(),
@@ -571,6 +574,7 @@ mod tests {
                 },
             ],
             loops: vec![],
+            prompt_required: true,
         };
         let region = LoopRegion {
             id: "review_loop".into(),

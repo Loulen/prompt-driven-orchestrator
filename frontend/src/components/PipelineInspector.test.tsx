@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineInspector from "./PipelineInspector";
 import type { LibraryPipelineEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
@@ -123,5 +123,43 @@ describe("PipelineInspector", () => {
     // other option is still visible so the user can flip.
     expect(screen.getByTestId("pipeline-inspector-scope-repo")).toBeInTheDocument();
     expect(screen.getByTestId("pipeline-inspector-scope-user")).toBeInTheDocument();
+  });
+
+  // Prompt-required checkbox (#158)
+  it("checks 'Prompt required' by default when the flag is absent", () => {
+    seedTab();
+    renderInspector([]);
+    const checkbox = screen.getByTestId("prompt-required-checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it("unchecks 'Prompt required' when the pipeline is prompt-optional", () => {
+    seedTab();
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === "p1" ? { ...t, pipeline: { ...t.pipeline, prompt_required: false } } : t,
+      ),
+    }));
+    renderInspector([]);
+    const checkbox = screen.getByTestId("prompt-required-checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("toggling the checkbox persists prompt_required to the store", () => {
+    seedTab();
+    renderInspector([]);
+    const checkbox = screen.getByTestId("prompt-required-checkbox");
+
+    // Uncheck → prompt-optional.
+    fireEvent.click(checkbox);
+    expect(
+      useEditStore.getState().openTabs[0].pipeline.prompt_required,
+    ).toBe(false);
+
+    // Re-check → prompt-required again.
+    fireEvent.click(checkbox);
+    expect(
+      useEditStore.getState().openTabs[0].pipeline.prompt_required,
+    ).toBe(true);
   });
 });

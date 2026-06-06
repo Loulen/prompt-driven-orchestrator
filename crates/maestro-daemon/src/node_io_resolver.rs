@@ -367,6 +367,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         }
     }
 
@@ -523,6 +524,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 4);
@@ -663,6 +665,7 @@ mod tests {
                 },
             ],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         for dir_name in ["a", "b"] {
@@ -743,6 +746,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 1);
@@ -817,6 +821,7 @@ mod tests {
             ],
             edges: vec![mk_edge("a"), mk_edge("b")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1);
@@ -894,6 +899,7 @@ mod tests {
             ],
             edges: vec![mk_edge("planner", "plan"), mk_edge("designer", "spec")],
             loops: Vec::new(),
+            prompt_required: true,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1);

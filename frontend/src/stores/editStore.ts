@@ -90,7 +90,7 @@ interface EditState {
   deleteEdge: (index: number) => void;
 
   // Pipeline-level mutations
-  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables">>) => void;
+  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required">>) => void;
 
   // Prompt mutations
   updatePrompt: (nodeId: string, content: string) => void;
@@ -133,6 +133,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     name: p.name,
   };
   if (p.version) obj.version = p.version;
+  // Prompt-optional pipelines (#158) carry an explicit `prompt_required: false`.
+  // The default (prompt required) is omitted so the common case stays clean and
+  // round-trips by absence — same convention as `loops` and `version`.
+  if (p.prompt_required === false) obj.prompt_required = false;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(p.variables)) {
@@ -543,6 +547,7 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (updates.name !== undefined) tab.pipeline.name = updates.name;
       if (updates.version !== undefined) tab.pipeline.version = updates.version;
       if (updates.variables !== undefined) tab.pipeline.variables = updates.variables;
+      if (updates.prompt_required !== undefined) tab.pipeline.prompt_required = updates.prompt_required;
     }));
   },
 

@@ -1,6 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { pathToSvg, segmentHandles, dragSegment } from "./edgePath";
+import {
+  pathToSvg,
+  segmentHandles,
+  dragSegment,
+  reanchorWaypoints,
+} from "./edgePath";
 import type { Point } from "./orthogonalRouter";
+
+// Asserts every consecutive pair in `[source, ...waypoints, target]` shares an
+// x or a y (no diagonal segment).
+function expectOrthogonal(source: Point, waypoints: Point[], target: Point) {
+  const pts = [source, ...waypoints, target];
+  for (let i = 1; i < pts.length; i++) {
+    const dx = Math.abs(pts[i].x - pts[i - 1].x);
+    const dy = Math.abs(pts[i].y - pts[i - 1].y);
+    expect(dx < 1e-6 || dy < 1e-6).toBe(true);
+  }
+}
 
 describe("pathToSvg", () => {
   it("renders a polyline as an SVG move + line commands", () => {
@@ -113,5 +129,88 @@ describe("dragSegment", () => {
     expect(pinned[pinned.length - 1]).toEqual({ x: 0, y: 200 });
     expect(pinned[1]).toEqual({ x: 40, y: 0 });
     expect(pinned[2]).toEqual({ x: 40, y: 200 });
+  });
+});
+
+describe("reanchorWaypoints", () => {
+  // A manual route pinned while source sat at (0,0) and target at (200,80):
+  //   source(0,0) -> w0(100,0) -> w1(100,80) -> target(200,80)
+  // segment source->w0 is horizontal, w0->w1 vertical, w1->target horizontal.
+  const waypoints: Point[] = [
+    { x: 100, y: 0 },
+    { x: 100, y: 80 },
+  ];
+
+  it("re-anchors the source-adjacent waypoint when the source node moves", () => {
+    // Source node dragged down/left to (-40, 30). Naively the path would have a
+    // diagonal source(-40,30)->w0(100,0). The first segment was horizontal, so
+    // w0 must follow the source's new y to stay horizontal.
+    const source: Point = { x: -40, y: 30 };
+    const target: Point = { x: 200, y: 80 };
+
+    const out = reanchorWaypoints(source, target, waypoints);
+
+    expectOrthogonal(source, out, target);
+    // w0 tracked the source on the shared (y) axis; its x is untouched.
+    expect(out[0]).toEqual({ x: 100, y: 30 });
+  });
+
+  it("re-anchors the target-adjacent waypoint when the target node moves", () => {
+    // Target node dragged to (260, 140). The last segment w1->target was
+    // horizontal, so w1 must follow the target's new y to stay horizontal.
+    const source: Point = { x: 0, y: 0 };
+    const target: Point = { x: 260, y: 140 };
+
+    const out = reanchorWaypoints(source, target, waypoints);
+
+    expectOrthogonal(source, out, target);
+    // w1 tracked the target on the shared (y) axis; its x is untouched.
+    expect(out[1]).toEqual({ x: 100, y: 140 });
+  });
+
+  it("re-anchors a single-waypoint L-bend, preserving the elbow shape", () => {
+    // A VH elbow pinned with source(0,0), target(200,80):
+    //   source(0,0) -> w0(0,80) -> target(200,80)
+    // source->w0 vertical (share x with source), w0->target horizontal (share y
+    // with target). After the source moves to (40,-20) the elbow must keep that
+    // VH shape: w0.x tracks the source, w0.y tracks the target.
+    const elbow: Point[] = [{ x: 0, y: 80 }];
+    const source: Point = { x: 40, y: -20 };
+    const target: Point = { x: 200, y: 80 };
+
+    const out = reanchorWaypoints(source, target, elbow);
+
+    expectOrthogonal(source, out, target);
+    expect(out[0]).toEqual({ x: 40, y: 80 });
+  });
+
+  it("re-anchors both ends when both endpoints move (multi-select drag)", () => {
+    const source: Point = { x: -10, y: 25 };
+    const target: Point = { x: 240, y: 130 };
+
+    const out = reanchorWaypoints(source, target, waypoints);
+
+    expectOrthogonal(source, out, target);
+    expect(out[0]).toEqual({ x: 100, y: 25 });
+    expect(out[1]).toEqual({ x: 100, y: 130 });
+  });
+
+  it("leaves interior waypoints untouched (only endpoint-adjacent ones move)", () => {
+    // Three waypoints: w1 is purely interior and must not be re-anchored.
+    const threeWp: Point[] = [
+      { x: 50, y: 0 }, // w0 (source-adjacent)
+      { x: 50, y: 40 }, // w1 (interior)
+      { x: 150, y: 40 }, // w2 (target-adjacent)
+    ];
+    // Source->w0 was horizontal (share y=0); w2->target was vertical (share
+    // x=150). Move source's y and target's x.
+    const source: Point = { x: 0, y: 12 };
+    const target: Point = { x: 150, y: 90 };
+
+    const out = reanchorWaypoints(source, target, threeWp);
+
+    expectOrthogonal(source, out, target);
+    // Interior waypoint unchanged.
+    expect(out[1]).toEqual({ x: 50, y: 40 });
   });
 });

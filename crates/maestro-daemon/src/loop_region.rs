@@ -536,4 +536,148 @@ mod tests {
             }
         );
     }
+
+    // ── Integration-style: a full bounded-region run via the engine ──────────
+    //
+    // Mirrors the migrated review-loop: rev -> end WHEN verdict in [PASS], and
+    // rev -> impl ELSE (the continuation back-edge). The "scheduler" here is the
+    // loop below: each lap evaluates rev's outgoing edges, then either re-enters
+    // (back-edge fired) or exits / exhausts.
+
+    fn migrated_review_loop(max_iter: i64) -> (PipelineDef, LoopRegion) {
+        let pipeline = PipelineDef {
+            name: "mrl".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("impl", &["task", "review"], &["code"]),
+                node("rev", &["code"], &["review"]),
+                node("end", &["result"], &[]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "impl", "task"),
+                edge("impl", "code", "rev", "code"),
+                {
+                    let mut e = edge("rev", "review", "end", "result");
+                    e.when =
+                        Some(serde_yaml::from_str("verdict: { in: [PASS, APPROVED] }").unwrap());
+                    e
+                },
+                {
+                    let mut e = edge("rev", "review", "impl", "task");
+                    e.is_else = true;
+                    e
+                },
+            ],
+            loops: vec![],
+        };
+        let region = LoopRegion {
+            id: "review_loop".into(),
+            kind: LoopKind::Bounded,
+            members: vec!["impl".into(), "rev".into()],
+            max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+        };
+        (pipeline, region)
+    }
+
+    /// Simulates running the region: `verdicts[i]` is the reviewer verdict at lap
+    /// i+1. Returns `(laps_run, final_outcome)` where outcome is one of
+    /// "exit:<target>", "exhausted-unrouted", "exhausted-routed:<target>".
+    fn run_region(
+        pipeline: &PipelineDef,
+        region: &LoopRegion,
+        max_iter: i64,
+        verdicts: &[&str],
+    ) -> (i64, String) {
+        let mut runtime = RegionRuntime::new(max_iter);
+        let reentry = reentry_edge_indices(pipeline, region);
+        loop {
+            let lap = runtime.current_iter as usize;
+            let verdict = verdicts.get(lap - 1).copied().unwrap_or("FAIL");
+            let mut fields = std::collections::HashMap::new();
+            fields.insert(
+                "verdict".to_string(),
+                serde_yaml::Value::String(verdict.to_string()),
+            );
+
+            // Evaluate rev's outgoing edges at this iter.
+            let rev_out: Vec<&crate::pipeline::EdgeDef> = pipeline
+                .edges
+                .iter()
+                .filter(|e| e.source.node == "rev")
+                .collect();
+            let fired = crate::edge_router::fired_edges(
+                &rev_out,
+                &fields,
+                &Default::default(),
+                runtime.current_iter,
+            );
+
+            // Count fired re-entry edges (by identity against the reentry set).
+            let reentry_fired = pipeline
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(i, e)| reentry.contains(i) && fired.iter().any(|f| std::ptr::eq(*f, *e)))
+                .count();
+
+            // An exit fires if any fired edge leaves the region.
+            let member_set: std::collections::HashSet<&str> =
+                region.members.iter().map(String::as_str).collect();
+            let exit_target = fired
+                .iter()
+                .find(|e| !member_set.contains(e.target.node.as_str()))
+                .map(|e| e.target.node.clone());
+
+            if let Some(t) = exit_target {
+                return (runtime.current_iter, format!("exit:{t}"));
+            }
+
+            match resolve_lap(pipeline, region, &runtime, reentry_fired) {
+                LapDecision::NextLap { iter, .. } => {
+                    runtime.current_iter = iter;
+                }
+                LapDecision::Exhausted => {
+                    return match exhaustion_outcome(
+                        pipeline,
+                        region,
+                        &runtime,
+                        &fields,
+                        &Default::default(),
+                    ) {
+                        ExhaustionOutcome::Routed(targets) => (
+                            runtime.current_iter,
+                            format!("exhausted-routed:{}", targets.join(",")),
+                        ),
+                        ExhaustionOutcome::Unrouted => {
+                            (runtime.current_iter, "exhausted-unrouted".into())
+                        }
+                    };
+                }
+                LapDecision::NoReentry => {
+                    return (runtime.current_iter, "no-reentry".into());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_run_exits_early_on_pass() {
+        // FAIL, FAIL, PASS → exits at lap 3 to End, never reaching max.
+        let (pipeline, region) = migrated_review_loop(5);
+        let (laps, outcome) = run_region(&pipeline, &region, 5, &["FAIL", "FAIL", "PASS"]);
+        assert_eq!(laps, 3);
+        assert_eq!(outcome, "exit:end");
+    }
+
+    #[test]
+    fn full_run_blocks_exhausted_unrouted_at_max_iter() {
+        // Verdict never passes and no `iter >= max` exit is wired → at max_iter
+        // the region blocks "exhausted — unrouted" (never a silent stall).
+        let (pipeline, region) = migrated_review_loop(3);
+        let (laps, outcome) = run_region(&pipeline, &region, 3, &["FAIL", "FAIL", "FAIL"]);
+        assert_eq!(laps, 3);
+        assert_eq!(outcome, "exhausted-unrouted");
+    }
 }

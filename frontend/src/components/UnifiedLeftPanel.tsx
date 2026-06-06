@@ -40,6 +40,9 @@ interface Props {
   onSelectTrigger?: (triggerId: string) => void;
   onNewTrigger?: () => void;
   onTriggersChanged?: () => void;
+  /** Run-now / edit a Trigger via the New Run modal (#162). */
+  onRunNowTrigger?: (trigger: Trigger) => void;
+  onEditTrigger?: (trigger: Trigger) => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -54,6 +57,8 @@ export default function UnifiedLeftPanel({
   onSelectTrigger,
   onNewTrigger,
   onTriggersChanged,
+  onRunNowTrigger,
+  onEditTrigger,
 }: Props) {
   const [activeTab, setActiveTab] = useState<LeftTab>("runs");
   const [confirmCleanup, setConfirmCleanup] = useState<
@@ -311,6 +316,8 @@ export default function UnifiedLeftPanel({
             onSelectTrigger={onSelectTrigger ?? (() => {})}
             onNewTrigger={onNewTrigger ?? (() => {})}
             onTriggersChanged={onTriggersChanged ?? (() => {})}
+            onRunNow={onRunNowTrigger}
+            onEditTrigger={onEditTrigger}
           />
         </div>
       )}

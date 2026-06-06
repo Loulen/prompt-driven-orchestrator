@@ -189,6 +189,7 @@ export interface WsMessage {
     | "pipeline_changed"
     | "trigger_created"
     | "trigger_fired"
+    | "trigger_updated"
     | "trigger_deleted";
   event?: DaemonEvent;
   pipeline_id?: string;

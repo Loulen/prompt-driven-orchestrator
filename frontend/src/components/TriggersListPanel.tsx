@@ -1,6 +1,6 @@
-import { Plus, Trash2, Zap } from "lucide-react";
+import { Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
 import type { Trigger } from "../types";
-import { deleteTrigger } from "../api";
+import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
 
 interface Props {
@@ -9,6 +9,10 @@ interface Props {
   onSelectTrigger: (triggerId: string) => void;
   onNewTrigger: () => void;
   onTriggersChanged: () => void;
+  /** Open the New Run modal pre-filled from this Trigger (Run-now mode). */
+  onRunNow?: (trigger: Trigger) => void;
+  /** Open the modal in edit mode for this Trigger. */
+  onEditTrigger?: (trigger: Trigger) => void;
 }
 
 /**
@@ -43,10 +47,21 @@ export default function TriggersListPanel({
   onSelectTrigger,
   onNewTrigger,
   onTriggersChanged,
+  onRunNow,
+  onEditTrigger,
 }: Props) {
   async function handleDelete(triggerId: string) {
     try {
       await deleteTrigger(triggerId);
+      onTriggersChanged();
+    } catch {
+      // WS push / refresh will reconcile.
+    }
+  }
+
+  async function handleToggle(t: Trigger) {
+    try {
+      await updateTrigger(t.id, { enabled: !t.enabled });
       onTriggersChanged();
     } catch {
       // WS push / refresh will reconcile.
@@ -139,17 +154,61 @@ export default function TriggersListPanel({
                     disabled
                   </span>
                 )}
+                {/* Hover actions: run-now, edit, delete. */}
+                <span className="hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
+                  <span
+                    role="button"
+                    title="Run now (test this trigger)"
+                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-acc"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRunNow?.(t);
+                    }}
+                    data-testid="trigger-run-now"
+                  >
+                    <Play size={12} />
+                  </span>
+                  <span
+                    role="button"
+                    title="Edit trigger"
+                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditTrigger?.(t);
+                    }}
+                    data-testid="trigger-edit"
+                  >
+                    <Pencil size={12} />
+                  </span>
+                  <span
+                    role="button"
+                    title="Delete trigger"
+                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDelete(t.id);
+                    }}
+                    data-testid="trigger-delete"
+                  >
+                    <Trash2 size={12} />
+                  </span>
+                </span>
+                {/* Enable/disable toggle — always visible so paused state is reversible. */}
                 <span
-                  role="button"
-                  title="Delete trigger"
-                  className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed group-hover:inline-flex"
+                  role="switch"
+                  aria-checked={t.enabled}
+                  aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
+                  title={t.enabled ? "Disable trigger" : "Enable trigger"}
+                  className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-bg-4 ${
+                    t.enabled ? "text-acc" : "text-fg-4"
+                  }`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    void handleDelete(t.id);
+                    void handleToggle(t);
                   }}
-                  data-testid="trigger-delete"
+                  data-testid="trigger-toggle"
                 >
-                  <Trash2 size={12} />
+                  <Power size={12} />
                 </span>
               </button>
             );

@@ -244,6 +244,45 @@ export async function createTrigger(req: CreateTriggerRequest): Promise<Trigger>
   return resp.json();
 }
 
+export async function fetchTrigger(triggerId: string): Promise<Trigger> {
+  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`);
+  if (!resp.ok) throw new Error(`GET /triggers/${triggerId} failed: ${resp.status}`);
+  return resp.json();
+}
+
+/**
+ * A partial Trigger edit (#162). Omitted fields are left unchanged. `enabled`
+ * toggles activation; the config fields cover schedule, input template, and
+ * overlap policy (plus name/repo/branch/guard for completeness).
+ */
+export interface UpdateTriggerRequest {
+  name?: string;
+  enabled?: boolean;
+  cron?: string;
+  input_template?: string;
+  overlap_policy?: string;
+  target_repo?: string | null;
+  source_branch?: string | null;
+  guard_command?: string | null;
+  variables?: Record<string, unknown>;
+}
+
+export async function updateTrigger(
+  triggerId: string,
+  req: UpdateTriggerRequest,
+): Promise<Trigger> {
+  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `PATCH /triggers/${triggerId} failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export async function deleteTrigger(triggerId: string): Promise<void> {
   const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`, {
     method: "DELETE",

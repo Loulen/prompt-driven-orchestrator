@@ -1,22 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Sparkles, Star, X } from "lucide-react";
-import type { PipelineListEntry } from "../types";
-import { createRun, createTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
+import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, Star, X } from "lucide-react";
+import type { PipelineListEntry, Trigger } from "../types";
+import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
-import { CRON_PRESETS, presetToCron, type CronPresetId } from "../cronPresets";
+import { CRON_PRESETS, presetToCron, cronToPreset, type CronPresetId } from "../cronPresets";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
+/**
+ * Open the modal pre-filled from an existing Trigger (#162). `mode: "run"`
+ * opens Run-now mode to fire a one-off Run from the Trigger's template (the
+ * guard is not executed). `mode: "edit"` opens Trigger mode bound to the
+ * Trigger so submitting PATCHes it instead of creating a new one.
+ */
+export interface TriggerPrefill {
+  trigger: Trigger;
+  mode: "run" | "edit";
+}
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: (runId: string) => void;
+  prefillTrigger?: TriggerPrefill | null;
+  /** Called after a trigger is created/edited so the list can refresh. */
+  onTriggerSaved?: () => void;
 }
 
-export default function NewRunModal({ open, onClose, onCreated }: Props) {
+export default function NewRunModal({ open, onClose, onCreated, prefillTrigger = null, onTriggerSaved }: Props) {
   const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
   const [runName, setRunName] = useState("");
@@ -26,6 +39,9 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   // Trigger mode: the same modal creates a Trigger via a [Run now | Trigger]
   // toggle. Schedule (#160) plus an optional guard command (#161).
   const [mode, setMode] = useState<"run" | "trigger">("run");
+  // When set, Trigger-mode submits a PATCH against this id instead of POSTing a
+  // new Trigger (#162 edit). Cleared for create / run-now.
+  const [editingTriggerId, setEditingTriggerId] = useState<string | null>(null);
   const [triggerName, setTriggerName] = useState("");
   const [cronPresetId, setCronPresetId] = useState<CronPresetId>("daily");
   const [dailyHour, setDailyHour] = useState(9);
@@ -52,6 +68,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prefillDone = useRef(false);
+  const triggerPrefillDone = useRef(false);
 
   const handleRepoChange = useCallback((value: string) => {
     setTargetRepo(value);
@@ -64,14 +81,65 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
   }, []);
 
   useEffect(() => {
-    if (open && !prefillDone.current && recentRepos.length > 0 && !targetRepo) {
+    // Skip the recent-repos default when prefilling from a Trigger — the
+    // Trigger's own repo wins.
+    if (open && !prefillDone.current && !prefillTrigger && recentRepos.length > 0 && !targetRepo) {
       prefillDone.current = true;
       handleRepoChange(recentRepos[0]);
     }
     if (!open) {
       prefillDone.current = false;
     }
-  }, [open, recentRepos, targetRepo, handleRepoChange]);
+  }, [open, recentRepos, targetRepo, handleRepoChange, prefillTrigger]);
+
+  // Prefill the form from a Trigger when opened for run-now or edit (#162).
+  useEffect(() => {
+    if (!open) {
+      triggerPrefillDone.current = false;
+      return;
+    }
+    if (triggerPrefillDone.current || !prefillTrigger) return;
+    triggerPrefillDone.current = true;
+
+    // One-shot prefill: the `triggerPrefillDone` ref gates this to a single run
+    // per open, so the setState cascade is bounded and does not re-fire. The
+    // conditional setState calls below are deliberate (mode-dependent prefill).
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const { trigger, mode: prefillMode } = prefillTrigger;
+    setSelectedPipelineId(trigger.pipeline_id);
+    setTargetRepo(trigger.target_repo ?? "");
+    setSourceBranch(trigger.source_branch ?? "");
+    setInput(trigger.input_template ?? "");
+    setOverrides(
+      Object.fromEntries(
+        Object.entries(trigger.variables ?? {}).map(([k, v]) => [k, String(v)]),
+      ),
+    );
+
+    if (prefillMode === "edit") {
+      setMode("trigger");
+      setEditingTriggerId(trigger.id);
+      setTriggerName(trigger.name);
+      setGuardCommand(trigger.guard_command ?? "");
+      // Map the stored cron back onto a preset (or the raw escape hatch).
+      const preset = cronToPreset(trigger.cron);
+      setCronPresetId(preset);
+      if (preset === "custom") {
+        setRawCron(trigger.cron);
+      } else if (preset === "daily") {
+        const m = trigger.cron.trim().match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
+        if (m) {
+          setDailyMinute(Number(m[1]));
+          setDailyHour(Number(m[2]));
+        }
+      }
+    } else {
+      // Run-now: fire a one-off Run from the template; never touch the guard.
+      setMode("run");
+      setEditingTriggerId(null);
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, prefillTrigger]);
 
   useEffect(() => {
     if (!open || !targetRepo.trim()) return;
@@ -326,30 +394,54 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
 
     try {
       await flushPendingSaves();
-      await createTrigger({
-        name: triggerName.trim(),
-        pipeline_id: selectedPipeline.id,
-        cron: resolvedCron,
-        input_template: input.trim() || undefined,
-        guard_command: guardCommand.trim() || undefined,
-        target_repo: targetRepo.trim() || undefined,
-        source_branch: sourceBranch || undefined,
-        variables,
-      });
+      if (editingTriggerId) {
+        // Edit (#162): PATCH the existing Trigger's editable fields. `Some(None)`
+        // semantics: an emptied guard clears it.
+        await updateTrigger(editingTriggerId, {
+          name: triggerName.trim(),
+          cron: resolvedCron,
+          input_template: input.trim(),
+          guard_command: guardCommand.trim() || null,
+          target_repo: targetRepo.trim() || null,
+          source_branch: sourceBranch || null,
+          overlap_policy: undefined,
+          variables,
+        });
+      } else {
+        await createTrigger({
+          name: triggerName.trim(),
+          pipeline_id: selectedPipeline.id,
+          cron: resolvedCron,
+          input_template: input.trim() || undefined,
+          guard_command: guardCommand.trim() || undefined,
+          target_repo: targetRepo.trim() || undefined,
+          source_branch: sourceBranch || undefined,
+          variables,
+        });
+      }
+      onTriggerSaved?.();
       setTriggerName("");
       setInput("");
       setGuardCommand("");
       setOverrides({});
       setMode("run");
+      setEditingTriggerId(null);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create trigger");
+      setError(
+        e instanceof Error
+          ? e.message
+          : editingTriggerId
+            ? "Failed to save trigger"
+            : "Failed to create trigger",
+      );
     } finally {
       setSubmitting(false);
     }
   }, [
     selectedPipeline,
     canCreateTrigger,
+    editingTriggerId,
     overrides,
     triggerName,
     resolvedCron,
@@ -358,6 +450,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
     targetRepo,
     sourceBranch,
     flushPendingSaves,
+    onTriggerSaved,
     onClose,
   ]);
 
@@ -380,7 +473,7 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="flex items-center gap-3">
             <h2 className="font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-              {mode === "run" ? "New Run" : "New Trigger"}
+              {mode === "run" ? "New Run" : editingTriggerId ? "Edit Trigger" : "New Trigger"}
             </h2>
             {/* [Run now | Trigger] toggle (#160) */}
             <div
@@ -967,10 +1060,16 @@ export default function NewRunModal({ open, onClose, onCreated }: Props) {
               disabled={submitting || !canCreateTrigger}
               className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
               style={{ fontSize: "11.5px" }}
-              data-testid="create-trigger-button"
+              data-testid={editingTriggerId ? "save-trigger-button" : "create-trigger-button"}
             >
-              <Clock size={12} />
-              {submitting ? "Creating…" : "Create trigger"}
+              {editingTriggerId ? <Save size={12} /> : <Clock size={12} />}
+              {editingTriggerId
+                ? submitting
+                  ? "Saving…"
+                  : "Save trigger"
+                : submitting
+                  ? "Creating…"
+                  : "Create trigger"}
             </button>
           )}
         </div>

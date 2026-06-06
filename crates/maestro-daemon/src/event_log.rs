@@ -223,6 +223,9 @@ pub struct RunState {
     pub target_repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// Provenance: the id of the Trigger that created this Run, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggered_by: Option<String>,
 }
 
 impl RunState {
@@ -246,6 +249,7 @@ impl RunState {
             switch_states: HashMap::new(),
             target_repo: None,
             source_branch: None,
+            triggered_by: None,
         }
     }
 }
@@ -333,6 +337,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                     }
                     if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                         state.source_branch = Some(sb.to_string());
+                    }
+                    if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
+                        state.triggered_by = Some(tb.to_string());
                     }
 
                     let input_images = payload

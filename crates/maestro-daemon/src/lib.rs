@@ -1,8 +1,12 @@
 mod blackboard;
 #[allow(dead_code)]
 mod condition;
+#[allow(dead_code)]
+mod cron_schedule;
 mod edge_router;
 mod event_log;
+#[allow(dead_code)]
+mod fire_decision;
 mod frontmatter_parser;
 pub mod graph_resolver;
 pub mod library_store;
@@ -25,6 +29,10 @@ mod scheduler_dispatcher;
 pub mod stale_detector;
 mod switch_router;
 pub mod tmux_session_manager;
+#[allow(dead_code)]
+mod trigger_scheduler;
+#[allow(dead_code)]
+mod trigger_store;
 #[allow(dead_code)]
 mod variable_resolver;
 
@@ -145,6 +153,10 @@ struct CreateRunRequest {
     source_branch: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// Provenance: the id of the Trigger that created this Run, if any. Set by
+    /// the trigger scheduler; absent for manual runs.
+    #[serde(default)]
+    triggered_by: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +172,9 @@ struct RunListEntry {
     started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Provenance: the Trigger that created this Run, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    triggered_by: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -282,6 +297,28 @@ pub fn run_fail(reason: String) -> Result<()> {
 pub struct DaemonHandle {
     pub addr: SocketAddr,
     pub task: tokio::task::JoinHandle<Result<()>>,
+    state: Arc<AppState>,
+}
+
+impl DaemonHandle {
+    /// Run a single Trigger scheduler tick synchronously. Lets integration
+    /// tests drive firing deterministically instead of waiting for the ~30 s
+    /// background interval.
+    pub async fn run_trigger_tick(&self) {
+        run_trigger_scheduler_tick(&self.state).await;
+    }
+
+    /// Force a Trigger's next fire into the past so the next
+    /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
+    /// next-fire times come from the cron schedule.
+    pub async fn force_trigger_due(&self, trigger_id: &str) {
+        let _ = trigger_store::set_next_fire(
+            &self.state.db,
+            trigger_id,
+            Some("2020-01-01T00:00:00.000Z"),
+        )
+        .await;
+    }
 }
 
 pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle> {
@@ -408,11 +445,30 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         }))
     };
 
+    // Background task: Trigger scheduler (sibling of reaper/stale). Fires due
+    // Triggers on a ~30s tick. Best-effort: only runs while the daemon lives,
+    // forward-only (no backfill of missed slots). Suppressed in a nested daemon
+    // for the same reason the reaper is — a sub-claude must stay passive.
+    let _trigger_handle = if nested_daemon {
+        None
+    } else {
+        let trigger_state = state.clone();
+        Some(tokio::spawn(async move {
+            let mut tick =
+                time::interval(Duration::from_secs(trigger_scheduler::TICK_INTERVAL_SECS));
+            loop {
+                tick.tick().await;
+                run_trigger_scheduler_tick(&trigger_state).await;
+            }
+        }))
+    };
+
     let task = tokio::spawn(async move {
         let _watcher = run_watcher; // keep the file watcher alive for the server's lifetime
         let _reaper = _reaper_handle; // keep the reaper alive
         let _run_modified = _run_modified_handle; // keep the pipeline_modified handler alive
         let _stale = _stale_handle; // keep the stale detector alive
+        let _trigger = _trigger_handle; // keep the trigger scheduler alive
         axum::serve(listener, app).await.context("server error")?;
         Ok(())
     });
@@ -420,6 +476,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
     Ok(DaemonHandle {
         addr: bound_addr,
         task,
+        state,
     })
 }
 
@@ -503,6 +560,216 @@ async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+// --- Trigger endpoints ---
+
+#[derive(Deserialize)]
+struct CreateTriggerRequest {
+    name: String,
+    /// Library pipeline id the Trigger fires.
+    pipeline_id: String,
+    #[serde(default)]
+    target_repo: Option<String>,
+    #[serde(default)]
+    source_branch: Option<String>,
+    #[serde(default)]
+    input_template: String,
+    #[serde(default)]
+    variables: HashMap<String, serde_yaml::Value>,
+    /// 5-field cron expression.
+    cron: String,
+    #[serde(default)]
+    guard_command: Option<String>,
+    #[serde(default = "default_overlap_policy")]
+    overlap_policy: String,
+}
+
+fn default_overlap_policy() -> String {
+    "skip".to_string()
+}
+
+async fn create_trigger(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateTriggerRequest>,
+) -> Response {
+    if req.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "trigger name must not be empty" })),
+        )
+            .into_response();
+    }
+
+    // Validate the cron expression up front (Sharp tool: fail loud at config
+    // time, not at 3am).
+    let schedule = match cron_schedule::CronSchedule::parse(&req.cron) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid cron expression: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Resolve the target pipeline and its prompt_required flag.
+    let yaml =
+        library_store::pipelines::get_yaml(&state.repo_root, &req.pipeline_id).or_else(|| {
+            std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok()
+        });
+    let yaml = match yaml {
+        Some(y) => y,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("pipeline not found: {}", req.pipeline_id)
+                })),
+            )
+                .into_response();
+        }
+    };
+    let (pipeline_name, prompt_required) = match pipeline::parse_pipeline(&yaml) {
+        Ok(r) => (r.pipeline.name.clone(), r.pipeline.prompt_required),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("pipeline parse error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Server-side fire_decision reject rule: an empty resolvable input on a
+    // prompt-required pipeline (cron-only: no guard, so the only source is the
+    // input template) is a misconfiguration — refuse at creation.
+    if req.guard_command.as_deref().unwrap_or("").trim().is_empty()
+        && req.input_template.trim().is_empty()
+        && prompt_required
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "this pipeline requires a prompt; add a guard, an input \
+                          template, or mark the pipeline prompt-not-required"
+            })),
+        )
+            .into_response();
+    }
+
+    // Validate target repo if provided.
+    if let Some(ref repo) = req.target_repo {
+        if let Err(msg) = validate_target_repo(repo) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
+    let next_fire_at = schedule
+        .next_fire_after(chrono::Local::now())
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+
+    let variables = serde_json::to_value(&req.variables).unwrap_or(serde_json::json!({}));
+
+    let new = trigger_store::NewTrigger {
+        name: req.name,
+        pipeline_id: req.pipeline_id,
+        pipeline_name,
+        target_repo: req.target_repo,
+        source_branch: req.source_branch,
+        input_template: req.input_template,
+        variables,
+        cron: req.cron,
+        guard_command: req.guard_command.filter(|g| !g.trim().is_empty()),
+        overlap_policy: if req.overlap_policy == "allow" {
+            "allow".to_string()
+        } else {
+            "skip".to_string()
+        },
+        next_fire_at,
+    };
+
+    match trigger_store::create(&state.db, new).await {
+        Ok(trigger) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "trigger_created",
+                "trigger_id": trigger.id,
+            }));
+            (StatusCode::CREATED, Json(trigger)).into_response()
+        }
+        Err(e) => {
+            error!("failed to create trigger: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to persist trigger" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
+    match trigger_store::list(&state.db).await {
+        Ok(triggers) => Json(triggers).into_response(),
+        Err(e) => {
+            error!("failed to list triggers: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to list triggers" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn delete_trigger(
+    State(state): State<Arc<AppState>>,
+    AxumPath(trigger_id): AxumPath<String>,
+) -> Response {
+    match trigger_store::delete(&state.db, &trigger_id).await {
+        Ok(true) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "trigger_deleted",
+                "trigger_id": trigger_id,
+            }));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "trigger not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("failed to delete trigger: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to delete trigger" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn list_trigger_fires(
+    State(state): State<Arc<AppState>>,
+    AxumPath(trigger_id): AxumPath<String>,
+) -> Response {
+    match trigger_store::fire_history(&state.db, &trigger_id).await {
+        Ok(fires) => Json(fires).into_response(),
+        Err(e) => {
+            error!("failed to list trigger fires: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to list trigger fires" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
@@ -564,6 +831,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
+        .route("/triggers", get(list_triggers).post(create_trigger))
+        .route(
+            "/triggers/{trigger_id}",
+            axum::routing::delete(delete_trigger),
+        )
+        .route("/triggers/{trigger_id}/fires", get(list_trigger_fires))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -583,6 +856,10 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     .execute(db)
     .await
     .context("failed to create events table")?;
+
+    trigger_store::init(db)
+        .await
+        .context("failed to create trigger tables")?;
 
     Ok(())
 }
@@ -768,6 +1045,164 @@ async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
             .context("failed to load run ids")?;
 
     Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+// --- Trigger scheduler ---
+
+/// A Run is "live" (blocks an overlapping fire) while it is `running`,
+/// `awaiting_user`, or `paused`.
+fn run_status_is_live(status: &event_log::RunStatus) -> bool {
+    matches!(
+        status,
+        event_log::RunStatus::Running
+            | event_log::RunStatus::AwaitingUser
+            | event_log::RunStatus::Paused
+    )
+}
+
+/// Whether the Trigger's *own* previous Run is still live. Scans projected Run
+/// state for a run carrying this `triggered_by` whose status is live.
+async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
+    let run_ids = match load_all_run_ids(db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("trigger scheduler: failed to load run ids: {e}");
+            return false;
+        }
+    };
+    for run_id in run_ids {
+        let events = match load_events(db, &run_id).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if let Some(state) = event_log::project(&events) {
+            if state.triggered_by.as_deref() == Some(trigger_id)
+                && run_status_is_live(&state.status)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Resolve the target pipeline's `prompt_required` flag for a Trigger; defaults
+/// to `true` (and treats a missing/unparseable pipeline as such) so a dangling
+/// reference rejects rather than fires blind.
+fn trigger_prompt_required(state: &AppState, trigger: &trigger_store::Trigger) -> bool {
+    let yaml =
+        library_store::pipelines::get_yaml(&state.repo_root, &trigger.pipeline_id).or_else(|| {
+            std::fs::read_to_string(resolve_pipeline_path(
+                &state.repo_root,
+                &trigger.pipeline_id,
+            ))
+            .ok()
+        });
+    match yaml {
+        Some(y) => pipeline::parse_pipeline(&y)
+            .map(|r| r.pipeline.prompt_required)
+            .unwrap_or(true),
+        None => true,
+    }
+}
+
+/// Run one scheduler tick: fire every due Trigger that the decision admits,
+/// recording every significant outcome and recomputing each next fire.
+async fn run_trigger_scheduler_tick(state: &AppState) {
+    let now_str = event_log::now_iso();
+    let due = match trigger_store::due_triggers(&state.db, &now_str).await {
+        Ok(t) => t,
+        Err(e) => {
+            warn!("trigger scheduler: due_triggers failed: {e}");
+            return;
+        }
+    };
+    let now = chrono::Utc::now();
+
+    for trigger in due {
+        let has_live = trigger_has_live_run(&state.db, &trigger.id).await;
+        let prompt_required = trigger_prompt_required(state, &trigger);
+        // Cron-only slice: no guard execution yet (#161).
+        let plan = trigger_scheduler::plan_tick(&trigger, now, has_live, None, prompt_required);
+
+        // Recompute the next fire (forward-only).
+        if let Err(e) =
+            trigger_store::set_next_fire(&state.db, &trigger.id, plan.next_fire_at.as_deref()).await
+        {
+            warn!(
+                "trigger scheduler: set_next_fire failed for {}: {e}",
+                trigger.id
+            );
+        }
+
+        match plan.decision {
+            fire_decision::FireDecision::Fire { input } => {
+                let req = CreateRunRequest {
+                    pipeline: trigger.pipeline_id.clone(),
+                    input,
+                    variables: trigger_variables(&trigger),
+                    pipeline_id: Some(trigger.pipeline_id.clone()),
+                    target_repo: trigger.target_repo.clone(),
+                    source_branch: trigger.source_branch.clone(),
+                    name: None,
+                    triggered_by: Some(trigger.id.clone()),
+                };
+                match create_run_inner(state, req, Vec::new()).await {
+                    Ok(run_id) => {
+                        let record = trigger_store::FireRecord {
+                            outcome: "fired".to_string(),
+                            reason: None,
+                            run_id: Some(run_id),
+                        };
+                        record_and_broadcast_fire(state, &trigger.id, &record).await;
+                    }
+                    Err((_, body)) => {
+                        let reason = body
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("run creation failed")
+                            .to_string();
+                        let record = trigger_store::FireRecord {
+                            outcome: "error".to_string(),
+                            reason: Some(reason),
+                            run_id: None,
+                        };
+                        record_and_broadcast_fire(state, &trigger.id, &record).await;
+                    }
+                }
+            }
+            fire_decision::FireDecision::Skip { .. }
+            | fire_decision::FireDecision::Reject { .. } => {
+                if let Some(record) = plan.record {
+                    record_and_broadcast_fire(state, &trigger.id, &record).await;
+                }
+            }
+        }
+    }
+}
+
+/// Parse a Trigger's stored variable overrides (a JSON object) into the
+/// `CreateRunRequest` shape; an empty/invalid value yields no overrides.
+fn trigger_variables(trigger: &trigger_store::Trigger) -> HashMap<String, serde_yaml::Value> {
+    serde_json::from_value(trigger.variables.clone()).unwrap_or_default()
+}
+
+/// Persist a fire audit row and broadcast a `trigger_fired` update over the
+/// pipeline channel so the UI refreshes live.
+async fn record_and_broadcast_fire(
+    state: &AppState,
+    trigger_id: &str,
+    record: &trigger_store::FireRecord,
+) {
+    if let Err(e) = trigger_store::record_fire(&state.db, trigger_id, record).await {
+        warn!("trigger scheduler: record_fire failed for {trigger_id}: {e}");
+    }
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "trigger_fired",
+        "trigger_id": trigger_id,
+        "outcome": record.outcome,
+        "run_id": record.run_id,
+    }));
 }
 
 #[derive(sqlx::FromRow)]
@@ -2089,6 +2524,7 @@ async fn parse_multipart_create_run(
         target_repo,
         source_branch,
         name,
+        triggered_by: None,
     };
     Ok((req, images))
 }
@@ -2166,16 +2602,27 @@ async fn create_run_core(
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Response {
+    match create_run_inner(state, req, images).await {
+        Ok(run_id) => (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response(),
+        Err((status, body)) => (status, Json(body)).into_response(),
+    }
+}
+
+/// The Run-creation logic, returning the new `run_id` on success or a
+/// `(status, body)` pair on failure. `create_run_core` wraps this into an HTTP
+/// `Response`; the trigger scheduler calls it directly to learn the run id for
+/// `triggered_by` provenance.
+async fn create_run_inner(
+    state: &AppState,
+    req: CreateRunRequest,
+    images: Vec<ImageFile>,
+) -> Result<String, (StatusCode, serde_json::Value)> {
     // Validate target_repo if provided
     let run_repo_root = if let Some(ref target) = req.target_repo {
         match validate_target_repo(target) {
             Ok(p) => p,
             Err(msg) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": msg })),
-                )
-                    .into_response();
+                return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
             }
         }
     } else {
@@ -2185,11 +2632,7 @@ async fn create_run_core(
     // Validate source_branch if provided
     let source_ref = if let Some(ref branch) = req.source_branch {
         if let Err(msg) = validate_source_branch(&run_repo_root, branch) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
+            return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
         branch.as_str()
     } else {
@@ -2209,11 +2652,10 @@ async fn create_run_core(
                 match std::fs::read_to_string(&path) {
                     Ok(y) => (y, path),
                     Err(_) => {
-                        return (
+                        return Err((
                             StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({ "error": format!("pipeline template not found: {lib_id}") })),
-                        )
-                            .into_response();
+                            serde_json::json!({ "error": format!("pipeline template not found: {lib_id}") }),
+                        ));
                     }
                 }
             }
@@ -2223,11 +2665,10 @@ async fn create_run_core(
         match std::fs::read_to_string(&path) {
             Ok(y) => (y, path),
             Err(e) => {
-                return (
+                return Err((
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("cannot read pipeline: {e}") })),
-                )
-                    .into_response();
+                    serde_json::json!({ "error": format!("cannot read pipeline: {e}") }),
+                ));
             }
         }
     };
@@ -2235,11 +2676,10 @@ async fn create_run_core(
     let parse_result = match pipeline::parse_pipeline(&yaml) {
         Ok(r) => r,
         Err(e) => {
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("pipeline parse error: {e}") })),
-            )
-                .into_response();
+                serde_json::json!({ "error": format!("pipeline parse error: {e}") }),
+            ));
         }
     };
 
@@ -2251,11 +2691,7 @@ async fn create_run_core(
 
     // Empty input is allowed only for prompt-optional pipelines (#158).
     if let Err(msg) = validate_run_input(pipeline.prompt_required, &req.input) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response();
+        return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
     let run_id = event_log::generate_run_id();
@@ -2292,6 +2728,11 @@ async fn create_run_core(
             run_payload["name"] = serde_json::json!(name);
         }
     }
+    if let Some(ref trigger_id) = req.triggered_by {
+        if !trigger_id.is_empty() {
+            run_payload["triggered_by"] = serde_json::json!(trigger_id);
+        }
+    }
     if !images.is_empty() {
         let image_names: Vec<&str> = images.iter().map(|i| i.filename.as_str()).collect();
         run_payload["image_filenames"] = serde_json::json!(image_names);
@@ -2309,7 +2750,10 @@ async fn create_run_core(
 
     if let Err(e) = append_event(state, &run_started).await {
         error!("failed to append run_started: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": "event log error" }),
+        ));
     }
 
     // Create worktree — artifacts live under <target_repo>/.maestro/runs/<run-id>/
@@ -2318,11 +2762,10 @@ async fn create_run_core(
 
     if let Err(e) = create_worktree(&run_repo_root, &worktree_dir, &branch_name, source_ref) {
         error!("failed to create worktree: {e}");
-        return (
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("worktree creation failed: {e}") })),
-        )
-            .into_response();
+            serde_json::json!({ "error": format!("worktree creation failed: {e}") }),
+        ));
     }
 
     // Copy pipeline YAML + prompts to run-scoped location (always in target repo)
@@ -2367,7 +2810,7 @@ async fn create_run_core(
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
-    (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
+    Ok(run_id)
 }
 
 fn spawn_manager_session(
@@ -2456,6 +2899,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 status: run_state.status,
                 started_at: run_state.started_at,
                 name: run_state.name,
+                triggered_by: run_state.triggered_by,
             });
         }
     }
@@ -4789,6 +5233,7 @@ async fn run_command(
                 target_repo,
                 source_branch,
                 name: None,
+                triggered_by: None,
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 

@@ -69,6 +69,21 @@ impl TestDaemon {
         maestro_daemon::tmux_session_manager::tmux_socket_name(self.addr.port())
     }
 
+    /// Drive a single Trigger scheduler tick synchronously (test seam).
+    pub async fn run_trigger_tick(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.run_trigger_tick().await;
+        }
+    }
+
+    /// Force a Trigger's next fire into the past so the next tick treats it as
+    /// due (test seam).
+    pub async fn force_trigger_due(&self, trigger_id: &str) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.force_trigger_due(trigger_id).await;
+        }
+    }
+
     /// Open a WebSocket connection to `/ws`. Returns the connected stream so the
     /// test can read the initial `{"type":"ready"}` and any subsequent events.
     pub async fn connect_ws(&self) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {

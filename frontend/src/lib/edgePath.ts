@@ -2,7 +2,8 @@
 // custom xyflow edge component — kept out of the component so they can be unit
 // tested without a DOM/flow harness.
 
-import type { Point } from "./orthogonalRouter";
+import type { CSSProperties } from "react";
+import { routeOrthogonal, type Point } from "./orthogonalRouter";
 
 /**
  * Converts a polyline into an SVG path `d` string of straight line segments
@@ -14,6 +15,16 @@ export function pathToSvg(points: Point[]): string {
   const head = `M ${first.x},${first.y}`;
   const tail = rest.map((p) => `L ${p.x},${p.y}`).join(" ");
   return `${head} ${tail}`;
+}
+
+/**
+ * SVG `d` for the live drag-connection preview (#169): a right-angle path from
+ * `source` to `target` so the dangling wire matches the orthogonal final edge
+ * instead of a bezier curve. No obstacles are routed around mid-drag — the
+ * endpoint is moving every frame, so the bend-minimal step is what reads best.
+ */
+export function connectionPreviewPath(source: Point, target: Point): string {
+  return pathToSvg(routeOrthogonal({ source, target, obstacles: [] }));
 }
 
 export type SegmentOrientation = "horizontal" | "vertical";
@@ -102,6 +113,47 @@ export function dragSegment(
   }
 
   return result;
+}
+
+/**
+ * Inline style for a segment drag handle (#169). The handle is a thin bar laid
+ * ALONG its segment and painted in the edge's own `strokeColor` — not a chunky
+ * hardcoded-green rectangle. A horizontal segment is dragged vertically, so its
+ * handle is wide-in-x / thin-in-y with an ns-resize cursor; a vertical segment
+ * is the transpose. `x`/`y` are the segment midpoint in flow coordinates.
+ */
+export function segHandleStyle(
+  x: number,
+  y: number,
+  orientation: SegmentOrientation,
+  strokeColor: string,
+): CSSProperties {
+  const LONG = 16; // span along the segment
+  const THIN = 4; // span across it (was 8 — thinner now)
+  return {
+    position: "absolute",
+    transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+    width: orientation === "horizontal" ? LONG : THIN,
+    height: orientation === "horizontal" ? THIN : LONG,
+    borderRadius: THIN / 2,
+    background: strokeColor,
+    opacity: 0.9,
+    cursor: orientation === "horizontal" ? "ns-resize" : "ew-resize",
+    pointerEvents: "all",
+  };
+}
+
+/**
+ * Removes the waypoint at `index` from a manual route's waypoint list (#169),
+ * returning a new array. An out-of-range index is a no-op. When the result is
+ * empty the caller reverts the edge to `auto` (an empty manual route is
+ * meaningless — see `editStore` serialization).
+ */
+export function deleteWaypoint(waypoints: Point[], index: number): Point[] {
+  if (index < 0 || index >= waypoints.length) {
+    return waypoints;
+  }
+  return waypoints.filter((_, i) => i !== index);
 }
 
 /**

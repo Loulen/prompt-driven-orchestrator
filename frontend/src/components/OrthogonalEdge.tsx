@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, type CSSProperties } from "react";
+import { useMemo, useState, useCallback } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -8,7 +8,14 @@ import {
   type Edge,
 } from "@xyflow/react";
 import { routeOrthogonal, type Point, type Rect } from "../lib/orthogonalRouter";
-import { pathToSvg, segmentHandles, dragSegment, reanchorWaypoints } from "../lib/edgePath";
+import {
+  pathToSvg,
+  segmentHandles,
+  dragSegment,
+  reanchorWaypoints,
+  segHandleStyle,
+  deleteWaypoint,
+} from "../lib/edgePath";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeWaypoint } from "../types";
 
@@ -119,6 +126,37 @@ export default function OrthogonalEdge({
     [edgeIndex, points, screenToFlowPosition, updateEdge],
   );
 
+  // Right-click a segment handle to delete the waypoint it sits on (#169). The
+  // interior `points` ARE the persisted waypoints (point index k ⇒ waypoint
+  // index k-1). A handle on segment `i` spans points[i]..points[i+1]; drop the
+  // interior point it touches (prefer the segment start when it is a waypoint,
+  // else the segment end). Removing the last waypoint reverts the edge to auto.
+  const onHandleDelete = useCallback(
+    (segmentIndex: number) => (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (edgeIndex == null || mode !== "manual" || !waypoints || waypoints.length === 0) {
+        return;
+      }
+      const lastIdx = points.length - 1;
+      const startIsWaypoint = segmentIndex >= 1 && segmentIndex <= lastIdx - 1;
+      const wpIndex = startIsWaypoint ? segmentIndex - 1 : segmentIndex;
+      const next = deleteWaypoint(
+        waypoints.map((w) => ({ x: w.x, y: w.y })),
+        wpIndex,
+      );
+      if (next.length === 0) {
+        updateEdge(edgeIndex, { mode: "auto", waypoints: null });
+        return;
+      }
+      updateEdge(edgeIndex, {
+        mode: "manual",
+        waypoints: next.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+      });
+    },
+    [edgeIndex, mode, waypoints, points.length, updateEdge],
+  );
+
   const strokeColor = data?.strokeColor ?? "var(--color-fg-4)";
 
   const labelPoint = points[Math.floor(points.length / 2)] ?? targetPt;
@@ -176,30 +214,12 @@ export default function OrthogonalEdge({
               className="nodrag nopan"
               data-testid={`edge-seg-handle-${id}-${h.segmentIndex}`}
               onPointerDown={onHandleDrag(h.segmentIndex, h.orientation)}
+              onContextMenu={onHandleDelete(h.segmentIndex)}
               onMouseEnter={() => setHovered(true)}
-              style={segHandleStyle(h.x, h.y, h.orientation)}
+              style={segHandleStyle(h.x, h.y, h.orientation, strokeColor)}
             />
           ))}
       </EdgeLabelRenderer>
     </>
   );
-}
-
-function segHandleStyle(
-  x: number,
-  y: number,
-  orientation: "horizontal" | "vertical",
-): CSSProperties {
-  // A horizontal segment is dragged vertically (ns-resize) and vice-versa.
-  return {
-    position: "absolute",
-    transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
-    width: orientation === "horizontal" ? 18 : 8,
-    height: orientation === "horizontal" ? 8 : 18,
-    borderRadius: 3,
-    background: "var(--color-acc, #10b981)",
-    opacity: 0.85,
-    cursor: orientation === "horizontal" ? "ns-resize" : "ew-resize",
-    pointerEvents: "all",
-  };
 }

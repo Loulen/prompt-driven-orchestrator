@@ -1,24 +1,18 @@
-import { getBezierPath, useConnection, type ConnectionLineComponentProps } from "@xyflow/react";
+import { useConnection, type ConnectionLineComponentProps } from "@xyflow/react";
+import { connectionPreviewPath } from "../lib/edgePath";
 
 export default function DragConnectionLine({
   fromX,
   fromY,
   toX,
   toY,
-  fromPosition,
-  toPosition,
   connectionLineStyle,
 }: ConnectionLineComponentProps) {
   const connection = useConnection();
 
-  const [path] = getBezierPath({
-    sourceX: fromX,
-    sourceY: fromY,
-    sourcePosition: fromPosition,
-    targetX: toX,
-    targetY: toY,
-    targetPosition: toPosition,
-  });
+  // Orthogonal preview (#169): the dangling wire matches the right-angle final
+  // edge instead of a bezier curve.
+  const path = connectionPreviewPath({ x: fromX, y: fromY }, { x: toX, y: toY });
 
   const sourcePortName = connection.fromHandle?.id ?? "out";
   const targetPortName = connection.toHandle?.id;

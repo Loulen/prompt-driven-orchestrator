@@ -4,6 +4,9 @@ import {
   segmentHandles,
   dragSegment,
   reanchorWaypoints,
+  segHandleStyle,
+  deleteWaypoint,
+  connectionPreviewPath,
 } from "./edgePath";
 import type { Point } from "./orthogonalRouter";
 
@@ -58,6 +61,39 @@ describe("segmentHandles", () => {
       y: 40,
       orientation: "vertical",
     });
+  });
+});
+
+describe("segHandleStyle", () => {
+  it("paints the handle in the edge's own color, not a hardcoded accent green", () => {
+    const style = segHandleStyle(50, 0, "horizontal", "#f59e0b");
+    expect(style.background).toBe("#f59e0b");
+    // The old chunky green default must be gone.
+    expect(style.background).not.toBe("var(--color-acc, #10b981)");
+    expect(style.background).not.toBe("#10b981");
+  });
+
+  it("renders a thin handle aligned to the segment axis (long along the segment, thin across it)", () => {
+    // A horizontal segment: the handle is dragged vertically, so it lies ALONG
+    // the segment (wide in x) and stays thin across it (short in y).
+    const h = segHandleStyle(0, 0, "horizontal", "#fff");
+    expect(Number(h.width)).toBeGreaterThan(Number(h.height));
+    // Thinner than the old 8px chunky bar.
+    expect(Number(h.height)).toBeLessThan(8);
+
+    // A vertical segment is the transpose: tall in y, thin in x.
+    const v = segHandleStyle(0, 0, "vertical", "#fff");
+    expect(Number(v.height)).toBeGreaterThan(Number(v.width));
+    expect(Number(v.width)).toBeLessThan(8);
+  });
+
+  it("anchors the handle at the given midpoint and keeps the perpendicular resize cursor", () => {
+    const h = segHandleStyle(50, 12, "horizontal", "#fff");
+    expect(h.transform).toContain("translate(50px, 12px)");
+    expect(h.cursor).toBe("ns-resize");
+
+    const v = segHandleStyle(50, 12, "vertical", "#fff");
+    expect(v.cursor).toBe("ew-resize");
   });
 });
 
@@ -129,6 +165,57 @@ describe("dragSegment", () => {
     expect(pinned[pinned.length - 1]).toEqual({ x: 0, y: 200 });
     expect(pinned[1]).toEqual({ x: 40, y: 0 });
     expect(pinned[2]).toEqual({ x: 40, y: 200 });
+  });
+});
+
+describe("connectionPreviewPath", () => {
+  it("produces an orthogonal SVG path (straight runs only, no bezier curve)", () => {
+    const d = connectionPreviewPath({ x: 0, y: 0 }, { x: 200, y: 80 });
+    // Orthogonal paths are M/L commands; a bezier preview would carry a `C`.
+    expect(d).toMatch(/^M /);
+    expect(d).toContain("L");
+    expect(d).not.toContain("C");
+  });
+
+  it("starts at the source and ends at the target", () => {
+    const d = connectionPreviewPath({ x: 10, y: 20 }, { x: 110, y: 60 });
+    expect(d.startsWith("M 10,20")).toBe(true);
+    expect(d.trimEnd().endsWith("110,60")).toBe(true);
+  });
+});
+
+describe("deleteWaypoint", () => {
+  it("removes the only waypoint, leaving none (caller reverts the edge to auto)", () => {
+    const out = deleteWaypoint([{ x: 0, y: 80 }], 0);
+    expect(out).toEqual([]);
+  });
+
+  it("removes the waypoint at the given index, keeping the others in order", () => {
+    const wps: Point[] = [
+      { x: 50, y: 0 },
+      { x: 50, y: 40 },
+      { x: 150, y: 40 },
+    ];
+    expect(deleteWaypoint(wps, 1)).toEqual([
+      { x: 50, y: 0 },
+      { x: 150, y: 40 },
+    ]);
+  });
+
+  it("does not mutate the input array", () => {
+    const wps: Point[] = [
+      { x: 50, y: 0 },
+      { x: 50, y: 40 },
+    ];
+    const copy = wps.map((p) => ({ ...p }));
+    deleteWaypoint(wps, 0);
+    expect(wps).toEqual(copy);
+  });
+
+  it("is a no-op for an out-of-range index", () => {
+    const wps: Point[] = [{ x: 50, y: 0 }];
+    expect(deleteWaypoint(wps, 5)).toEqual(wps);
+    expect(deleteWaypoint(wps, -1)).toEqual(wps);
   });
 });
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import {
   ReactFlow,
   Background,
+  Handle,
+  Position,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -9,22 +11,22 @@ import {
   type Edge,
   type NodeProps,
   type Connection,
-  MarkerType,
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeDef, NodeStatus, NodeType, PipelineDef, PortBrief, RunState } from "../types";
+import type { NodeDef, NodeStatus, NodeType, PortBrief, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { deriveEditNodes } from "./editNodeDerivation";
+import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
-import { SwitchEditNode } from "./SwitchNode";
 import { LoopEditNode } from "./LoopNode";
+import { LoopRegionNode } from "./LoopRegionNode";
 import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
+import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import LintBanner from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
@@ -42,11 +44,13 @@ interface EditNodeData {
   status: NodeStatus;
   // True only for start/end markers on a completed run — see `markerReached`.
   reached?: boolean;
+  // Filenames of images uploaded with the run's input. Only the start marker
+  // surfaces these (issue #145); undefined/empty on every other node.
+  inputImages?: string[];
   [key: string]: unknown;
 }
 
-// Exported for unit tests; co-located with the canvas it renders. Same allowance
-// as DagCanvas's StartNode/EndNode exports.
+// Exported for unit tests; co-located with the canvas it renders.
 export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   const isSelected = selection.kind === "node" && selection.id === id;
@@ -61,37 +65,71 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
     : data.nodeType === "start" ? "text-acc"
     : data.nodeType === "end" ? "text-st-blocked"
     : "text-fg-3";
+  // Images uploaded with the run's input ride along on the Start marker only
+  // (issue #145). The canvas shows a compact, filename-tagged strip; the full
+  // thumbnails live in the StartInspector.
+  const inputImages =
+    data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
   return (
     <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
-      {data.inputs.map((port, i) => (
-        <PortRow
-          key={`in-${port.name}`}
-          portName={port.name}
-          kind="input"
-          side={port.side}
-          index={i}
-          total={data.inputs.length}
-          description={port.description}
-          isDrop={isDropTarget}
-        />
-      ))}
+      {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
+          on the node body. A single invisible target handle covers the card so a
+          drop creates/pools an input by name (inherited from the source). The
+          declared `result` input on the End node keeps its handle id so routing
+          to End still resolves. */}
+      <Handle
+        id={data.inputs.length === 1 ? data.inputs[0].name : undefined}
+        type="target"
+        position={Position.Left}
+        isConnectableStart={false}
+        className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          borderRadius: 6,
+          transform: "none",
+          border: "none",
+          background: "transparent",
+          opacity: isDropTarget ? 1 : 0,
+        }}
+      />
+      {/* Slim card (#149): type icon + name + code/doc marker only. The node id
+          and the amber interactive badge are intentionally dropped from the
+          card. */}
       <div className="flex items-center gap-2">
         <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
-        {data.interactive && (
-          <span
-            className="rounded bg-st-await-bg px-1 font-mono text-st-await"
-            style={{ fontSize: "9px" }}
-          >
-            interactive
-          </span>
-        )}
         <CodeDocMarker type={data.nodeType} />
       </div>
-      <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
-        {data.nodeId}
-      </div>
+      {inputImages.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
+          {inputImages.map((name) => (
+            <div
+              key={name}
+              data-testid="start-node-image-chip"
+              title={name}
+              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
+            >
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage:
+                    "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px)",
+                }}
+              />
+              <div
+                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
+                style={{ fontSize: "7.5px" }}
+              >
+                {name}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {data.outputs.map((port, i) => (
         <PortRow
           key={`out-${port.name}`}
@@ -107,51 +145,15 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   );
 }
 
-const nodeTypes = { edit: EditNode, switch: SwitchEditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
+const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
+const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
-  "switch": "switch",
   "loop": "loop",
   "for-each": "foreach",
   "merge": "merge",
 };
-
-function deriveEditEdges(pipeline: PipelineDef): Edge[] {
-  const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
-
-  return pipeline.edges.map((e, i) => {
-    const isEndEdge = endNodeId != null && e.target.node === endNodeId;
-    const isDashed = isEndEdge;
-
-    const strokeColor = isDashed
-      ? "var(--color-st-blocked, #f97316)"
-      : "var(--color-fg-4)";
-
-    const sourcePort = e.source.port;
-    const targetPort = e.target.port;
-
-    return {
-      id: `e-${i}`,
-      source: e.source.node,
-      target: e.target.node,
-      sourceHandle: sourcePort || null,
-      targetHandle: targetPort || null,
-      type: "default",
-      style: {
-        stroke: strokeColor,
-        strokeWidth: 1.5,
-        strokeDasharray: isDashed ? "6 3" : undefined,
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: strokeColor,
-        width: 16,
-        height: 16,
-      },
-    };
-  });
-}
 
 interface EditCanvasProps {
   libraryEntries: LibraryEntry[];
@@ -168,7 +170,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
-  const setScrollToPort = useEditStore((s) => s.setScrollToPort);
   const updateNode = useEditStore((s) => s.updateNode);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
@@ -219,10 +220,38 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     setLibraryBinding(tab.id, pipelineSync.entry.id, pipelineSync.entry.scope);
   }, [tab, pipelineSync.entry, setLibraryBinding]);
 
-  const derivedNodes = useMemo(
-    () => (pipeline ? deriveEditNodes(pipeline, activeRunState) : []),
-    [pipeline, activeRunState],
-  );
+  const derivedNodes = useMemo(() => {
+    if (!pipeline) return [];
+    const cards = deriveEditNodes(pipeline, activeRunState);
+    // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
+    // their member cards. We back each multi-member region with a decorative,
+    // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
+    // single-member regions render as a badge on the member card (no box). The
+    // region nodes are prepended and pinned to a low zIndex so member cards stay
+    // clickable on top.
+    const regionNodes: Node[] = deriveLoopRegions(pipeline, activeRunState)
+      .filter((r) => r.box != null)
+      .map((r) => ({
+        id: `region-${r.id}`,
+        type: "loopRegion",
+        position: { x: r.box!.x, y: r.box!.y },
+        data: {
+          regionId: r.id,
+          kind: r.kind,
+          counterText: r.counterText,
+          exhausted: r.exhausted,
+          width: r.box!.width,
+          height: r.box!.height,
+        },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        focusable: false,
+        zIndex: 0,
+        style: { zIndex: 0 },
+      }));
+    return [...regionNodes, ...cards];
+  }, [pipeline, activeRunState]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -243,7 +272,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       const sourceNode = pipeline.nodes.find((n) => n.id === connection.source);
       const targetNode = pipeline.nodes.find((n) => n.id === connection.target);
       const sourcePort = connection.sourceHandle ?? sourceNode?.outputs[0]?.name ?? "out";
-      const targetPort = connection.targetHandle ?? targetNode?.inputs[0]?.name ?? "in";
+      // Inputs are emergent (#149): dropping on a node's body creates an input
+      // named after the SOURCE document. Structural nodes (merge/loop/for-each)
+      // still expose declared target handles, so honour an explicit
+      // `targetHandle`; otherwise the emergent name is inherited from the source.
+      const targetPort = connection.targetHandle ?? targetNode?.inputs[0]?.name ?? sourcePort;
 
       addEdgeToStore({
         source: { node: connection.source, port: sourcePort },
@@ -265,6 +298,8 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const handleNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.preventDefault();
+      // Loop-region boxes are decorative, not pipeline nodes — no context menu.
+      if (node.type === "loopRegion") return;
       const nodeDef = pipeline?.nodes.find((n) => n.id === node.id);
       if (nodeDef?.type === "start" || nodeDef?.type === "end") return;
       setContextMenu({
@@ -406,13 +441,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           ],
         };
         break;
-      case "switch":
-        newNode = {
-          id, name, type, interactive: false, view,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "default", repeated: false, side: "right" }],
-        };
-        break;
       default:
         newNode = {
           id, name, type, interactive: false, view,
@@ -460,13 +488,21 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodeClick={(_event, node) => {
+            // Region boxes are decorative; clicking one is a no-op (they fall
+            // back to the pane selection path via their pass-through body).
+            if (node.type === "loopRegion") return;
             setSelection({ kind: "node", id: node.id });
             onCloseInfo?.();
           }}
           onEdgeClick={(_event, edge) => {
-            setSelection({ kind: "node", id: edge.source });
-            setScrollToPort(edge.sourceHandle ?? null);
+            // Clicking an edge opens the edge detail panel (#147), keyed by the
+            // edge's index in pipeline.edges (decoded from its `e-{i}` id).
+            const idx = edgeIndexFromId(edge.id);
+            if (idx == null) return;
+            setSelection({ kind: "edge", id: null, edgeIndex: idx });
+            onCloseInfo?.();
           }}
           onPaneClick={() => setSelection({ kind: "none", id: null })}
           onConnect={onConnect}

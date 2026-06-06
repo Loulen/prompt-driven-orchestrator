@@ -8,7 +8,6 @@ import { fetchRuns, fetchRun } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import type { RunListEntry, RunState } from "./types";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
-import DagCanvas from "./components/DagCanvas";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
 import ConflictModal from "./components/ConflictModal";
@@ -20,7 +19,6 @@ import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
-import SwitchInspector from "./components/SwitchInspector";
 import LoopInspector from "./components/LoopInspector";
 import ForEachInspector from "./components/ForEachInspector";
 import MergeInspector from "./components/MergeInspector";
@@ -28,7 +26,8 @@ import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
-import SwitchDetailPanel from "./components/SwitchDetailPanel";
+import EdgeDetailPanel from "./components/EdgeDetailPanel";
+import { deriveEdgeTrigger } from "./lib/edgeTrigger";
 import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -139,6 +138,17 @@ export default function App() {
     ? editTab.pipeline.nodes.find((n) => n.id === selection.id)?.type ?? null
     : null;
 
+  // Runtime trigger status for the selected edge (#147). Derived from the run
+  // state when editing a run; the canvas never renders it.
+  const selectedEdge =
+    editTab && selection.kind === "edge" && selection.edgeIndex != null
+      ? editTab.pipeline.edges[selection.edgeIndex] ?? null
+      : null;
+  const edgeTrigger =
+    selectedEdge && editTab?.scope === "run"
+      ? deriveEdgeTrigger(selectedRun, selectedEdge)
+      : null;
+
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
 
@@ -156,17 +166,6 @@ export default function App() {
   // down and reattach, pushing terminal content upward on every flip.
   function inspectorRunPane() {
     if (isEditingRun && selectedRun && runNode) {
-      if (editNodeType === "switch") {
-        return (
-          <SwitchDetailPanel
-            key={runNode.node_id}
-            node={runNode}
-            runId={selectedRun.run_id}
-            switchState={selectedRun.switch_states?.[runNode.node_id] ?? null}
-            nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
-          />
-        );
-      }
       return (
         <NodeDetailPanel
           key={runNode.node_id}
@@ -186,7 +185,6 @@ export default function App() {
 
   function inspectorEditPane() {
     switch (editNodeType) {
-      case "switch": return <SwitchInspector />;
       case "loop": return <LoopInspector />;
       case "for-each": return <ForEachInspector />;
       case "merge": return <MergeInspector />;
@@ -211,11 +209,6 @@ export default function App() {
 
   const handleCloseInfo = useCallback(() => {
     setInfoPanelOpen(false);
-  }, []);
-
-  const handleSelectNodeInRun = useCallback((nodeId: string | null) => {
-    setSelectedNodeId(nodeId);
-    if (nodeId) setInfoPanelOpen(false);
   }, []);
 
   useEffect(() => {
@@ -362,8 +355,6 @@ export default function App() {
     clearSaveError(saveErrorTab.id);
   }, [saveErrorTab, clearSaveError]);
 
-  const showRunDetail = !hasEditTab && selectedRun;
-
   return (
     <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
@@ -404,17 +395,6 @@ export default function App() {
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
                   runState={selectedRun}
-                />
-              </div>
-            ) : showRunDetail ? (
-              <div className="flex h-full min-w-0 flex-col">
-                <DagCanvas
-                  run={selectedRun}
-                  onSelectNode={handleSelectNodeInRun}
-                  selectedNodeId={selectedNodeId}
-                  infoOpen={infoPanelOpen}
-                  onToggleInfo={handleToggleInfo}
-                  onRetryAll={(newRunId) => setSelectedRunId(newRunId)}
                 />
               </div>
             ) : (
@@ -464,6 +444,8 @@ export default function App() {
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
                   />
+                ) : selection.kind === "edge" ? (
+                  <EdgeDetailPanel trigger={edgeTrigger} />
                 ) : null}
                 {selection.kind === "none" && isEditingRun && selectedRun && (
                   <RunInfoSidebar run={selectedRun} />
@@ -489,16 +471,7 @@ export default function App() {
                     endNode={selectedRun.end_node}
                   />
                 )}
-                {selectedNode && selectedRun && selectedNodeType === "switch" && (
-                  <SwitchDetailPanel
-                    key={selectedNode.node_id}
-                    node={selectedNode}
-                    runId={selectedRun.run_id}
-                    switchState={selectedRun.switch_states?.[selectedNode.node_id] ?? null}
-                    nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
-                  />
-                )}
-                {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && selectedNodeType !== "switch" && (
+                {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && (
                   <NodeDetailPanel
                     key={selectedNode.node_id}
                     node={selectedNode}

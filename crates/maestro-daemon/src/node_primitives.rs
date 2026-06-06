@@ -539,6 +539,10 @@ mod tests {
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
         }
     }
 
@@ -610,6 +614,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut run_state = empty_run_state();
@@ -649,6 +654,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let run_state = empty_run_state();
@@ -688,6 +694,7 @@ mod tests {
                 make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut run_state = empty_run_state();
@@ -741,6 +748,7 @@ mod tests {
                 make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let run_state = empty_run_state();
@@ -789,6 +797,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![make_node("entry", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let run_state = empty_run_state();
@@ -840,6 +849,7 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("researcher", "research", "implementer", "research"),
             ],
+            loops: Vec::new(),
         };
 
         let mut run_state = empty_run_state();
@@ -890,6 +900,7 @@ mod tests {
                 make_node_with_repeated_input("implementer", "reviews"),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "reviews")],
+            loops: Vec::new(),
         };
 
         let run_state = empty_run_state();
@@ -934,6 +945,7 @@ mod tests {
                 make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            loops: Vec::new(),
         };
 
         let mut run_state = empty_run_state();
@@ -1192,6 +1204,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut run_state = empty_run_state();

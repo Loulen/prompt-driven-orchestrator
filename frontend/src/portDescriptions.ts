@@ -3,10 +3,6 @@ import type { NodeType } from "./types";
 const FIRST_CLASS_DESCRIPTIONS: Partial<
   Record<NodeType, Record<string, string>>
 > = {
-  switch: {
-    "input:in": "Artifact to inspect for routing",
-    "output:default": "Fires when no other branch matches",
-  },
   loop: {
     "input:in": "Starts the loop",
     "input:break": "Forces immediate exit",

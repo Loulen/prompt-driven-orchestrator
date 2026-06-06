@@ -17,11 +17,17 @@ import {
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 
-export type SelectionKind = "node" | "none";
+export type SelectionKind = "node" | "edge" | "none";
 
 export interface Selection {
   kind: SelectionKind;
   id: string | null;
+  /**
+   * Index into `pipeline.edges` when `kind === "edge"`. Edges have no stable id,
+   * so the index is the selection key — the same key the canvas uses (`e-{i}`)
+   * and `updateEdge`/`deleteEdge` take. Undefined for node/none selections.
+   */
+  edgeIndex?: number;
 }
 
 export interface ConflictData {
@@ -173,8 +179,36 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       source: e.source,
       target: e.target,
     };
+    // Conditional routing (ADR-0011): a guarded edge carries `when:`, a
+    // fallback edge carries `else: true`. Both live on the edge now, not on a
+    // Switch node's output ports.
+    if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
+    if (e.else === true) edge.else = true;
+    // Routing (#154): only manually-pinned edges persist their route. Auto
+    // edges recompute deterministically, so they store no `mode`/`waypoints` —
+    // emitting them would be noise. A `manual` mode without waypoints is also
+    // meaningless (nothing pinned), so guard on a non-empty waypoint list.
+    if (e.mode === "manual" && e.waypoints && e.waypoints.length > 0) {
+      edge.mode = "manual";
+      edge.waypoints = e.waypoints.map((w) => ({ x: w.x, y: w.y }));
+    }
     return edge;
   });
+
+  // Named bounded loop regions (ADR-0011 / #148). Emitted only when present so
+  // loop-less pipelines stay clean and round-trip identically.
+  if (p.loops && p.loops.length > 0) {
+    obj.loops = p.loops.map((r) => {
+      const region: Record<string, unknown> = {
+        id: r.id,
+        kind: r.kind,
+        members: r.members,
+      };
+      if (r.max_iter !== undefined && r.max_iter !== null)
+        region.max_iter = r.max_iter;
+      return region;
+    });
+  }
 
   return obj;
 }
@@ -283,7 +317,6 @@ function cleanEdgeSideEffects(tab: OpenPipeline, edge: EdgeDef): void {
       targetNode.over = null;
     }
   }
-  cleanSwitchPredicatesOnDisconnect(tab, edge);
 }
 
 function propagatePortChangesToEdges(
@@ -321,34 +354,6 @@ function propagatePortChangesToEdges(
     }
   }
   tab.pipeline.edges = kept;
-}
-
-function cleanSwitchPredicatesOnDisconnect(tab: OpenPipeline, deletedEdge: EdgeDef): void {
-  if (deletedEdge.target.port !== "in") return;
-  const switchNode = tab.pipeline.nodes.find(
-    (n) => n.id === deletedEdge.target.node && n.type === "switch",
-  );
-  if (!switchNode) return;
-
-  tab.pipeline.nodes = tab.pipeline.nodes.map((n) => {
-    if (n.id !== switchNode.id) return n;
-    return {
-      ...n,
-      outputs: n.outputs.map((port) => {
-        if (port.name === "default" || !port.when) return port;
-        const filtered: Record<string, unknown> = {};
-        for (const [field, pred] of Object.entries(port.when)) {
-          if (field.startsWith("$")) {
-            filtered[field] = pred;
-          }
-        }
-        return {
-          ...port,
-          when: Object.keys(filtered).length > 0 ? filtered : null,
-        };
-      }),
-    };
-  });
 }
 
 export const useEditStore = create<EditState>((set, get) => ({

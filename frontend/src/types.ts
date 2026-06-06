@@ -4,7 +4,7 @@ export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" |
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
 }
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "switch" | "loop" | "for-each" | "merge";
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "loop" | "for-each" | "merge";
 
 export interface RunListEntry {
   run_id: string;
@@ -42,6 +42,19 @@ export interface EdgeInfo {
   when_clause?: Record<string, unknown> | null;
 }
 
+/**
+ * Runtime trigger status for a single conditional edge (ADR-0011, #147).
+ * Shown ONLY in the edge detail panel — never rendered on the canvas. Derived
+ * from the run state; absent until the edge's source node has been evaluated.
+ */
+export interface EdgeTriggerStatus {
+  fired: boolean;
+  /** The clause's evaluated value rendered for display, e.g. `verdict = FAIL`. */
+  last_value: string | null;
+  evaluated_at: string | null;
+  iter: number | null;
+}
+
 export interface PortBrief {
   name: string;
   side: PortSide;
@@ -62,6 +75,9 @@ export interface StartNodeInfo {
   input_path: string;
   started_at: string;
   target_node_ids: string[];
+  // Filenames of images uploaded alongside the text prompt (stored in
+  // `_input/`). Empty when the run was launched without images (issue #145).
+  input_images: string[];
 }
 
 export interface EndPortStatus {
@@ -101,12 +117,6 @@ export interface ForEachStateInfo {
   done: boolean;
 }
 
-export interface SwitchStateInfo {
-  switch_node_id: string;
-  chosen_branch: string;
-  evaluated_at: string;
-}
-
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -123,7 +133,6 @@ export interface RunState {
   merge_resolver: MergeResolverInfo | null;
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
-  switch_states?: Record<string, SwitchStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
 }
@@ -208,10 +217,61 @@ export interface EdgeEndpoint {
   port: string;
 }
 
+/** A pinned waypoint on a manually-routed edge — absolute canvas coordinates. */
+export interface EdgeWaypoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Edge routing mode (issue #154). `auto` edges store no waypoints — their
+ * right-angle path is recomputed deterministically and re-routes on node move.
+ * `manual` edges pin the route to persisted `waypoints`. Both `mode` and
+ * `waypoints` are LAYOUT, not semantics: they persist in the pipeline file (so
+ * routing travels when a workflow is shared) but are excluded from the semantic
+ * pipeline-diff (see `comparablePipelineObject`).
+ */
+export type EdgeRouteMode = "auto" | "manual";
+
 export interface EdgeDef {
   source: EdgeEndpoint;
   target: EdgeEndpoint;
   reason?: string | null;
+  /** Optional `when:` clause (ADR-0011): conditional routing on the edge. */
+  when?: Record<string, unknown> | null;
+  /** `else: true` marks a fallback edge (fires iff no sibling matched). */
+  else?: boolean;
+  /**
+   * `repeated: true` marks an edge whose source artifact accumulates across
+   * iterations (glob `iter-*`). Loop accumulation ("read all laps") lives on
+   * the edge, not on a declared input port (ADR-0011 / #149).
+   */
+  repeated?: boolean;
+  /** Routing mode (#154). Absent ⇒ `auto`. */
+  mode?: EdgeRouteMode | null;
+  /** Pinned absolute waypoints (#154). Only meaningful when `mode === "manual"`. */
+  waypoints?: EdgeWaypoint[] | null;
+}
+
+/**
+ * The kind of a named loop region (ADR-0011 / #148). `bounded` regions carry an
+ * iteration counter and a `max_iter`; they are born by auto-detection of a cycle
+ * so no cycle is ever accidentally unbounded.
+ */
+export type LoopKind = "bounded";
+
+/**
+ * A named bounded loop region (ADR-0011 / #148). Replaces the `loop` node: the
+ * loop is identified by `id`, its body is the explicit `members` list (>= 1
+ * node), and the iteration counter is region-wide, keyed by `id`. The canvas
+ * renders it as a translucent box (>= 2 members) or a compact badge (1 member)
+ * with a `↻ X/Y` header.
+ */
+export interface LoopRegion {
+  id: string;
+  kind: LoopKind;
+  members: string[];
+  max_iter?: number | string | null;
 }
 
 export interface PipelineDef {
@@ -220,6 +280,8 @@ export interface PipelineDef {
   variables: Record<string, VariableDef>;
   nodes: NodeDef[];
   edges: EdgeDef[];
+  /** Named bounded loop regions (ADR-0011 / #148). Absent when there are none. */
+  loops?: LoopRegion[];
 }
 
 export interface PipelineDetail {

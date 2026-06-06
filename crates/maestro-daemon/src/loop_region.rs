@@ -1,0 +1,683 @@
+//! Bounded loop region engine (ADR-0011 / #148).
+//!
+//! A bounded loop region replaces the old `Loop` node. The region is a *named*
+//! entry of the pipeline `loops:` block (`id` + `kind: bounded` + `members` +
+//! `max_iter`); its iteration counter is **region-wide, keyed by `id`**.
+//!
+//! This module is the pure decision core: given a region, its current runtime
+//! counter, and which re-entry (back) edges fired in the just-completed lap, it
+//! decides whether to start the next lap — spawning the region entry **once**,
+//! even when several back-edges fire (coalesced; fixes the iter+1 double-spawn,
+//! #108) — or to enter the explicit `Exhausted` state at `max_iter`. It never
+//! produces a silent stall.
+
+use crate::graph_resolver;
+use crate::pipeline::{LoopKind, LoopRegion, PipelineDef};
+
+/// The default iteration cap given to an auto-materialized bounded region, so a
+/// drawn cycle is never accidentally unbounded (ADR-0011 / #148). Matches the
+/// daemon's existing `max_iter` fallback.
+pub const DEFAULT_MAX_ITER: i64 = 5;
+
+/// The live per-region iteration counter (keyed by the region `id` elsewhere).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionRuntime {
+    pub current_iter: i64,
+    pub max_iter: i64,
+    pub exhausted: bool,
+}
+
+impl RegionRuntime {
+    /// A region begins at lap 1.
+    pub fn new(max_iter: i64) -> Self {
+        Self {
+            current_iter: 1,
+            max_iter,
+            exhausted: false,
+        }
+    }
+}
+
+/// The outcome of resolving a completed lap's re-entry signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LapDecision {
+    /// Start the next lap: bump the counter to `iter` and re-spawn `entry` once.
+    NextLap { iter: i64, entry: String },
+    /// `max_iter` reached with re-entry still requested: the region is exhausted.
+    /// The caller routes an `iter >= max` exit edge if one matches, else blocks
+    /// the region "exhausted — unrouted" (never a silent stall).
+    Exhausted,
+    /// No re-entry edge fired: the region does not loop again this turn.
+    NoReentry,
+}
+
+/// Resolves one lap of a bounded region given how many re-entry edges fired.
+///
+/// `reentry_fired` is the number of back-edges (edges from a member back into the
+/// region) that fired in the completed lap. Any positive count is **coalesced**
+/// into a single next-lap entry-spawn: firing two back-edges in one lap must not
+/// advance the counter twice nor spawn the entry twice (#108 regression).
+pub fn resolve_lap(
+    pipeline: &PipelineDef,
+    region: &LoopRegion,
+    runtime: &RegionRuntime,
+    reentry_fired: usize,
+) -> LapDecision {
+    if reentry_fired == 0 {
+        return LapDecision::NoReentry;
+    }
+    if runtime.current_iter >= runtime.max_iter {
+        return LapDecision::Exhausted;
+    }
+    let entry = match graph_resolver::region_entry(pipeline, &region.members) {
+        Some(e) => e,
+        // A closed island with no external entry: fall back to the first member
+        // so the lap still advances deterministically rather than stalling.
+        None => region.members.first().cloned().unwrap_or_default(),
+    };
+    LapDecision::NextLap {
+        iter: runtime.current_iter + 1,
+        entry,
+    }
+}
+
+/// Auto-materializes a bounded region for every detected cycle not already
+/// covered by an existing `loops:` entry (ADR-0011 / #148). Each new region gets
+/// a generated id (deterministic from its members, so re-running is stable), the
+/// cycle's members, and `DEFAULT_MAX_ITER` — guaranteeing no cycle is ever
+/// accidentally unbounded.
+///
+/// A cycle is "covered" when an existing region's member set is identical to it.
+pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
+    let covered: Vec<std::collections::BTreeSet<&str>> = pipeline
+        .loops
+        .iter()
+        .map(|r| r.members.iter().map(String::as_str).collect())
+        .collect();
+
+    let mut out = Vec::new();
+    for cycle in graph_resolver::detect_cycles(pipeline) {
+        let cycle_set: std::collections::BTreeSet<&str> =
+            cycle.iter().map(String::as_str).collect();
+        if covered.contains(&cycle_set) {
+            continue;
+        }
+        out.push(LoopRegion {
+            id: generated_region_id(&cycle),
+            kind: LoopKind::Bounded,
+            members: cycle,
+            max_iter: Some(serde_yaml::Value::Number(DEFAULT_MAX_ITER.into())),
+        });
+    }
+    out
+}
+
+/// A short, deterministic region id derived from the sorted member ids, prefixed
+/// `loop-` so it reads as a loop in the YAML.
+fn generated_region_id(members: &[String]) -> String {
+    let mut sorted = members.to_vec();
+    sorted.sort();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for m in &sorted {
+        for b in m.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0x2f; // member separator
+    }
+    format!("loop-{hash:08x}")
+}
+
+/// Returns the global indices (into `pipeline.edges`) of a region's *re-entry*
+/// edges: edges whose source is a member and whose target is the region entry.
+/// These are the back-edges whose firing requests another lap. No edge is
+/// flagged a "back-edge" in the YAML — the role is derived from the region
+/// topology (ADR-0011).
+pub fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<usize> {
+    let entry = match graph_resolver::region_entry(pipeline, &region.members) {
+        Some(e) => e,
+        None => match region.members.first() {
+            Some(m) => m.clone(),
+            None => return Vec::new(),
+        },
+    };
+    let member_set: std::collections::HashSet<&str> =
+        region.members.iter().map(String::as_str).collect();
+    pipeline
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| member_set.contains(e.source.node.as_str()) && e.target.node == entry)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Builds the per-iteration edge-resolution key (ADR-0011 / #148 scheduler
+/// concern). The model from commit da0d72e resolves convergence edges (fired /
+/// dead) for the out-of-loop case; inside a region the resolution state must be
+/// keyed by `(loop id, iter, edge)` so an edge that fired at lap 1 is not counted
+/// resolved at lap 2.
+pub fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
+    format!("{loop_id}#{iter}#{edge_index}")
+}
+
+/// Returns the `iter` to stamp on a node's artifact (ADR-0011 / #148). A node
+/// that is a member of an active region is stamped with that region's current
+/// counter; a non-member stays at `iter 1`. (A node belonging to several regions
+/// — nested loops — takes the highest active counter; flat iteration in v1 means
+/// this rarely arises.)
+pub fn iter_for_node(node_id: &str, regions: &[(LoopRegion, RegionRuntime)]) -> i64 {
+    regions
+        .iter()
+        .filter(|(region, _)| region.members.iter().any(|m| m == node_id))
+        .map(|(_, runtime)| runtime.current_iter)
+        .max()
+        .unwrap_or(1)
+}
+
+/// The outcome of an exhausted bounded region (ADR-0011 / #148).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExhaustionOutcome {
+    /// An `iter >= max` (or otherwise matching) exit edge routes the exhaustion
+    /// to one or more external targets. Targets are de-duplicated, in edge order.
+    Routed(Vec<String>),
+    /// No exit edge matched: the region is blocked "exhausted — unrouted"
+    /// (routable by the Pipeline Manager), never a silent stall.
+    Unrouted,
+}
+
+/// Decides what happens when a bounded region reaches `max_iter` with re-entry
+/// still requested. Evaluates each member's outgoing edges at `iter = max_iter`
+/// (reusing the conditional-edge router, so an `iter >= max` guard fires) and
+/// collects the edges leaving the region (member → non-member). If any fire, the
+/// exhaustion is `Routed` to their external targets; otherwise it is `Unrouted`.
+pub fn exhaustion_outcome(
+    pipeline: &PipelineDef,
+    region: &LoopRegion,
+    runtime: &RegionRuntime,
+    frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
+    vars: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> ExhaustionOutcome {
+    let member_set: std::collections::HashSet<&str> =
+        region.members.iter().map(String::as_str).collect();
+
+    let mut targets: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for member in &region.members {
+        let outgoing: Vec<&crate::pipeline::EdgeDef> = pipeline
+            .edges
+            .iter()
+            .filter(|e| e.source.node == *member)
+            .collect();
+        let fired =
+            crate::edge_router::fired_edges(&outgoing, frontmatter, vars, runtime.current_iter);
+        for e in fired {
+            if !member_set.contains(e.target.node.as_str()) && seen.insert(e.target.node.clone()) {
+                targets.push(e.target.node.clone());
+            }
+        }
+    }
+
+    if targets.is_empty() {
+        ExhaustionOutcome::Unrouted
+    } else {
+        ExhaustionOutcome::Routed(targets)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::{LoopKind, NodeDef, NodeType, Port, PortType};
+    use pretty_assertions::assert_eq;
+
+    fn node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::DocOnly,
+            inputs: inputs
+                .iter()
+                .map(|n| Port {
+                    name: (*n).into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                })
+                .collect(),
+            outputs: outputs
+                .iter()
+                .map(|n| Port {
+                    name: (*n).into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                })
+                .collect(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        }
+    }
+
+    fn edge(sn: &str, sp: &str, tn: &str, tp: &str) -> crate::pipeline::EdgeDef {
+        crate::pipeline::EdgeDef {
+            source: crate::pipeline::EdgeEndpoint {
+                node: sn.into(),
+                port: sp.into(),
+            },
+            target: crate::pipeline::EdgeEndpoint {
+                node: tn.into(),
+                port: tp.into(),
+            },
+            ..Default::default()
+        }
+    }
+
+    /// start -> impl -> rev -> impl (back-edge). One region: [impl, rev].
+    fn review_loop() -> (PipelineDef, LoopRegion) {
+        let pipeline = PipelineDef {
+            name: "rl".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("impl", &["task", "review"], &["code"]),
+                node("rev", &["code"], &["review"]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "impl", "task"),
+                edge("impl", "code", "rev", "code"),
+                edge("rev", "review", "impl", "review"),
+            ],
+            loops: vec![],
+        };
+        let region = LoopRegion {
+            id: "review_loop".into(),
+            kind: LoopKind::Bounded,
+            members: vec!["impl".into(), "rev".into()],
+            max_iter: Some(serde_yaml::Value::Number(3.into())),
+        };
+        (pipeline, region)
+    }
+
+    #[test]
+    fn one_back_edge_starts_the_next_lap_at_the_entry() {
+        let (pipeline, region) = review_loop();
+        let runtime = RegionRuntime::new(3);
+        let decision = resolve_lap(&pipeline, &region, &runtime, 1);
+        assert_eq!(
+            decision,
+            LapDecision::NextLap {
+                iter: 2,
+                entry: "impl".into()
+            }
+        );
+    }
+
+    #[test]
+    fn multiple_back_edges_coalesce_into_one_next_lap() {
+        // #108 regression: two back-edges firing in the SAME lap must advance the
+        // counter exactly once and re-spawn the entry exactly once — not iter+2,
+        // not two spawns.
+        let (pipeline, region) = review_loop();
+        let runtime = RegionRuntime::new(5);
+        let decision = resolve_lap(&pipeline, &region, &runtime, 2);
+        assert_eq!(
+            decision,
+            LapDecision::NextLap {
+                iter: 2,
+                entry: "impl".into()
+            }
+        );
+    }
+
+    #[test]
+    fn no_back_edge_means_no_reentry() {
+        let (pipeline, region) = review_loop();
+        let runtime = RegionRuntime::new(3);
+        assert_eq!(
+            resolve_lap(&pipeline, &region, &runtime, 0),
+            LapDecision::NoReentry
+        );
+    }
+
+    #[test]
+    fn reentry_at_max_iter_is_exhausted() {
+        // At iter == max_iter with re-entry still requested, the region exhausts
+        // (never silently advances past the bound).
+        let (pipeline, region) = review_loop();
+        let runtime = RegionRuntime {
+            current_iter: 3,
+            max_iter: 3,
+            exhausted: false,
+        };
+        assert_eq!(
+            resolve_lap(&pipeline, &region, &runtime, 1),
+            LapDecision::Exhausted
+        );
+    }
+
+    #[test]
+    fn reentry_edges_are_member_to_member_into_the_entry() {
+        // A re-entry (back) edge of a region is one whose source is a member and
+        // whose target is the region entry. start->impl (external) is NOT one;
+        // impl->rev (intra-body, not into entry) is NOT one; rev->impl IS one.
+        let (pipeline, region) = review_loop();
+        let backs = reentry_edge_indices(&pipeline, &region);
+        // Edge order: 0 start->impl, 1 impl->rev, 2 rev->impl.
+        assert_eq!(backs, vec![2]);
+    }
+
+    #[test]
+    fn edge_resolution_key_is_per_loop_and_iter() {
+        // The same back-edge resolves independently each lap: a key for (loop,
+        // iter=1, edge) differs from (loop, iter=2, edge), so a lap-1 firing is
+        // not counted resolved at lap 2.
+        let k1 = resolution_key("review_loop", 1, 2);
+        let k2 = resolution_key("review_loop", 2, 2);
+        assert_ne!(k1, k2);
+    }
+
+    /// review loop with a designer-wired exhaustion exit: rev -> end when
+    /// iter >= 3, plus the rev -> impl back-edge (unconditional here).
+    fn review_loop_with_exit() -> (PipelineDef, LoopRegion) {
+        let pipeline = PipelineDef {
+            name: "rle".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("impl", &["task", "review"], &["code"]),
+                node("rev", &["code"], &["review"]),
+                node("end", &["result"], &[]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "impl", "task"),
+                edge("impl", "code", "rev", "code"),
+                edge("rev", "review", "impl", "review"),
+                {
+                    let mut e = edge("rev", "review", "end", "result");
+                    e.when = Some(serde_yaml::from_str("iter: { gte: 3 }").unwrap());
+                    e
+                },
+            ],
+            loops: vec![],
+        };
+        let region = LoopRegion {
+            id: "review_loop".into(),
+            kind: LoopKind::Bounded,
+            members: vec!["impl".into(), "rev".into()],
+            max_iter: Some(serde_yaml::Value::Number(3.into())),
+        };
+        (pipeline, region)
+    }
+
+    #[test]
+    fn exhaustion_routes_through_a_matching_exit_edge() {
+        // At iter == max with an `iter >= max` exit edge wired, exhaustion routes
+        // to that edge's external target instead of blocking.
+        let (pipeline, region) = review_loop_with_exit();
+        let runtime = RegionRuntime {
+            current_iter: 3,
+            max_iter: 3,
+            exhausted: false,
+        };
+        let outcome = exhaustion_outcome(
+            &pipeline,
+            &region,
+            &runtime,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(outcome, ExhaustionOutcome::Routed(vec!["end".into()]));
+    }
+
+    #[test]
+    fn exhaustion_with_no_matching_exit_is_unrouted() {
+        // No exit edge wired (the bare review loop) → exhausted-unrouted, never a
+        // silent stall.
+        let (pipeline, region) = review_loop();
+        let runtime = RegionRuntime {
+            current_iter: 3,
+            max_iter: 3,
+            exhausted: false,
+        };
+        let outcome = exhaustion_outcome(
+            &pipeline,
+            &region,
+            &runtime,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(outcome, ExhaustionOutcome::Unrouted);
+    }
+
+    #[test]
+    fn auto_materializes_a_region_for_an_uncovered_cycle() {
+        // A pipeline drawn with a cycle but no `loops:` entry gets a bounded
+        // region auto-materialized (generated id + default max_iter 5), so no
+        // cycle is ever accidentally unbounded.
+        let (pipeline, _region) = review_loop(); // has the impl<->rev cycle, loops: empty
+        let materialized = materialize_missing_regions(&pipeline);
+        assert_eq!(materialized.len(), 1);
+        let r = &materialized[0];
+        assert_eq!(r.kind, LoopKind::Bounded);
+        assert!(!r.id.is_empty(), "generated id must be non-empty");
+        assert_eq!(r.members, vec!["impl".to_string(), "rev".to_string()]);
+        assert_eq!(
+            r.max_iter,
+            Some(serde_yaml::Value::Number(5.into())),
+            "default max_iter is 5"
+        );
+    }
+
+    #[test]
+    fn does_not_re_materialize_a_covered_cycle() {
+        // A cycle already covered by an existing `loops:` entry is left alone.
+        let (mut pipeline, region) = review_loop();
+        pipeline.loops = vec![region];
+        assert!(materialize_missing_regions(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn member_iter_is_the_region_counter_nonmember_is_one() {
+        // Member artifacts are stamped with the region iter; a non-member stays
+        // at iter 1 (it is not part of any loop).
+        let (_pipeline, region) = review_loop();
+        let runtime = RegionRuntime {
+            current_iter: 2,
+            max_iter: 3,
+            exhausted: false,
+        };
+        let regions = [(region.clone(), runtime.clone())];
+        assert_eq!(iter_for_node("impl", &regions), 2);
+        assert_eq!(iter_for_node("rev", &regions), 2);
+        assert_eq!(iter_for_node("start", &regions), 1);
+    }
+
+    #[test]
+    fn single_member_self_loop_reenters_on_itself() {
+        // A one-member self-looping region re-spawns that member as the entry.
+        let pipeline = PipelineDef {
+            name: "sl".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("worker", &["seed", "again"], &["out"]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "worker", "seed"),
+                edge("worker", "out", "worker", "again"),
+            ],
+            loops: vec![],
+        };
+        let region = LoopRegion {
+            id: "spin".into(),
+            kind: LoopKind::Bounded,
+            members: vec!["worker".into()],
+            max_iter: Some(serde_yaml::Value::Number(4.into())),
+        };
+        let runtime = RegionRuntime::new(4);
+        assert_eq!(
+            resolve_lap(&pipeline, &region, &runtime, 1),
+            LapDecision::NextLap {
+                iter: 2,
+                entry: "worker".into()
+            }
+        );
+    }
+
+    // ── Integration-style: a full bounded-region run via the engine ──────────
+    //
+    // Mirrors the migrated review-loop: rev -> end WHEN verdict in [PASS], and
+    // rev -> impl ELSE (the continuation back-edge). The "scheduler" here is the
+    // loop below: each lap evaluates rev's outgoing edges, then either re-enters
+    // (back-edge fired) or exits / exhausts.
+
+    fn migrated_review_loop(max_iter: i64) -> (PipelineDef, LoopRegion) {
+        let pipeline = PipelineDef {
+            name: "mrl".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("impl", &["task", "review"], &["code"]),
+                node("rev", &["code"], &["review"]),
+                node("end", &["result"], &[]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "impl", "task"),
+                edge("impl", "code", "rev", "code"),
+                {
+                    let mut e = edge("rev", "review", "end", "result");
+                    e.when =
+                        Some(serde_yaml::from_str("verdict: { in: [PASS, APPROVED] }").unwrap());
+                    e
+                },
+                {
+                    let mut e = edge("rev", "review", "impl", "task");
+                    e.is_else = true;
+                    e
+                },
+            ],
+            loops: vec![],
+        };
+        let region = LoopRegion {
+            id: "review_loop".into(),
+            kind: LoopKind::Bounded,
+            members: vec!["impl".into(), "rev".into()],
+            max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+        };
+        (pipeline, region)
+    }
+
+    /// Simulates running the region: `verdicts[i]` is the reviewer verdict at lap
+    /// i+1. Returns `(laps_run, final_outcome)` where outcome is one of
+    /// "exit:<target>", "exhausted-unrouted", "exhausted-routed:<target>".
+    fn run_region(
+        pipeline: &PipelineDef,
+        region: &LoopRegion,
+        max_iter: i64,
+        verdicts: &[&str],
+    ) -> (i64, String) {
+        let mut runtime = RegionRuntime::new(max_iter);
+        let reentry = reentry_edge_indices(pipeline, region);
+        loop {
+            let lap = runtime.current_iter as usize;
+            let verdict = verdicts.get(lap - 1).copied().unwrap_or("FAIL");
+            let mut fields = std::collections::HashMap::new();
+            fields.insert(
+                "verdict".to_string(),
+                serde_yaml::Value::String(verdict.to_string()),
+            );
+
+            // Evaluate rev's outgoing edges at this iter.
+            let rev_out: Vec<&crate::pipeline::EdgeDef> = pipeline
+                .edges
+                .iter()
+                .filter(|e| e.source.node == "rev")
+                .collect();
+            let fired = crate::edge_router::fired_edges(
+                &rev_out,
+                &fields,
+                &Default::default(),
+                runtime.current_iter,
+            );
+
+            // Count fired re-entry edges (by identity against the reentry set).
+            let reentry_fired = pipeline
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(i, e)| reentry.contains(i) && fired.iter().any(|f| std::ptr::eq(*f, *e)))
+                .count();
+
+            // An exit fires if any fired edge leaves the region.
+            let member_set: std::collections::HashSet<&str> =
+                region.members.iter().map(String::as_str).collect();
+            let exit_target = fired
+                .iter()
+                .find(|e| !member_set.contains(e.target.node.as_str()))
+                .map(|e| e.target.node.clone());
+
+            if let Some(t) = exit_target {
+                return (runtime.current_iter, format!("exit:{t}"));
+            }
+
+            match resolve_lap(pipeline, region, &runtime, reentry_fired) {
+                LapDecision::NextLap { iter, .. } => {
+                    runtime.current_iter = iter;
+                }
+                LapDecision::Exhausted => {
+                    return match exhaustion_outcome(
+                        pipeline,
+                        region,
+                        &runtime,
+                        &fields,
+                        &Default::default(),
+                    ) {
+                        ExhaustionOutcome::Routed(targets) => (
+                            runtime.current_iter,
+                            format!("exhausted-routed:{}", targets.join(",")),
+                        ),
+                        ExhaustionOutcome::Unrouted => {
+                            (runtime.current_iter, "exhausted-unrouted".into())
+                        }
+                    };
+                }
+                LapDecision::NoReentry => {
+                    return (runtime.current_iter, "no-reentry".into());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_run_exits_early_on_pass() {
+        // FAIL, FAIL, PASS → exits at lap 3 to End, never reaching max.
+        let (pipeline, region) = migrated_review_loop(5);
+        let (laps, outcome) = run_region(&pipeline, &region, 5, &["FAIL", "FAIL", "PASS"]);
+        assert_eq!(laps, 3);
+        assert_eq!(outcome, "exit:end");
+    }
+
+    #[test]
+    fn full_run_blocks_exhausted_unrouted_at_max_iter() {
+        // Verdict never passes and no `iter >= max` exit is wired → at max_iter
+        // the region blocks "exhausted — unrouted" (never a silent stall).
+        let (pipeline, region) = migrated_review_loop(3);
+        let (laps, outcome) = run_region(&pipeline, &region, 3, &["FAIL", "FAIL", "FAIL"]);
+        assert_eq!(laps, 3);
+        assert_eq!(outcome, "exhausted-unrouted");
+    }
+}

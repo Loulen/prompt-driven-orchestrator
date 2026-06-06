@@ -115,6 +115,7 @@ mod tests {
             variables: HashMap::new(),
             nodes,
             edges: vec![],
+            loops: Vec::new(),
         }
     }
 
@@ -249,6 +250,10 @@ mod tests {
                 port: "in".into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
         });
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 

@@ -123,6 +123,22 @@ describe("addNode", () => {
   });
 });
 
+describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
+  it("selects an edge by index", () => {
+    useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 2 });
+    const sel = useEditStore.getState().selection;
+    expect(sel.kind).toBe("edge");
+    expect(sel.edgeIndex).toBe(2);
+  });
+
+  it("clearing selection back to none drops the edge index", () => {
+    useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 0 });
+    useEditStore.getState().setSelection({ kind: "none", id: null });
+    expect(useEditStore.getState().selection.kind).toBe("none");
+    expect(useEditStore.getState().selection.edgeIndex).toBeUndefined();
+  });
+});
+
 describe("duplicateNode", () => {
   it("generates a new id different from the original", () => {
     const original = makeNode({ id: "orig1234", name: "my-node" });
@@ -763,6 +779,35 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("type: end");
   });
 
+  it("serializes a bounded loops: region block (ADR-0011 / #148)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const rev: NodeDef = {
+      id: "rev", name: "reviewer", type: "doc-only",
+      inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }],
+      interactive: false, view: { x: 300, y: 0 },
+    };
+    const pipeline = makeFullPipeline([impl, rev]);
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 },
+    ];
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("loops:");
+    expect(yaml).toContain("id: review_loop");
+    expect(yaml).toContain("kind: bounded");
+    expect(yaml).toContain("max_iter: 3");
+    // members listed
+    expect(yaml).toMatch(/members:/);
+  });
+
+  it("omits the loops: block when there are no regions", () => {
+    const yaml = serializePipeline(makeFullPipeline([]));
+    expect(yaml).not.toContain("loops:");
+  });
+
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "doc-only",
@@ -790,20 +835,22 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(typeIndent).toBe(allowedIndent);
   });
 
-  it("serializes output port with when clause at correct indentation", () => {
-    const switchNode: NodeDef = {
-      id: "gate", name: "gate", type: "switch",
+  it("serializes an edge when clause at correct indentation", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
       inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: [
-        {
-          name: "pass", repeated: false, side: "right",
-          when: { verdict: { eq: "PASS" }, score: { gte: 7 } },
-        },
-        { name: "default", repeated: false, side: "right" },
-      ],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
     };
-    const yaml = serializePipeline(makeFullPipeline([switchNode]));
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          when: { verdict: { eq: "PASS" }, score: { gte: 7 } },
+        },
+      ]),
+    );
 
     const lines = yaml.split("\n");
     // Find verdict and score lines under when: — they must be at same indent
@@ -815,6 +862,55 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     const verdictIndent = lines[verdictIdx].match(/^(\s*)/)?.[1].length ?? -1;
     const scoreIndent = lines[scoreIdx].match(/^(\s*)/)?.[1].length ?? -1;
     expect(verdictIndent).toBe(scoreIndent);
+  });
+
+  it("serializes a manual edge's mode and waypoints (shareable routing, #154)", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          mode: "manual",
+          waypoints: [
+            { x: 120, y: 40 },
+            { x: 120, y: 220 },
+          ],
+        },
+      ]),
+    );
+    expect(yaml).toContain("mode: manual");
+    expect(yaml).toContain("waypoints:");
+    // The coordinates survive so the route travels with a shared pipeline.
+    expect(yaml).toContain("x: 120");
+    expect(yaml).toContain("y: 40");
+    expect(yaml).toContain("y: 220");
+  });
+
+  it("omits routing fields for an auto edge (no waypoints stored, #154)", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          mode: "auto",
+        },
+      ]),
+    );
+    // Auto edges recompute deterministically — nothing routing-related persists.
+    expect(yaml).not.toContain("mode:");
+    expect(yaml).not.toContain("waypoints:");
   });
 
   it("serializes multi-field frontmatter with all fields at same depth", () => {
@@ -847,20 +943,22 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(indent(scoreLine!)).toBe(indent(summaryLine!));
   });
 
-  it("serializes deeply nested when clause with in-predicate correctly", () => {
-    const switchNode: NodeDef = {
-      id: "gate", name: "gate", type: "switch",
+  it("serializes a deeply nested edge when clause with in-predicate correctly", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
       inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: [
-        {
-          name: "pass", repeated: false, side: "right",
-          when: { verdict: { in: ["PASS", "APPROVED"] } },
-        },
-        { name: "default", repeated: false, side: "right" },
-      ],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
     };
-    const yaml = serializePipeline(makeFullPipeline([switchNode]));
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          when: { verdict: { in: ["PASS", "APPROVED"] } },
+        },
+      ]),
+    );
 
     // The YAML must not contain excessive indentation (more than 16 spaces
     // for any line would indicate double-indent bug)
@@ -896,6 +994,87 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("variables:");
     expect(yaml).toContain("max_iter: 5");
     expect(yaml).toContain("threshold: 0.8");
+  });
+});
+
+describe("serializePipeline persists edge when/else (ADR-0011)", () => {
+  function makeEdgePipeline(edges: EdgeDef[]): PipelineDef {
+    return {
+      name: "edge-when-test",
+      version: "1.0",
+      variables: {},
+      nodes: [
+        {
+          id: "reviewer", name: "reviewer", type: "doc-only",
+          inputs: [{ name: "task", repeated: false, side: "left" }],
+          outputs: [{ name: "verdict", repeated: false, side: "right" }],
+          interactive: false, view: { x: 0, y: 0 },
+        },
+        {
+          id: "impl", name: "impl", type: "code-mutating",
+          inputs: [{ name: "review", repeated: false, side: "left" }],
+          outputs: [{ name: "diff", repeated: false, side: "right" }],
+          interactive: false, view: { x: 200, y: 0 },
+        },
+      ],
+      edges,
+    };
+  }
+
+  it("emits the when clause on a guarded edge", () => {
+    const yaml = serializePipeline(
+      makeEdgePipeline([
+        {
+          source: { node: "reviewer", port: "verdict" },
+          target: { node: "impl", port: "review" },
+          when: { verdict: { eq: "FAIL" } },
+        },
+      ]),
+    );
+    expect(yaml).toContain("when:");
+    expect(yaml).toContain("verdict:");
+    expect(yaml).toContain("eq: FAIL");
+  });
+
+  it("emits a canonical boolean (not a string) for a bool when value", () => {
+    const yaml = serializePipeline(
+      makeEdgePipeline([
+        {
+          source: { node: "reviewer", port: "verdict" },
+          target: { node: "impl", port: "review" },
+          when: { is_blocking: { eq: true } },
+        },
+      ]),
+    );
+    // The value must be a YAML boolean `true`, never the string "true".
+    expect(yaml).toMatch(/eq: true\b/);
+    expect(yaml).not.toContain('eq: "true"');
+  });
+
+  it("emits else: true on a fallback edge", () => {
+    const yaml = serializePipeline(
+      makeEdgePipeline([
+        {
+          source: { node: "reviewer", port: "verdict" },
+          target: { node: "impl", port: "review" },
+          else: true,
+        },
+      ]),
+    );
+    expect(yaml).toContain("else: true");
+  });
+
+  it("omits when/else on an unconditional edge", () => {
+    const yaml = serializePipeline(
+      makeEdgePipeline([
+        {
+          source: { node: "reviewer", port: "verdict" },
+          target: { node: "impl", port: "review" },
+        },
+      ]),
+    );
+    expect(yaml).not.toContain("when:");
+    expect(yaml).not.toContain("else:");
   });
 });
 

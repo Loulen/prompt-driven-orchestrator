@@ -12,12 +12,6 @@ describe("getPortDescription", () => {
     );
   });
 
-  it("returns hardcoded description for switch input:in", () => {
-    expect(getPortDescription("switch", "input", "in")).toBe(
-      "Artifact to inspect for routing",
-    );
-  });
-
   it("returns hardcoded description for merge input:branches", () => {
     expect(getPortDescription("merge", "input", "branches")).toBe(
       "Accumulates all incoming branches",

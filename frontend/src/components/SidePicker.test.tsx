@@ -77,20 +77,21 @@ describe("SidePicker retrofit in NodeInspector PortRow", () => {
     });
   });
 
-  it("renders SidePicker buttons (L/R/T/B) in port rows", () => {
+  // Inputs are emergent (#149): they are read-only and carry no side picker.
+  // The side picker now lives only on the declared OUTPUT port rows.
+  it("renders SidePicker buttons (L/R/T/B) on output port rows", () => {
     render(<TooltipProvider><NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} /></TooltipProvider>);
-    const sideButtons = screen.getAllByTitle("left");
-    expect(sideButtons.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("left").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByTitle("right").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("clicking a side button updates the port side", () => {
+  it("clicking a side button updates the output port side", () => {
     render(<TooltipProvider><NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} /></TooltipProvider>);
     const topButtons = screen.getAllByTitle("top");
     fireEvent.click(topButtons[0]);
 
     const state = useEditStore.getState();
     const updatedNode = state.openTabs[0].pipeline.nodes.find((n) => n.id === "n1")!;
-    expect(updatedNode.inputs[0].side).toBe("top");
+    expect(updatedNode.outputs[0].side).toBe("top");
   });
 });

@@ -121,6 +121,15 @@ async fn run_state_includes_start_node_with_entry_targets() {
         .expect("target_node_ids should be an array");
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0], "only");
+
+    // A run launched without images carries an empty image list (issue #145).
+    let images = start_node["input_images"]
+        .as_array()
+        .expect("input_images should be an array");
+    assert!(
+        images.is_empty(),
+        "no images uploaded => empty input_images"
+    );
 }
 
 #[tokio::test]
@@ -150,6 +159,102 @@ async fn run_state_includes_end_node_with_pending_port() {
     assert_eq!(ports[0]["port_name"], "result");
     assert_eq!(ports[0]["status"], "pending");
     assert!(ports[0]["reason"].is_null());
+}
+
+/// Builds a `multipart/form-data` body by hand (the test profile's `reqwest`
+/// has no `multipart` feature). Returns the body bytes and the matching
+/// `Content-Type` header value.
+fn build_multipart(fields: &[(&str, &str)], images: &[(&str, &[u8])]) -> (Vec<u8>, String) {
+    const BOUNDARY: &str = "maestrotestboundary7f3a";
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    for (filename, data) in images {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"images\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (body, format!("multipart/form-data; boundary={BOUNDARY}"))
+}
+
+#[tokio::test]
+async fn run_state_includes_uploaded_input_images() {
+    unsafe {
+        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
+    }
+
+    // Minimal valid PNG header bytes — enough for the daemon to accept + store.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR";
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let (body, content_type) = build_multipart(
+        &[("pipeline", PIPELINE_NAME), ("input", "look at these")],
+        &[("ui-bug.png", PNG), ("trace.png", PNG)],
+    );
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /runs (multipart) should return 201"
+    );
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let run_id = json["run_id"].as_str().unwrap().to_string();
+
+    // The projected start_node surfaces the uploaded image filenames.
+    let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let run_state: serde_json::Value = resp.json().await.unwrap();
+    let images = run_state["start_node"]["input_images"]
+        .as_array()
+        .expect("input_images should be an array");
+    let names: Vec<&str> = images.iter().map(|v| v.as_str().unwrap()).collect();
+    // The start_node reflects the order the user attached them (upload order),
+    // not alphabetised — what they see matches what they uploaded.
+    assert_eq!(names, vec!["ui-bug.png", "trace.png"]);
+
+    // Each image is actually served from the _input/ artifact dir.
+    for name in ["ui-bug.png", "trace.png"] {
+        let resp = reqwest::get(format!(
+            "{}/runs/{}/artifact?path=_input/{}",
+            daemon.url(),
+            run_id,
+            name
+        ))
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), 200, "image {name} should be served");
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("image/png"),
+            "image {name} served with image/png content-type"
+        );
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(&bytes[..], PNG, "image {name} bytes round-trip");
+    }
 }
 
 #[tokio::test]

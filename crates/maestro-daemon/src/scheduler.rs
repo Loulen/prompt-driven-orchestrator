@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::condition;
+use crate::edge_router;
 use crate::event_log::{NodeStatus, RunState, RunStatus};
 use crate::graph_resolver;
 use crate::pipeline::{NodeType, PipelineDef};
@@ -146,6 +147,35 @@ pub fn evaluate_outgoing_edges_with_context(
     resolved_vars: &HashMap<String, serde_yaml::Value>,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
+    // Single-node callers (tests, var-update reprocessing) supply only the
+    // just-completed node's frontmatter. Seed the per-node map with it so
+    // convergence suppression can re-evaluate this producer's edges. Other
+    // producers fall back to empty frontmatter (treated as live — conservative).
+    let mut frontmatter_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+        HashMap::new();
+    frontmatter_by_node.insert(completed_node_id.to_string(), frontmatter_fields.clone());
+    evaluate_outgoing_edges_full(
+        pipeline,
+        run_state,
+        completed_node_id,
+        resolved_vars,
+        frontmatter_fields,
+        &frontmatter_by_node,
+    )
+}
+
+/// Same as [`evaluate_outgoing_edges_with_context`] but with an explicit
+/// per-node frontmatter map, used by `scheduler_step` so convergence
+/// suppression (ADR-0011) can re-evaluate the conditional edges of *other*
+/// completed producers (e.g. the classifier feeding a suppressed `else` branch).
+pub fn evaluate_outgoing_edges_full(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    completed_node_id: &str,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
     let source_iter = run_state
@@ -177,7 +207,35 @@ pub fn evaluate_outgoing_edges_with_context(
         .find(|n| n.node_type == NodeType::End)
         .map(|n| n.id.as_str());
 
-    for edge in &pipeline.edges {
+    // Conditional routing on edges (ADR-0011): for a non-Switch producer,
+    // evaluate the source node's outgoing edges in multi-match. Every edge whose
+    // `when:` is satisfied fires; an `else` edge fires iff no sibling on the same
+    // source port matched; an unconditional edge always fires. We compute the
+    // firing set up-front (keyed by index into `pipeline.edges`) and gate the
+    // loop on it. (Switch nodes keep their own port-based routing via
+    // `matched_port` for backward compatibility.)
+    let fired_indices: HashSet<usize> = if is_switch {
+        // Switch routing is handled by `matched_port`; don't double-gate.
+        HashSet::new()
+    } else {
+        let outgoing: Vec<(usize, &crate::pipeline::EdgeDef)> = pipeline
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.source.node == completed_node_id)
+            .collect();
+        let edge_refs: Vec<&crate::pipeline::EdgeDef> = outgoing.iter().map(|(_, e)| *e).collect();
+        let fired =
+            edge_router::fired_edges(&edge_refs, frontmatter_fields, resolved_vars, source_iter);
+        // Map firing edges back to their global indices by identity.
+        outgoing
+            .iter()
+            .filter(|(_, e)| fired.iter().any(|f| std::ptr::eq(*f, *e)))
+            .map(|(i, _)| *i)
+            .collect()
+    };
+
+    for (edge_index, edge) in pipeline.edges.iter().enumerate() {
         if edge.source.node != completed_node_id {
             continue;
         }
@@ -186,6 +244,11 @@ pub fn evaluate_outgoing_edges_with_context(
             if edge.source.port != *port {
                 continue;
             }
+        }
+
+        // Skip edges whose conditional clause did not fire (non-Switch sources).
+        if !is_switch && !fired_indices.contains(&edge_index) {
+            continue;
         }
 
         let target_id = &edge.target.node;
@@ -213,8 +276,14 @@ pub fn evaluate_outgoing_edges_with_context(
             let is_switch_target = target_node.is_some_and(|n| n.node_type == NodeType::Switch);
 
             if is_switch_target {
-                let all_upstream_done =
-                    check_all_upstream_completed(pipeline, run_state, target_id, completed_node_id);
+                let all_upstream_done = check_all_upstream_completed(
+                    pipeline,
+                    run_state,
+                    target_id,
+                    completed_node_id,
+                    frontmatter_by_node,
+                    resolved_vars,
+                );
                 if all_upstream_done {
                     let switch_actions = evaluate_outgoing_edges_with_context(
                         pipeline,
@@ -244,8 +313,14 @@ pub fn evaluate_outgoing_edges_with_context(
                 );
                 actions.extend(foreach_actions);
             } else {
-                let all_upstream_done =
-                    check_all_upstream_completed(pipeline, run_state, target_id, completed_node_id);
+                let all_upstream_done = check_all_upstream_completed(
+                    pipeline,
+                    run_state,
+                    target_id,
+                    completed_node_id,
+                    frontmatter_by_node,
+                    resolved_vars,
+                );
 
                 if all_upstream_done {
                     let next_iter = run_state
@@ -259,6 +334,52 @@ pub fn evaluate_outgoing_edges_with_context(
                         iter: next_iter,
                     });
                 }
+            }
+        }
+    }
+
+    // ── Explicit halt on unrouted convergence (ADR-0011, "jamais de stall
+    // silencieux", extended to Merge by the ADR-0006 addendum) ───────────────
+    //
+    // The edge-resolution barrier above lets a convergence node spawn on its
+    // *live* (fired) branches and skip *dead* (permanently-suppressed) ones. But
+    // a convergence whose branches are ALL dead never has an edge fire into it,
+    // so it is never spawned — it becomes a dead node too. Death propagates
+    // downstream: when the cascade renders `End` unreachable through every live
+    // path, the Run would otherwise sit `Running` forever. Detect that here and
+    // emit an explicit Halt instead, so the state is diagnosable ("unrouted")
+    // rather than a silent stall.
+    //
+    // We only consider halting when this completion produced no forward progress
+    // (no Spawn / Complete / Halt). If End is still reachable through any live
+    // path, `is_node_dead(End)` is false and we stay our hand — a Merge waiting
+    // on a still-running sibling is normal, not a stall.
+    if !is_switch
+        && !actions.iter().any(|a| {
+            matches!(
+                a,
+                SchedulerAction::Spawn { .. }
+                    | SchedulerAction::Complete
+                    | SchedulerAction::Halt { .. }
+            )
+        })
+    {
+        if let Some(end_id) = end_node_id {
+            let mut visiting = HashSet::new();
+            let end_dead = is_node_dead(
+                pipeline,
+                run_state,
+                end_id,
+                frontmatter_by_node,
+                resolved_vars,
+                &mut visiting,
+            );
+            if end_dead {
+                actions.push(SchedulerAction::Halt {
+                    message: "unrouted: conditional routing suppressed every path to End \
+                         (no live branch reaches End)"
+                        .to_string(),
+                });
             }
         }
     }
@@ -595,6 +716,8 @@ fn check_all_upstream_completed(
     run_state: &RunState,
     target_node_id: &str,
     just_completed_node_id: &str,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
     let upstream: HashSet<&str> = pipeline
         .edges
@@ -607,11 +730,125 @@ fn check_all_upstream_completed(
         if *src == just_completed_node_id {
             return true;
         }
-        run_state
+        if run_state
             .nodes
             .get(*src)
             .is_some_and(|n| n.status == NodeStatus::Completed)
+        {
+            return true;
+        }
+        // ADR-0011 ("jamais de stall silencieux"): a convergence target (e.g. a
+        // `Merge`) must not wait forever on an upstream branch that is dead — a
+        // non-firing conditional/`else` edge, or a transitively-dead producer.
+        // Such a branch never appears in `run_state` and never completes, so we
+        // treat its edge as resolved rather than a blocker.
+        let mut visiting = HashSet::new();
+        is_node_dead(
+            pipeline,
+            run_state,
+            src,
+            frontmatter_by_node,
+            vars,
+            &mut visiting,
+        )
     })
+}
+
+/// Returns `true` when `node_id` is **dead** for this run (decided model,
+/// ADR-0006 addendum): it has incoming edges and every one of them is dead —
+/// i.e. each producer has completed and the edge into `node_id` did not fire
+/// (its `when:` was false, or it is an `else` whose sibling matched), or the
+/// producer is itself dead. Death propagates upstream-to-downstream through this
+/// recursion: a node fed only by dead branches is dead, including a `Merge`
+/// whose `branches` are all dead, and including `End` itself (used to detect an
+/// unrouted convergence that must halt explicitly rather than stall silently).
+///
+/// Conservative on purpose: if any incoming edge is still *live* (its producer
+/// has not completed yet, or the edge fired, or the producer's outcome is not
+/// yet decided), the node is NOT dead and the convergence keeps waiting. A node
+/// already present in `run_state` (spawned at any status) is by definition not
+/// dead. A node with no incoming edges is a root and is likewise never dead.
+fn is_node_dead(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    node_id: &str,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+    visiting: &mut HashSet<String>,
+) -> bool {
+    // Already spawned (running / completed / failed / stopped): not dead.
+    if run_state.nodes.contains_key(node_id) {
+        return false;
+    }
+    // Cycle guard: if we re-encounter a node mid-walk, do not let it prop up its
+    // own deadness. Treat the recursion as "not dead via this edge".
+    if !visiting.insert(node_id.to_string()) {
+        return false;
+    }
+
+    let incoming: Vec<&crate::pipeline::EdgeDef> = pipeline
+        .edges
+        .iter()
+        .filter(|e| e.target.node == node_id)
+        .collect();
+
+    // A root with no incoming edges is an entry point, never dead.
+    if incoming.is_empty() {
+        visiting.remove(node_id);
+        return false;
+    }
+
+    // The node is dead iff EVERY incoming edge is dead.
+    let dead = incoming.iter().all(|edge| {
+        let src = edge.source.node.as_str();
+        let producer = pipeline.nodes.iter().find(|n| n.id == src);
+        let producer_completed = run_state
+            .nodes
+            .get(src)
+            .is_some_and(|n| n.status == NodeStatus::Completed);
+
+        if producer_completed {
+            // The producer has run: this edge is dead only if it did NOT fire.
+            // Recompute the firing set from the producer's recorded frontmatter.
+            // Switch producers route by port; we conservatively treat their
+            // edges as live (Switch is being retired by ADR-0011 and is not part
+            // of the conditional-edge convergence path).
+            let is_switch = producer.is_some_and(|n| n.node_type == NodeType::Switch);
+            if is_switch {
+                return false; // live: keep waiting
+            }
+            let source_iter = run_state.nodes.get(src).map(|n| n.iter).unwrap_or(1);
+            let empty = HashMap::new();
+            let fm = frontmatter_by_node.get(src).unwrap_or(&empty);
+            let outgoing: Vec<&crate::pipeline::EdgeDef> = pipeline
+                .edges
+                .iter()
+                .filter(|e| e.source.node == src)
+                .collect();
+            let fired = edge_router::fired_edges(&outgoing, fm, vars, source_iter);
+            let this_edge_fired = fired.iter().any(|f| std::ptr::eq(*f, *edge));
+            // Dead iff this edge did not fire.
+            !this_edge_fired
+        } else if run_state.nodes.contains_key(src) {
+            // Producer spawned but not completed (running / awaiting / failed):
+            // outcome not yet decided — edge is still live.
+            false
+        } else {
+            // Producer never spawned: this edge is dead only if the producer is
+            // itself dead (recurse).
+            is_node_dead(
+                pipeline,
+                run_state,
+                src,
+                frontmatter_by_node,
+                vars,
+                visiting,
+            )
+        }
+    });
+
+    visiting.remove(node_id);
+    dead
 }
 
 // ---------------------------------------------------------------------------
@@ -734,8 +971,14 @@ pub fn scheduler_step(
             .get(node_id)
             .cloned()
             .unwrap_or_default();
-        let edge_actions =
-            evaluate_outgoing_edges_with_context(pipeline, run_state, node_id, resolved_vars, &fm);
+        let edge_actions = evaluate_outgoing_edges_full(
+            pipeline,
+            run_state,
+            node_id,
+            resolved_vars,
+            &fm,
+            completed_node_frontmatter,
+        );
         actions.extend(edge_actions);
     }
 
@@ -920,6 +1163,35 @@ mod tests {
                 port: tgt_port.into(),
             },
             reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        }
+    }
+
+    fn make_cond_edge(
+        src_node: &str,
+        src_port: &str,
+        tgt_node: &str,
+        tgt_port: &str,
+        when: Option<&str>,
+        is_else: bool,
+    ) -> EdgeDef {
+        EdgeDef {
+            source: EdgeEndpoint {
+                node: src_node.into(),
+                port: src_port.into(),
+            },
+            target: EdgeEndpoint {
+                node: tgt_node.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+            when: when.map(|s| serde_yaml::from_str(s).unwrap()),
+            is_else,
+            repeated: false,
+            ..Default::default()
         }
     }
 
@@ -934,6 +1206,10 @@ mod tests {
                 port: "result".into(),
             },
             reason: Some(reason.into()),
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
         }
     }
 
@@ -1000,6 +1276,7 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -1022,6 +1299,7 @@ mod tests {
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1043,6 +1321,7 @@ mod tests {
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1068,6 +1347,7 @@ mod tests {
                 make_edge("planner", "plan", "impl-a", "plan"),
                 make_edge("planner", "plan", "impl-b", "plan"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1094,6 +1374,7 @@ mod tests {
                 make_edge("impl-a", "summary", "merger", "summary-a"),
                 make_edge("impl-b", "summary", "merger", "summary-b"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1129,6 +1410,7 @@ mod tests {
                 make_edge("b", "out", "d", "in-b"),
                 make_edge("c", "out", "d", "in-c"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1150,6 +1432,7 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1173,6 +1456,7 @@ mod tests {
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1203,6 +1487,7 @@ mod tests {
                 "review",
                 "Blocked after {iter} iterations on {node-id}",
             )],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1239,7 +1524,12 @@ mod tests {
                     port: "result".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1264,6 +1554,7 @@ mod tests {
                 make_node("reviewer", &["code"], &["review"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1299,6 +1590,7 @@ mod tests {
                 make_edge("a", "out", "b", "in"),
                 make_edge("a", "out", "c", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1317,6 +1609,641 @@ mod tests {
     }
 
     #[test]
+    fn conditional_edges_multi_match_spawn_all_satisfied_targets() {
+        // ADR-0011: a producer fans out to ALL guarded edges whose `when:` is
+        // satisfied; the `else` edge is suppressed because a sibling matched.
+        let pipeline = PipelineDef {
+            name: "cond-fanout".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+            loops: Vec::new(),
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> = [
+            ("severity".into(), serde_yaml::Value::String("high".into())),
+            ("security".into(), serde_yaml::Value::Bool(true)),
+        ]
+        .into_iter()
+        .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "hotfix".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "security".into(),
+            iter: 1,
+        }));
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must be suppressed when a sibling matched: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_edges_else_fires_when_none_match() {
+        let pipeline = PipelineDef {
+            name: "cond-else".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+            loops: Vec::new(),
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "hotfix".into(),
+                iter: 1,
+            }),
+            "unmatched guarded edge must not fire: {actions:?}"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must fire when no sibling matched: {actions:?}"
+        );
+    }
+
+    fn make_merge_node(id: &str) -> NodeDef {
+        let mut n = make_node(id, &["branches"], &["merged"]);
+        n.node_type = NodeType::Merge;
+        n
+    }
+
+    /// Regression for the L5 `conditional-edge-routing` stall (ADR-0011, #144):
+    /// a `Merge` fed by three unconditional edges (hotfix, security-review,
+    /// backlog) must NOT wait forever on `backlog`, which is permanently
+    /// suppressed because its inbound `else` edge from `classifier` did not fire
+    /// (a guarded sibling matched). "jamais de stall silencieux."
+    fn fanout_merge_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "cond-merge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_node("backlog", &["triage"], &["note"]),
+                make_merge_node("merge1"),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+                make_edge("hotfix", "patch", "merge1", "branches"),
+                make_edge("security", "review", "merge1", "branches"),
+                make_edge("backlog", "note", "merge1", "branches"),
+            ],
+            loops: Vec::new(),
+        }
+    }
+
+    fn classifier_high_security_fm() -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let fm: HashMap<String, serde_yaml::Value> = [
+            ("severity".into(), serde_yaml::Value::String("high".into())),
+            ("security".into(), serde_yaml::Value::Bool(true)),
+        ]
+        .into_iter()
+        .collect();
+        [("classifier".to_string(), fm)].into_iter().collect()
+    }
+
+    #[test]
+    fn merge_spawns_when_suppressed_else_branch_never_runs() {
+        let pipeline = fanout_merge_pipeline();
+
+        // classifier + the two matched branches completed; backlog never spawned
+        // (its `else` edge was suppressed). The second branch (security) is the
+        // node we're processing as "just completed".
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+        state
+            .nodes
+            .insert("security".into(), completed_node("security"));
+
+        let fm_by_node = classifier_high_security_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "security",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "merge must spawn once both fired branches completed, ignoring the \
+             permanently-suppressed backlog branch: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn merge_still_waits_for_a_fired_branch_that_is_not_yet_done() {
+        // The suppression relief must NOT let a Merge fire early: while a branch
+        // that DID fire (hotfix) is still running, the Merge must keep waiting.
+        let pipeline = fanout_merge_pipeline();
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state.nodes.insert("hotfix".into(), running_node("hotfix"));
+        state
+            .nodes
+            .insert("security".into(), completed_node("security"));
+
+        let fm_by_node = classifier_high_security_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "security",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "merge must NOT spawn while a fired branch (hotfix) is still running: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn scheduler_step_spawns_merge_past_suppressed_branch() {
+        let pipeline = fanout_merge_pipeline();
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+        state
+            .nodes
+            .insert("security".into(), completed_node("security"));
+
+        let actions = scheduler_step(
+            &pipeline,
+            &state,
+            &HashMap::new(),
+            &classifier_high_security_fm(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "scheduler_step must converge on merge1 past the suppressed backlog branch: {actions:?}"
+        );
+    }
+
+    /// Edge case (c) — non-regression: a classic all-unconditional fan-in still
+    /// converges. Two unconditional branches into a Merge, both completed, must
+    /// spawn the Merge. (The edge-resolution barrier must not break the simple,
+    /// pre-conditional case.)
+    fn unconditional_fanin_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "uncond-fanin".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_merge_node("merge1"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("a", "out", "merge1", "branches"),
+                make_edge("b", "out", "merge1", "branches"),
+                make_end_edge("merge1", "merged", "done"),
+            ],
+            loops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unconditional_fanin_still_converges() {
+        let pipeline = unconditional_fanin_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "b",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "classic unconditional fan-in must still converge on merge1: {actions:?}"
+        );
+    }
+
+    /// Edge case (d) — death propagation over >=2 levels. `mid` is fed by a
+    /// single guarded edge from `classifier` that did not fire (its sibling
+    /// guard matched), so `mid` is dead; `merge1` is fed by `mid` (2nd-level
+    /// dead branch) and by `hotfix` (live, completed). The Merge must spawn on
+    /// the single live branch, treating the transitively-dead `mid` branch as
+    /// resolved.
+    fn two_level_death_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "two-level-death".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("mid", &["triage"], &["out"]),
+                make_merge_node("merge1"),
+                make_end_node(),
+            ],
+            edges: vec![
+                // hotfix branch fires (severity=high), mid branch does not.
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "mid",
+                    "triage",
+                    Some("severity: { eq: low }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "merge1", "branches"),
+                make_edge("mid", "out", "merge1", "branches"),
+                make_end_edge("merge1", "merged", "done"),
+            ],
+            loops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn merge_spawns_past_two_level_dead_branch() {
+        let pipeline = two_level_death_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+        // `mid` never spawned: its inbound guarded edge did not fire.
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm)].into_iter().collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "hotfix",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "merge must spawn past a transitively-dead (2-level) branch: {actions:?}"
+        );
+    }
+
+    /// Edge case (a) — an all-dead Merge is SKIPPED when End stays reachable.
+    /// Both branches into `merge1` are guarded and neither matched, so `merge1`
+    /// has zero fired branches and is itself dead. A separate unconditional path
+    /// `classifier -> end` keeps End reachable, so the run must reach End rather
+    /// than stall waiting on the dead `merge1`.
+    fn all_dead_merge_with_alt_end_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "all-dead-merge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_merge_node("merge1"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "merge1", "branches"),
+                make_edge("security", "review", "merge1", "branches"),
+                // merge1 -> end, AND a direct classifier -> end keeping End reachable.
+                make_end_edge("merge1", "merged", "merged-done"),
+                make_end_edge("classifier", "triage", "direct-done"),
+            ],
+            loops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn all_dead_merge_is_skipped_when_end_reachable() {
+        let pipeline = all_dead_merge_with_alt_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        // Artifact matches NEITHER guard: both hotfix and security branches die,
+        // so merge1 has zero fired branches.
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        // The direct edge fires End; the run must not stall on the dead merge1.
+        assert!(
+            actions.contains(&SchedulerAction::Complete)
+                || actions
+                    .iter()
+                    .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "an all-dead merge must not silently stall the run: {actions:?}"
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "merge1".into(),
+                iter: 1,
+            }),
+            "an all-dead merge must NOT spawn: {actions:?}"
+        );
+    }
+
+    /// Edge case (b) — death cascade reaches End: explicit halt, never a silent
+    /// stall. The ONLY path to End is via `merge1`; both branches into `merge1`
+    /// are guarded and neither matched, so `merge1` is all-dead and End becomes
+    /// unreachable. Per ADR-0011 ("jamais de stall silencieux") the scheduler
+    /// must emit an explicit Halt rather than leaving the run Running forever.
+    fn all_dead_merge_only_end_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "all-dead-only-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_merge_node("merge1"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "merge1", "branches"),
+                make_edge("security", "review", "merge1", "branches"),
+                make_end_edge("merge1", "merged", "done"),
+            ],
+            loops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn death_cascade_to_unreachable_end_halts_explicitly() {
+        let pipeline = all_dead_merge_only_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        // Artifact matches neither guard: both branches die, merge1 is all-dead,
+        // and End (reachable only through merge1) becomes unreachable.
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "a death cascade rendering End unreachable must halt explicitly, \
+             never stall silently: {actions:?}"
+        );
+    }
+
+    /// Guard against a false-positive halt: while a branch that DID fire is
+    /// still running, End is still reachable through it, so the unrouted-halt
+    /// detector must stay its hand. The Merge keeps waiting; no Halt is emitted.
+    #[test]
+    fn no_halt_while_a_fired_branch_is_still_running() {
+        // Same shape as all_dead_merge_only_end, but the artifact matches a guard
+        // (severity=high), so `hotfix` fired and is running; `security` died.
+        let pipeline = all_dead_merge_only_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state.nodes.insert("hotfix".into(), running_node("hotfix"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        // Re-evaluate the classifier (e.g. on a later tick): hotfix already
+        // spawned (running), security dead. End reachable through hotfix->merge1.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "must NOT halt while a fired branch (hotfix) is still running and \
+             End stays reachable through it: {actions:?}"
+        );
+    }
+
+    #[test]
     fn end_edge_always_fires() {
         let pipeline = PipelineDef {
             name: "halt-test".into(),
@@ -1327,6 +2254,7 @@ mod tests {
                 make_end_node(),
             ],
             edges: vec![make_end_edge("reviewer", "review", "Run halted")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1412,6 +2340,7 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1457,6 +2386,7 @@ mod tests {
                 make_edge("sw", "pass", "b-pass", "in"),
                 make_edge("sw", "default", "c-default", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1500,6 +2430,7 @@ mod tests {
                 make_node("downstream", &["in"], &["out"]),
             ],
             edges: vec![make_edge("sw", "pass", "downstream", "in")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1555,6 +2486,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1630,6 +2562,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1687,6 +2620,7 @@ mod tests {
                 make_edge("sw", "pass", "end", "result"),
                 make_edge("sw", "default", "rework", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1738,6 +2672,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("sw", "default", "rework", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1801,6 +2736,7 @@ mod tests {
                 make_edge("sw", "first", "first-handler", "in"),
                 make_edge("sw", "second", "second-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1857,6 +2793,7 @@ mod tests {
                 make_edge("sw", "high", "high-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1914,6 +2851,7 @@ mod tests {
                 make_edge("b", "out", "sw", "in"),
                 make_edge("sw", "pass", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -1957,6 +2895,7 @@ mod tests {
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2077,6 +3016,7 @@ mod tests {
                 make_edge("entry", "out", "loop1", "in"),
                 make_edge("loop1", "body", "worker", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -2100,6 +3040,7 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2136,6 +3077,7 @@ mod tests {
                 make_edge("impl", "out", "sw", "in"),
                 make_edge("sw", "pass", "loop1", "break"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2167,6 +3109,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("sw", "default", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2221,6 +3164,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2268,6 +3212,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2327,6 +3272,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2401,6 +3347,7 @@ mod tests {
                 make_edge("impl", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2448,6 +3395,7 @@ mod tests {
                 make_edge("impl", "out", "reviewer", "in"),
                 make_edge("reviewer", "review", "loop1", "break"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2493,6 +3441,7 @@ mod tests {
                 make_edge("tester", "out", "loop1", "break"),
                 make_edge("loop1", "done", "downstream", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2571,6 +3520,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -2604,6 +3554,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -2632,6 +3583,7 @@ mod tests {
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -2658,6 +3610,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
             edges: vec![],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -2681,6 +3634,7 @@ mod tests {
                 make_edge("upstream", "out", "loop1", "in"),
                 make_edge("loop1", "body", "impl", "in"),
             ],
+            loops: Vec::new(),
         };
         let mut state = empty_run_state();
         state
@@ -2709,6 +3663,7 @@ mod tests {
                 make_edge("loop1", "body", "a", "in"),
                 make_edge("loop1", "body", "b", "in"),
             ],
+            loops: Vec::new(),
         };
         let state = empty_run_state();
 
@@ -2801,6 +3756,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2850,6 +3806,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2914,6 +3871,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "break"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -2962,6 +3920,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3023,6 +3982,7 @@ mod tests {
                 make_edge("worker", "out", "fe1", "done"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3072,6 +4032,7 @@ mod tests {
                 make_node("worker", &["in"], &["out"]),
             ],
             edges: vec![make_edge("fe1", "body", "worker", "in")],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -3133,6 +4094,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3193,6 +4155,7 @@ mod tests {
                 make_edge("fe1", "body", "worker", "in"),
                 make_edge("fe1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3450,6 +4413,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let state = paused_run_state();
@@ -3468,6 +4432,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         // While paused: nothing
@@ -3498,6 +4463,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = paused_run_state();
@@ -3530,6 +4496,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         // Planner completed → implementer is ready, but run is paused
@@ -3624,6 +4591,7 @@ edges:
                 make_node("implementer", &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3648,6 +4616,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3670,6 +4639,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3708,6 +4678,7 @@ edges:
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         // a is completed → b should be proposed exactly once
@@ -3748,6 +4719,7 @@ edges:
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3807,6 +4779,7 @@ edges:
                 make_edge("planner", "plan", "implementer", "plan"),
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
+            loops: Vec::new(),
         };
 
         // Fresh state: only entry nodes (no upstream) should be proposed
@@ -3837,6 +4810,7 @@ edges:
                 make_edge("a", "out", "b", "in"),
                 make_edge("a", "out", "c", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3874,7 +4848,12 @@ edges:
                     port: "result".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3912,6 +4891,7 @@ edges:
                 make_edge("sw", "pass", "pass-handler", "in"),
                 make_edge("sw", "default", "default-handler", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -3978,6 +4958,7 @@ edges:
                 make_edge("start", "user_prompt", "loop1", "in"),
                 make_edge("loop1", "body", "worker", "in"),
             ],
+            loops: Vec::new(),
         };
 
         let state = empty_run_state();
@@ -4016,6 +4997,7 @@ edges:
                 make_edge("worker", "out", "loop1", "break"),
                 make_edge("loop1", "done", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4062,6 +5044,7 @@ edges:
                 make_edge("a", "out", "b", "in"),
                 make_edge("b", "out", "end", "result"),
             ],
+            loops: Vec::new(),
         };
 
         let mut queue = TickQueue::new();
@@ -4143,6 +5126,7 @@ edges:
                 make_node("b", &["in"], &["out"]),
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
         };
 
         let mut queue = TickQueue::new();
@@ -4197,6 +5181,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4212,6 +5197,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();
@@ -4227,6 +5213,7 @@ edges:
             variables: HashMap::new(),
             nodes: vec![make_node("a", &["task"], &["out"])],
             edges: vec![],
+            loops: Vec::new(),
         };
 
         let mut state = empty_run_state();

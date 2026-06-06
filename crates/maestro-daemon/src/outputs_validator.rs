@@ -265,6 +265,7 @@ mod tests {
             variables: HashMap::new(),
             nodes,
             edges: Vec::new(),
+            loops: Vec::new(),
         }
     }
 

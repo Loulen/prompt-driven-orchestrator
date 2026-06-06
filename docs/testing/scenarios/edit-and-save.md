@@ -16,29 +16,27 @@
   before driving the UI:
 
   ```yaml
+  # Inputs are emergent (#149): regular nodes declare OUTPUTS only; inputs are
+  # derived from incoming edges. Only the End node keeps a declared `result`
+  # input (structural).
   name: edit-and-save-scenario
   version: "1.0"
   nodes:
     - id: start
       name: Start
       type: start
-      inputs: []
       outputs:
         - name: user_prompt
       view: { x: 0, y: 100 }
     - id: alpha
       name: alpha
       type: doc-only
-      inputs:
-        - name: in
       outputs:
         - name: out
       view: { x: 200, y: 100 }
     - id: beta
       name: beta
       type: doc-only
-      inputs:
-        - name: in
       outputs:
         - name: out
       view: { x: 400, y: 100 }
@@ -47,7 +45,6 @@
       type: end
       inputs:
         - name: result
-      outputs: []
       view: { x: 600, y: 100 }
   edges: []
   ```
@@ -56,10 +53,12 @@
 
 1. Open the UI, confirm the **`Daemon: connected`** label is visible in the
    status bar.
-2. Click the **edit-mode toggle** (pencil icon, top-right). Verify the badge
-   switches from `Run` to `Edit`.
-3. Click the `edit-and-save-scenario` row in the **Pipelines** sidebar. The
-   canvas should render four nodes (`Start`, `alpha`, `beta`, `End`).
+2. Click the `edit-and-save-scenario` row in the **Pipelines** sidebar. The
+   canvas should render four nodes (`Start`, `alpha`, `beta`, `End`). There is
+   no Run/Edit mode toggle — editing the pipeline is the unified canvas (#146).
+3. Assert the work nodes render as **slim cards** (#149): each shows a type
+   icon, the node **name**, and a **code/doc marker** — and **no** node id text
+   and **no** amber `interactive` badge on the card.
 4. Click the `alpha` node. The **Node Inspector** opens on the right with a
    `Prompt` textarea (placeholder `Enter the node's role prompt...`).
 5. In the prompt textarea, type `MARKER_<timestamp>_SAVE_TEST` and stop typing.
@@ -73,8 +72,8 @@
    - **"Saved just now"** (or **"Saved Xs ago"**) text appears near the Save
      button (`data-testid="saved-ago"`).
    - The Save button is now **disabled** (no unsaved changes).
-9. Reload the page (`F5` or `navigate_page`). Re-toggle Edit mode, re-open
-   the `edit-and-save-scenario` pipeline, click the `alpha` node.
+9. Reload the page (`F5` or `navigate_page`). Re-open the
+   `edit-and-save-scenario` pipeline, click the `alpha` node.
 10. Assert the prompt textarea displays **`MARKER_<timestamp>_SAVE_TEST`** —
     the value persisted through save and page reload.
 11. Read `.maestro/pipelines/edit-and-save-scenario.prompts/alpha.md` from
@@ -102,44 +101,52 @@ under the explicit Save model.
     disk. Its content **must still equal** `MARKER_<timestamp>_SAVE_TEST`
     (from the earlier explicit save in step 7) — proves no auto-save occurred.
 
-## Edge click → source Inspector scroll (refs #51)
+## Connection gesture → emergent input by drop-on-body (refs #51, #149)
 
-This section tests that clicking an edge in EditCanvas selects the source
-node and scrolls the Node Inspector to the matching output port row.
+This section tests the emergent-input connection gesture: drag from an
+**output dot** and drop on a target node's **body** (there are no input dots).
+The created input is named after the source document.
 
-17. With the `edit-and-save-scenario` pipeline still open in Edit mode,
-    draw an edge from `alpha`'s `out` port to `beta`'s `in` port (if one
-    doesn't already exist). Click **Save** to persist.
-18. Click the **edge** between `alpha` and `beta` on the canvas.
-19. Assert:
-    - The **Node Inspector** opens on the right (not EdgeInspector — that
-      component no longer exists).
-    - The inspector shows **`alpha`**'s properties (node ID, name, type,
-      prompt, ports).
-    - The output port row with name `out` is scrolled into view and
-      briefly highlighted (border + background accent color, ~1.5 s).
-    - The port row element has `data-port="out"` attribute in the DOM.
-20. Click the canvas pane (empty area). Assert selection clears — no panel
+17. With the `edit-and-save-scenario` pipeline still open, drag from `alpha`'s
+    **green `out` output dot** and drop **anywhere on `beta`'s card body**
+    (there is no input dot to aim at — the whole card is the drop target).
+    Click **Save** to persist.
+18. Assert the saved YAML now has an edge `alpha.out → beta` whose **target
+    port is `out`** (the emergent input inherited the source document name).
+    Read `.maestro/pipelines/edit-and-save-scenario.yaml` and confirm the edge
+    `source: { node: alpha, port: out }`, `target: { node: beta, port: out }`.
+19. Click the **edge** between `alpha` and `beta` on the canvas. Assert:
+    - The **Node Inspector** opens on the right for the source node `alpha`
+      (not EdgeInspector — that component no longer exists).
+    - The inspector shows **`alpha`**'s name, type, prompt and **outputs**.
+    - The **output** port row named `out` is scrolled into view and briefly
+      highlighted; the row has `data-port="out"` in the DOM.
+20. Inspect `beta`'s card on the canvas. Assert it shows **no input dot**
+    (`.port-pill.kind-input` is absent on the card) — the incoming arrow lands
+    on the body.
+21. Click the canvas pane (empty area). Assert selection clears — no panel
     shows, or PipelineInspector shows.
 
-## EditToolbar icons + tooltips (refs #53)
+## EditToolbar icons + tooltips (refs #53, #147)
 
-21. With the `edit-and-save-scenario` pipeline open in Edit mode, assert
-    the **EditToolbar** overlay is visible in the top-left corner of the
-    canvas (`data-testid="edit-toolbar"`).
-22. Assert the toolbar contains exactly four icon buttons:
+22. With the `edit-and-save-scenario` pipeline open, assert the
+    **EditToolbar** overlay is visible in the top-left corner of the canvas
+    (`data-testid="edit-toolbar"`).
+23. Assert the toolbar contains the icon buttons (the **Switch** button was
+    removed — conditional routing lives on the edge, #147):
     - Add node (`data-testid="toolbar-add"`)
     - Library (`data-testid="toolbar-library"`)
     - Loop (`data-testid="toolbar-loop"`)
-    - Switch (`data-testid="toolbar-switch"`)
-23. Hover the Add node button. Assert a tooltip appears with text
+    - Merge (`data-testid="toolbar-merge"`)
+    - Assert **`toolbar-switch` is absent**.
+24. Hover the Add node button. Assert a tooltip appears with text
     containing **"New node"**.
-24. Hover the Library button. Assert a tooltip appears with text
+25. Hover the Library button. Assert a tooltip appears with text
     containing **"Library"**.
-25. Hover the Loop button. Assert a tooltip appears with text
+26. Hover the Loop button. Assert a tooltip appears with text
     containing **"Loop node"**.
-26. Hover the Switch button. Assert a tooltip appears with text
-    containing **"Switch node"**.
+27. Hover the Merge button. Assert a tooltip appears with text
+    containing **"Merge node"**.
 
 ## Cleanup
 
@@ -154,6 +161,7 @@ node and scrolls the Node Inspector to the matching output port row.
   "verdict": "PASS" | "FAIL",
   "evidence": [
     "step 1: status bar shows 'Daemon: connected'",
+    "step 3: work nodes render as slim cards (icon+name+code/doc marker, no id, no interactive badge)",
     "step 6: tab shows dirty indicator '•', Save button enabled",
     "step 8: dirty indicator cleared, 'Saved Xs ago' visible",
     "step 10: textarea reads MARKER_…_SAVE_TEST after reload",
@@ -161,10 +169,12 @@ node and scrolls the Node Inspector to the matching output port row.
     "step 14: textarea still reads full value after 3 s wait (no broadcast wipe)",
     "step 15: tab title still shows dirty indicator '•' (no silent auto-save)",
     "step 16: alpha.md on disk unchanged (no auto-save)",
+    "step 18: drop-on-body created edge alpha.out → beta with emergent target port 'out'",
     "step 19: edge click opens Node Inspector for source node alpha, out port highlighted with data-port attribute",
-    "step 20: pane click clears selection",
-    "step 22: EditToolbar renders 4 icon buttons with correct data-testids",
-    "step 23-26: tooltips fire on hover for each toolbar icon"
+    "step 20: beta card shows no input dot (emergent input)",
+    "step 21: pane click clears selection",
+    "step 23: EditToolbar renders add/library/loop/merge buttons, no toolbar-switch",
+    "step 24-27: tooltips fire on hover for each toolbar icon"
   ],
   "anomalies": [
     "<optional — surprising-but-non-fatal observations>"

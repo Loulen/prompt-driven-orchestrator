@@ -17,8 +17,13 @@ export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 //   - map-key serialization order (variables, frontmatter, when-clauses come
 //     from Rust HashMaps whose JSON order is nondeterministic),
 //   - fields the canvas serializer doesn't round-trip.
-// `view: { x, y }` is stripped: library pipelines don't carry layout, so the
-// canvas can freely rearrange nodes without that registering as "diverged".
+// Layout is stripped from both sides before comparison:
+//   - node `view: { x, y }` — node positions,
+//   - edge `mode` + `waypoints` — orthogonal routing / manual pins (#154).
+// Library pipelines don't carry layout, and even a starred local pipeline can
+// be freely rearranged (move a node, pin an edge route) without that
+// registering as "diverged". Layout travels in the file (so a shared workflow
+// keeps its arrows) but is never a semantic difference.
 export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
   return deepEqual(comparablePipelineObject(a), comparablePipelineObject(b));
 }
@@ -29,6 +34,13 @@ function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
   if (nodes) {
     for (const node of nodes) {
       delete node.view;
+    }
+  }
+  const edges = obj.edges as Record<string, unknown>[] | undefined;
+  if (edges) {
+    for (const edge of edges) {
+      delete edge.mode;
+      delete edge.waypoints;
     }
   }
   return obj;

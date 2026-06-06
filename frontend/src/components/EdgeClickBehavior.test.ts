@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useEditStore } from "../stores/editStore";
+import { edgeIndexFromId } from "./editNodeDerivation";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 vi.mock("../api", () => ({
@@ -64,62 +65,46 @@ beforeEach(() => {
   });
 });
 
-describe("edge click selects source node", () => {
-  it("resolves edge source to node selection and sets scrollToPort", () => {
-    const nodeA = makeNode({ id: "aaaaaaaa", name: "Alpha", outputs: [{ name: "result", repeated: false }] });
-    const nodeB = makeNode({ id: "bbbbbbbb", name: "Beta" });
+// Edge click opens the edge detail panel (#147): it selects the EDGE itself,
+// keyed by its index in `pipeline.edges`, rather than redirecting to the source
+// node. The xyflow edge id is `e-{index}`; `edgeIndexFromId` decodes it.
+describe("edge click selects the edge", () => {
+  it("decodes the edge index from the canvas edge id", () => {
+    expect(edgeIndexFromId("e-0")).toBe(0);
+    expect(edgeIndexFromId("e-3")).toBe(3);
+  });
+
+  it("returns null for an id that is not an edge id", () => {
+    expect(edgeIndexFromId("node-abc")).toBeNull();
+    expect(edgeIndexFromId("e-")).toBeNull();
+    expect(edgeIndexFromId("")).toBeNull();
+  });
+
+  it("sets an edge selection carrying the clicked edge's index", () => {
+    const nodeA = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result", repeated: false }] });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
     const edge: EdgeDef = {
       source: { node: "aaaaaaaa", port: "result" },
       target: { node: "bbbbbbbb", port: "in" },
     };
     seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
 
-    const tab = useEditStore.getState().openTabs[0];
-    const edgeDef = tab.pipeline.edges[0];
+    const idx = edgeIndexFromId("e-0");
+    useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: idx! });
 
-    useEditStore.getState().setSelection({ kind: "node", id: edgeDef.source.node });
-    useEditStore.getState().setScrollToPort(edgeDef.source.port);
-
-    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "aaaaaaaa" });
-    expect(useEditStore.getState().scrollToPort).toBe("result");
-  });
-
-  it("works for edges with default port names", () => {
-    const nodeA = makeNode({ id: "aaaaaaaa" });
-    const nodeB = makeNode({ id: "bbbbbbbb" });
-    const edge: EdgeDef = {
-      source: { node: "aaaaaaaa", port: "out" },
-      target: { node: "bbbbbbbb", port: "in" },
-    };
-    seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
-
-    const tab = useEditStore.getState().openTabs[0];
-    const edgeDef = tab.pipeline.edges[0];
-
-    useEditStore.getState().setSelection({ kind: "node", id: edgeDef.source.node });
-    useEditStore.getState().setScrollToPort(edgeDef.source.port);
-
-    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "aaaaaaaa" });
-    expect(useEditStore.getState().scrollToPort).toBe("out");
+    const sel = useEditStore.getState().selection;
+    expect(sel.kind).toBe("edge");
+    expect(sel.edgeIndex).toBe(0);
   });
 });
 
-describe("scrollToPort store field", () => {
-  it("defaults to null", () => {
-    expect(useEditStore.getState().scrollToPort).toBeNull();
+describe("SelectionKind includes edge", () => {
+  it("setting selection to edge kind works", () => {
+    useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 1 });
+    expect(useEditStore.getState().selection.kind).toBe("edge");
   });
 
-  it("can be set and cleared", () => {
-    useEditStore.getState().setScrollToPort("review");
-    expect(useEditStore.getState().scrollToPort).toBe("review");
-
-    useEditStore.getState().setScrollToPort(null);
-    expect(useEditStore.getState().scrollToPort).toBeNull();
-  });
-});
-
-describe("SelectionKind does not include edge", () => {
-  it("setting selection to node kind works", () => {
+  it("setting selection to node kind still works", () => {
     useEditStore.getState().setSelection({ kind: "node", id: "abc" });
     expect(useEditStore.getState().selection.kind).toBe("node");
   });

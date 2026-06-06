@@ -67,8 +67,96 @@ function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
   });
 }
 
+function seedPooledReviewPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "sec",
+              name: "security-reviewer",
+              type: "doc-only",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "review", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+            {
+              id: "perf",
+              name: "perf-reviewer",
+              type: "doc-only",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "review", repeated: false, side: "right" }],
+              view: { x: 0, y: 100 },
+            },
+            {
+              id: "impl",
+              name: "implementer",
+              type: "code-mutating",
+              interactive: false,
+              inputs: [],
+              outputs: [
+                {
+                  name: "diff",
+                  repeated: false,
+                  side: "right",
+                  frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
+                },
+              ],
+              view: { x: 200, y: 50 },
+            },
+          ],
+          edges: [
+            { source: { node: "sec", port: "review" }, target: { node: "impl", port: "review" } },
+            { source: { node: "perf", port: "review" }, target: { node: "impl", port: "review" } },
+          ],
+        },
+        prompts: { impl: "Implement." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "impl" },
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("NodeInspector — pooled emergent inputs (#153)", () => {
+  it("shows one pooled input listing both contributing source nodes", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const pooled = screen.getByTestId("pooled-input-review");
+    expect(pooled).toHaveTextContent("review");
+    expect(pooled).toHaveTextContent("security-reviewer");
+    expect(pooled).toHaveTextContent("perf-reviewer");
+  });
+
+  it("shows the node ID", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByText("impl")).toBeInTheDocument();
+  });
+
+  it("shows the declared output port schema fields", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    // The output card for `diff` renders its frontmatter schema editor.
+    expect(screen.getByTestId("output-port-card-diff")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("verdict")).toBeInTheDocument();
+  });
 });
 
 describe("NodeInspector StarButton — library save is independent of pipeline save", () => {

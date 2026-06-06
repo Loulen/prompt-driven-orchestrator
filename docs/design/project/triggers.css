@@ -1,0 +1,485 @@
+/* triggers.css — Triggers tab, trigger rows, fire history, trigger-mode modal,
+   session counter, and triggered-run provenance. Builds on styles.css /
+   styles-v2.css; reuses --bg/--fg/--acc/--st tokens and the lp-tab pattern. */
+
+/* ───────────────────────── Trigger list ───────────────────────── */
+
+.trig-list { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+
+.trig-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 10px 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.trig-row:hover { background: var(--bg-3); }
+.trig-row.selected { background: var(--bg-3); border-color: var(--line-strong); }
+.trig-row.disabled { opacity: 0.56; }
+.trig-row.disabled:hover { opacity: 0.78; }
+
+/* status dot + hover tooltip */
+.trig-dot-wrap { position: relative; margin-top: 4px; display: grid; place-items: center; }
+.trig-dot-wrap .st-dot { width: 9px; height: 9px; }
+.trig-tip {
+  position: absolute;
+  left: 50%; bottom: calc(100% + 8px);
+  transform: translateX(-30%);
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 6px 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+  opacity: 0; pointer-events: none;
+  transition: opacity 120ms;
+  z-index: 20;
+}
+.trig-tip .tt-k { color: var(--fg-4); }
+.trig-tip .tt-ok { color: var(--st-done); }
+.trig-tip .tt-skip { color: var(--fg-3); }
+.trig-tip .tt-err { color: var(--st-failed); }
+.trig-dot-wrap:hover .trig-tip { opacity: 1; }
+
+.trig-main { min-width: 0; }
+.trig-name {
+  font-size: 12.5px; font-weight: 600; color: var(--fg);
+  letter-spacing: -0.005em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.trig-row.disabled .trig-name { font-weight: 500; }
+.trig-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px; color: var(--fg-3);
+  margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.trig-sub .sep { color: var(--fg-5); margin: 0 5px; }
+
+.trig-schedule {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--fg-2);
+  margin-top: 6px;
+}
+.trig-schedule svg { color: var(--fg-4); flex-shrink: 0; }
+.trig-schedule .sch-text { color: var(--fg-2); }
+
+.trig-fire {
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+  margin-top: 4px;
+}
+.trig-fire .tf-next { color: var(--acc); }
+.trig-fire .tf-paused { color: var(--fg-4); }
+.trig-fire .tf-err { color: var(--st-failed); }
+
+/* right column: toggle (always) + hover actions */
+.trig-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.trig-actions {
+  display: flex; gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.trig-row:hover .trig-actions { opacity: 1; }
+.trig-actions .icon-btn {
+  width: 24px; height: 22px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+}
+.trig-actions .icon-btn:hover { background: var(--bg-4); color: var(--fg); }
+.trig-actions .icon-btn.danger:hover { color: var(--st-failed); border-color: rgba(168,120,74,0.4); }
+
+/* ───────────────────── Triggers empty state ───────────────────── */
+
+.trig-empty {
+  height: 100%;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 32px 26px;
+}
+.trig-empty .te-art {
+  width: 72px; height: 72px;
+  display: grid; place-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  color: var(--fg-4);
+  position: relative;
+}
+.trig-empty .te-art .te-bolt {
+  position: absolute; right: -6px; bottom: -6px;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--acc-bg);
+  border: 1px solid var(--acc-border);
+  color: var(--acc);
+  display: grid; place-items: center;
+}
+.trig-empty .te-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.trig-empty .te-sub {
+  font-size: 11.5px; color: var(--fg-3); line-height: 1.55;
+  max-width: 230px;
+}
+.trig-empty .btn { margin-top: 4px; }
+
+/* ─────────────────── Trigger detail (right panel) ─────────────────── */
+
+.trig-detail-head {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.trig-detail-head .tdh-main { flex: 1; min-width: 0; }
+.trig-detail-head .tdh-name { font-size: 14px; font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.trig-detail-head .tdh-sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); margin-top: 3px; }
+
+/* config grid */
+.trig-config {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 14px;
+  font-size: 11.5px;
+}
+.trig-config .tc-k {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-4);
+  padding-top: 1px;
+}
+.trig-config .tc-v { color: var(--fg-2); }
+.trig-config .tc-v.mono { font-family: var(--font-mono); font-size: 11px; }
+.trig-config .tc-v .tcv-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 7px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-2);
+}
+.trig-config .tc-guard {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg);
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* fire history — the protagonist */
+.fire-log { display: flex; flex-direction: column; }
+.fire-entry {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  padding: 9px 0 9px;
+  border-bottom: 1px solid var(--line-soft);
+  position: relative;
+}
+.fire-entry:last-child { border-bottom: none; }
+.fire-rail {
+  display: grid; place-items: start center;
+  position: relative;
+}
+.fire-rail::before {
+  content: ""; position: absolute;
+  top: 14px; bottom: -9px; left: 50%;
+  width: 1px; background: var(--line);
+  transform: translateX(-50%);
+}
+.fire-entry:last-child .fire-rail::before { display: none; }
+.fire-glyph {
+  width: 13px; height: 13px; border-radius: 50%;
+  display: grid; place-items: center;
+  margin-top: 2px;
+  z-index: 1;
+  background: var(--bg-2);
+}
+.fire-glyph svg { width: 9px; height: 9px; }
+.fire-entry.fired   .fire-glyph { color: var(--st-done); box-shadow: inset 0 0 0 1.4px var(--st-done); }
+.fire-entry.skipped .fire-glyph { color: var(--fg-3);    box-shadow: inset 0 0 0 1.4px var(--fg-4); }
+.fire-entry.guard_fail .fire-glyph { color: var(--st-failed); box-shadow: inset 0 0 0 1.4px var(--st-failed); }
+.fire-entry.guard_err  .fire-glyph { color: var(--st-failed); box-shadow: inset 0 0 0 1.4px rgba(168,120,74,0.6); }
+
+.fire-body { min-width: 0; }
+.fire-top { display: flex; align-items: baseline; gap: 8px; }
+.fire-label { font-size: 12px; font-weight: 600; color: var(--fg); }
+.fire-entry.skipped .fire-label,
+.fire-entry.guard_fail .fire-label,
+.fire-entry.guard_err .fire-label { font-weight: 500; color: var(--fg-2); }
+.fire-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+  white-space: nowrap;
+}
+.fire-reason {
+  font-size: 11px; color: var(--fg-3);
+  line-height: 1.5; margin-top: 3px;
+}
+.fire-reason .mono { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2); }
+.fire-runlink {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--acc);
+  text-decoration: none;
+  cursor: pointer;
+}
+.fire-runlink svg { width: 11px; height: 11px; }
+.fire-runlink:hover { color: var(--acc-dim); }
+
+/* ───────────────── New Run modal — mode toggle + trigger group ───────────────── */
+
+.mode-toggle {
+  display: inline-flex;
+  width: 100%;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 3px;
+  gap: 3px;
+}
+.mode-toggle button {
+  flex: 1;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: none; background: transparent;
+  color: var(--fg-3);
+  font: inherit; font-size: 12px; font-weight: 500;
+  height: 30px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 130ms, color 130ms;
+}
+.mode-toggle button svg { width: 13px; height: 13px; }
+.mode-toggle button.on { background: var(--bg-3); color: var(--fg); box-shadow: 0 1px 0 rgba(255,255,255,0.03); }
+.mode-toggle button.on.trig { color: var(--acc); }
+
+.mode-caption {
+  font-size: 10.5px; color: var(--fg-4);
+  line-height: 1.5; margin-top: 7px;
+}
+
+/* the trigger-only group — hairline outline, distinct by a subtle gold edge
+   (no heavy fill), in keeping with the streamlined node aesthetic) */
+.trig-group {
+  margin-top: 4px;
+  border: 1px solid rgba(194,161,94,0.28);
+  border-radius: 10px;
+  background: var(--bg-1);
+  overflow: hidden;
+}
+.trig-group .tg-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--acc);
+}
+.trig-group .tg-head svg { width: 12px; height: 12px; }
+.trig-group .tg-body { padding: 13px; display: flex; flex-direction: column; gap: 13px; }
+
+/* schedule preset chooser */
+.sched-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.sched-chip {
+  height: 26px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.sched-chip:hover { background: var(--bg-3); color: var(--fg); }
+.sched-chip.on {
+  background: var(--acc-bg);
+  border-color: var(--acc-border);
+  color: var(--acc);
+  font-weight: 600;
+}
+.sched-chip .sc-time {
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.sched-time-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 9px;
+}
+.sched-time-row .stl { font-size: 10.5px; color: var(--fg-3); }
+.sched-time-row .input { width: 92px; }
+
+/* cron escape hatch */
+.cron-hatch { margin-top: 9px; }
+.cron-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0;
+}
+.cron-toggle:hover { color: var(--fg-2); }
+.cron-toggle .chev { display: inline-flex; transition: transform 120ms; }
+.cron-toggle.open .chev { transform: rotate(0deg); }
+.cron-toggle:not(.open) .chev { transform: rotate(-90deg); }
+.cron-field { margin-top: 8px; }
+.cron-field .cron-resolved {
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--fg-4);
+}
+.cron-field .cron-resolved .ok { color: var(--st-done); }
+
+/* guard contract helper */
+.guard-help {
+  font-size: 10.5px; color: var(--fg-4);
+  line-height: 1.55; margin-top: 6px;
+}
+.guard-help .g-exit0 { color: var(--st-done); font-family: var(--font-mono); }
+.guard-help .g-exitn { color: var(--st-failed); font-family: var(--font-mono); }
+.guard-help .mono { font-family: var(--font-mono); color: var(--fg-2); }
+
+/* overlap choice */
+.overlap-choice { display: flex; flex-direction: column; gap: 6px; }
+.overlap-opt {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 9px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg-1);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.overlap-opt:hover { border-color: var(--bg-5); }
+.overlap-opt.on { border-color: var(--acc-border); background: var(--acc-bg); }
+.overlap-radio {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1.5px solid var(--fg-4);
+  margin-top: 1px;
+  position: relative;
+}
+.overlap-opt.on .overlap-radio { border-color: var(--acc); }
+.overlap-opt.on .overlap-radio::after {
+  content: ""; position: absolute; inset: 2.5px;
+  border-radius: 50%; background: var(--acc);
+}
+.overlap-opt .oo-name { font-size: 12px; color: var(--fg); font-weight: 500; }
+.overlap-opt.on .oo-name { color: var(--fg); }
+.overlap-opt .oo-name .oo-def {
+  margin-left: 6px;
+  font-size: 9.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-4);
+}
+.overlap-opt .oo-sub { font-size: 10.5px; color: var(--fg-4); margin-top: 2px; line-height: 1.45; }
+
+/* repurposed prompt → input template label tint */
+.field label .relabel { color: var(--acc); }
+
+/* reject / invalid state near the action */
+.modal-foot.with-reason { flex-direction: column; align-items: stretch; gap: 10px; }
+.reject-reason {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 11px;
+  background: rgba(168,120,74,0.10);
+  border: 1px solid rgba(168,120,74,0.34);
+  border-radius: 6px;
+  font-size: 11px; color: #e3c9a3;
+  line-height: 1.5;
+}
+.reject-reason svg { color: var(--st-failed); flex-shrink: 0; margin-top: 1px; }
+.reject-reason .mono { font-family: var(--font-mono); font-size: 10.5px; color: #f0dcc0; }
+.modal-foot .foot-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn.primary:disabled,
+.btn:disabled.primary {
+  background: var(--bg-4);
+  border-color: var(--line-strong);
+  color: var(--fg-4);
+  cursor: not-allowed;
+  font-weight: 500;
+}
+
+/* ───────────────── Session counter in bottom status bar ───────────────── */
+
+.sess-counter {
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.sess-counter .sc-label { color: var(--fg-4); }
+.sess-counter .sc-val { color: var(--fg-2); }
+.sess-counter .sc-val .sc-cap { color: var(--fg-4); }
+.sess-gauge {
+  width: 46px; height: 5px;
+  border-radius: 3px;
+  background: var(--bg-5);
+  overflow: hidden;
+  position: relative;
+}
+.sess-gauge .sg-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--st-done);
+  border-radius: 3px;
+}
+.sess-counter.warn .sc-val { color: var(--st-await); }
+.sess-counter.warn .sess-gauge .sg-fill { background: var(--st-await); }
+.sess-counter.crit .sc-val { color: var(--st-failed); }
+.sess-counter.crit .sess-gauge .sg-fill { background: var(--st-failed); }
+.sess-counter.warn .sc-flag,
+.sess-counter.crit .sc-flag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--st-await);
+}
+.sess-counter.crit .sc-flag { color: var(--st-failed); }
+
+/* ───────────────── Triggered-run provenance badge (Runs tab) ───────────────── */
+
+/* provenance — a quiet inline link, not a filled pill (hairline aesthetic) */
+.prov-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--acc);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  max-width: 100%;
+  width: fit-content;
+  opacity: 0.92;
+}
+.prov-badge svg { width: 10px; height: 10px; flex-shrink: 0; opacity: 0.8; }
+.prov-badge .pb-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-bottom: 1px dashed rgba(194,161,94,0.4);
+}
+.prov-badge:hover { opacity: 1; }
+.prov-badge:hover .pb-name { border-bottom-style: solid; }
+
+/* ───────────────── Header action — count affordance parity ───────────────── */
+.lp-tab .lp-tab-c.dot-warn { color: var(--st-failed); background: rgba(168,120,74,0.16); }

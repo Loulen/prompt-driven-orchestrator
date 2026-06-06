@@ -8,6 +8,8 @@
 <link rel="stylesheet" href="styles-v2.css"/>
 <link rel="stylesheet" href="winners.css"/>
 <link rel="stylesheet" href="styles-v3.css"/>
+<link rel="stylesheet" href="refonte.css"/>
+<link rel="stylesheet" href="triggers.css"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -42,10 +44,14 @@
 <script type="text/babel" src="screens-v2.jsx"></script>
 <script type="text/babel" src="screens-v3.jsx"></script>
 <script type="text/babel" src="spotlights.jsx"></script>
+<script type="text/babel" src="refonte-canvas.jsx"></script>
+<script type="text/babel" src="refonte-inspect.jsx"></script>
+<script type="text/babel" src="refonte-screens.jsx"></script>
+<script type="text/babel" src="triggers-screens.jsx"></script>
 
 <script type="text/babel" data-presets="env,react">
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "accent": "#f59e0b",
+  "accent": "#c2a15e",
   "background": "#0f1115",
   "panelTone": "cool"
 }/*EDITMODE-END*/;
@@ -56,9 +62,22 @@ function MaestroApp() {
   // apply tweaks via root css vars
   React.useEffect(() => {
     const r = document.documentElement;
-    r.style.setProperty('--acc', t.accent);
-    r.style.setProperty('--acc-dim', t.accent);
-    r.style.setProperty('--st-running', '#3b82f6');
+    // single muted accent drives interaction + active/running status
+    const hex = t.accent;
+    const m = hex.replace('#','').match(/.{2}/g) || ['c2','a1','5e'];
+    const rgb = m.map(h => parseInt(h, 16));
+    const dim = rgb.map(c => Math.round(c * 0.82)).join(',');
+    const csv = rgb.join(',');
+    r.style.setProperty('--acc', hex);
+    r.style.setProperty('--acc-dim', `rgb(${dim})`);
+    r.style.setProperty('--acc-bg', `rgba(${csv},0.12)`);
+    r.style.setProperty('--acc-border', `rgba(${csv},0.34)`);
+    r.style.setProperty('--st-running', hex);
+    r.style.setProperty('--st-running-bg', `rgba(${csv},0.14)`);
+    r.style.setProperty('--st-await', hex);
+    r.style.setProperty('--st-await-bg', `rgba(${csv},0.14)`);
+    r.style.setProperty('--st-done', hex);
+    r.style.setProperty('--st-done-bg', `rgba(${csv},0.14)`);
     if (t.background === '#000000') {
       r.style.setProperty('--bg-1', '#000000'); r.style.setProperty('--bg-0', '#000000');
       r.style.setProperty('--bg-2', '#0a0a0c'); r.style.setProperty('--bg-3', '#141418');
@@ -74,129 +93,63 @@ function MaestroApp() {
   return (
     <>
       <DesignCanvas minScale={0.05} maxScale={2}>
-        <DCSection id="v3A" title="Happy path A — Run lifecycle intervention" subtitle="Per-node Play/Retry/Stop · stopped · stale · paused run states">
-          <DCArtboard id="v3-a1" label="01 · Run · running node · lifecycle controls" width={ART_W} height={ART_H}>
-            <ScreenV3_A1/>
+        <DCSection id="loopHappy" title="Happy path A — Build &amp; run a conditional review loop" subtitle="The refonte canvas gestalt — hairline nodes (no status band, no pills) · per-document output dots · emergent inputs · flat condition labels · translucent loop region · edge detail panel. The node + UI language all the trigger screens build on.">
+          <DCArtboard id="rf-1" label="01 · Canvas — review loop, idle" width={ART_W} height={ART_H}>
+            <RScreen1/>
           </DCArtboard>
-          <DCArtboard id="v3-a2" label="02 · Run · paused · Resume highlighted" width={ART_W} height={ART_H}>
-            <ScreenV3_A2/>
+          <DCArtboard id="rf-2" label="02 · Edge detail — editing a condition" width={ART_W} height={ART_H}>
+            <RScreen2/>
           </DCArtboard>
-          <DCArtboard id="v3-a3" label="03 · Run · stopped node · downstream cascade" width={ART_W} height={ART_H}>
-            <ScreenV3_A3/>
+          <DCArtboard id="rf-3" label="03 · Canvas — collection region + single-member badge" width={ART_W} height={ART_H}>
+            <RScreen3/>
           </DCArtboard>
-          <DCArtboard id="v3-a4" label="04 · Run · stale node · agent idle banner" width={ART_W} height={ART_H}>
-            <ScreenV3_A4/>
-          </DCArtboard>
-        </DCSection>
-        <DCSection id="v3B" title="Happy path B — Launch a new run on a different repo" subtitle="Multi-section New Run modal · repo + branch · two-group pipeline picker · image upload · labeled run rows">
-          <DCArtboard id="v3-b5" label="05 · New Run · repo + branch + pipeline groups" width={ART_W} height={ART_H}>
-            <ScreenV3_B5/>
-          </DCArtboard>
-          <DCArtboard id="v3-b6" label="06 · New Run · image upload with thumbnails" width={ART_W} height={ART_H}>
-            <ScreenV3_B6/>
-          </DCArtboard>
-          <DCArtboard id="v3-b7" label="07 · Left panel · run rows with display labels" width={ART_W} height={ART_H}>
-            <ScreenV3_B7/>
+          <DCArtboard id="rf-4" label="04 · Canvas — running · exhausted-unrouted block" width={ART_W} height={ART_H}>
+            <RScreen4/>
           </DCArtboard>
         </DCSection>
-        <DCSection id="v3C" title="Happy path C — Diffs and image outputs during a run" subtitle="Aggregate diff viewer · image gallery + lightbox · markdown with inline images">
-          <DCArtboard id="v3-c8" label="08 · Pipeline info · aggregate run diff" width={ART_W} height={ART_H}>
-            <ScreenV3_C8/>
+        <DCSection id="trigManage" title="Happy path B — Manage &amp; monitor triggers" subtitle="The three-tab strip (Runs · Triggers · Library) · hairline trigger rows with status dots, schedules and toggles · the fire-history debugging surface · triggered-run provenance · the session-counter status bar. Same hairline node language on the center canvas.">
+          <DCArtboard id="t-a1" label="05 · Triggers tab — populated" width={ART_W} height={ART_H}>
+            <T_A1/>
           </DCArtboard>
-          <DCArtboard id="v3-c9" label="09 · Node detail · image_list output gallery" width={ART_W} height={ART_H}>
-            <ScreenV3_C9/>
+          <DCArtboard id="t-a2" label="06 · Triggers tab — empty" width={ART_W} height={ART_H}>
+            <T_A2/>
           </DCArtboard>
-          <DCArtboard id="v3-c10" label="10 · Markdown viewer · inline images" width={ART_W} height={ART_H}>
-            <ScreenV3_C10/>
+          <DCArtboard id="t-a3" label="07 · Trigger detail — fire history" width={ART_W} height={ART_H}>
+            <T_A3/>
           </DCArtboard>
-        </DCSection>
-        <DCSection id="v3S" title="Component spotlight" subtitle="Output port type selector · library pipeline drift indicator">
-          <DCArtboard id="v3-s11" label="11 · Spotlight · output port type selector" width={ART_W} height={ART_H}>
-            <ScreenV3_S11/>
-          </DCArtboard>
-          <DCArtboard id="v3-s12" label="12 · Spotlight · library pipeline drift indicator" width={ART_W} height={ART_H}>
-            <ScreenV3_S12/>
+          <DCArtboard id="t-a4" label="08 · Runs tab — provenance + near-cap counter" width={ART_W} height={ART_H}>
+            <T_A4/>
           </DCArtboard>
         </DCSection>
-        <DCSection id="happyA" title="Happy path A — Monitor and intervene during a Run" subtitle="Inline xterm.js, fused panel, edit-during-run, frontmatter retry exhausted">
-          <DCArtboard id="a1-run-default" label="01 · Run · node terminal at default height" width={ART_W} height={ART_H}>
-            <ScreenA1/>
+        <DCSection id="trigCreate" title="Happy path C — Create a trigger" subtitle="The New Run modal's mode toggle frames everything below it. Trigger mode reveals the Name · Schedule · Guard · Overlap group (a hairline-outlined distinct block), with the prompt repurposed as an input template — and the reject state when a prompt-required pipeline has neither.">
+          <DCArtboard id="t-b1" label="09 · New Run modal — Trigger mode, populated" width={ART_W} height={ART_H}>
+            <T_B1/>
           </DCArtboard>
-          <DCArtboard id="a2-info-manager" label="02 · Run · pipeline-info panel · Manager terminal" width={ART_W} height={ART_H}>
-            <ScreenA2/>
-          </DCArtboard>
-          <DCArtboard id="a3-edit-during-run" label="03 · Run · edit during run · pending node added" width={ART_W} height={ART_H}>
-            <ScreenA3/>
-          </DCArtboard>
-          <DCArtboard id="a4-fail-validation" label="04 · Run · failed · frontmatter retry exhausted" width={ART_W} height={ART_H}>
-            <ScreenA4/>
+          <DCArtboard id="t-b2" label="10 · New Run modal — Trigger mode, reject" width={ART_W} height={ART_H}>
+            <T_B2/>
           </DCArtboard>
         </DCSection>
-        <DCSection id="happyB" title="Happy path B — Design a pipeline from the library" subtitle="Library focus, typed outputs, ForEach + Merge, lint diagnostic">
-          <DCArtboard id="b5-template-design" label="05 · Library · template selected · design context" width={ART_W} height={ART_H}>
-            <ScreenB5/>
+        <DCSection id="spotlights" title="Component spotlights" subtitle="The pieces no single screen fully reveals — the refonte node system, plus the new trigger-only components across their states.">
+          <DCArtboard id="rf-5" label="11 · Node card variants" width={ART_W} height={ART_H}>
+            <RScreen5/>
           </DCArtboard>
-          <DCArtboard id="b6-schema-enum" label="06 · Inspector · output schema with enum" width={ART_W} height={ART_H}>
-            <ScreenB6/>
+          <DCArtboard id="rf-6" label="12 · Node inspector — pooling" width={ART_W} height={ART_H}>
+            <RScreen6/>
           </DCArtboard>
-          <DCArtboard id="b7-foreach-merge" label="07 · Canvas · ForEach + Merge convergence" width={ART_W} height={ART_H}>
-            <ScreenB7/>
+          <DCArtboard id="rf-7" label="13 · Region inspector / header" width={ART_W} height={ART_H}>
+            <RScreen7/>
           </DCArtboard>
-          <DCArtboard id="b8-lint" label="08 · Canvas · fan-out without Merge · lint info" width={ART_W} height={ART_H}>
-            <ScreenB8/>
+          <DCArtboard id="rf-8" label="14 · Edge shaping interaction" width={ART_W} height={ART_H}>
+            <RScreen8/>
           </DCArtboard>
-        </DCSection>
-        <DCSection id="happyC" title="Happy path C — Launch a new Run" subtitle="+ New Run modal fed by starred templates">
-          <DCArtboard id="c9-new-run" label="09 · + New Run · pipeline picker" width={ART_W} height={ART_H}>
-            <ScreenC9/>
+          <DCArtboard id="t-s1" label="15 · Session counter — normal · near-cap · at-cap" width={920} height={520}>
+            <T_SpotSessions/>
           </DCArtboard>
-        </DCSection>
-        <DCSection id="spotlight" title="Component spotlight" subtitle="Expanded terminal · star popover · enum schema row">
-          <DCArtboard id="s10-terminal-expanded" label="10 · Spotlight · expanded node terminal" width={ART_W} height={ART_H}>
-            <ScreenS10/>
+          <DCArtboard id="t-s2" label="16 · Trigger row — outcomes, toggle, hover actions" width={760} height={720}>
+            <T_SpotRow/>
           </DCArtboard>
-          <DCArtboard id="s11-info-popover" label="11 · Spotlight · info panel · star popover" width={ART_W} height={ART_H}>
-            <ScreenS11/>
-          </DCArtboard>
-          <DCArtboard id="s12-schema-enum" label="12 · Spotlight · output schema · enum row" width={ART_W} height={ART_H}>
-            <ScreenS12/>
-          </DCArtboard>
-        </DCSection>
-        <DCSection id="winners" title="Component spotlights — picked winners" subtitle="H1 node cadre · P2 port pill · O3 output card · F1 field row · S1 AND-rail branches · I1 hairline inspector port row · amber inspector accent">
-          <DCArtboard id="w1-nodes" label="W1 · Node card · H1 status × type matrix" width={ART_W} height={ART_H}>
-            <SpotNodes/>
-          </DCArtboard>
-          <DCArtboard id="w2-ports" label="W2 · Port row · P2 capsule pill" width={ART_W} height={ART_H}>
-            <SpotPorts/>
-          </DCArtboard>
-          <DCArtboard id="w3-inspector" label="W3 · Inspector · O3 output + F1 field + S1 branches" width={ART_W} height={ART_H}>
-            <SpotInspector/>
-          </DCArtboard>
-        </DCSection>
-        <DCSection id="carryover" title="Carry-overs" subtitle="Out-of-scope screens kept as-is from the previous iteration">
-          <DCArtboard id="empty" label="Empty state — no run selected" width={ART_W} height={ART_H}>
-            <Screen8/>
-          </DCArtboard>
-          <DCArtboard id="md-verdict" label="Markdown viewer · verdict" width={ART_W} height={ART_H}>
-            <Screen9/>
-          </DCArtboard>
-          <DCArtboard id="md-feedback" label="Markdown viewer · iter 4 of 5" width={ART_W} height={ART_H}>
-            <Screen9b/>
-          </DCArtboard>
-          <DCArtboard id="edit-switch" label="Switch · branch editor" width={ART_W} height={ART_H}>
-            <Screen13/>
-          </DCArtboard>
-          <DCArtboard id="edit-loop" label="Loop · config" width={ART_W} height={ART_H}>
-            <Screen14/>
-          </DCArtboard>
-          <DCArtboard id="edit-library" label="Library dropdown open" width={ART_W} height={ART_H}>
-            <Screen15/>
-          </DCArtboard>
-          <DCArtboard id="run-loop-switch" label="Run · Loop + Switch executing" width={ART_W} height={ART_H}>
-            <Screen16/>
-          </DCArtboard>
-          <DCArtboard id="star-states" label="Star · favorite states" width={ART_W} height={ART_H}>
-            <Screen17/>
+          <DCArtboard id="t-s3" label="17 · Schedule chooser &amp; Guard contract" width={620} height={680}>
+            <T_SpotSchedGuard/>
           </DCArtboard>
         </DCSection>
       </DesignCanvas>
@@ -204,7 +157,7 @@ function MaestroApp() {
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme"/>
         <TweakColor label="Accent" value={t.accent}
-          options={['#10b981','#a78bfa','#3b82f6','#f59e0b','#e5e5e5']}
+          options={['#c2a15e','#b89160','#9aa886','#a8a08c','#a89bbf']}
           onChange={(v) => setTweak('accent', v)}/>
         <TweakColor label="Background" value={t.background}
           options={['#000000','#0f1115','#13110f']}

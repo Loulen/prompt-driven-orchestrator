@@ -30,6 +30,16 @@ pub enum NodeType {
     Merge,
 }
 
+impl NodeType {
+    /// A *regular* node (doc-only / code-mutating) declares no inputs: its inputs
+    /// are emergent, derived from incoming edges and named after the edge target
+    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/for-each/
+    /// merge) keep their required, declared input ports.
+    pub fn has_emergent_inputs(&self) -> bool {
+        matches!(self, NodeType::DocOnly | NodeType::CodeMutating)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FrontmatterFieldDecl {
     #[serde(rename = "type")]
@@ -117,18 +127,63 @@ pub struct NodeDef {
     pub over: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EdgeEndpoint {
     pub node: String,
     pub port: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Edge routing mode (#154). `Auto` edges store no waypoints — their
+/// right-angle path is recomputed deterministically and re-routes on node move.
+/// `Manual` edges pin the route to persisted `waypoints`. Routing is *layout*,
+/// not semantics: it persists in the pipeline file (so a shared workflow keeps
+/// its arrows) but is excluded from the semantic pipeline-diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeRouteMode {
+    Auto,
+    Manual,
+}
+
+/// A pinned waypoint on a manually-routed edge — absolute canvas coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EdgeWaypoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EdgeDef {
     pub source: EdgeEndpoint,
     pub target: EdgeEndpoint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional `when:` clause: a mechanical predicate (ADR-0002 grammar)
+    /// evaluated against the source node's frontmatter, `iter`, and pipeline
+    /// variables. When present, the edge fires only if the clause is satisfied.
+    /// Conditional routing lives on the edge (ADR-0011).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<serde_yaml::Value>,
+    /// `else: true` marks a fallback edge that fires iff no sibling edge on the
+    /// same source port matched (ADR-0011). Mutually exclusive with `when:`.
+    #[serde(default, rename = "else", skip_serializing_if = "is_false")]
+    pub is_else: bool,
+    /// `repeated: true` marks an edge whose source artifact accumulates across
+    /// iterations: the resolver globs `iter-*` and pools every match into the
+    /// emergent input. Loop accumulation ("read all laps") lives on the edge,
+    /// not on a declared input port (ADR-0011 / #149).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub repeated: bool,
+    /// Routing mode (#154). Absent ⇒ auto (recomputed, never persisted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<EdgeRouteMode>,
+    /// Pinned absolute waypoints (#154). Only meaningful when `mode == Manual`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waypoints: Option<Vec<EdgeWaypoint>>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +204,31 @@ pub struct VariableDef {
     pub default: serde_yaml::Value,
 }
 
+/// The kind of a named loop region (ADR-0011 / #148). `Bounded` loops carry an
+/// iteration counter and a `max_iter`; they are born by auto-detection of a
+/// cycle so no cycle is ever accidentally unbounded. (`Collection` — ex-ForEach,
+/// `over: <field>` — is deferred to #151 and not modeled here.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopKind {
+    Bounded,
+}
+
+/// A named bounded loop region (ADR-0011 / #148). Replaces the `Loop` node:
+/// the loop is identified by `id`, its body is the explicit `members` list
+/// (>= 1 node; a single self-looping member is valid), and the iteration
+/// counter is region-wide, keyed by `id`. `max_iter` caps re-entry; an
+/// `iter >= max` exit edge routes the exhaustion, otherwise the region blocks
+/// "exhausted — unrouted" (never a silent stall).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRegion {
+    pub id: String,
+    pub kind: LoopKind,
+    pub members: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iter: Option<serde_yaml::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub name: String,
@@ -159,6 +239,10 @@ pub struct PipelineDef {
     pub nodes: Vec<NodeDef>,
     #[serde(default)]
     pub edges: Vec<EdgeDef>,
+    /// Named bounded loop regions (ADR-0011 / #148). Absent on pipelines with no
+    /// loops; round-trips when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loops: Vec<LoopRegion>,
 }
 
 fn infer_variable_type(val: &serde_yaml::Value) -> VariableType {
@@ -294,22 +378,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    // Reject when: on edges (moved to Switch nodes since #45)
-    if let Some(edges) = raw
-        .as_mapping()
-        .and_then(|m| m.get(serde_yaml::Value::String("edges".into())))
-        .and_then(|v| v.as_sequence())
-    {
-        for edge_val in edges {
-            if let Some(edge_map) = edge_val.as_mapping() {
-                if edge_map.contains_key(serde_yaml::Value::String("when".into())) {
-                    return Err(ParseError::MissingField(
-                        "edges no longer accept 'when:' (since #45). Move the condition into a Switch node.".into(),
-                    ));
-                }
-            }
-        }
-    }
+    // Conditional routing lives on the edge: an edge may carry a `when:` clause
+    // and/or an `else: true` marker (ADR-0011, supersedes #45's Switch-port
+    // placement). No prescriptive validation here (ADR-0001 sharp tool).
 
     let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
@@ -421,7 +492,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges"];
+    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges", "loops"];
     if let Some(mapping) = raw.as_mapping() {
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {
@@ -438,6 +509,12 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let node_ids: std::collections::HashSet<&str> =
         pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
+    // `role` is "source" or "target". For the target side of an edge that lands
+    // on a *regular* node, the input is emergent (#149): the node declares no
+    // inputs, so any target port is valid by construction (it names the emergent
+    // input). We only validate the port against declared ports for outputs and
+    // for structural-node inputs (start/end/switch/loop/for-each/merge), which
+    // keep their required, declared ports.
     let check_endpoint = |endpoint: &EdgeEndpoint,
                           role: &str,
                           get_ports: fn(&NodeDef) -> &[Port]|
@@ -456,6 +533,10 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
             .iter()
             .find(|n| n.id == endpoint.node)
             .unwrap();
+        // Skip the declared-port check for emergent inputs (regular-node targets).
+        if role == "target" && node.node_type.has_emergent_inputs() {
+            return None;
+        }
         if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
             return Some(Diagnostic {
                 severity: Severity::Warning,
@@ -936,6 +1017,57 @@ edges:
     }
 
     #[test]
+    fn parses_edge_with_when_clause_and_else_marker() {
+        let yaml = with_start_end(
+            r#"
+name: conditional-edges
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: review
+    outputs:
+      - name: code
+  - id: ab000003
+    name: archiver
+    type: doc-only
+    inputs:
+      - name: review
+    outputs:
+      - name: note
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: review }
+    when:
+      verdict: { eq: FAIL }
+  - source: { node: ab000001, port: review }
+    target: { node: ab000003, port: review }
+    else: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let guarded = &result.pipeline.edges[0];
+        assert!(guarded.when.is_some(), "first edge should carry when:");
+        assert!(!guarded.is_else, "first edge is not an else edge");
+
+        let fallback = &result.pipeline.edges[1];
+        assert!(fallback.when.is_none(), "else edge carries no when:");
+        assert!(fallback.is_else, "second edge should be an else edge");
+
+        // Round-trips: re-serialize, re-parse — no drift on the conditional fields.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed = parse_pipeline(&serialized).unwrap();
+        assert!(reparsed.pipeline.edges[0].when.is_some());
+        assert!(reparsed.pipeline.edges[1].is_else);
+    }
+
+    #[test]
     fn parses_interactive_node() {
         let yaml = with_start_end(
             r#"
@@ -1118,7 +1250,12 @@ edges:
     }
 
     #[test]
-    fn warns_on_port_name_typo() {
+    fn warns_on_source_port_typo_but_not_emergent_target() {
+        // Outputs stay declared, so a source-port typo is still a warning. Inputs
+        // on a regular (doc-only / code-mutating) node are emergent (#149): the
+        // input is derived from the edge and named after the target port, so any
+        // target port is valid by construction — no false-positive "target port
+        // not found" diagnostic (regression guard for run-minimal / edit-and-save).
         let yaml = with_start_end(
             r#"
 name: bad-port
@@ -1131,11 +1268,9 @@ nodes:
   - id: ab000002
     name: implementer
     type: doc-only
-    inputs:
-      - name: plan
 edges:
   - source: { node: ab000001, port: plaan }
-    target: { node: ab000002, port: plaan }
+    target: { node: ab000002, port: anything }
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
@@ -1147,9 +1282,57 @@ edges:
         assert!(warnings
             .iter()
             .any(|w| w.contains("source port 'plaan' not found")));
-        assert!(warnings
+        assert!(
+            !warnings.iter().any(|w| w.contains("target port")),
+            "emergent input on a regular node must not warn on target port; got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_structural_target_port_typo() {
+        // Structural nodes (here: the End node's `result` input) keep their
+        // declared, required ports — a target-port typo on them is still a warning.
+        let yaml = r#"
+name: bad-structural-target
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: only
+    type: doc-only
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: user_prompt }
+  - source: { node: ab000001, port: out }
+    target: { node: end, port: resullt }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let warnings: Vec<&str> = result
+            .diagnostics
             .iter()
-            .any(|w| w.contains("target port 'plaan' not found")));
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("target port 'resullt' not found")),
+            "structural End-node target typo should warn; got: {warnings:?}"
+        );
+        // The canonical emergent Start->only edge must NOT warn (the #149 regression).
+        assert!(
+            !warnings.iter().any(|w| w.contains("user_prompt")),
+            "emergent Start->only edge must not warn; got: {warnings:?}"
+        );
     }
 
     #[test]
@@ -1192,6 +1375,44 @@ edges:
     }
 
     #[test]
+    fn parses_bounded_loop_region_block() {
+        // ADR-0011 / #148: a loop is a named entry of the `loops:` block —
+        // `id` + `kind: bounded` + `members` (>=1) + `max_iter`. It is no longer
+        // a node.
+        let yaml = with_start_end(
+            r#"
+name: with-region
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+  - id: ab000002
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [ab000001, ab000002]
+    max_iter: 3
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.loops.len(), 1);
+        let region = &result.pipeline.loops[0];
+        assert_eq!(region.id, "review_loop");
+        assert_eq!(region.kind, LoopKind::Bounded);
+        assert_eq!(region.members, vec!["ab000001", "ab000002"]);
+        assert_eq!(
+            region.max_iter,
+            Some(serde_yaml::Value::Number(serde_yaml::Number::from(3)))
+        );
+    }
+
+    #[test]
     fn parses_nodes_with_view_positions() {
         let yaml = with_start_end(
             r#"
@@ -1218,7 +1439,8 @@ nodes:
     }
 
     #[test]
-    fn rejects_edge_with_when_clause() {
+    fn accepts_edge_with_when_clause() {
+        // ADR-0011 supersedes #45: conditional routing lives on the edge again.
         let yaml = with_start_end(
             r#"
 name: conditional
@@ -1242,12 +1464,139 @@ edges:
       iter: { lt: 5 }
 "#,
         );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("edges no longer accept 'when:'"),
-            "error should mention when removal: {msg}"
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.edges[0].when.is_some());
+    }
+
+    #[test]
+    fn parses_repeated_flag_on_edge() {
+        // `repeated` is an edge property (ADR-0011 / #149): it marks an edge whose
+        // source artifact accumulates across iterations (glob `iter-*`). It lives
+        // on the edge, not on a declared input port.
+        let yaml = with_start_end(
+            r#"
+name: repeated-edge
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: reviews }
+    repeated: true
+"#,
         );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.pipeline.edges[0].repeated);
+        // Round-trips: re-serializing keeps the flag.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        assert!(reparsed.edges[0].repeated);
+    }
+
+    #[test]
+    fn parses_manual_edge_routing_and_round_trips() {
+        // #154: manual routing (mode + absolute waypoints) persists in the
+        // pipeline file so a shared workflow carries its arrows. The daemon
+        // parses and re-serializes them without drift.
+        let yaml = with_start_end(
+            r#"
+name: routed-edge
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: review }
+    mode: manual
+    waypoints:
+      - { x: 120, y: 40 }
+      - { x: 120, y: 220 }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert_eq!(edge.mode, Some(EdgeRouteMode::Manual));
+        let wp = edge.waypoints.as_ref().expect("waypoints parsed");
+        assert_eq!(wp.len(), 2);
+        assert_eq!(wp[0].x, 120.0);
+        assert_eq!(wp[0].y, 40.0);
+        assert_eq!(wp[1].y, 220.0);
+
+        // Round-trips: re-serialize, re-parse — routing survives.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        let redge = &reparsed.edges[0];
+        assert_eq!(redge.mode, Some(EdgeRouteMode::Manual));
+        assert_eq!(redge.waypoints.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn edge_routing_defaults_to_none() {
+        // An edge without explicit routing parses with no mode and no waypoints
+        // (auto routing is recomputed deterministically, never persisted).
+        let yaml = with_start_end(
+            r#"
+name: auto-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.edges[0].mode, None);
+        assert!(result.pipeline.edges[0].waypoints.is_none());
+    }
+
+    #[test]
+    fn edge_repeated_defaults_to_false() {
+        let yaml = with_start_end(
+            r#"
+name: plain-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(!result.pipeline.edges[0].repeated);
     }
 
     #[test]

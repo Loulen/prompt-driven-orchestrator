@@ -25,22 +25,23 @@
   --fg-5: #383e48;
 
   /* Accents */
-  --acc: #10b981;          /* emerald primary */
-  --acc-dim: #0e8f66;
-  --acc-bg: rgba(16, 185, 129, 0.12);
-  --acc-border: rgba(16, 185, 129, 0.32);
+  /* Accents — single muted gold */
+  --acc: #c2a15e;          /* muted gold primary */
+  --acc-dim: #a8874a;
+  --acc-bg: rgba(194, 161, 94, 0.12);
+  --acc-border: rgba(194, 161, 94, 0.34);
 
-  /* Status */
-  --st-running: #3b82f6;
-  --st-running-bg: rgba(59, 130, 246, 0.14);
-  --st-await: #f59e0b;
-  --st-await-bg: rgba(245, 158, 11, 0.14);
-  --st-done: #10b981;
-  --st-done-bg: rgba(16, 185, 129, 0.14);
-  --st-blocked: #f97316;
-  --st-blocked-bg: rgba(249, 115, 22, 0.14);
-  --st-failed: #ef4444;
-  --st-failed-bg: rgba(239, 68, 68, 0.14);
+  /* Status — gold-led, muted (warm neutral family) */
+  --st-running: #c2a15e;
+  --st-running-bg: rgba(194, 161, 94, 0.14);
+  --st-await: #c2a15e;
+  --st-await-bg: rgba(194, 161, 94, 0.14);
+  --st-done: #c2a15e;
+  --st-done-bg: rgba(194, 161, 94, 0.14);
+  --st-blocked: #a8784a;
+  --st-blocked-bg: rgba(168, 120, 74, 0.14);
+  --st-failed: #a8784a;
+  --st-failed-bg: rgba(168, 120, 74, 0.14);
   --st-archived: #6b7280;
   --st-pending: #4b5563;
 
@@ -253,14 +254,14 @@
 }
 .btn.sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
 
-/* Filter chip */
+/* Filter chip — flattened */
 .filter-chip {
-  height: 24px; padding: 0 8px;
+  height: 24px; padding: 0 7px;
   display: inline-flex; align-items: center; gap: 6px;
-  border-radius: 5px;
-  background: var(--bg-3);
-  border: 1px solid var(--line-strong);
-  color: var(--fg-2);
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg-3);
   font-size: 11.5px;
   cursor: pointer;
 }
@@ -281,9 +282,9 @@
 .st-dot.pending { background: var(--st-pending); }
 
 @keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55); }
-  70%  { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  0%   { box-shadow: 0 0 0 0 rgba(194, 161, 94, 0.5); }
+  70%  { box-shadow: 0 0 0 5px rgba(194, 161, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(194, 161, 94, 0); }
 }
 
 /* Run list rows */
@@ -341,29 +342,26 @@
 .pipe-row .pr-name { font-size: 12.5px; font-weight: 500; color: var(--fg); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pipe-row .pr-sub { font-size: 11px; color: var(--fg-4); font-family: var(--font-mono); }
 
-/* Badge */
+/* Badge — flattened to text, no pill */
 .badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 18px; padding: 0 6px;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: auto; padding: 0;
   font-size: 10px; font-weight: 600;
-  letter-spacing: 0.04em;
-  border-radius: 4px;
+  letter-spacing: 0.06em;
+  border-radius: 0;
   text-transform: uppercase;
-  background: var(--bg-3);
-  color: var(--fg-2);
-  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--fg-3);
+  border: none;
   font-family: var(--font-mono);
 }
-.badge.repo { color: #c084fc; border-color: rgba(192,132,252,0.30); background: rgba(192,132,252,0.08); }
-.badge.user { color: #38bdf8; border-color: rgba(56,189,248,0.30); background: rgba(56,189,248,0.08); }
-.badge.code { color: #fb923c; border-color: rgba(251,146,60,0.30); background: rgba(251,146,60,0.08); }
-.badge.doc { color: #94a3b8; border-color: rgba(148,163,184,0.28); background: rgba(148,163,184,0.06); }
-.badge.running { color: var(--st-running); border-color: rgba(59,130,246,0.32); background: var(--st-running-bg); }
-.badge.awaiting { color: var(--st-await); border-color: rgba(245,158,11,0.32); background: var(--st-await-bg); }
-.badge.done { color: var(--st-done); border-color: rgba(16,185,129,0.32); background: var(--st-done-bg); }
-.badge.blocked { color: var(--st-blocked); border-color: rgba(249,115,22,0.34); background: var(--st-blocked-bg); }
-.badge.failed { color: var(--st-failed); border-color: rgba(239,68,68,0.32); background: var(--st-failed-bg); }
-.badge.pending { color: var(--fg-3); }
+.badge.repo, .badge.user, .badge.doc, .badge.pending { color: var(--fg-3); }
+.badge.code { color: var(--acc); }
+.badge.running { color: var(--st-running); }
+.badge.awaiting { color: var(--st-await); }
+.badge.done { color: var(--st-done); }
+.badge.blocked { color: var(--st-blocked); }
+.badge.failed { color: var(--st-failed); }
 
 /* DAG canvas (center) */
 .dag-canvas {

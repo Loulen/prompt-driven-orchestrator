@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { Star } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
-import type { NodeDef, NodeType, PortDef, PortSide } from "../types";
+import type { NodeDef, NodeType, PortDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
-import InspectorPortRow from "./InspectorPortRow";
 import OutputPortCard from "./OutputPortCard";
+import PooledInputRow from "./PooledInputRow";
+import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
@@ -57,30 +58,33 @@ export default function NodeInspector({
 
   if (!tab || !node) return null;
 
+  // Inputs are emergent (#149): derived from the pipeline's incoming edges,
+  // not declared on the node. Same-named edges pool into one list input.
+  const pooledInputs = derivePooledInputs(tab.pipeline, node.id);
+
   function handleField(field: keyof NodeDef, value: unknown) {
     updateNode(node!.id, { [field]: value } as Partial<NodeDef>);
   }
 
-  function handleAddPort(portSide: "inputs" | "outputs") {
-    const ports = [...node![portSide]];
-    let name = portSide === "inputs" ? "in" : "out";
+  function handleAddOutput() {
+    const ports = [...node!.outputs];
+    let name = "out";
     let counter = 1;
     while (ports.some((p) => p.name === name)) {
-      name = `${portSide === "inputs" ? "in" : "out"}-${++counter}`;
+      name = `out-${++counter}`;
     }
-    const defaultSide: PortSide = portSide === "inputs" ? "left" : "right";
-    ports.push({ name, repeated: false, side: defaultSide });
-    updateNode(node!.id, { [portSide]: ports });
+    ports.push({ name, repeated: false, side: "right" });
+    updateNode(node!.id, { outputs: ports });
   }
 
-  function handleUpdatePort(side: "inputs" | "outputs", index: number, updates: Partial<PortDef>) {
-    const ports = node![side].map((p, i) => (i === index ? { ...p, ...updates } : p));
-    updateNode(node!.id, { [side]: ports });
+  function handleUpdateOutput(index: number, updates: Partial<PortDef>) {
+    const ports = node!.outputs.map((p, i) => (i === index ? { ...p, ...updates } : p));
+    updateNode(node!.id, { outputs: ports });
   }
 
-  function handleRemovePort(side: "inputs" | "outputs", index: number) {
-    const ports = node![side].filter((_, i) => i !== index);
-    updateNode(node!.id, { [side]: ports });
+  function handleRemoveOutput(index: number) {
+    const ports = node!.outputs.filter((_, i) => i !== index);
+    updateNode(node!.id, { outputs: ports });
   }
 
   return (
@@ -174,33 +178,40 @@ export default function NodeInspector({
           placeholder="Enter the node's role prompt..."
         />
 
-        {/* Inputs */}
-        <SectionHead title="Inputs" count={node.inputs.length} onAdd={() => handleAddPort("inputs")} />
-        <div className="flex flex-col">
-          {node.inputs.map((port, i) => (
-            <InspectorPortRow
-              key={i}
-              port={port}
-              highlighted={highlightedPort === port.name}
-              isLast={i === node.inputs.length - 1}
-              onUpdate={(updates) => handleUpdatePort("inputs", i, updates)}
-              onRemove={() => handleRemovePort("inputs", i)}
-            />
-          ))}
-        </div>
+        {/* Inputs — emergent (#149): derived from incoming edges, read-only.
+            Same-named edges pool into one logical list input that spells out
+            every contributing source node (e.g. `review ← sec-reviewer,
+            perf-reviewer`). The node declares no inputs. */}
+        <SectionHead title="Inputs" count={pooledInputs.length} />
+        {pooledInputs.length === 0 ? (
+          <p className="px-1 py-1 text-fg-4" style={{ fontSize: "10px" }}>
+            No inputs — wire an output into this node to create one.
+          </p>
+        ) : (
+          <div className="flex flex-col">
+            {pooledInputs.map((input, i) => (
+              <PooledInputRow
+                key={input.name}
+                input={input}
+                highlighted={highlightedPort === input.name}
+                isLast={i === pooledInputs.length - 1}
+              />
+            ))}
+          </div>
+        )}
 
-        {/* Outputs */}
-        <SectionHead title="Outputs" count={node.outputs.length} onAdd={() => handleAddPort("outputs")} />
+        {/* Outputs — declared: the node's production contract (CONTEXT.md § Node). */}
+        <SectionHead title="Outputs" count={node.outputs.length} onAdd={handleAddOutput} />
         <div className="flex flex-col">
           {node.outputs.map((port, i) => (
             <OutputPortCard
               key={i}
               port={port}
               highlighted={highlightedPort === port.name}
-              onUpdate={(updates) => handleUpdatePort("outputs", i, updates)}
-              onRemove={() => handleRemovePort("outputs", i)}
+              onUpdate={(updates) => handleUpdateOutput(i, updates)}
+              onRemove={() => handleRemoveOutput(i)}
               schema={port.frontmatter}
-              onSchemaChange={(fm) => handleUpdatePort("outputs", i, { frontmatter: fm ?? null })}
+              onSchemaChange={(fm) => handleUpdateOutput(i, { frontmatter: fm ?? null })}
             />
           ))}
         </div>

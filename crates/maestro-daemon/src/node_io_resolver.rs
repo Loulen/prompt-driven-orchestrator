@@ -40,42 +40,63 @@ pub fn resolve(pipeline: &PipelineDef, artifacts_dir: &Path, node_id: &str, iter
         }
     };
 
+    // Inputs are EMERGENT (#149): derived from incoming edges, not declared on
+    // the node. Each edge contributes files to a logical input named after its
+    // target endpoint (which inherits the source document name). Several
+    // same-named edges POOL into one list input. `repeated` (accumulate
+    // `iter-*`) is read off the edge, never off a declared port.
     let mut inputs: Vec<PortIO> = Vec::new();
+    let mut input_index: HashMap<String, usize> = HashMap::new();
 
-    for input_port in &node.inputs {
-        let mut files = Vec::new();
-        let mut found_edge = false;
-
-        for edge in &pipeline.edges {
-            if edge.target.node != node_id || edge.target.port != input_port.name {
-                continue;
-            }
-            found_edge = true;
-
-            if input_port.repeated {
-                let source_dir = artifacts_dir.join(&edge.source.node);
-                files.extend(glob_repeated(&source_dir, &edge.source.port));
-            } else {
-                let path = crate::blackboard::artifact_path(
-                    artifacts_dir,
-                    &edge.source.node,
-                    iter,
-                    &edge.source.port,
-                );
-                files.push(file_info(artifacts_dir, &path));
-            }
+    for edge in &pipeline.edges {
+        if edge.target.node != node_id {
+            continue;
         }
 
-        if !found_edge && input_port.name == "task" {
-            let path = crate::blackboard::input_path(artifacts_dir);
+        let mut files = Vec::new();
+        if edge.repeated {
+            let source_dir = artifacts_dir.join(&edge.source.node);
+            files.extend(glob_repeated(&source_dir, &edge.source.port));
+        } else {
+            let path = crate::blackboard::artifact_path(
+                artifacts_dir,
+                &edge.source.node,
+                iter,
+                &edge.source.port,
+            );
             files.push(file_info(artifacts_dir, &path));
         }
 
+        match input_index.get(&edge.target.port) {
+            // Pool same-named edges into one logical list input. Once two edges
+            // share a target name the input is a list (repeated), regardless of
+            // each edge's own flag.
+            Some(&idx) => {
+                let pooled: &mut PortIO = &mut inputs[idx];
+                pooled.repeated = true;
+                pooled.files.extend(files);
+            }
+            None => {
+                input_index.insert(edge.target.port.clone(), inputs.len());
+                inputs.push(PortIO {
+                    port: edge.target.port.clone(),
+                    repeated: edge.repeated,
+                    port_type: PortType::Markdown,
+                    files,
+                });
+            }
+        }
+    }
+
+    // Entry-node fallback: a node with no incoming edges that still expects a
+    // `task` reads the run's `_input` (preserves existing single-entry pipelines).
+    if inputs.is_empty() && node.inputs.iter().any(|p| p.name == "task") {
+        let path = crate::blackboard::input_path(artifacts_dir);
         inputs.push(PortIO {
-            port: input_port.name.clone(),
-            repeated: input_port.repeated,
-            port_type: input_port.port_type,
-            files,
+            port: "task".into(),
+            repeated: false,
+            port_type: PortType::Markdown,
+            files: vec![file_info(artifacts_dir, &path)],
         });
     }
 
@@ -340,7 +361,12 @@ mod tests {
                     port: "plan".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
             }],
+            loops: Vec::new(),
         }
     }
 
@@ -490,7 +516,13 @@ mod tests {
                     port: "reviews".into(),
                 },
                 reason: None,
+                when: None,
+                is_else: false,
+                // `repeated` lives on the edge now (#149), not the input port.
+                repeated: true,
+                ..Default::default()
             }],
+            loops: Vec::new(),
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 4);
@@ -609,6 +641,10 @@ mod tests {
                         port: "docs".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
+                    repeated: false,
+                    ..Default::default()
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -620,8 +656,13 @@ mod tests {
                         port: "docs".into(),
                     },
                     reason: None,
+                    when: None,
+                    is_else: false,
+                    repeated: false,
+                    ..Default::default()
                 },
             ],
+            loops: Vec::new(),
         };
 
         for dir_name in ["a", "b"] {
@@ -636,6 +677,234 @@ mod tests {
         assert_eq!(io.inputs[0].port, "docs");
         assert_eq!(io.inputs[0].files.len(), 2);
         assert!(io.inputs[0].files.iter().all(|f| f.exists));
+    }
+
+    #[test]
+    fn emergent_input_derived_from_edge_when_node_declares_none() {
+        // #149: inputs are emergent — derived from incoming edges, not declared.
+        // The target node has NO declared inputs; the resolver still surfaces one
+        // input, named after the target endpoint (which inherits the source name).
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "# Plan").unwrap();
+
+        let pipeline = PipelineDef {
+            name: "emergent".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    id: "planner".into(),
+                    name: "planner".into(),
+                    node_type: NodeType::DocOnly,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "plan".into(),
+                        repeated: false,
+                        side: None,
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                },
+                NodeDef {
+                    id: "implementer".into(),
+                    name: "implementer".into(),
+                    node_type: NodeType::CodeMutating,
+                    // Declares NO inputs — the input is emergent.
+                    inputs: vec![],
+                    outputs: vec![],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                },
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeEndpoint {
+                    node: "planner".into(),
+                    port: "plan".into(),
+                },
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "plan".into(),
+                },
+                reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+        };
+
+        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(!io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[0].files[0].path, "planner/iter-1/plan/output.md");
+        assert!(io.inputs[0].files[0].exists);
+    }
+
+    #[test]
+    fn same_named_edges_pool_into_one_list_input() {
+        // #149: two incoming edges with the SAME target name pool into a single
+        // logical list input. The target node declares no inputs at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for src in ["a", "b"] {
+            let dir = artifacts.join(format!("{src}/iter-1/plan"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("plan from {src}")).unwrap();
+        }
+
+        let mk_node = |id: &str, has_out: bool| NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::DocOnly,
+            inputs: vec![],
+            outputs: if has_out {
+                vec![Port {
+                    name: "plan".into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                }]
+            } else {
+                vec![]
+            },
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        };
+        let mk_edge = |src: &str| EdgeDef {
+            source: EdgeEndpoint {
+                node: src.into(),
+                port: "plan".into(),
+            },
+            target: EdgeEndpoint {
+                node: "sink".into(),
+                port: "plan".into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        };
+
+        let pipeline = PipelineDef {
+            name: "pool".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                mk_node("a", true),
+                mk_node("b", true),
+                mk_node("sink", false),
+            ],
+            edges: vec![mk_edge("a"), mk_edge("b")],
+            loops: Vec::new(),
+        };
+
+        let io = resolve(&pipeline, &artifacts, "sink", 1);
+
+        // One logical input, pooled into a list of both source files.
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(
+            io.inputs[0].repeated,
+            "pooled same-name edges become a list input"
+        );
+        assert_eq!(io.inputs[0].files.len(), 2);
+        assert!(io.inputs[0].files.iter().all(|f| f.exists));
+    }
+
+    #[test]
+    fn distinct_named_edges_stay_separate_inputs() {
+        // #149: two incoming edges with DISTINCT target names are two separate
+        // emergent inputs (no pooling). Order follows edge declaration order.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for (src, port) in [("planner", "plan"), ("designer", "spec")] {
+            let dir = artifacts.join(format!("{src}/iter-1/{port}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("{port} from {src}")).unwrap();
+        }
+
+        let mk_node = |id: &str, out: Option<&str>| NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::DocOnly,
+            inputs: vec![],
+            outputs: out
+                .map(|o| {
+                    vec![Port {
+                        name: o.into(),
+                        repeated: false,
+                        side: None,
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                    }]
+                })
+                .unwrap_or_default(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        };
+        let mk_edge = |src: &str, port: &str| EdgeDef {
+            source: EdgeEndpoint {
+                node: src.into(),
+                port: port.into(),
+            },
+            target: EdgeEndpoint {
+                node: "sink".into(),
+                port: port.into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        };
+
+        let pipeline = PipelineDef {
+            name: "distinct".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                mk_node("planner", Some("plan")),
+                mk_node("designer", Some("spec")),
+                mk_node("sink", None),
+            ],
+            edges: vec![mk_edge("planner", "plan"), mk_edge("designer", "spec")],
+            loops: Vec::new(),
+        };
+
+        let io = resolve(&pipeline, &artifacts, "sink", 1);
+
+        assert_eq!(io.inputs.len(), 2);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert_eq!(io.inputs[1].port, "spec");
+        assert!(!io.inputs[0].repeated);
+        assert!(!io.inputs[1].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[1].files.len(), 1);
     }
 
     #[test]

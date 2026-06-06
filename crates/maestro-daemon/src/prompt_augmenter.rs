@@ -636,6 +636,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -680,6 +681,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         });
 
         let node = &pipeline.nodes[1];
@@ -724,6 +726,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: true,
+            ..Default::default()
         });
 
         let node = &pipeline.nodes[1];
@@ -884,6 +887,7 @@ mod tests {
                     when: None,
                     is_else: false,
                     repeated: false,
+                    ..Default::default()
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -898,6 +902,7 @@ mod tests {
                     when: None,
                     is_else: false,
                     repeated: false,
+                    ..Default::default()
                 },
             ],
         };

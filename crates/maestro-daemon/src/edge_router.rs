@@ -82,6 +82,7 @@ mod tests {
             when: when.map(|s| serde_yaml::from_str(s).unwrap()),
             is_else,
             repeated: false,
+            ..Default::default()
         }
     }
 

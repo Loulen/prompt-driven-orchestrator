@@ -25,6 +25,7 @@ import { NodeCard } from "./NodeCard";
 import { LoopEditNode } from "./LoopNode";
 import { ForEachEditNode } from "./ForEachNode";
 import { MergeEditNode } from "./MergeNode";
+import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import LintBanner from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
@@ -144,6 +145,7 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
 }
 
 const nodeTypes = { edit: EditNode, loop: LoopEditNode, foreach: ForEachEditNode, merge: MergeEditNode };
+const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
@@ -455,6 +457,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodeClick={(_event, node) => {
             setSelection({ kind: "node", id: node.id });
             onCloseInfo?.();

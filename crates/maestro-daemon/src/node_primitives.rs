@@ -542,6 +542,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         }
     }
 

@@ -392,9 +392,11 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
   }
 
   it("labels a guarded edge with its when: pill", () => {
+    // The orthogonal edge (#154) renders its own condition pill from
+    // `data.label` (xyflow's built-in `label` is no longer used).
     const edges = deriveEditEdges(condPipeline());
     const guarded = edges[0];
-    expect(guarded.label).toBe("severity = high");
+    expect(guarded.data?.label).toBe("severity = high");
     expect(guarded.data?.isConditional).toBe(true);
     expect(guarded.data?.isElse).toBe(false);
   });
@@ -402,7 +404,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
   it("labels an else edge with 'else'", () => {
     const edges = deriveEditEdges(condPipeline());
     const fallback = edges[1];
-    expect(fallback.label).toBe("else");
+    expect(fallback.data?.label).toBe("else");
     expect(fallback.data?.isConditional).toBe(true);
     expect(fallback.data?.isElse).toBe(true);
   });
@@ -440,7 +442,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
       ],
     };
     const edges = deriveEditEdges(pipeline);
-    expect(edges[0].label).toBeUndefined();
+    expect(edges[0].data?.label).toBeUndefined();
     expect(edges[0].data?.isConditional).toBe(false);
   });
 });

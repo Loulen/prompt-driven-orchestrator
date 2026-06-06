@@ -137,6 +137,15 @@ Supprimer l'edge qui retire le **dernier cycle** des membres d'une boucle `bound
 
 Une edge câble un output port source vers un input port target, et porte une clause `when:` **optionnelle** (sémantique multi-match : cf. *Edges conditionnelles*). La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39) ; le pattern halt-edge des versions antérieures reste déprécié.
 
+### Routage — `mode` + `waypoints` (#154)
+
+Le tracé d'une edge est **orthogonal** (connecteur à angle droit) : l'auto-routage évite les autres nœuds et se recalcule quand un nœud bouge. Le routage vit sur l'edge via deux champs :
+
+- **`mode`** : `auto` (défaut, absent) ou `manual`. Une edge `auto` ne stocke **aucun** waypoint — son chemin est recalculé déterministiquement à chaque rendu (re-route gratuit au déplacement d'un nœud). Une edge `manual` épingle son tracé.
+- **`waypoints`** : liste de points **absolus** `{ x, y }`, significative seulement en `manual`. Le premier drag d'une poignée de segment épingle la route (`mode: manual`) ; l'action par-edge « re-route automatically » (panneau de détail d'edge) les efface et repasse en `auto`. Les waypoints absolus acceptent le drift quand un nœud bouge : le reset est l'échappatoire.
+
+`mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur routage ou les positions de leurs nœuds comparent **égaux** (déplacer un nœud ou bouger un waypoint ne marque jamais le pipeline « modifié »). Cf. #154, design screen 14.
+
 ---
 
 ## Blackboard

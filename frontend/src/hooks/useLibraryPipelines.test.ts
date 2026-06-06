@@ -64,6 +64,47 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
 
+  // #154: edge routing (mode + waypoints) is LAYOUT, not semantics. Two
+  // pipelines differing only in how their arrows are drawn must compare equal,
+  // so nudging a waypoint or pinning a route never marks the pipeline dirty.
+  it("ignores edge mode and waypoints so manual routing doesn't count as divergence", () => {
+    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+      source: { node: "a", port: "out" },
+      target: { node: "b", port: "in" },
+      ...over,
+    });
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [e({ mode: "auto" })],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        e({
+          mode: "manual",
+          waypoints: [
+            { x: 100, y: 50 },
+            { x: 100, y: 200 },
+          ],
+        }),
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("still flags a real edge difference (target change) despite routing exclusion", () => {
+    const base = { source: { node: "a", port: "out" } };
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [{ ...base, target: { node: "b", port: "in" }, mode: "manual" as const }],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [{ ...base, target: { node: "a", port: "in" }, mode: "auto" as const }],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
   it("preserves structural differences", () => {
     expect(
       pipelinesEquivalent(def({ nodes: [node("a")] }), def({ nodes: [node("b")] })),

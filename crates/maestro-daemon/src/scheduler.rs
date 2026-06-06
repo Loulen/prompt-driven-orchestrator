@@ -1166,6 +1166,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         }
     }
 
@@ -1190,6 +1191,7 @@ mod tests {
             when: when.map(|s| serde_yaml::from_str(s).unwrap()),
             is_else,
             repeated: false,
+            ..Default::default()
         }
     }
 
@@ -1207,6 +1209,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         }
     }
 
@@ -1515,6 +1518,7 @@ mod tests {
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 
@@ -4781,6 +4785,7 @@ edges:
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 

@@ -217,6 +217,22 @@ export interface EdgeEndpoint {
   port: string;
 }
 
+/** A pinned waypoint on a manually-routed edge — absolute canvas coordinates. */
+export interface EdgeWaypoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Edge routing mode (issue #154). `auto` edges store no waypoints — their
+ * right-angle path is recomputed deterministically and re-routes on node move.
+ * `manual` edges pin the route to persisted `waypoints`. Both `mode` and
+ * `waypoints` are LAYOUT, not semantics: they persist in the pipeline file (so
+ * routing travels when a workflow is shared) but are excluded from the semantic
+ * pipeline-diff (see `comparablePipelineObject`).
+ */
+export type EdgeRouteMode = "auto" | "manual";
+
 export interface EdgeDef {
   source: EdgeEndpoint;
   target: EdgeEndpoint;
@@ -231,6 +247,10 @@ export interface EdgeDef {
    * the edge, not on a declared input port (ADR-0011 / #149).
    */
   repeated?: boolean;
+  /** Routing mode (#154). Absent ⇒ `auto`. */
+  mode?: EdgeRouteMode | null;
+  /** Pinned absolute waypoints (#154). Only meaningful when `mode === "manual"`. */
+  waypoints?: EdgeWaypoint[] | null;
 }
 
 export interface PipelineDef {

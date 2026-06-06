@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { ArrowRight, Plus, X, Activity } from "lucide-react";
+import { ArrowRight, Plus, X, Activity, RefreshCw } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, EdgeTriggerStatus } from "../types";
 import {
@@ -151,6 +151,18 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
           the enclosing region.
         </div>
 
+        {/* Routing — orthogonal edge shaping (#154, design screen 14). The
+            per-edge "Re-route automatically" reset lives here, not on the canvas. */}
+        <SectionHead title="Routing" />
+        <RoutingSection
+          edge={edge}
+          onResetAuto={() => {
+            if (edgeIndex == null) return;
+            // Drop the pinned route: back to deterministic right-angle auto.
+            updateEdge(edgeIndex, { mode: "auto", waypoints: null });
+          }}
+        />
+
         {/* Runtime trigger status — panel-only (never on canvas) */}
         <SectionHead title="Runtime" />
         <TriggerStatusView trigger={trigger} />
@@ -262,6 +274,48 @@ function ConditionRowEditor({
       >
         <X size={12} />
       </button>
+    </div>
+  );
+}
+
+function RoutingSection({
+  edge,
+  onResetAuto,
+}: {
+  edge: EdgeDef;
+  onResetAuto: () => void;
+}) {
+  const waypoints = edge.waypoints ?? [];
+  const isManual = edge.mode === "manual" && waypoints.length > 0;
+
+  return (
+    <div className="flex flex-col gap-2" data-testid="edge-routing">
+      <div className="flex items-center gap-2 rounded border border-line bg-bg-3 px-2 py-1.5">
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${isManual ? "bg-acc" : "bg-fg-5"}`}
+        />
+        <div className="min-w-0">
+          <div className="text-fg-2" style={{ fontSize: "11px" }}>
+            {isManual ? "Manually pinned" : "Automatic"}
+          </div>
+          <div className="text-fg-4" style={{ fontSize: "10px" }}>
+            {isManual
+              ? `Route persisted as ${waypoints.length} waypoint${waypoints.length === 1 ? "" : "s"}; survives node moves.`
+              : "Right-angle route, re-computed on every node move."}
+          </div>
+        </div>
+      </div>
+      {isManual && (
+        <button
+          onClick={onResetAuto}
+          className="flex items-center justify-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 hover:border-acc hover:text-acc"
+          style={{ fontSize: "10.5px" }}
+          data-testid="reroute-auto"
+        >
+          <RefreshCw size={11} />
+          Re-route automatically
+        </button>
+      )}
     </div>
   );
 }

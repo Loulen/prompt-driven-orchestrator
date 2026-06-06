@@ -364,6 +364,7 @@ mod tests {
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         }
     }
@@ -518,6 +519,7 @@ mod tests {
                 is_else: false,
                 // `repeated` lives on the edge now (#149), not the input port.
                 repeated: true,
+                ..Default::default()
             }],
         };
 
@@ -640,6 +642,7 @@ mod tests {
                     when: None,
                     is_else: false,
                     repeated: false,
+                    ..Default::default()
                 },
                 EdgeDef {
                     source: EdgeEndpoint {
@@ -654,6 +657,7 @@ mod tests {
                     when: None,
                     is_else: false,
                     repeated: false,
+                    ..Default::default()
                 },
             ],
         };
@@ -733,6 +737,7 @@ mod tests {
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 
@@ -794,6 +799,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         };
 
         let pipeline = PipelineDef {
@@ -869,6 +875,7 @@ mod tests {
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         };
 
         let pipeline = PipelineDef {

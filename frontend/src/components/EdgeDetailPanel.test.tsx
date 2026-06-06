@@ -155,4 +155,46 @@ describe("EdgeDetailPanel", () => {
     const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
     expect(edge.when == null || Object.keys(edge.when).length === 0).toBe(true);
   });
+
+  // #154: the per-edge routing reset lives in the detail panel (design screen 14).
+  describe("Routing section", () => {
+    it("reads 'Automatic' for an auto edge and offers no reset", () => {
+      seedEdge(baseEdge);
+      render(<EdgeDetailPanel />);
+      const routing = screen.getByTestId("edge-routing");
+      expect(routing).toHaveTextContent(/Automatic/i);
+      expect(screen.queryByTestId("reroute-auto")).toBeNull();
+    });
+
+    it("reads 'Manually pinned' with the waypoint count for a manual edge", () => {
+      seedEdge({
+        ...baseEdge,
+        mode: "manual",
+        waypoints: [
+          { x: 10, y: 20 },
+          { x: 10, y: 80 },
+        ],
+      });
+      render(<EdgeDetailPanel />);
+      const routing = screen.getByTestId("edge-routing");
+      expect(routing).toHaveTextContent(/Manually pinned/i);
+      expect(routing).toHaveTextContent("2");
+    });
+
+    it("'Re-route automatically' resets the edge to auto and clears waypoints", () => {
+      seedEdge({
+        ...baseEdge,
+        mode: "manual",
+        waypoints: [
+          { x: 10, y: 20 },
+          { x: 10, y: 80 },
+        ],
+      });
+      render(<EdgeDetailPanel />);
+      fireEvent.click(screen.getByTestId("reroute-auto"));
+      const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+      expect(edge.mode === "auto" || edge.mode == null).toBe(true);
+      expect(edge.waypoints == null || edge.waypoints.length === 0).toBe(true);
+    });
+  });
 });

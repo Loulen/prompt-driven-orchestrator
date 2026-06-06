@@ -9652,6 +9652,7 @@ mod tests {
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 
@@ -9699,6 +9700,7 @@ mod tests {
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 
@@ -10536,6 +10538,7 @@ edges: []
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 
@@ -10621,6 +10624,7 @@ edges: []
                 when: None,
                 is_else: false,
                 repeated: false,
+                ..Default::default()
             }],
         };
 

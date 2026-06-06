@@ -1556,6 +1556,7 @@ edges:
             when: None,
             is_else: false,
             repeated: false,
+            ..Default::default()
         }
     }
 

@@ -1,6 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
-import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+import type { EdgeWaypoint, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -157,10 +158,7 @@ export function formatWhenPill(when: Record<string, unknown>): string {
   return parts.join(" and ");
 }
 
-export interface EditEdgeData extends Record<string, unknown> {
-  isConditional: boolean;
-  isElse: boolean;
-}
+export type EditEdgeData = OrthogonalEdgeData;
 
 /**
  * Derives xyflow edges from a pipeline. Conditional edges (ADR-0011) carry an
@@ -230,24 +228,27 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         ? formatWhenPill(e.when as Record<string, unknown>)
         : undefined;
 
+    // Orthogonal routing (#154): the custom edge computes its own right-angle
+    // path (auto: pathfind around nodes; manual: through persisted waypoints)
+    // and renders the condition pill + segment handles itself, so we hand it
+    // the routing fields plus the styling it needs.
+    const waypoints: EdgeWaypoint[] | null = e.waypoints ?? null;
     return {
       id: `e-${i}`,
       source: e.source.node,
       target: e.target.node,
       sourceHandle: e.source.port || null,
       targetHandle,
-      type: "default",
-      label,
-      labelShowBg: isConditional,
-      labelBgPadding: [6, 3] as [number, number],
-      labelBgBorderRadius: 6,
-      labelStyle: { fill: "var(--color-fg)", fontSize: 10, fontFamily: "var(--font-mono, monospace)" },
-      labelBgStyle: { fill: "var(--color-bg-2, #1e1e1e)", stroke: strokeColor, strokeWidth: 1 },
-      data: { isConditional, isElse },
-      style: {
-        stroke: strokeColor,
-        strokeWidth: 1.5,
-        strokeDasharray: isDashed ? "6 3" : undefined,
+      type: "orthogonal",
+      data: {
+        edgeIndex: i,
+        mode: e.mode ?? null,
+        waypoints,
+        isConditional,
+        isElse,
+        label,
+        strokeColor,
+        dashed: isDashed,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,

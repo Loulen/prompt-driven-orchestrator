@@ -127,13 +127,32 @@ pub struct NodeDef {
     pub over: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EdgeEndpoint {
     pub node: String,
     pub port: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Edge routing mode (#154). `Auto` edges store no waypoints — their
+/// right-angle path is recomputed deterministically and re-routes on node move.
+/// `Manual` edges pin the route to persisted `waypoints`. Routing is *layout*,
+/// not semantics: it persists in the pipeline file (so a shared workflow keeps
+/// its arrows) but is excluded from the semantic pipeline-diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeRouteMode {
+    Auto,
+    Manual,
+}
+
+/// A pinned waypoint on a manually-routed edge — absolute canvas coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EdgeWaypoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EdgeDef {
     pub source: EdgeEndpoint,
     pub target: EdgeEndpoint,
@@ -155,6 +174,12 @@ pub struct EdgeDef {
     /// not on a declared input port (ADR-0011 / #149).
     #[serde(default, skip_serializing_if = "is_false")]
     pub repeated: bool,
+    /// Routing mode (#154). Absent ⇒ auto (recomputed, never persisted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<EdgeRouteMode>,
+    /// Pinned absolute waypoints (#154). Only meaningful when `mode == Manual`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waypoints: Option<Vec<EdgeWaypoint>>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1407,6 +1432,79 @@ edges:
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
         assert!(reparsed.edges[0].repeated);
+    }
+
+    #[test]
+    fn parses_manual_edge_routing_and_round_trips() {
+        // #154: manual routing (mode + absolute waypoints) persists in the
+        // pipeline file so a shared workflow carries its arrows. The daemon
+        // parses and re-serializes them without drift.
+        let yaml = with_start_end(
+            r#"
+name: routed-edge
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: review }
+    target: { node: ab000002, port: review }
+    mode: manual
+    waypoints:
+      - { x: 120, y: 40 }
+      - { x: 120, y: 220 }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert_eq!(edge.mode, Some(EdgeRouteMode::Manual));
+        let wp = edge.waypoints.as_ref().expect("waypoints parsed");
+        assert_eq!(wp.len(), 2);
+        assert_eq!(wp[0].x, 120.0);
+        assert_eq!(wp[0].y, 40.0);
+        assert_eq!(wp[1].y, 220.0);
+
+        // Round-trips: re-serialize, re-parse — routing survives.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        let redge = &reparsed.edges[0];
+        assert_eq!(redge.mode, Some(EdgeRouteMode::Manual));
+        assert_eq!(redge.waypoints.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn edge_routing_defaults_to_none() {
+        // An edge without explicit routing parses with no mode and no waypoints
+        // (auto routing is recomputed deterministically, never persisted).
+        let yaml = with_start_end(
+            r#"
+name: auto-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.edges[0].mode, None);
+        assert!(result.pipeline.edges[0].waypoints.is_none());
     }
 
     #[test]

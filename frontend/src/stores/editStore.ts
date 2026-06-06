@@ -184,6 +184,14 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // Switch node's output ports.
     if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
     if (e.else === true) edge.else = true;
+    // Routing (#154): only manually-pinned edges persist their route. Auto
+    // edges recompute deterministically, so they store no `mode`/`waypoints` —
+    // emitting them would be noise. A `manual` mode without waypoints is also
+    // meaningless (nothing pinned), so guard on a non-empty waypoint list.
+    if (e.mode === "manual" && e.waypoints && e.waypoints.length > 0) {
+      edge.mode = "manual";
+      edge.waypoints = e.waypoints.map((w) => ({ x: w.x, y: w.y }));
+    }
     return edge;
   });
 

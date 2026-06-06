@@ -835,6 +835,55 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(verdictIndent).toBe(scoreIndent);
   });
 
+  it("serializes a manual edge's mode and waypoints (shareable routing, #154)", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          mode: "manual",
+          waypoints: [
+            { x: 120, y: 40 },
+            { x: 120, y: 220 },
+          ],
+        },
+      ]),
+    );
+    expect(yaml).toContain("mode: manual");
+    expect(yaml).toContain("waypoints:");
+    // The coordinates survive so the route travels with a shared pipeline.
+    expect(yaml).toContain("x: 120");
+    expect(yaml).toContain("y: 40");
+    expect(yaml).toContain("y: 220");
+  });
+
+  it("omits routing fields for an auto edge (no waypoints stored, #154)", () => {
+    const gate: NodeDef = {
+      id: "gate", name: "gate", type: "doc-only",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([gate], [
+        {
+          source: { node: "gate", port: "out" },
+          target: { node: "end", port: "result" },
+          mode: "auto",
+        },
+      ]),
+    );
+    // Auto edges recompute deterministically — nothing routing-related persists.
+    expect(yaml).not.toContain("mode:");
+    expect(yaml).not.toContain("waypoints:");
+  });
+
   it("serializes multi-field frontmatter with all fields at same depth", () => {
     const node: NodeDef = {
       id: "multi", name: "multi", type: "doc-only",

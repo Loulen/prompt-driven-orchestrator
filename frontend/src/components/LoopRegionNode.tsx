@@ -1,20 +1,35 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../types";
+import { useEditStore } from "../stores/editStore";
 
 /**
- * Data carried by a `loopRegion` canvas node (ADR-0011 / #148). A loop region is
- * the named `loops:` entry, NOT a pipeline node: the canvas draws it as a
- * translucent box enclosing its members (>= 2 members) with a `↻ X/Y` header.
- * Single-member regions render as a badge instead (handled on the member card),
- * so this node only ever backs the box form. The node is purely decorative — it
- * sits behind the member cards, is not draggable/connectable, and routes clicks
- * through to the canvas except on its header.
+ * Data carried by a `loopRegion` canvas node (ADR-0011 / #148, #150). A loop
+ * region is the named `loops:` entry, NOT a pipeline node: the canvas draws it
+ * as a translucent box enclosing its members (>= 2 members) with a `↻ X/Y`
+ * header. Single-member regions render as a badge instead (handled on the member
+ * card), so this node only ever backs the box form. The box is purely
+ * decorative — it sits behind the member cards and routes clicks through to the
+ * canvas — but its header is interactive: clicking it opens the region inspector
+ * and (for a bounded region) hosts an inline `max_iter` editor (#150).
  */
 export interface LoopRegionNodeData {
   regionId: string;
   kind: LoopKind;
   /** `↻` counter text, e.g. `max 3` (idle) or `2/3` (running). */
   counterText: string;
+  /**
+   * The header text shown *before* the editable `max_iter` input (#150). For a
+   * bounded region it is `max ` (idle) or `${currentIter}/` (running), so the
+   * header reads `↻ max [3]` or `↻ 2/[3]` — preserving the live `↻ i/N` counter
+   * while making the bound editable. Unused for the collection read-only form.
+   */
+  iterPrefix: string;
+  /**
+   * The region's raw `max_iter` bound (number, `$var` string, or null/absent).
+   * Drives the inline header editor for a bounded region (#150). Null/absent for
+   * a collection region (no bound).
+   */
+  maxIter: number | string | null;
   /** True once the region reached `max_iter` with the loop still continuing. */
   exhausted: boolean;
   width: number;
@@ -23,11 +38,23 @@ export interface LoopRegionNodeData {
 }
 
 export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
+  const setSelection = useEditStore((s) => s.setSelection);
+  const updateRegion = useEditStore((s) => s.updateRegion);
+
   const accent = data.exhausted
     ? "var(--color-st-blocked)"
     : "var(--color-acc)";
   // `⇉` (fan-out) for a collection region, `↻` (loop) for a bounded one.
   const glyph = data.kind === "collection" ? "⇉" : "↻";
+  // A bounded region with a numeric bound gets an inline `max_iter` editor in
+  // the header (#150). A `$var` bound or a collection region shows the counter
+  // text read-only (var references and fan-out counts are edited elsewhere).
+  const editableMaxIter =
+    data.kind === "bounded" && typeof data.maxIter === "number";
+
+  const openInspector = () =>
+    setSelection({ kind: "region", id: null, regionId: data.regionId });
+
   return (
     <div
       data-testid="loop-region"
@@ -47,7 +74,8 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
     >
       <div
         data-testid="loop-region-header"
-        className="pointer-events-auto absolute flex items-center gap-1.5 rounded bg-bg-1 px-2 font-mono"
+        onClick={openInspector}
+        className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-bg-1 px-2 font-mono"
         style={{
           top: -13,
           left: 14,
@@ -61,9 +89,32 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         <span className="loop-region-glyph" style={{ fontSize: 12, lineHeight: 1 }}>
           {glyph}
         </span>
-        <span className="loop-region-count" style={{ opacity: 0.85 }}>
-          {data.counterText}
-        </span>
+        {editableMaxIter ? (
+          <span className="loop-region-count flex items-center gap-0.5" style={{ opacity: 0.85 }}>
+            {/* Live lap prefix (`max ` idle, `2/` running) — read-only progress,
+                preserving the `↻ i/N` counter — then the editable bound (#150). */}
+            <span data-testid="region-iter-prefix">{data.iterPrefix}</span>
+            <input
+              type="number"
+              min={1}
+              value={Number(data.maxIter)}
+              // Editing the bound is a header action, not a region-open click.
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                updateRegion(data.regionId, { max_iter: Number.isNaN(n) ? null : n });
+              }}
+              data-testid="region-header-max-iter"
+              className="w-9 rounded border border-line-strong bg-bg-3 px-1 text-center font-mono text-acc outline-none focus:border-acc"
+              style={{ fontSize: 11, height: 16 }}
+              title="max_iter — applies live to a running region"
+            />
+          </span>
+        ) : (
+          <span className="loop-region-count" style={{ opacity: 0.85 }}>
+            {data.counterText}
+          </span>
+        )}
         <span className="loop-region-name pl-0.5 font-normal text-fg-3">
           {data.regionId}
         </span>

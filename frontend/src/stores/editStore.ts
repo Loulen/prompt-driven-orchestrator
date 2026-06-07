@@ -6,6 +6,7 @@ import type {
   EdgeDef,
 } from "../types";
 import type { LibraryPipelineScope } from "../api";
+import type { LoopRegion } from "../types";
 import {
   fetchPipeline,
   fetchPipelines,
@@ -16,9 +17,9 @@ import {
   saveLibraryPipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
-import { materializeMissingRegions } from "../lib/loopRegions";
+import { materializeMissingRegions, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 
-export type SelectionKind = "node" | "edge" | "none";
+export type SelectionKind = "node" | "edge" | "region" | "none";
 
 export interface Selection {
   kind: SelectionKind;
@@ -29,6 +30,12 @@ export interface Selection {
    * and `updateEdge`/`deleteEdge` take. Undefined for node/none selections.
    */
   edgeIndex?: number;
+  /**
+   * The selected loop region's `id` when `kind === "region"` (ADR-0011 / #150).
+   * Regions carry a stable `id`, so the id is the selection key the region
+   * inspector and `updateRegion` use. Undefined for other selections.
+   */
+  regionId?: string;
 }
 
 export interface ConflictData {
@@ -89,6 +96,9 @@ interface EditState {
   addEdge: (edge: EdgeDef) => void;
   updateEdge: (index: number, updates: Partial<EdgeDef>) => void;
   deleteEdge: (index: number) => void;
+
+  // Region mutations (ADR-0011 / #150) — edit a bounded region's bound live.
+  updateRegion: (regionId: string, updates: Partial<LoopRegion>) => void;
 
   // Pipeline-level mutations
   updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required">>) => void;
@@ -541,9 +551,32 @@ export const useEditStore = create<EditState>((set, get) => ({
   deleteEdge: (index: number) => {
     set((s) => ({
       ...mutateActiveTab(s, (tab) => {
+        // Destroy-loop on last-cycle removal (ADR-0011 / #150): if this edge was
+        // the last cycle of one or more bounded regions, those regions are
+        // destroyed — their `loops:` entry (bound + iteration state) goes with
+        // the edge. Computed BEFORE the edge is removed, against the live graph.
+        // Deleting a non-last cycle edge leaves the loop intact (the list is
+        // empty). The confirmation popup is owned by the canvas, which calls
+        // this only after the user confirms.
+        const destroyed = new Set(regionsDestroyedByEdgeRemoval(tab.pipeline, index));
         tab.pipeline.edges = tab.pipeline.edges.filter((_, i) => i !== index);
+        if (destroyed.size > 0 && tab.pipeline.loops) {
+          tab.pipeline.loops = tab.pipeline.loops.filter((r) => !destroyed.has(r.id));
+        }
       }),
       selection: { kind: "none" as const, id: null },
+    }));
+  },
+
+  updateRegion: (regionId: string, updates: Partial<LoopRegion>) => {
+    set((s) => mutateActiveTab(s, (tab) => {
+      // Editing a bounded region's `max_iter` round-trips into the `loops:`
+      // entry and, on a live run, applies to the running region — the
+      // `extend_cycle` of the Pipeline Manager (ADR-0007 / ADR-0011 / #150). The
+      // daemon enforces the only guard (no drop below the current lap) on save.
+      tab.pipeline.loops = (tab.pipeline.loops ?? []).map((r) =>
+        r.id === regionId ? { ...r, ...updates } : r,
+      );
     }));
   },
 

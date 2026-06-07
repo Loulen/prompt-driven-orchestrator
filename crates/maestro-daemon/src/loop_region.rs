@@ -153,6 +153,48 @@ pub fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<
         .collect()
 }
 
+/// True when a bounded region's members still close a cycle under the
+/// pipeline's *current* edges (ADR-0011 / #150). A region "closes a cycle" when
+/// `detect_cycles` finds a cycle whose members are all members of the region —
+/// the topological signature the region was materialized from. Removing the
+/// edge that takes this to `false` removes the region's **last** cycle, which is
+/// what triggers the destroy-loop confirmation.
+fn region_has_cycle(pipeline: &PipelineDef, region: &LoopRegion) -> bool {
+    let member_set: std::collections::HashSet<&str> =
+        region.members.iter().map(String::as_str).collect();
+    graph_resolver::detect_cycles(pipeline)
+        .iter()
+        .any(|cycle| cycle.iter().all(|m| member_set.contains(m.as_str())))
+}
+
+/// Returns the ids of the `bounded` regions that would be **destroyed** by
+/// removing the edge at `edge_index` (ADR-0011 / #150). A region is destroyed
+/// when it currently closes a cycle but, with that edge gone, its members no
+/// longer close any cycle — i.e. the deleted edge was the region's **last**
+/// cycle. Deleting an edge while another cycle still closes the region leaves
+/// the loop intact (it is not returned). `collection` regions have no
+/// topological cycle to lose and are never returned.
+///
+/// This is the destroy-vs-keep decision behind the confirmation popup: on
+/// confirm, the caller removes each returned region's `loops:` entry (its bound
+/// and iteration state go with it); deleting a non-last cycle edge returns an
+/// empty list and pops nothing.
+pub fn regions_destroyed_by_edge_removal(pipeline: &PipelineDef, edge_index: usize) -> Vec<String> {
+    if edge_index >= pipeline.edges.len() {
+        return Vec::new();
+    }
+    let mut without = pipeline.clone();
+    without.edges.remove(edge_index);
+
+    pipeline
+        .loops
+        .iter()
+        .filter(|region| region.kind == LoopKind::Bounded)
+        .filter(|region| region_has_cycle(pipeline, region) && !region_has_cycle(&without, region))
+        .map(|region| region.id.clone())
+        .collect()
+}
+
 /// Builds the per-iteration edge-resolution key (ADR-0011 / #148 scheduler
 /// concern). The model from commit da0d72e resolves convergence edges (fired /
 /// dead) for the out-of-loop case; inside a region the resolution state must be
@@ -299,7 +341,10 @@ pub fn collection_fanout(
 /// the set of laps whose every member has finished. The barrier is reached when
 /// laps `1..=total` are all complete. An empty collection (`total == 0`) is
 /// barriered by definition (vacuously), so the caller fires immediately.
-pub fn collection_barrier_reached(total: i64, completed_iters: &std::collections::HashSet<i64>) -> bool {
+pub fn collection_barrier_reached(
+    total: i64,
+    completed_iters: &std::collections::HashSet<i64>,
+) -> bool {
     if total == 0 {
         return true;
     }
@@ -642,6 +687,85 @@ mod tests {
                 entry: "worker".into()
             }
         );
+    }
+
+    // ── Destroy-vs-keep on edge removal (ADR-0011 / #150) ─────────────────────
+
+    #[test]
+    fn deleting_the_only_back_edge_destroys_the_region() {
+        // The bare review loop has a single cycle (rev -> impl). Deleting that
+        // back-edge removes the region's last cycle, so the region is destroyed:
+        // its `loops:` entry (and its bound + iteration state) go with it.
+        let (mut pipeline, region) = review_loop();
+        pipeline.loops = vec![region];
+        // Edge order: 0 start->impl, 1 impl->rev, 2 rev->impl (the back-edge).
+        let destroyed = regions_destroyed_by_edge_removal(&pipeline, 2);
+        assert_eq!(destroyed, vec!["review_loop".to_string()]);
+    }
+
+    #[test]
+    fn deleting_a_non_last_cycle_edge_keeps_the_region() {
+        // A region with TWO cycles closing it (rev -> impl AND rev -> mid -> impl
+        // via a second member). Deleting one back-edge leaves the other cycle, so
+        // the region survives: no destroy, no popup.
+        let pipeline = PipelineDef {
+            name: "rl2".into(),
+            version: None,
+            variables: Default::default(),
+            nodes: vec![
+                node("start", &[], &["user_prompt"]),
+                node("impl", &["task", "review", "more"], &["code"]),
+                node("rev", &["code"], &["review", "extra"]),
+                node("mid", &["extra"], &["more"]),
+            ],
+            edges: vec![
+                edge("start", "user_prompt", "impl", "task"), // 0
+                edge("impl", "code", "rev", "code"),          // 1
+                edge("rev", "review", "impl", "review"),      // 2 back-edge A
+                edge("rev", "extra", "mid", "extra"),         // 3
+                edge("mid", "more", "impl", "more"),          // 4 back-edge B
+            ],
+            loops: vec![LoopRegion {
+                id: "review_loop".into(),
+                kind: LoopKind::Bounded,
+                members: vec!["impl".into(), "rev".into(), "mid".into()],
+                max_iter: Some(serde_yaml::Value::Number(3.into())),
+                over: None,
+            }],
+            prompt_required: true,
+        };
+        // Deleting back-edge A (index 2) still leaves the impl->rev->mid->impl
+        // cycle, so the region is kept.
+        assert!(regions_destroyed_by_edge_removal(&pipeline, 2).is_empty());
+    }
+
+    #[test]
+    fn deleting_an_edge_outside_any_cycle_destroys_nothing() {
+        // Deleting a purely-forward edge (start -> impl, index 0) does not touch
+        // the region's cycle, so no region is destroyed (no popup).
+        let (mut pipeline, region) = review_loop();
+        pipeline.loops = vec![region];
+        assert!(regions_destroyed_by_edge_removal(&pipeline, 0).is_empty());
+    }
+
+    #[test]
+    fn a_collection_region_is_never_destroyed_by_edge_removal() {
+        // A `collection` region has no topological cycle to lose; removing any
+        // edge never pops the bounded-region destroy confirmation.
+        let (mut pipeline, _region) = collection_fanout_merge();
+        pipeline.loops = vec![LoopRegion {
+            id: "per-issue".into(),
+            kind: LoopKind::Collection,
+            members: vec!["fixer".into()],
+            max_iter: None,
+            over: Some("issues".into()),
+        }];
+        for i in 0..pipeline.edges.len() {
+            assert!(
+                regions_destroyed_by_edge_removal(&pipeline, i).is_empty(),
+                "collection region must never be destroyed (edge {i})"
+            );
+        }
     }
 
     // ── Integration-style: a full bounded-region run via the engine ──────────

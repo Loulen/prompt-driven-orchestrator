@@ -20,7 +20,8 @@ import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import { collectionFanoutNudges } from "../lib/loopRegions";
+import { collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
+import DestroyLoopModal from "./DestroyLoopModal";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
@@ -231,6 +232,13 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     type: "node" | "edge";
     id: string;
     edgeIndex?: number;
+  } | null>(null);
+  // Pending destroy-loop confirmation (#150): set when a Delete-edge action would
+  // remove a bounded region's last cycle. Holds the edge to delete and the loops
+  // it would destroy; confirming deletes the edge (the store drops the regions).
+  const [pendingDestroy, setPendingDestroy] = useState<{
+    edgeIndex: number;
+    loopIds: string[];
   } | null>(null);
   const reactFlowRef = useRef<HTMLDivElement>(null);
   const reactFlow = useReactFlow();
@@ -575,14 +583,35 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
             setContextMenu(null);
           }}
           onDeleteEdge={() => {
-            if (contextMenu.edgeIndex !== undefined) {
-              deleteEdge(contextMenu.edgeIndex);
-            }
+            const idx = contextMenu.edgeIndex;
             setContextMenu(null);
+            if (idx === undefined) return;
+            // Destroy-loop confirmation (ADR-0011 / #150): if this edge is the
+            // last cycle of one or more bounded regions, confirm before deleting
+            // (the store removes the destroyed `loops:` entries on confirm).
+            // Deleting a non-last cycle edge proceeds immediately (no popup).
+            const destroyed = pipeline
+              ? regionsDestroyedByEdgeRemoval(pipeline, idx)
+              : [];
+            if (destroyed.length > 0) {
+              setPendingDestroy({ edgeIndex: idx, loopIds: destroyed });
+            } else {
+              deleteEdge(idx);
+            }
           }}
           onClose={() => setContextMenu(null)}
         />
       )}
+
+      <DestroyLoopModal
+        open={pendingDestroy != null}
+        loopIds={pendingDestroy?.loopIds ?? []}
+        onClose={() => setPendingDestroy(null)}
+        onConfirm={() => {
+          if (pendingDestroy) deleteEdge(pendingDestroy.edgeIndex);
+          setPendingDestroy(null);
+        }}
+      />
     </div>
   );
 }

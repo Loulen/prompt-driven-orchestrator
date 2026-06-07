@@ -136,6 +136,50 @@ export function materializeMissingRegions(
 }
 
 /**
+ * True when a bounded region's members still close a cycle under the given
+ * edges (ADR-0011 / #150). A region "closes a cycle" when `detectCycles` finds a
+ * cycle whose members are all members of the region — the topological signature
+ * the region was materialized from. Mirrors the daemon's
+ * `loop_region::region_has_cycle`.
+ */
+function regionHasCycle(region: LoopRegion, nodes: NodeDef[], edges: EdgeDef[]): boolean {
+  const memberSet = new Set(region.members);
+  return detectCycles(nodes, edges).some((cycle) => cycle.every((m) => memberSet.has(m)));
+}
+
+/**
+ * Returns the ids of the `bounded` regions that would be **destroyed** by
+ * removing the edge at `edgeIndex` (ADR-0011 / #150). A region is destroyed when
+ * it currently closes a cycle but, with that edge gone, its members no longer
+ * close any cycle — i.e. the deleted edge was the region's **last** cycle.
+ * Deleting an edge while another cycle still closes the region leaves the loop
+ * intact (not returned). `collection` regions have no topological cycle to lose
+ * and are never returned. Mirrors the daemon's
+ * `loop_region::regions_destroyed_by_edge_removal`.
+ *
+ * This is the destroy-vs-keep decision behind the confirmation popup: when the
+ * list is non-empty, deleting the edge pops "this will destroy loop <id>"; on
+ * confirm the caller removes each returned region's `loops:` entry (its bound
+ * and iteration state go with it). An empty list pops nothing.
+ */
+export function regionsDestroyedByEdgeRemoval(
+  pipeline: PipelineDef,
+  edgeIndex: number,
+): string[] {
+  const edges = pipeline.edges;
+  if (edgeIndex < 0 || edgeIndex >= edges.length) return [];
+  const without = edges.filter((_, i) => i !== edgeIndex);
+  return (pipeline.loops ?? [])
+    .filter((region) => region.kind === "bounded")
+    .filter(
+      (region) =>
+        regionHasCycle(region, pipeline.nodes, edges) &&
+        !regionHasCycle(region, pipeline.nodes, without),
+    )
+    .map((region) => region.id);
+}
+
+/**
  * Info-only nudges (ADR-0001 sharp tool, never auto-wraps) suggesting a
  * collection fan-out (#151): when a `list`-typed output port feeds a downstream
  * node that is NOT already a member of a collection region, offer the explicit

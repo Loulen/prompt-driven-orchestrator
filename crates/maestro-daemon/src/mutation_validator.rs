@@ -70,7 +70,62 @@ pub fn validate_run_mutation(
         }
     }
 
+    // Live `max_iter` edit of a bounded loop region (ADR-0011 / #150, ADR-0007).
+    // Editing a running region's bound IS allowed — it is the `extend_cycle` of
+    // the Pipeline Manager. The only guard is the same consistency invariant the
+    // legacy Loop node had: the new bound may not drop below the lap the region
+    // is already on, which would strand the run mid-lap. The region runtime
+    // counter is keyed by the region `id` in `loop_states`.
+    let resolved_vars: std::collections::HashMap<String, serde_yaml::Value> =
+        std::collections::HashMap::new();
+    for region in &new.loops {
+        if region.kind != pipeline::LoopKind::Bounded {
+            continue;
+        }
+        let Some(loop_state) = run_state.loop_states.get(&region.id) else {
+            continue;
+        };
+        let new_max = resolve_region_max_iter(region, &resolved_vars);
+        if new_max < loop_state.current_iter {
+            rejections.push(MutationRejection {
+                node_id: region.id.clone(),
+                reason: format!(
+                    "cannot set max_iter={} on loop '{}': current iteration is {}",
+                    new_max, region.id, loop_state.current_iter
+                ),
+            });
+        }
+    }
+
     rejections
+}
+
+/// Resolves a bounded region's `max_iter` to a concrete cap, mirroring the
+/// node-based `scheduler::resolve_max_iter`: a number is taken as-is, a `$var`
+/// string resolves against the run's variables, and an absent/invalid bound
+/// falls back to the daemon default. Kept here (rather than on the region) so
+/// the region and the legacy node agree on resolution during the live edit.
+fn resolve_region_max_iter(
+    region: &pipeline::LoopRegion,
+    resolved_vars: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> i64 {
+    match &region.max_iter {
+        Some(serde_yaml::Value::Number(n)) => {
+            n.as_i64().unwrap_or(crate::loop_region::DEFAULT_MAX_ITER)
+        }
+        Some(serde_yaml::Value::String(s)) => {
+            if let Some(var_name) = s.strip_prefix('$') {
+                resolved_vars
+                    .get(var_name)
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(crate::loop_region::DEFAULT_MAX_ITER)
+            } else {
+                s.parse::<i64>()
+                    .unwrap_or(crate::loop_region::DEFAULT_MAX_ITER)
+            }
+        }
+        _ => crate::loop_region::DEFAULT_MAX_ITER,
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +425,90 @@ mod tests {
 
         let result = validate_run_mutation(&old, &new, &rs);
         assert_eq!(result.len(), 3, "should report all three rejections");
+    }
+
+    fn region(id: &str, max_iter: i64) -> pipeline::LoopRegion {
+        pipeline::LoopRegion {
+            id: id.to_string(),
+            kind: pipeline::LoopKind::Bounded,
+            members: vec!["impl".to_string(), "rev".to_string()],
+            max_iter: Some(serde_yaml::Value::Number(serde_yaml::Number::from(
+                max_iter,
+            ))),
+            over: None,
+        }
+    }
+
+    fn pipeline_with_region(region: pipeline::LoopRegion) -> pipeline::PipelineDef {
+        let mut p = pipeline(vec![
+            simple_node("impl", pipeline::NodeType::CodeMutating),
+            simple_node("rev", pipeline::NodeType::DocOnly),
+        ]);
+        p.loops = vec![region];
+        p
+    }
+
+    #[test]
+    fn allows_increasing_region_max_iter_live() {
+        // ADR-0007 (b): editing a live bounded region's max_iter is allowed — it
+        // is the `extend_cycle` of the Pipeline Manager. The region runtime
+        // counter is keyed by the region id (loop_states), at iter 2.
+        let old = pipeline_with_region(region("review_loop", 3));
+        let new = pipeline_with_region(region("review_loop", 6));
+        let mut rs = run_state_with_nodes(vec![]);
+        rs.loop_states.insert(
+            "review_loop".to_string(),
+            event_log::LoopState {
+                loop_node_id: "review_loop".to_string(),
+                current_iter: 2,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(
+            result.is_empty(),
+            "extending a live region's max_iter must be allowed"
+        );
+    }
+
+    #[test]
+    fn rejects_region_max_iter_below_current_iter() {
+        // Lowering a live region's max_iter below the lap it is already on would
+        // strand the run mid-lap; reject it (ADR-0007 consistency invariant).
+        let old = pipeline_with_region(region("review_loop", 5));
+        let new = pipeline_with_region(region("review_loop", 2));
+        let mut rs = run_state_with_nodes(vec![]);
+        rs.loop_states.insert(
+            "review_loop".to_string(),
+            event_log::LoopState {
+                loop_node_id: "review_loop".to_string(),
+                current_iter: 3,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].node_id, "review_loop");
+        assert!(result[0].reason.contains("max_iter=2"));
+        assert!(result[0].reason.contains("current iteration is 3"));
+    }
+
+    #[test]
+    fn region_without_active_state_allows_any_max_iter() {
+        // No live counter for the region (not yet run / not iterating) ⇒ any
+        // max_iter is accepted; the guard only bites a live region.
+        let old = pipeline_with_region(region("review_loop", 5));
+        let new = pipeline_with_region(region("review_loop", 1));
+        let rs = run_state_with_nodes(vec![]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(result.is_empty());
     }
 
     #[test]

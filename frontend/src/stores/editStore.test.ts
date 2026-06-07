@@ -240,6 +240,102 @@ describe("addEdge auto-materializes a bounded loop region on a cycle (ADR-0011 /
   });
 });
 
+describe("deleteEdge removes a region whose last cycle it destroys (ADR-0011 / #150)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+
+  it("removes the loops: entry when the deleted edge was the region's last cycle", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [a, b],
+      [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    // Edge 1 (b -> a) is the only back-edge: deleting it removes the last cycle.
+    useEditStore.getState().deleteEdge(1);
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    // The destroyed region's entry, bound, and iteration state go with it.
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+  });
+
+  it("keeps the region when the deleted edge is not its last cycle", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const c = makeNode({ id: "cccc3333", name: "mid" });
+    // Two cycles close {a,b,c}: b -> a (edge 2) and c -> a (edge 4).
+    const pipeline = makePipeline(
+      [a, b, c],
+      [
+        edge("aaaa1111", "bbbb2222"), // 0
+        edge("bbbb2222", "cccc3333"), // 1
+        edge("bbbb2222", "aaaa1111"), // 2 back-edge A
+        edge("cccc3333", "aaaa1111"), // 3 back-edge B
+      ],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222", "cccc3333"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    // Delete back-edge A (index 2); a -> b -> c -> a still closes the region.
+    useEditStore.getState().deleteEdge(2);
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].id).toBe("review_loop");
+  });
+});
+
+describe("updateRegion edits a region's max_iter (ADR-0011 / #150)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+
+  it("round-trips a new max_iter into the loops: entry", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [a, b],
+      [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    useEditStore.getState().updateRegion("review_loop", { max_iter: 7 });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops![0].max_iter).toBe(7);
+    expect(tab.dirty).toBe(true);
+    // The edit is serialized back into the loops: block.
+    expect(serializePipeline(tab.pipeline)).toContain("max_iter: 7");
+  });
+
+  it("leaves other regions untouched", () => {
+    const pipeline = makePipeline([], []);
+    pipeline.loops = [
+      { id: "loop-a", kind: "bounded", members: ["x"], max_iter: 2 },
+      { id: "loop-b", kind: "bounded", members: ["y"], max_iter: 4 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    useEditStore.getState().updateRegion("loop-b", { max_iter: 9 });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops!.find((r) => r.id === "loop-a")!.max_iter).toBe(2);
+    expect(tab.pipeline.loops!.find((r) => r.id === "loop-b")!.max_iter).toBe(9);
+  });
+});
+
 describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
   it("selects an edge by index", () => {
     useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 2 });

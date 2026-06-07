@@ -113,6 +113,20 @@ export interface LoopRegionLayout {
   memberIds: string[];
   /** `↻` counter text, e.g. `max 3` (idle) or `2/3` (running). */
   counterText: string;
+  /**
+   * The header text shown *before* the editable `max_iter` input (#150). For a
+   * bounded region: `max ` (idle) or `${currentIter}/` (running). For a
+   * collection region it equals `counterText` (no editable bound). Lets the
+   * header read `↻ max [3]` / `↻ 2/[3]` — preserving the live `↻ i/N` counter
+   * while the bound stays editable.
+   */
+  iterPrefix: string;
+  /**
+   * The region's raw `max_iter` bound (number, `$var` string, or null/absent),
+   * straight from the `loops:` entry. Drives the inline header editor (#150);
+   * `counterText` is the formatted display, this is the editable source.
+   */
+  maxIter: LoopRegion["max_iter"];
   /** True once the region has reached `max_iter` on a live run. */
   exhausted: boolean;
   /** Translucent-box geometry. Present iff `kind` renders as a box (>= 2 members). */
@@ -184,6 +198,14 @@ export function deriveLoopRegions(
       : live
         ? `${currentIter}/${maxText}`
         : `max ${maxText}`;
+    // For a bounded region the header splits into a read-only live prefix
+    // (`max ` idle, `i/` running) and the editable `max_iter` input (#150). A
+    // collection region has no editable bound, so its prefix is the full text.
+    const iterPrefix = isCollection
+      ? counterText
+      : live
+        ? `${currentIter}/`
+        : "max ";
 
     if (members.length === 1) {
       layouts.push({
@@ -191,6 +213,8 @@ export function deriveLoopRegions(
         kind: region.kind,
         memberIds: members.map((n) => n.id),
         counterText,
+        iterPrefix,
+        maxIter: region.max_iter ?? null,
         exhausted,
         box: null,
         badgeMemberId: members[0].id,
@@ -215,6 +239,8 @@ export function deriveLoopRegions(
       kind: region.kind,
       memberIds: members.map((n) => n.id),
       counterText,
+      iterPrefix,
+      maxIter: region.max_iter ?? null,
       exhausted,
       badgeMemberId: null,
       box: {
@@ -258,6 +284,8 @@ export function buildLoopRegionNodes(
         regionId: r.id,
         kind: r.kind,
         counterText: r.counterText,
+        iterPrefix: r.iterPrefix,
+        maxIter: r.maxIter ?? null,
         exhausted: r.exhausted,
         width: r.box!.width,
         height: r.box!.height,

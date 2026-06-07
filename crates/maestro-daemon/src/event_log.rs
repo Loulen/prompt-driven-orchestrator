@@ -848,6 +848,55 @@ pub fn generate_run_id() -> String {
     format!("{ts}-{short}")
 }
 
+/// The folded manager routing applied to one bounded loop region by id
+/// (ADR-0011 / #152). The Pipeline Manager can route an exhausted-unrouted
+/// region: **bump** it (run `bumped_by` more iterations) or **end** it (fire its
+/// completion). Both are issued as `CommandIssued` events; this is their
+/// projection onto a single region.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegionRoute {
+    /// Extra iterations the manager added on top of the region's `max_iter`
+    /// (sum of every `bump_region` command for this id).
+    pub bumped_by: i64,
+    /// True once the manager ended the region (any `end_region` command for this
+    /// id), so the scheduler stops blocking it "exhausted — unrouted".
+    pub ended: bool,
+}
+
+/// Folds the manager's loop-region routing commands (ADR-0011 / #152) per region
+/// id from the event log: `bump_region` accumulates `additional_iter`,
+/// `end_region` flips `ended`. The result drives `resume_run` continuation of an
+/// exhausted-unrouted region without restarting the daemon.
+pub fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
+    let mut routes: HashMap<String, RegionRoute> = HashMap::new();
+    for event in events {
+        if event.kind != EventKind::CommandIssued {
+            continue;
+        }
+        let Some(ref payload) = event.payload else {
+            continue;
+        };
+        let cmd = payload.get("command").and_then(|v| v.as_str());
+        let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        match cmd {
+            Some("bump_region") => {
+                let additional = payload
+                    .get("additional_iter")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                routes.entry(region_id.to_string()).or_default().bumped_by += additional;
+            }
+            Some("end_region") => {
+                routes.entry(region_id.to_string()).or_default().ended = true;
+            }
+            _ => {}
+        }
+    }
+    routes
+}
+
 pub fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
     let mut extensions: HashMap<String, i64> = HashMap::new();
     for event in events {
@@ -2534,5 +2583,70 @@ mod tests {
         assert_eq!(serialized, "\"node_invalidated\"");
         let deserialized: EventKind = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, kind);
+    }
+
+    // ── Manager loop-region routing (ADR-0011 / #152) ────────────────────────
+
+    #[test]
+    fn end_region_marks_the_region_ended() {
+        // The manager ends a bounded region by id (fire its completion): the
+        // folded route for that id is `ended`, so the scheduler stops blocking
+        // it "exhausted — unrouted".
+        let events = vec![make_event_with_payload(
+            EventKind::CommandIssued,
+            None,
+            serde_json::json!({ "command": "end_region", "region_id": "review_loop" }),
+        )];
+        let routes = collect_region_routes(&events);
+        let route = routes.get("review_loop").expect("review_loop routed");
+        assert!(route.ended, "end_region marks the region ended");
+        assert_eq!(route.bumped_by, 0, "end_region adds no extra iterations");
+    }
+
+    #[test]
+    fn bump_region_accumulates_additional_iterations() {
+        // Two bumps of +2 and +3 on the same region id sum to +5 extra laps; the
+        // region is not ended (the manager chose to keep iterating).
+        let events = vec![
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({
+                    "command": "bump_region",
+                    "region_id": "review_loop",
+                    "additional_iter": 2,
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({
+                    "command": "bump_region",
+                    "region_id": "review_loop",
+                    "additional_iter": 3,
+                }),
+            ),
+        ];
+        let routes = collect_region_routes(&events);
+        let route = routes.get("review_loop").expect("review_loop routed");
+        assert_eq!(route.bumped_by, 5, "bumps accumulate");
+        assert!(!route.ended, "bump does not end the region");
+    }
+
+    #[test]
+    fn region_routes_are_keyed_per_region_id() {
+        // Routing one region leaves a sibling region untouched: routes are keyed
+        // by region id, so the manager unsticks exactly the region it named.
+        let events = vec![make_event_with_payload(
+            EventKind::CommandIssued,
+            None,
+            serde_json::json!({ "command": "end_region", "region_id": "review_loop" }),
+        )];
+        let routes = collect_region_routes(&events);
+        assert!(routes.contains_key("review_loop"));
+        assert!(
+            !routes.contains_key("other_loop"),
+            "an unrouted sibling region has no route entry"
+        );
     }
 }

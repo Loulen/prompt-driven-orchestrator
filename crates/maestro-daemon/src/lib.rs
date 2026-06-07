@@ -207,6 +207,10 @@ struct RunCommandRequest {
     iter: Option<i64>,
     #[serde(default)]
     additional_iter: Option<i64>,
+    /// Identifies the loop region a `bump_region` / `end_region` command targets
+    /// (ADR-0011 / #152 — the Pipeline Manager routes a region by id).
+    #[serde(default)]
+    region_id: Option<String>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -5241,6 +5245,101 @@ async fn run_command(
             info!("extend_cycle: node {node_id} +{additional_iter} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
+        // The Pipeline Manager routes a loop region BY ID (ADR-0011 / #152):
+        // `bump_region` runs N more iterations; `end_region` fires its
+        // completion. Both append a control-flow `CommandIssued` event and then
+        // continue the run (lift an exhausted-unrouted Halt and re-evaluate),
+        // so a stalled region is unstuck without restarting the daemon.
+        "bump_region" | "end_region" => {
+            let Some(region_id) = req.region_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("region_id required for {}", req.kind)
+                    })),
+                )
+                    .into_response();
+            };
+
+            let payload = if req.kind == "bump_region" {
+                let Some(additional_iter) = req.additional_iter else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": "additional_iter required for bump_region"
+                        })),
+                    )
+                        .into_response();
+                };
+                if additional_iter <= 0 {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": "additional_iter must be positive" })),
+                    )
+                        .into_response();
+                }
+                serde_json::json!({
+                    "command": "bump_region",
+                    "region_id": region_id,
+                    "additional_iter": additional_iter,
+                })
+            } else {
+                serde_json::json!({
+                    "command": "end_region",
+                    "region_id": region_id,
+                })
+            };
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(payload),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            // Continue the run: an exhausted-unrouted region halts the run, so
+            // lift the Halt/Failed back to Running before re-evaluating.
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = match event_log::project(&events) {
+                Some(s) => s,
+                None => {
+                    return (StatusCode::NOT_FOUND, "run not found").into_response();
+                }
+            };
+            if run_state.status == event_log::RunStatus::Halted
+                || run_state.status == event_log::RunStatus::Failed
+            {
+                let resume_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::CommandIssued,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "command": "resume_run" })),
+                };
+                if let Err(e) = append_event(&state, &resume_event).await {
+                    error!("failed to append resume_run after region route: {e}");
+                }
+            }
+
+            re_evaluate_after_command(&state, &run_id).await;
+
+            info!("{}: region {region_id} in run {run_id}", req.kind);
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
         "pause_run" => {
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
@@ -5693,6 +5792,31 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
             if let Some(val) = resolved_vars.get_mut(&var_name) {
                 if let Some(n) = val.as_i64() {
                     *val = serde_yaml::Value::Number(serde_yaml::Number::from(n + additional));
+                }
+            }
+        }
+    }
+
+    // Apply manager loop-region routes (ADR-0011 / #152). A `bump_region` raises
+    // the region's effective `max_iter` by the bumped amount; when that cap is a
+    // `$var` reference, bumping the variable lifts the `iter >= max` exit guard
+    // so the region runs the extra laps after `resume_run`. (A literal cap is the
+    // region engine's bound — #148 — and reads the recorded route directly.)
+    let region_routes = event_log::collect_region_routes(&events);
+    for (region_id, route) in &region_routes {
+        if route.bumped_by <= 0 {
+            continue;
+        }
+        if let Some(region) = pipeline.loops.iter().find(|r| &r.id == region_id) {
+            if let Some(serde_yaml::Value::String(s)) = &region.max_iter {
+                if let Some(var_name) = s.strip_prefix('$') {
+                    if let Some(val) = resolved_vars.get_mut(var_name) {
+                        if let Some(n) = val.as_i64() {
+                            *val = serde_yaml::Value::Number(serde_yaml::Number::from(
+                                n + route.bumped_by,
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -10344,6 +10468,196 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn end_region_requires_region_id() {
+        // The manager routes a loop region BY ID (ADR-0011 / #152): without a
+        // region_id the command is a bad request.
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "end_region" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn end_region_emits_command_issued_with_region_id() {
+        // Ending a region by id appends a `command_issued` control-flow event
+        // carrying the region id, so the projection can fold it (#152).
+        let state = test_state().await;
+
+        let run_event = event_log::Event {
+            id: None,
+            run_id: "region-end".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "loop-pipe" })),
+        };
+        append_event(&state, &run_event).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/region-end/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "end_region", "region_id": "review_loop" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, "region-end").await.unwrap();
+        let routes = event_log::collect_region_routes(&events);
+        let route = routes
+            .get("review_loop")
+            .expect("end_region routed review_loop");
+        assert!(route.ended, "the region is folded as ended");
+    }
+
+    #[tokio::test]
+    async fn bump_region_requires_positive_additional_iter() {
+        let state = test_state().await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-run/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "bump_region",
+                            "region_id": "review_loop",
+                            "additional_iter": 0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn bump_region_emits_command_issued_with_additional_iter() {
+        let state = test_state().await;
+
+        let run_event = event_log::Event {
+            id: None,
+            run_id: "region-bump".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "loop-pipe" })),
+        };
+        append_event(&state, &run_event).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/region-bump/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "bump_region",
+                            "region_id": "review_loop",
+                            "additional_iter": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, "region-bump").await.unwrap();
+        let routes = event_log::collect_region_routes(&events);
+        let route = routes
+            .get("review_loop")
+            .expect("bump_region routed review_loop");
+        assert_eq!(route.bumped_by, 2, "the region is folded with +2 laps");
+        assert!(!route.ended);
+    }
+
+    #[tokio::test]
+    async fn end_region_resumes_an_exhausted_unrouted_halt() {
+        // The acceptance behavior (#152): a run blocked "exhausted — unrouted"
+        // (a RunHalted) is continued by routing the region from the manager —
+        // `resume_run` lifts the halt so the run is Running again, without a
+        // daemon restart.
+        let state = test_state().await;
+
+        let run_event = event_log::Event {
+            id: None,
+            run_id: "region-unstick".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "loop-pipe" })),
+        };
+        append_event(&state, &run_event).await.unwrap();
+
+        let halt_event = event_log::Event {
+            id: None,
+            run_id: "region-unstick".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunHalted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "message": "exhausted — unrouted" })),
+        };
+        append_event(&state, &halt_event).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/region-unstick/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "end_region", "region_id": "review_loop" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, "region-unstick").await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            run_state.status,
+            event_log::RunStatus::Running,
+            "ending the region resumes the halted run"
+        );
     }
 
     #[tokio::test]

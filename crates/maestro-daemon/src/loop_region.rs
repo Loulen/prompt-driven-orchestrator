@@ -204,6 +204,51 @@ pub fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
     format!("{loop_id}#{iter}#{edge_index}")
 }
 
+/// Resolves a bounded region's `max_iter` (ADR-0011 / #148). A literal number is
+/// the cap; a `$var` reference reads `vars`; anything else (or a missing cap)
+/// falls back to [`DEFAULT_MAX_ITER`] so a region is never accidentally
+/// unbounded. Mirrors `scheduler::resolve_max_iter` for the legacy Loop node so
+/// region and node iteration agree on the same bound semantics.
+pub fn resolve_region_max_iter(
+    region: &LoopRegion,
+    vars: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> i64 {
+    match &region.max_iter {
+        Some(serde_yaml::Value::Number(n)) => n.as_i64().unwrap_or(DEFAULT_MAX_ITER),
+        Some(serde_yaml::Value::String(s)) => {
+            if let Some(var_name) = s.strip_prefix('$') {
+                vars.get(var_name)
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(DEFAULT_MAX_ITER)
+            } else {
+                s.parse::<i64>().unwrap_or(DEFAULT_MAX_ITER)
+            }
+        }
+        _ => DEFAULT_MAX_ITER,
+    }
+}
+
+/// The bounded region a `node_id` is an entry of, *and* the given edge re-enters
+/// (ADR-0011 / #148). Used by the scheduler to recognise that a fired edge into
+/// `target` is a region re-entry (back-edge) rather than a plain forward edge, so
+/// region iteration / exhaustion governs the spawn instead of the generic path.
+/// Returns the first matching `bounded` region whose entry is `target` and whose
+/// members include `source` (the back-edge `source -> target` closes the region).
+pub fn bounded_region_reentered_by_edge<'a>(
+    pipeline: &'a PipelineDef,
+    source: &str,
+    target: &str,
+) -> Option<&'a LoopRegion> {
+    pipeline.loops.iter().find(|region| {
+        region.kind == LoopKind::Bounded
+            && region.members.iter().any(|m| m == source)
+            && reentry_edge_indices(pipeline, region).iter().any(|&i| {
+                let e = &pipeline.edges[i];
+                e.source.node == source && e.target.node == target
+            })
+    })
+}
+
 /// Returns the `iter` to stamp on a node's artifact (ADR-0011 / #148). A node
 /// that is a member of an active region is stamped with that region's current
 /// counter; a non-member stays at `iter 1`. (A node belonging to several regions

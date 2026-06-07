@@ -268,6 +268,29 @@ pub fn evaluate_outgoing_edges_full(
             } else {
                 actions.push(SchedulerAction::Complete);
             }
+        } else if let Some(region) = crate::loop_region::bounded_region_reentered_by_edge(
+            pipeline,
+            completed_node_id,
+            target_id,
+        ) {
+            // ── Bounded loop REGION re-entry (ADR-0011 / #148) ────────────────
+            //
+            // The fired edge is a region back-edge (member -> entry): the
+            // region wants another lap. The region engine — not the generic
+            // forward-spawn path — governs this. While iter < max, advance the
+            // counter and re-spawn the entry once (coalesced). At max_iter with
+            // re-entry still requested, the region is *exhausted*: route an
+            // `iter >= max` exit edge if one matches, else emit the explicit
+            // "exhausted — unrouted" halt (never a silent stall, never an
+            // off-by-one spawn past the bound).
+            actions.extend(handle_region_reentry(
+                pipeline,
+                run_state,
+                region,
+                target_id,
+                frontmatter_fields,
+                resolved_vars,
+            ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
@@ -382,6 +405,107 @@ pub fn evaluate_outgoing_edges_full(
                 });
             }
         }
+    }
+
+    actions
+}
+
+/// Drives one re-entry of a bounded loop region (ADR-0011 / #148) when a member's
+/// back-edge fired. Delegates the decision to the pure region engine
+/// (`loop_region`):
+///
+/// - **NextLap**: emit `LoopIterStarted{region, iter+1}` (so the projection
+///   tracks the region counter in `loop_states`) and re-`Spawn` the region entry
+///   once at the next iter — even if several back-edges fired this lap, the
+///   engine coalesces to one (#108).
+/// - **Exhausted** (`iter >= max_iter` with re-entry still requested): consult
+///   `exhaustion_outcome`. `Routed` ⇒ `Spawn` each external target (or `Complete`
+///   if it is `End`); `Unrouted` ⇒ the explicit "exhausted — unrouted" `Halt` —
+///   the diagnosable state the Pipeline Manager routes (#152), never a silent
+///   stall and never an off-by-one spawn past the bound.
+///
+/// The region's live counter is read from `run_state.loop_states[region.id]`,
+/// defaulting to lap 1 before any iteration event has been projected.
+fn handle_region_reentry(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    region: &crate::pipeline::LoopRegion,
+    entry_id: &str,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    let max_iter = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
+    let current_iter = run_state
+        .loop_states
+        .get(region.id.as_str())
+        .map(|ls| ls.current_iter)
+        .unwrap_or(1);
+
+    let runtime = crate::loop_region::RegionRuntime {
+        current_iter,
+        max_iter,
+        exhausted: false,
+    };
+
+    // A fired back-edge means at least one re-entry was requested this lap.
+    match crate::loop_region::resolve_lap(pipeline, region, &runtime, 1) {
+        crate::loop_region::LapDecision::NextLap { iter, entry } => {
+            actions.push(SchedulerAction::LoopIterStarted {
+                loop_node_id: region.id.clone(),
+                iter,
+                max_iter,
+            });
+            // Trust the engine's entry, falling back to the edge target.
+            let entry = if entry.is_empty() {
+                entry_id.to_string()
+            } else {
+                entry
+            };
+            actions.push(SchedulerAction::Spawn {
+                node_id: entry,
+                iter,
+            });
+        }
+        crate::loop_region::LapDecision::Exhausted => {
+            match crate::loop_region::exhaustion_outcome(
+                pipeline,
+                region,
+                &runtime,
+                frontmatter_fields,
+                resolved_vars,
+            ) {
+                crate::loop_region::ExhaustionOutcome::Routed(targets) => {
+                    let end_node_id = pipeline
+                        .nodes
+                        .iter()
+                        .find(|n| n.node_type == NodeType::End)
+                        .map(|n| n.id.as_str());
+                    for target in targets {
+                        if end_node_id == Some(target.as_str()) {
+                            actions.push(SchedulerAction::Complete);
+                        } else {
+                            actions.push(SchedulerAction::Spawn {
+                                node_id: target,
+                                iter: 1,
+                            });
+                        }
+                    }
+                }
+                crate::loop_region::ExhaustionOutcome::Unrouted => {
+                    actions.push(SchedulerAction::Halt {
+                        message: format!(
+                            "exhausted — unrouted: bounded region '{}' reached max_iter \
+                             {max_iter} with the continuation condition still true and no \
+                             matching exit edge (route it from the Pipeline Manager)",
+                            region.id
+                        ),
+                    });
+                }
+            }
+        }
+        crate::loop_region::LapDecision::NoReentry => {}
     }
 
     actions
@@ -5294,5 +5418,312 @@ edges:
         let mut state = empty_run_state();
         state.status = crate::event_log::RunStatus::Halted;
         assert!(step(&pipeline, &state).is_empty());
+    }
+
+    // ── Bounded loop REGION iteration (ADR-0011 / #148) ──────────────────────
+    //
+    // The bounded-region review loop migrated from Loop+Switch: the body is the
+    // `loops:` region [impl, rev]; routing lives on the edges (rev -> end WHEN
+    // verdict in [PASS], rev -> impl ELSE). These tests pin the scheduler's
+    // runtime wiring for region iteration — the seam the L5 manager-unstick
+    // scenario exercises and which had no daemon-level coverage.
+
+    fn migrated_review_loop_pipeline(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "manager-unstick-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("impl", &["task", "review"], &["code"]),
+                make_node("rev", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "impl", "task"),
+                make_edge("impl", "code", "rev", "code"),
+                make_cond_edge(
+                    "rev",
+                    "review",
+                    "end",
+                    "result",
+                    Some("verdict: { in: [PASS, APPROVED] }"),
+                    false,
+                ),
+                make_cond_edge("rev", "review", "impl", "task", None, true),
+            ],
+            loops: vec![crate::pipeline::LoopRegion {
+                id: "review_loop".into(),
+                kind: crate::pipeline::LoopKind::Bounded,
+                members: vec!["impl".into(), "rev".into()],
+                max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+                over: None,
+            }],
+            prompt_required: true,
+        }
+    }
+
+    fn fail_fm() -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let mut rev_fm = HashMap::new();
+        rev_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("FAIL".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("rev".to_string(), rev_fm);
+        by_node
+    }
+
+    #[test]
+    fn region_back_edge_reenters_the_entry_at_the_next_lap() {
+        // rev completes FAIL at lap 1 → the `else` back-edge rev->impl fires and
+        // the region must re-enter: impl re-spawns at iter 2 (the next lap),
+        // NOT halt "unrouted". Regression: the back-edge produced no re-entry
+        // spawn because the region iteration was never tracked at runtime.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        // Region tracked at lap 1.
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 2,
+            }),
+            "FAIL at lap 1 must re-enter impl at iter 2, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "must not halt at lap 1, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_blocks_exhausted_unrouted_at_max_iter() {
+        // rev completes FAIL at lap 2 == max_iter with no `iter >= max` exit edge
+        // wired: the region must block the explicit "exhausted — unrouted" halt,
+        // NOT re-enter (no iter-3 spawn) and NOT a generic unrouted message.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 2));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn {
+                    node_id,
+                    iter: 3,
+                } if node_id == "impl"
+            )),
+            "must not re-enter past max_iter, got {actions:?}"
+        );
+        let halt = actions.iter().find_map(|a| match a {
+            SchedulerAction::Halt { message } => Some(message.clone()),
+            _ => None,
+        });
+        let Some(halt) = halt else {
+            panic!("expected an exhausted-unrouted halt, got {actions:?}");
+        };
+        assert!(
+            halt.contains("exhausted") && halt.contains("unrouted"),
+            "halt must be the region exhausted-unrouted reason, got {halt:?}"
+        );
+    }
+
+    #[test]
+    fn region_exits_early_on_pass_edge() {
+        // rev PASSes at lap 1 → the guarded rev->end edge fires; the run
+        // completes, leaving the region before max_iter. (No regression here;
+        // pins the early-exit path stays intact alongside the re-entry fix.)
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut rev_fm = HashMap::new();
+        rev_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("PASS".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("rev".to_string(), rev_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            &rev_fm,
+            &by_node,
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "PASS must complete via rev->end, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_member_re_enters_then_forwards_to_next_member_at_the_new_lap() {
+        // After the re-entry spawns impl at iter 2, impl completing must forward
+        // (unconditional impl->rev) to spawn rev at iter 2 — the intra-body edge
+        // is NOT a region re-entry, so it takes the generic forward path. This is
+        // what stamps both members at the region iter, which the run overlay
+        // reads to render the exhausted-unrouted affordance.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        // impl has re-entered and completed at lap 2; rev is still at lap 1.
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "impl",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "rev".into(),
+                iter: 2,
+            }),
+            "impl@2 must forward to rev@2 on the new lap, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_reentry_via_scheduler_step_is_idempotent_at_max_iter() {
+        // Through the whole-state scheduler_step (which re-evaluates every
+        // completed node each tick), an already-exhausted region must propose at
+        // most one halt and never re-spawn a member past max_iter — the
+        // idempotent filter and the region bound together keep the tick stable.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 2));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = step_with_fm(&pipeline, &state, &fail_fm());
+        let halts = actions
+            .iter()
+            .filter(|a| matches!(a, SchedulerAction::Halt { .. }))
+            .count();
+        assert_eq!(halts, 1, "exactly one exhausted halt, got {actions:?}");
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "impl" || node_id == "rev"
+            )),
+            "no member re-spawn past max_iter, got {actions:?}"
+        );
     }
 }

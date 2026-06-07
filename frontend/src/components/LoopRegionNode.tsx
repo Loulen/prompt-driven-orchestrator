@@ -1,6 +1,7 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../types";
 import { useEditStore } from "../stores/editStore";
+import { endRegion } from "../api";
 
 /**
  * Data carried by a `loopRegion` canvas node (ADR-0011 / #148, #150). A loop
@@ -32,6 +33,12 @@ export interface LoopRegionNodeData {
   maxIter: number | string | null;
   /** True once the region reached `max_iter` with the loop still continuing. */
   exhausted: boolean;
+  /**
+   * The live run this region belongs to, or `null` in a template view. Present
+   * only when a run is active; the "route from manager" affordance (#152) on an
+   * exhausted-unrouted region targets this run.
+   */
+  runId: string | null;
   width: number;
   height: number;
   [key: string]: unknown;
@@ -134,6 +141,26 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           }}
         >
           exhausted — unrouted
+          {data.runId != null && (
+            // The run overlay on an exhausted-unrouted region offers a "route
+            // from manager" affordance (ADR-0011 / #152): ending the region by
+            // id fires its completion and the daemon resumes the run.
+            <button
+              type="button"
+              data-testid="loop-region-route-from-manager"
+              className="ml-1.5 rounded border px-1 leading-none hover:bg-st-blocked-bg"
+              style={{
+                borderColor: "var(--color-st-blocked)",
+                color: "var(--color-st-blocked)",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                void endRegion(data.runId as string, data.regionId);
+              }}
+            >
+              route from manager
+            </button>
+          )}
         </div>
       )}
     </div>

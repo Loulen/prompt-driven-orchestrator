@@ -378,6 +378,42 @@ export async function resumeRun(runId: string): Promise<void> {
   if (!resp.ok) throw new Error(`resume_run failed: ${resp.status}`);
 }
 
+/**
+ * Route a loop region by id from the Pipeline Manager (ADR-0011 / #152): end it
+ * (fire its completion) so a region blocked "exhausted — unrouted" leaves the
+ * region and the run proceeds. The daemon resumes the run as part of the command.
+ */
+export async function endRegion(runId: string, regionId: string): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "end_region", region_id: regionId }),
+  });
+  if (!resp.ok) throw new Error(`end_region failed: ${resp.status}`);
+}
+
+/**
+ * Route a loop region by id from the Pipeline Manager (ADR-0011 / #152): bump it
+ * (run `additionalIter` more iterations) so a region blocked "exhausted —
+ * unrouted" resumes iterating. The daemon resumes the run as part of the command.
+ */
+export async function bumpRegion(
+  runId: string,
+  regionId: string,
+  additionalIter: number,
+): Promise<void> {
+  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: "bump_region",
+      region_id: regionId,
+      additional_iter: additionalIter,
+    }),
+  });
+  if (!resp.ok) throw new Error(`bump_region failed: ${resp.status}`);
+}
+
 export async function retryAll(runId: string): Promise<CreateRunResponse> {
   const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
     method: "POST",

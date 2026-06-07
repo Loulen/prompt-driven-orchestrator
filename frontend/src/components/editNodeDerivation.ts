@@ -287,6 +287,9 @@ export function buildLoopRegionNodes(
         iterPrefix: r.iterPrefix,
         maxIter: r.maxIter ?? null,
         exhausted: r.exhausted,
+        // The live run id (or null in a template view) so an exhausted-unrouted
+        // region can offer "route from manager" (ADR-0011 / #152).
+        runId: runState?.run_id ?? null,
         width: r.box!.width,
         height: r.box!.height,
       },

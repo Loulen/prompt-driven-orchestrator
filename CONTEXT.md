@@ -104,7 +104,7 @@ loops:
   - `collection` à un membre = fan-out d'**un** nœud par item (le foreach le plus courant : « un fixer par issue »).
   - `bounded` à un membre = un nœud qui **se relance** (self-edge) jusqu'à `max_iter`.
 - **Entrée** = le membre ayant une in-edge depuis un non-membre (membre unique : ce nœud). **Re-entry** = une edge d'un membre vers cette entrée (membre unique : sa self-edge).
-- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ N items` (collection), éditable.
+- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ N items` (collection), **en lecture seule sur le canvas** — ni id ni éditeur inline (règle slim card #149). Le `max_iter` et l'id se consultent/s'éditent dans l'**inspecteur de région** (clic sur le header).
 
 ### Deux drivers
 

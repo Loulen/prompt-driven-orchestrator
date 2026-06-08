@@ -60,8 +60,6 @@ function props(data: Partial<LoopRegionNodeData>): NodeProps<Node<LoopRegionNode
     regionId: "review_loop",
     kind: "bounded",
     counterText: "max 3",
-    iterPrefix: "max ",
-    maxIter: 3,
     exhausted: false,
     runId: null,
     width: 400,
@@ -87,7 +85,7 @@ const reviewLoop: LoopRegion = {
   max_iter: 3,
 };
 
-describe("LoopRegionNode header (#150)", () => {
+describe("LoopRegionNode header (slim card #149 / #150)", () => {
   beforeEach(() => {
     useEditStore.setState({
       openTabs: [],
@@ -109,45 +107,66 @@ describe("LoopRegionNode header (#150)", () => {
     expect(sel.regionId).toBe("review_loop");
   });
 
-  it("edits max_iter inline from the header for a bounded region", () => {
+  it("renders the bound read-only — no inline max_iter editor on the canvas", () => {
+    // The bound is editable only in the RegionInspector: the canvas header must
+    // carry no <input>, honouring the slim-card rule (#149). The earlier inline
+    // header editor (#150) was removed.
     seedStore([reviewLoop]);
     render(
       <Wrapper>
-        <LoopRegionNode {...props({})} />
+        <LoopRegionNode {...props({ counterText: "max 3" })} />
       </Wrapper>,
     );
-    const input = screen.getByTestId("region-header-max-iter");
-    fireEvent.change(input, { target: { value: "6" } });
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.pipeline.loops!.find((r) => r.id === "review_loop")!.max_iter).toBe(6);
+    const header = screen.getByTestId("loop-region-header");
+    expect(screen.queryByTestId("region-header-max-iter")).toBeNull();
+    expect(screen.queryByTestId("region-iter-prefix")).toBeNull();
+    expect(header.querySelector("input")).toBeNull();
+    expect(header).toHaveTextContent("max 3");
   });
 
-  it("shows the live lap prefix before the editable max during a run (preserves the ↻ i/N counter)", () => {
-    // On a live run the header reads `↻ 2/3`: the `2/` is the live lap (read-
-    // only progress) and the `3` is the editable bound. Editing the bound must
-    // not erase the live-counter display the loop-region scenario asserts.
+  it("keeps the live ↻ i/N counter read-only during a run", () => {
+    // On a live run the header reads `↻ 2/3` as plain text — no editable bound,
+    // so the live-counter display the loop-region scenario asserts is preserved.
     seedStore([reviewLoop]);
     render(
       <Wrapper>
-        <LoopRegionNode {...props({ iterPrefix: "2/", counterText: "2/3" })} />
+        <LoopRegionNode {...props({ counterText: "2/3" })} />
       </Wrapper>,
     );
-    expect(screen.getByTestId("region-iter-prefix")).toHaveTextContent("2/");
-    expect(screen.getByTestId("region-header-max-iter")).toHaveValue(3);
+    const header = screen.getByTestId("loop-region-header");
+    expect(header).toHaveTextContent("2/3");
+    expect(screen.queryByTestId("region-header-max-iter")).toBeNull();
   });
 
-  it("shows no inline max_iter editor for a collection region", () => {
+  it("does not show the region id on the canvas header", () => {
+    // The id lives in the RegionInspector only; the slim card shows it nowhere
+    // on the canvas (the `loop-region-name` span was removed).
+    seedStore([reviewLoop]);
+    render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ regionId: "loop-473d6a4234e27f9a", counterText: "max 3" })}
+        />
+      </Wrapper>,
+    );
+    const header = screen.getByTestId("loop-region-header");
+    expect(header.querySelector(".loop-region-name")).toBeNull();
+    expect(header).not.toHaveTextContent("loop-473d6a4234e27f9a");
+  });
+
+  it("renders no inline editor for a collection region either", () => {
     seedStore([
       { id: "per-issue", kind: "collection", members: ["impl"], over: "issues" },
     ]);
     render(
       <Wrapper>
         <LoopRegionNode
-          {...props({ regionId: "per-issue", kind: "collection", counterText: "over issues", iterPrefix: "over issues", maxIter: null })}
+          {...props({ regionId: "per-issue", kind: "collection", counterText: "over issues" })}
         />
       </Wrapper>,
     );
     expect(screen.queryByTestId("region-header-max-iter")).toBeNull();
+    expect(screen.getByTestId("loop-region-header")).toHaveTextContent("over issues");
   });
 });
 

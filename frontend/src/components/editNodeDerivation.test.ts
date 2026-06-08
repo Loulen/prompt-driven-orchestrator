@@ -146,18 +146,6 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     expect(r.exhausted).toBe(false);
   });
 
-  it("exposes a bounded region's raw max_iter on the layout (#150 header editor)", () => {
-    // The inline header editor (#150) needs the raw bound, not just the
-    // formatted counter text. `maxIter` carries the number (or `$var`/null).
-    const p = pipelineWith(
-      [node("impl", "code-mutating", ["code"]), node("rev", "doc-only", ["review"])],
-      [{ id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 }],
-    );
-    const regions = deriveLoopRegions(p, null);
-    expect(regions[0].kind).toBe("bounded");
-    expect(regions[0].maxIter).toBe(3);
-  });
-
   it("renders a multi-member collection as a box", () => {
     const p = pipelineWith(
       [node("fix-a", "code-mutating", ["a"]), node("fix-b", "code-mutating", ["b"])],

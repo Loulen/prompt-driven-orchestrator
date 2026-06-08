@@ -843,11 +843,27 @@ fn check_all_upstream_completed(
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
+    // ADR-0011: an edge's role (forward vs. re-entry/back-edge) is *derived from
+    // the loop region*, never flagged in the YAML. A bounded region's re-entry
+    // edge (member -> entry) requests another lap; it must NOT count as an
+    // upstream precondition for the entry node, or entering the loop from an
+    // external forward edge deadlocks silently on a back-edge source that is
+    // itself downstream of the entry inside the cycle (#172). We exclude only the
+    // re-entry edge: a source that also feeds the target via a plain forward edge
+    // still counts through that edge.
+    let reentry_edges: HashSet<usize> = pipeline
+        .loops
+        .iter()
+        .filter(|r| r.kind == crate::pipeline::LoopKind::Bounded)
+        .flat_map(|r| crate::loop_region::reentry_edge_indices(pipeline, r))
+        .collect();
+
     let upstream: HashSet<&str> = pipeline
         .edges
         .iter()
-        .filter(|e| e.target.node == target_node_id)
-        .map(|e| e.source.node.as_str())
+        .enumerate()
+        .filter(|(i, e)| e.target.node == target_node_id && !reentry_edges.contains(i))
+        .map(|(_, e)| e.source.node.as_str())
         .collect();
 
     upstream.iter().all(|src| {
@@ -5724,6 +5740,148 @@ edges:
                 SchedulerAction::Spawn { node_id, .. } if node_id == "impl" || node_id == "rev"
             )),
             "no member re-spawn past max_iter, got {actions:?}"
+        );
+    }
+
+    // ── #172: entering a bounded region from outside ──────────────────────────
+    //
+    // Topology that the default `bugfix` pipeline exhibits and that deadlocked
+    // silently before the fix:
+    //
+    //   dbg ──(verdict eq Bug)──▶ impl ⇄ tst
+    //   dbg ──(repro, context)──▶ tst        impl ──▶ tst (forward)
+    //                                        tst  ──▶ impl (back-edge / else)
+    //                                        tst  ──(verdict eq Pass)──▶ end
+    //
+    // Bounded region [impl, tst]; entry = impl (first member with an external
+    // incoming edge). The back-edge tst->impl is a region re-entry edge: it must
+    // NOT count as an upstream precondition for impl's first spawn, or impl never
+    // starts — its only other producer, tst, sits downstream of impl in the cycle
+    // and can never complete first. ADR-0011: no silent stall.
+    fn external_entry_into_loop_pipeline(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "external-entry-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("dbg", &["task"], &["verdict", "repro"]),
+                make_node("impl", &["task", "review"], &["code"]),
+                make_node("tst", &["code", "repro"], &["verdict"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                // External forward edge into the loop entry, guarded.
+                make_cond_edge(
+                    "dbg",
+                    "verdict",
+                    "impl",
+                    "task",
+                    Some("verdict: { eq: Bug }"),
+                    false,
+                ),
+                // External context edge into the *other* member (not the entry).
+                make_edge("dbg", "repro", "tst", "repro"),
+                // Intra-body forward edge.
+                make_edge("impl", "code", "tst", "code"),
+                // Region exit (guarded) and back-edge (else) — both off `tst`.
+                make_cond_edge(
+                    "tst",
+                    "verdict",
+                    "end",
+                    "result",
+                    Some("verdict: { eq: Pass }"),
+                    false,
+                ),
+                make_cond_edge("tst", "verdict", "impl", "review", None, true),
+            ],
+            loops: vec![crate::pipeline::LoopRegion {
+                id: "fix_loop".into(),
+                kind: crate::pipeline::LoopKind::Bounded,
+                members: vec!["impl".into(), "tst".into()],
+                max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+                over: None,
+            }],
+            prompt_required: true,
+        }
+    }
+
+    #[test]
+    fn external_forward_edge_spawns_bounded_loop_entry() {
+        // dbg completes with verdict=Bug → the guarded entry edge dbg->impl fires.
+        // impl is the region entry and also the target of the back-edge tst->impl.
+        // The back-edge must be excluded from impl's upstream join, so impl spawns
+        // at iter 1 on dbg's completion alone. (Before the fix: no spawn, no halt,
+        // run stuck `running` forever — #172.)
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 1,
+            }),
+            "entering the loop from dbg must spawn the entry impl@1, got {actions:?}"
+        );
+        // The context edge fired too, but tst must wait for impl (its forward
+        // producer), so it does NOT spawn yet — and nothing halts silently.
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "tst"
+            )),
+            "tst must wait for impl, not spawn on dbg's completion, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "entering a bounded loop must not halt, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_loop_entry_then_forwards_to_second_member() {
+        // After impl spawns and completes its first lap, its forward edge
+        // impl->tst must spawn tst@1: tst's upstream is {dbg (done), impl (just
+        // completed)} — the back-edge is excluded, so the join resolves.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+        state.nodes.insert("impl".into(), completed_node("impl"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "impl",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "tst".into(),
+                iter: 1,
+            }),
+            "impl completing must forward to spawn tst@1, got {actions:?}"
         );
     }
 }

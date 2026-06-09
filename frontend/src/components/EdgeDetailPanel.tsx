@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { ArrowRight, Plus, X, Activity, RefreshCw } from "lucide-react";
+import { ArrowRight, Plus, X, Activity, RefreshCw, CornerDownRight } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, EdgeTriggerStatus } from "../types";
 import {
@@ -51,6 +51,11 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
     : null;
 
   const rows = whenToRows(edge?.when);
+  // An `else: true` edge is a fallback (fires iff no sibling matched). It and a
+  // `when:` predicate are mutually exclusive (ADR-0011), so the panel mirrors the
+  // canvas precedence (`editNodeDerivation.ts`): when `else` is set, the edge is
+  // treated as a default branch and the predicate editor is suppressed.
+  const isElse = edge?.else === true;
 
   const commitRows = useCallback(
     (next: ConditionRow[]) => {
@@ -59,6 +64,18 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
       // `when:` and `else:` are mutually exclusive (ADR-0011). Authoring a
       // condition on a fallback edge converts it to a guarded edge.
       updateEdge(edgeIndex, when ? { when, else: false } : { when });
+    },
+    [edgeIndex, updateEdge],
+  );
+
+  const handleToggleElse = useCallback(
+    (next: boolean) => {
+      if (edgeIndex == null) return;
+      // `else:` and `when:` are mutually exclusive (ADR-0011). Marking an edge as
+      // the default branch drops any predicate; un-marking leaves a plain
+      // always-fires edge (`else: false` round-trips by absence — the YAML
+      // encoder only emits `else` when true).
+      updateEdge(edgeIndex, next ? { else: true, when: null } : { else: false });
     },
     [edgeIndex, updateEdge],
   );
@@ -113,43 +130,65 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 
       <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
         {/* When */}
-        <SectionHead title="When" count={rows.length} />
-        <div className="flex flex-col gap-2" data-testid="when-editor">
-          {rows.map((row, i) => (
-            <ConditionRowEditor
-              key={i}
-              row={row}
-              fields={fields}
-              onUpdate={(updates) => handleUpdateRow(i, updates)}
-              onDelete={() => handleDeleteRow(i)}
-            />
-          ))}
-          <button
-            onClick={handleAddCondition}
-            className="flex items-center gap-1 self-start rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 hover:border-acc hover:text-acc"
-            style={{ fontSize: "10.5px" }}
-            data-testid="add-condition"
-          >
-            <Plus size={12} />
-            Add condition
-          </button>
-          {rows.length === 0 && (
-            <div className="text-fg-4" style={{ fontSize: "10px" }}>
-              No condition — this edge always fires.
-            </div>
-          )}
-        </div>
+        <SectionHead title="When" count={isElse ? undefined : rows.length} />
 
-        {/* Available fields */}
-        <SectionHead title="Available fields" />
-        <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
-          Output schema of{" "}
-          <span className="font-mono text-fg-3">
-            {fromName}.{edge.source.port}
-          </span>
-          , plus <span className="font-mono text-acc">iter</span> — the counter of
-          the enclosing region.
-        </div>
+        {/* Default (else) — a fallback edge fires iff no sibling (same source
+            output port) matched. Mutually exclusive with a `when:` predicate
+            (ADR-0011), so toggling it on suppresses the predicate editor. */}
+        <ElseToggle isElse={isElse} onToggle={handleToggleElse} />
+
+        {isElse ? (
+          <div
+            className="text-fg-4"
+            style={{ fontSize: "10px", lineHeight: 1.6 }}
+            data-testid="else-active-note"
+          >
+            Default branch — fires only when <span className="text-fg-3">no sibling edge</span>{" "}
+            (same source output port) matched. A default edge carries no
+            condition; turn this off to author a <span className="font-mono">when:</span> predicate.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2" data-testid="when-editor">
+            {rows.map((row, i) => (
+              <ConditionRowEditor
+                key={i}
+                row={row}
+                fields={fields}
+                onUpdate={(updates) => handleUpdateRow(i, updates)}
+                onDelete={() => handleDeleteRow(i)}
+              />
+            ))}
+            <button
+              onClick={handleAddCondition}
+              className="flex items-center gap-1 self-start rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 hover:border-acc hover:text-acc"
+              style={{ fontSize: "10.5px" }}
+              data-testid="add-condition"
+            >
+              <Plus size={12} />
+              Add condition
+            </button>
+            {rows.length === 0 && (
+              <div className="text-fg-4" style={{ fontSize: "10px" }}>
+                No condition — this edge always fires.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Available fields — irrelevant for a default edge (no predicate). */}
+        {!isElse && (
+          <>
+            <SectionHead title="Available fields" />
+            <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
+              Output schema of{" "}
+              <span className="font-mono text-fg-3">
+                {fromName}.{edge.source.port}
+              </span>
+              , plus <span className="font-mono text-acc">iter</span> — the counter of
+              the enclosing region.
+            </div>
+          </>
+        )}
 
         {/* Routing — orthogonal edge shaping (#154, design screen 14). The
             per-edge "Re-route automatically" reset lives here, not on the canvas. */}
@@ -168,6 +207,52 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
         <TriggerStatusView trigger={trigger} />
       </div>
     </aside>
+  );
+}
+
+/**
+ * Toggle that marks the selected edge as the default (`else`) branch. An `else`
+ * edge fires iff no sibling edge (same source output port) matched (ADR-0011,
+ * CONTEXT.md → *Edges conditionnelles*). It is mutually exclusive with a `when:`
+ * predicate, so the panel suppresses the predicate editor while it is on.
+ */
+function ElseToggle({
+  isElse,
+  onToggle,
+}: {
+  isElse: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={isElse}
+      onClick={() => onToggle(!isElse)}
+      className={`flex items-center justify-between gap-2 rounded border px-2 py-1.5 ${
+        isElse
+          ? "border-acc bg-bg-3 text-acc"
+          : "border-line-strong bg-bg-3 text-fg-3 hover:border-acc hover:text-acc"
+      }`}
+      data-testid="else-toggle"
+      title="A default edge fires only when no sibling edge matched"
+    >
+      <span className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
+        <CornerDownRight size={12} className="shrink-0" />
+        Default (else)
+      </span>
+      <span
+        className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+          isElse ? "bg-acc" : "bg-fg-5"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+            isElse ? "left-3" : "left-0.5"
+          }`}
+        />
+      </span>
+    </button>
   );
 }
 

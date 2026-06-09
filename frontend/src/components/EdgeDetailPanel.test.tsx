@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import EdgeDetailPanel from "./EdgeDetailPanel";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore, pipelineToYamlObject } from "../stores/editStore";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 function reviewer(): NodeDef {
@@ -139,13 +139,85 @@ describe("EdgeDetailPanel", () => {
     expect(options).toContain("iter");
   });
 
-  it("clears else when a when: condition is authored (mutually exclusive)", () => {
-    seedEdge({ ...baseEdge, else: true });
-    render(<EdgeDetailPanel />);
-    fireEvent.click(screen.getByTestId("add-condition"));
-    const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
-    expect(edge.when).not.toBeNull();
-    expect(edge.else).toBeFalsy();
+  // #179: default (else) edge affordance — fires iff no sibling matched.
+  describe("default (else) toggle", () => {
+    it("renders the toggle off for a plain/guarded edge and shows the when editor", () => {
+      seedEdge(baseEdge);
+      render(<EdgeDetailPanel />);
+      const toggle = screen.getByTestId("else-toggle");
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByTestId("when-editor")).toBeInTheDocument();
+      expect(screen.queryByTestId("else-active-note")).toBeNull();
+    });
+
+    it("toggling it on marks the edge else:true and clears any when rows", () => {
+      seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" } } });
+      render(<EdgeDetailPanel />);
+
+      fireEvent.click(screen.getByTestId("else-toggle"));
+
+      const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+      expect(edge.else).toBe(true);
+      expect(edge.when == null || Object.keys(edge.when).length === 0).toBe(true);
+    });
+
+    it("an else edge reads the toggle on and suppresses the predicate editor", () => {
+      seedEdge({ ...baseEdge, else: true });
+      render(<EdgeDetailPanel />);
+
+      expect(screen.getByTestId("else-toggle")).toHaveAttribute("aria-checked", "true");
+      // No predicate authoring surface for a default edge.
+      expect(screen.queryByTestId("when-editor")).toBeNull();
+      expect(screen.queryByTestId("add-condition")).toBeNull();
+      expect(screen.getByTestId("else-active-note")).toBeInTheDocument();
+    });
+
+    it("toggling it off clears else, restoring the predicate editor", () => {
+      seedEdge({ ...baseEdge, else: true });
+      render(<EdgeDetailPanel />);
+
+      fireEvent.click(screen.getByTestId("else-toggle"));
+
+      const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+      expect(edge.else).toBeFalsy();
+      // The predicate editor comes back once the edge is no longer a default.
+      expect(screen.getByTestId("when-editor")).toBeInTheDocument();
+    });
+
+    it("clears else when a when: condition is authored (mutually exclusive)", () => {
+      // The auto-clear invariant in commitRows still holds: a guarded edge that
+      // somehow carried else loses it the moment a predicate is committed.
+      seedEdge(baseEdge);
+      render(<EdgeDetailPanel />);
+      fireEvent.click(screen.getByTestId("add-condition"));
+      const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+      expect(edge.when).not.toBeNull();
+      expect(edge.else).toBeFalsy();
+    });
+
+    it("an else edge serializes to `else: true` and round-trips through encode", () => {
+      seedEdge({ ...baseEdge, else: true });
+      render(<EdgeDetailPanel />);
+
+      const pipeline = useEditStore.getState().openTabs[0].pipeline;
+      const yaml = pipelineToYamlObject(pipeline);
+      const edges = yaml.edges as Record<string, unknown>[];
+      expect(edges[0].else).toBe(true);
+      // A default edge carries no predicate in the persisted form.
+      expect(edges[0].when).toBeUndefined();
+    });
+
+    it("a toggled-on edge serializes to `else: true` with no when clause", () => {
+      seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" } } });
+      render(<EdgeDetailPanel />);
+
+      fireEvent.click(screen.getByTestId("else-toggle"));
+
+      const pipeline = useEditStore.getState().openTabs[0].pipeline;
+      const edges = pipelineToYamlObject(pipeline).edges as Record<string, unknown>[];
+      expect(edges[0].else).toBe(true);
+      expect(edges[0].when).toBeUndefined();
+    });
   });
 
   it("deletes a condition row, clearing the when clause", () => {

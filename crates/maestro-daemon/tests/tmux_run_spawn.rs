@@ -2,17 +2,17 @@
 //! script that invokes `claude --dangerously-skip-permissions` and keeps the
 //! tmux session alive until that process exits.
 //!
-//! The lifecycle test substitutes `claude` with `sleep 60` via
-//! `MAESTRO_TMUX_CMD_OVERRIDE` so the test box doesn't actually need claude
-//! on PATH. Single-test file by design — `set_var` mutates process-global
-//! state and we don't want a sibling test racing it.
+//! The lifecycle test substitutes `claude` with a harmless `sleep` via the
+//! per-daemon `tmux_cmd_override` config (`TestDaemon::spawn`'s default), so the
+//! test box doesn't actually need claude on PATH and no process-global env is
+//! mutated (#181).
 
 mod common;
 
 use std::time::Duration;
 
 use common::TestDaemon;
-use maestro_daemon::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
+use maestro_daemon::build_tmux_script;
 
 const PIPELINE_NAME: &str = "minimal-tmux";
 const NODE_ID: &str = "solo";
@@ -83,11 +83,9 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     // Acceptance: the constructed command string contains
     // `claude --dangerously-skip-permissions` and the `exec bash -c` shape.
-    // We make sure the override env is unset so we get the production tail.
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
-
+    // `None` override → production claude tail.
     let prompt_path = std::path::Path::new("/tmp/maestro-test/solo-iter-1.md");
-    let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);
+    let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None);
 
     assert!(
         script.starts_with("exec bash -c "),
@@ -122,10 +120,9 @@ async fn tmux_session_alive_after_run_spawn() {
         return;
     }
 
-    // Substitute claude → sleep 60. Set BEFORE spawning the daemon so
-    // `build_tmux_script` reads the override at run-creation time.
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
-
+    // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so the
+    // spawned node session stays alive (for the poll below) without launching
+    // real claude.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     // The daemon spawns sessions on its own scoped tmux socket (`tmux -L`),
     // not the default server — inspect/kill through the same socket.
@@ -164,8 +161,6 @@ async fn tmux_session_alive_after_run_spawn() {
     let _ = std::process::Command::new("tmux")
         .args(["-L", &socket, "kill-session", "-t", &session])
         .output();
-
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 
     assert!(
         alive,

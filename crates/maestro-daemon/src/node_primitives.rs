@@ -37,6 +37,9 @@ pub struct StartNodeParams<'a> {
     pub pipeline_path: &'a Path,
     pub resolved_vars: &'a HashMap<String, serde_yaml::Value>,
     pub daemon_port: u16,
+    /// Per-daemon override for the `claude …` tail of the spawned tmux script.
+    /// Threaded from `AppState.tmux_cmd_override`; `None` → real claude (#181).
+    pub tmux_cmd_override: Option<&'a str>,
 }
 
 pub struct StartNodeResult {
@@ -137,6 +140,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         params.node_id,
         params.iter,
         params.daemon_port,
+        params.tmux_cmd_override,
     ) {
         return StartNodeResult {
             outcome: PrimitiveOutcome::Rejected {
@@ -640,6 +644,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let result = start_node(&params);
@@ -675,6 +680,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let result = start_node(&params);
@@ -730,6 +736,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -784,6 +791,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -824,6 +832,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -888,6 +897,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -933,6 +943,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -983,6 +994,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1235,6 +1247,7 @@ mod tests {
             pipeline_path: &tmp.path().join("pipeline.yaml"),
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
         };
 
         let result = start_node(&params);

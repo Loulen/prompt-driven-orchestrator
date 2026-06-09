@@ -99,10 +99,6 @@ async fn create_run(daemon_url: &str) -> String {
 /// directory must still exist on disk and the prompt endpoint must return 200.
 #[tokio::test]
 async fn sub_worktree_survives_node_completion() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 
@@ -186,10 +182,6 @@ async fn sub_worktree_survives_node_completion() {
 /// they now survive merge.
 #[tokio::test]
 async fn cleanup_run_removes_surviving_sub_worktrees() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 

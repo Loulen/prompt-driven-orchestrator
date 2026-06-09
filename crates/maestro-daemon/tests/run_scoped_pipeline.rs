@@ -77,11 +77,19 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// Wait for a `pipeline_modified` event on the WebSocket for a given run_id.
+///
+/// `expected_kind` filters on `payload.kind` ("yaml" | "prompt"). A single run
+/// can legitimately surface *both* kinds close together — creating a run writes
+/// the run-scoped `pipeline.yaml` snapshot (a "yaml" event) around the same time
+/// the watcher picks up prompt-file changes — so a caller that asserts on a
+/// specific kind must skip the other one rather than grab whichever arrives
+/// first (#182). Pass `None` to accept any `pipeline_modified` for the run.
 async fn next_pipeline_modified_event(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     run_id: &str,
+    expected_kind: Option<&str>,
     deadline: Duration,
 ) -> Option<serde_json::Value> {
     let result = timeout(deadline, async {
@@ -94,7 +102,10 @@ async fn next_pipeline_modified_event(
             let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
             if parsed["type"] == "event" {
                 if let Some(event) = parsed.get("event") {
-                    if event["kind"] == "pipeline_modified" && event["run_id"] == run_id {
+                    if event["kind"] == "pipeline_modified"
+                        && event["run_id"] == run_id
+                        && expected_kind.is_none_or(|k| event["payload"]["kind"] == k)
+                    {
                         return Some(event.clone());
                     }
                 }
@@ -178,7 +189,7 @@ async fn external_write_to_run_pipeline_emits_pipeline_modified() {
     // Should receive a pipeline_modified event within the debounce window.
     // The watcher may also have picked up the initial prompt copy, so we look
     // for any pipeline_modified event for this run_id.
-    let evt = next_pipeline_modified_event(&mut ws, &run_id, Duration::from_secs(4))
+    let evt = next_pipeline_modified_event(&mut ws, &run_id, None, Duration::from_secs(4))
         .await
         .expect("external write to run-scoped pipeline should emit pipeline_modified within 4s");
 
@@ -234,9 +245,10 @@ async fn external_prompt_edit_in_run_emits_pipeline_modified() {
         .join("planner.md");
     std::fs::write(&prompt_path, "You are an EDITED planner.\n").unwrap();
 
-    let evt = next_pipeline_modified_event(&mut ws, &run_id, Duration::from_secs(4))
-        .await
-        .expect("external prompt edit should emit pipeline_modified within 4s");
+    let evt =
+        next_pipeline_modified_event(&mut ws, &run_id, Some("prompt"), Duration::from_secs(4))
+            .await
+            .expect("external prompt edit should emit pipeline_modified within 4s");
 
     assert_eq!(evt["kind"], "pipeline_modified");
     assert_eq!(evt["run_id"], run_id);
@@ -290,9 +302,6 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
         eprintln!("tmux not on PATH — skipping");
         return;
     }
-
-    // Use sleep as a substitute for claude
-    std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
@@ -402,7 +411,6 @@ edges:
     let _ = Command::new("tmux")
         .args(["-L", &daemon.tmux_socket(), "kill-server"])
         .output();
-    std::env::remove_var("MAESTRO_TMUX_CMD_OVERRIDE");
 
     assert!(
         evt.is_some(),
@@ -634,8 +642,6 @@ async fn removing_node_from_run_pipeline_prevents_spawn() {
         return;
     }
 
-    std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-
     let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
     let run_id = create_two_node_run(&daemon.url()).await;
 
@@ -730,7 +736,6 @@ edges:
     let _ = Command::new("tmux")
         .args(["-L", &daemon.tmux_socket(), "kill-server"])
         .output();
-    std::env::remove_var("MAESTRO_TMUX_CMD_OVERRIDE");
 
     assert!(
         evt.is_none(),

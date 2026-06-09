@@ -81,10 +81,11 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn maestro_complete_does_not_panic_and_marks_node_done() {
-    // Bypass spawn_tmux_session entirely so the test doesn't need claude/tmux.
-    std::env::set_var(maestro_daemon::TMUX_CMD_OVERRIDE_ENV, "true");
-
-    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // Bypass spawn_tmux_session entirely so the test doesn't need claude/tmux:
+    // the node session runs `true` (exits immediately) instead of claude.
+    let daemon = TestDaemon::spawn_with_override(seed, Some("true".to_string()))
+        .await
+        .unwrap();
 
     let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "hello" });
     let resp = reqwest::Client::new()
@@ -163,16 +164,14 @@ async fn maestro_complete_does_not_panic_and_marks_node_done() {
         run["nodes"][NODE_ID]["status"], "completed",
         "node should be marked completed; run state was: {run}"
     );
-
-    std::env::remove_var(maestro_daemon::TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn maestro_fail_does_not_panic() {
     // Same panic path through `reqwest::blocking` — covers the `fail` arm too.
-    std::env::set_var(maestro_daemon::TMUX_CMD_OVERRIDE_ENV, "true");
-
-    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let daemon = TestDaemon::spawn_with_override(seed, Some("true".to_string()))
+        .await
+        .unwrap();
 
     let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "x" });
     let resp = reqwest::Client::new()
@@ -208,6 +207,4 @@ async fn maestro_fail_does_not_panic() {
         !stderr.contains("panicked"),
         "maestro fail must not panic. stderr=\n{stderr}"
     );
-
-    std::env::remove_var(maestro_daemon::TMUX_CMD_OVERRIDE_ENV);
 }

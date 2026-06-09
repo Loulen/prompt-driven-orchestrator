@@ -133,10 +133,6 @@ fn seed_artifacts(repo: &std::path::Path, run_id: &str) {
 
 #[tokio::test]
 async fn io_endpoint_returns_port_paths_and_frontmatter() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 
@@ -199,10 +195,6 @@ async fn io_endpoint_returns_404_before_run_creation() {
 
 #[tokio::test]
 async fn artifact_endpoint_returns_markdown_content() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 

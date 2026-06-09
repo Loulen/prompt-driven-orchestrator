@@ -107,10 +107,6 @@ async fn create_run(daemon_url: &str) -> String {
 /// events for each node, and then we manually mark the node done and verify.
 #[tokio::test]
 async fn multi_iter_projection_via_daemon() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 

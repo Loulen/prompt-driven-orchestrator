@@ -14,9 +14,10 @@ use common::TestDaemon;
 use maestro_daemon::tmux_session_manager;
 
 /// Tests in this file mutate process-wide env vars
-/// (MAESTRO_TMUX_CMD_OVERRIDE, MAESTRO_REAPER_*_SECS, MAESTRO_DAEMON_NO_CLEANUP)
-/// and assert on timing-sensitive reaper behaviour. They MUST run
-/// serially or one test will see another's values.
+/// (MAESTRO_REAPER_*_SECS, MAESTRO_DAEMON_NO_CLEANUP) and assert on
+/// timing-sensitive reaper behaviour. They MUST run serially or one test will
+/// see another's values. (The tmux command override is per-daemon config now —
+/// `TestDaemon::spawn`'s harmless `sleep` default — not a process-global env.)
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -158,6 +159,10 @@ async fn wait_for_session_gone(socket: &str, session: &str, timeout: Duration) -
 /// Layer 3a: After node completion, the reaper kills the session once
 /// the TTL expires. Uses fast TTL (2s) and reaper interval (1s).
 #[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
 async fn reaper_kills_completed_session_after_ttl() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
@@ -165,10 +170,6 @@ async fn reaper_kills_completed_session_after_ttl() {
     }
     let _serial = serial_guard();
 
-    std::env::set_var(
-        tmux_session_manager::TMUX_CMD_OVERRIDE_ENV,
-        "exec sleep 300",
-    );
     std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "2");
     std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "1");
 
@@ -216,13 +217,16 @@ async fn reaper_kills_completed_session_after_ttl() {
     );
 
     // Clean up env
-    std::env::remove_var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
 /// Layer 3a: At daemon boot, pre-existing orphan maestro-* sessions get swept.
 #[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
 async fn orphan_sweep_at_boot_kills_stale_session() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
@@ -230,10 +234,6 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
     }
     let _serial = serial_guard();
 
-    std::env::set_var(
-        tmux_session_manager::TMUX_CMD_OVERRIDE_ENV,
-        "exec sleep 300",
-    );
     std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "0");
     std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "1");
 
@@ -259,7 +259,6 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
         "orphan session should be killed by the periodic reaper (run absent from event log)"
     );
 
-    std::env::remove_var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
@@ -271,6 +270,10 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
 /// follow-up: the only safe behaviour for a nested daemon is to be
 /// completely passive on tmux state.
 #[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
 async fn nested_daemon_skips_orphan_sweep_and_reaper() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
@@ -278,10 +281,6 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
     }
     let _serial = serial_guard();
 
-    std::env::set_var(
-        tmux_session_manager::TMUX_CMD_OVERRIDE_ENV,
-        "exec sleep 300",
-    );
     std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "0");
     std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "1");
     std::env::set_var("MAESTRO_DAEMON_NO_CLEANUP", "1");
@@ -310,13 +309,16 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
         .args(["-L", &socket, "kill-session", "-t", orphan_session])
         .output();
     std::env::remove_var("MAESTRO_DAEMON_NO_CLEANUP");
-    std::env::remove_var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
 /// Layer 3a: Kill a session manually, hit /pane, assert a fresh session appears.
 #[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
 async fn dead_session_respawn_via_pane_endpoint() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
@@ -324,10 +326,6 @@ async fn dead_session_respawn_via_pane_endpoint() {
     }
     let _serial = serial_guard();
 
-    std::env::set_var(
-        tmux_session_manager::TMUX_CMD_OVERRIDE_ENV,
-        "exec sleep 300",
-    );
     // Long TTL so the reaper doesn't interfere
     std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
     std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
@@ -373,7 +371,6 @@ async fn dead_session_respawn_via_pane_endpoint() {
 
     // Clean up
     tmux_session_manager::kill(&socket, &session);
-    std::env::remove_var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }

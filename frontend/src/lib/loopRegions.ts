@@ -180,6 +180,44 @@ export function regionsDestroyedByEdgeRemoval(
 }
 
 /**
+ * Reconciles the `loops:` regions against the current node set after a node has
+ * been deleted (ADR-0011 / #150 / #173). Deleting a node also drops every edge
+ * that referenced it — which can take a bounded region's **last** cycle — and
+ * always leaves the deleted id dangling in any region's `members`. This rebuilds
+ * the region list so it can never name a node absent from the graph nor keep an
+ * orphan (cycle-less) bounded region:
+ *
+ *  - every region's `members` is pruned to nodes still present (no ghost ids —
+ *    a loop never lists a node that doesn't exist);
+ *  - a `bounded` region that no longer closes a cycle is dropped (its bound and
+ *    iteration state go with the deleted node — the same destroy-on-last-cycle
+ *    rule the edge path applies in `regionsDestroyedByEdgeRemoval`);
+ *  - a region left with no present members is dropped.
+ *
+ * `pipeline` is the graph AFTER the node and its edges have been removed. A
+ * `collection` region is born by gesture, not topology (#151), so it is kept on
+ * its remaining members (only an emptied-out collection is dropped).
+ */
+export function reconcileLoopRegions(pipeline: PipelineDef): LoopRegion[] {
+  const present = new Set(pipeline.nodes.map((n) => n.id));
+  const out: LoopRegion[] = [];
+  for (const region of pipeline.loops ?? []) {
+    const members = region.members.filter((m) => present.has(m));
+    if (members.length === 0) continue;
+    const pruned =
+      members.length === region.members.length ? region : { ...region, members };
+    if (
+      pruned.kind === "bounded" &&
+      !regionHasCycle(pruned, pipeline.nodes, pipeline.edges)
+    ) {
+      continue;
+    }
+    out.push(pruned);
+  }
+  return out;
+}
+
+/**
  * Info-only nudges (ADR-0001 sharp tool, never auto-wraps) suggesting a
  * collection fan-out (#151): when a `list`-typed output port feeds a downstream
  * node that is NOT already a member of a collection region, offer the explicit

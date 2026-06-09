@@ -17,7 +17,11 @@ import {
   saveLibraryPipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
-import { materializeMissingRegions, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
+import {
+  materializeMissingRegions,
+  reconcileLoopRegions,
+  regionsDestroyedByEdgeRemoval,
+} from "../lib/loopRegions";
 
 export type SelectionKind = "node" | "edge" | "region" | "none";
 
@@ -499,6 +503,17 @@ export const useEditStore = create<EditState>((set, get) => ({
       ...mutateActiveTab(s, (tab) => {
         tab.pipeline.nodes = tab.pipeline.nodes.filter((n) => n.id !== nodeId);
         tab.pipeline.edges = tab.pipeline.edges.filter((e) => !edgeReferencesNode(e, nodeId));
+        // Reconcile loop regions against the removed node (ADR-0011 / #173).
+        // Deleting a node also drops the edges that referenced it, which can take
+        // a bounded region's last cycle, and always leaves the deleted id
+        // dangling in any region's `members`. Mirror the edge path's
+        // destroy-on-last-cycle rule (`deleteEdge`): prune the id from every
+        // region and drop a bounded region that no longer closes a cycle, so
+        // neither an orphan region nor a ghost member id is ever written to the
+        // saved pipeline file.
+        if (tab.pipeline.loops && tab.pipeline.loops.length > 0) {
+          tab.pipeline.loops = reconcileLoopRegions(tab.pipeline);
+        }
       }),
       selection: { kind: "none" as const, id: null },
     }));

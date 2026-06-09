@@ -15,7 +15,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
+import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
@@ -59,9 +59,10 @@ interface EditNodeData {
   // Filenames of images uploaded with the run's input. Only the start marker
   // surfaces these (issue #145); undefined/empty on every other node.
   inputImages?: string[];
-  // Compact `⇉ ...` badge when this node is the single member of a collection
-  // region (#151). Absent on non-member nodes.
-  collectionBadge?: string;
+  // Compact badge when this node is the single member of a loop region: a
+  // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
+  // Absent on non-member nodes and on multi-member regions (boxed instead).
+  loopBadge?: { text: string; kind: LoopKind };
   [key: string]: unknown;
 }
 
@@ -144,14 +145,18 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
         <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
         <span className="font-medium text-fg">{data.label}</span>
         <CodeDocMarker type={data.nodeType} />
-        {data.collectionBadge && (
+        {data.loopBadge && (
           <span
-            data-testid="collection-badge"
+            data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
             className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
             style={{ fontSize: 10, lineHeight: "16px" }}
-            title="collection region — fans out one lap per item"
+            title={
+              data.loopBadge.kind === "collection"
+                ? "collection region — fans out one lap per item"
+                : "bounded loop region — one member"
+            }
           >
-            {data.collectionBadge}
+            {data.loopBadge.text}
           </span>
         )}
       </div>

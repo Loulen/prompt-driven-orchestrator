@@ -294,6 +294,84 @@ describe("deleteEdge removes a region whose last cycle it destroys (ADR-0011 / #
   });
 });
 
+describe("deleteNode reconciles loop regions (ADR-0011 / #173)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+
+  it("destroys an orphaned bounded region when a member node is deleted (no ghost id persists)", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [a, b],
+      [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    // Deleting `rev` also drops the rev -> impl back-edge: the region no longer
+    // closes a cycle, so it is destroyed rather than left as an orphan whose
+    // `members` still names the deleted node.
+    useEditStore.getState().deleteNode("bbbb2222");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.nodes.map((n) => n.id)).toEqual(["aaaa1111"]);
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+    expect(tab.dirty).toBe(true);
+    expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("prunes the deleted member from a surviving region's members (no ghost id)", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const c = makeNode({ id: "cccc3333", name: "mid" });
+    // Two cycles close {a,b,c}: b -> a AND c -> a.
+    const pipeline = makePipeline(
+      [a, b, c],
+      [
+        edge("aaaa1111", "bbbb2222"), // a -> b
+        edge("bbbb2222", "aaaa1111"), // b -> a  (cycle 1)
+        edge("aaaa1111", "cccc3333"), // a -> c
+        edge("cccc3333", "aaaa1111"), // c -> a  (cycle 2)
+      ],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222", "cccc3333"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    // Deleting `mid` removes a->c / c->a, but a<->b still closes the region: it
+    // survives with `mid` pruned from `members`.
+    useEditStore.getState().deleteNode("cccc3333");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].members).toEqual(["aaaa1111", "bbbb2222"]);
+  });
+
+  it("leaves a region intact when a non-member node is deleted", () => {
+    const start = makeNode({ id: "ssss0000", name: "start", type: "start" });
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [start, a, b],
+      [edge("ssss0000", "aaaa1111"), edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    useEditStore.getState().deleteNode("ssss0000");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].members).toEqual(["aaaa1111", "bbbb2222"]);
+  });
+});
+
 describe("updateRegion edits a region's max_iter (ADR-0011 / #150)", () => {
   function edge(s: string, t: string): EdgeDef {
     return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };

@@ -99,11 +99,6 @@ async fn create_run(daemon_url: &str) -> String {
 /// with the deterministic preamble sections.
 #[tokio::test]
 async fn prompt_endpoint_returns_augmented_prompt_after_run_creation() {
-    // Override tmux command so the test doesn't require `claude` on PATH
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 

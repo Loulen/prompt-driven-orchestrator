@@ -13,7 +13,6 @@
 mod common;
 
 use common::TestDaemon;
-use maestro_daemon::TMUX_CMD_OVERRIDE_ENV;
 
 const PIPELINE_NAME: &str = "auditor";
 const PIPELINE_YAML: &str = r#"name: auditor
@@ -162,7 +161,6 @@ async fn get_trigger(daemon: &TestDaemon, trigger_id: &str) -> serde_json::Value
 
 #[tokio::test]
 async fn due_trigger_creates_a_run_with_triggered_by_provenance() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let trigger = create_trigger(&daemon, "nightly audit", "* * * * *").await;
@@ -199,12 +197,10 @@ async fn due_trigger_creates_a_run_with_triggered_by_provenance() {
     );
 
     cleanup_runs(&daemon).await;
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn overlap_skip_while_previous_run_is_live() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let trigger = create_trigger(&daemon, "overlapping", "* * * * *").await;
@@ -239,12 +235,10 @@ async fn overlap_skip_while_previous_run_is_live() {
     assert_eq!(fires[1]["outcome"].as_str(), Some("fired"));
 
     cleanup_runs(&daemon).await;
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn missed_slots_are_forward_only_no_backfill() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // Hourly trigger; force it long-overdue (as if the daemon were off for days).
@@ -281,7 +275,6 @@ async fn missed_slots_are_forward_only_no_backfill() {
     );
 
     cleanup_runs(&daemon).await;
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 /// The resolved Run input is recorded in the `run_started` event payload; this
@@ -305,7 +298,6 @@ async fn run_started_input(daemon: &TestDaemon, run_id: &str) -> String {
 
 #[tokio::test]
 async fn guard_exit_zero_fires_with_stdout_as_input() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // Guard exits 0 and prints work to do; its stdout becomes the Run input.
@@ -329,12 +321,10 @@ async fn guard_exit_zero_fires_with_stdout_as_input() {
     assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
 
     cleanup_runs(&daemon).await;
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn guard_exit_nonzero_skips_without_firing() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // Guard exits non-zero: no work to do, so no Run is created.
@@ -350,13 +340,10 @@ async fn guard_exit_nonzero_skips_without_firing() {
     );
     let fires = list_fires(&daemon, &trigger_id).await;
     assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
-
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn guard_timeout_records_guard_error_and_skips() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     // Shrink the guard timeout so a hung guard times out fast in the test.
     std::env::set_var(maestro_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV, "200");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -381,12 +368,10 @@ async fn guard_timeout_records_guard_error_and_skips() {
     );
 
     std::env::remove_var(maestro_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV);
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn dangling_pipeline_reference_yields_error_outcome_and_stops_firing() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let trigger = create_trigger(&daemon, "audit", "* * * * *").await;
@@ -422,13 +407,10 @@ async fn dangling_pipeline_reference_yields_error_outcome_and_stops_firing() {
         "a dangling-ref Trigger must stop firing (next_fire cleared)"
     );
     assert_eq!(t["last_outcome"].as_str(), Some("error"));
-
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]
 async fn dangling_target_repo_reference_yields_error_outcome() {
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // A target repo that does not exist at fire time (deleted/renamed).
@@ -462,8 +444,6 @@ async fn dangling_target_repo_reference_yields_error_outcome() {
     );
     let fires = list_fires(&daemon, &trigger_id).await;
     assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
-
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }
 
 #[tokio::test]

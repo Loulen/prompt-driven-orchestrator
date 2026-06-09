@@ -94,10 +94,6 @@ async fn create_run(daemon_url: &str) -> String {
 
 #[tokio::test]
 async fn run_state_includes_start_node_with_entry_targets() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 
@@ -134,10 +130,6 @@ async fn run_state_includes_start_node_with_entry_targets() {
 
 #[tokio::test]
 async fn run_state_includes_end_node_with_pending_port() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 
@@ -191,10 +183,6 @@ fn build_multipart(fields: &[(&str, &str)], images: &[(&str, &[u8])]) -> (Vec<u8
 
 #[tokio::test]
 async fn run_state_includes_uploaded_input_images() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     // Minimal valid PNG header bytes — enough for the daemon to accept + store.
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR";
 
@@ -259,10 +247,6 @@ async fn run_state_includes_uploaded_input_images() {
 
 #[tokio::test]
 async fn artifact_endpoint_serves_input_md() {
-    unsafe {
-        std::env::set_var("MAESTRO_TMUX_CMD_OVERRIDE", "exec sleep 300");
-    }
-
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 

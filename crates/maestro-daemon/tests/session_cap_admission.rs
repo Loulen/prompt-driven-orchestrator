@@ -8,17 +8,18 @@
 //! impossible to satisfy if managers were counted.
 //!
 //! Node *state* (running vs waiting) is projected from the event log, so the
-//! assertions do not depend on a real tmux server being present; the
-//! `MAESTRO_TMUX_CMD_OVERRIDE` just keeps a missing `claude` binary from
-//! polluting logs. Single-test file by design — `set_var` mutates process-global
-//! state and we don't want a sibling test racing it.
+//! assertions do not depend on a real tmux server being present; the per-daemon
+//! `tmux_cmd_override` (seeded by `TestDaemon::spawn`) just keeps a missing
+//! `claude` binary from polluting logs. Single-test file by design — the session
+//! cap is still set via process-global `set_var(MAESTRO_SESSION_CAP)`, so a
+//! sibling test must not race it.
 
 mod common;
 
 use std::time::Duration;
 
 use common::TestDaemon;
-use maestro_daemon::{admission::SESSION_CAP_ENV, TMUX_CMD_OVERRIDE_ENV};
+use maestro_daemon::admission::SESSION_CAP_ENV;
 
 const PIPELINE_NAME: &str = "cap-solo";
 const NODE_ID: &str = "solo";
@@ -127,10 +128,9 @@ async fn wait_for_status(daemon: &TestDaemon, run_id: &str, want: &str) -> Optio
 async fn over_cap_node_waits_then_starts_when_a_slot_frees() {
     // Cap the whole daemon to a single live NodeRun session.
     std::env::set_var(SESSION_CAP_ENV, "1");
-    // Avoid needing a real `claude` on PATH; tmux may or may not be present —
-    // either way the node *state* is projected from the event log.
-    std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
 
+    // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so node
+    // sessions stay alive (occupying slots) without needing real `claude`.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // Run 1: its solo node takes the only slot.
@@ -176,5 +176,4 @@ async fn over_cap_node_waits_then_starts_when_a_slot_frees() {
     }
 
     std::env::remove_var(SESSION_CAP_ENV);
-    std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
 }

@@ -111,6 +111,11 @@ struct AppState {
     /// individually and non-recursively (see `pipeline_watcher::watch_run_dir`),
     /// so run creation must register each new run dir here.
     run_watcher: Arc<Mutex<Option<pipeline_watcher::PipelineDebouncer>>>,
+    /// Per-daemon override for the `claude …` tail of spawned tmux scripts.
+    /// `None` in production (real claude); `Some(cmd)` in tests, seeded via
+    /// [`DaemonConfig`] by `TestDaemon::spawn`, so no test ever launches real
+    /// claude and no `std::env::set_var` race can clobber it (#181).
+    tmux_cmd_override: Option<String>,
 }
 
 impl AppState {
@@ -327,7 +332,46 @@ impl DaemonHandle {
     }
 }
 
+/// Boot-time configuration for a daemon instance.
+///
+/// Carries the knobs that must be decided *per daemon* rather than read from
+/// process-global env in the hot path. Production builds this from the
+/// environment ([`DaemonConfig::from_env`]); tests construct it directly so two
+/// daemons in the same test process can't race on a shared env var (#181).
+#[derive(Debug, Clone, Default)]
+pub struct DaemonConfig {
+    /// Replaces the `claude …` tail in spawned tmux scripts when `Some`. Tests
+    /// set this (e.g. `Some("exec sleep 600")`) so node sessions run a harmless
+    /// command instead of launching a real `claude` process. `None` →
+    /// production default (real claude).
+    pub tmux_cmd_override: Option<String>,
+}
+
+impl DaemonConfig {
+    /// Build config from the environment — the production / CLI daemon path.
+    ///
+    /// Reads [`tmux_session_manager::TMUX_CMD_OVERRIDE_ENV`] exactly once, here
+    /// at boot, preserving the documented env seam for an operator launching a
+    /// real `maestro daemon` while keeping that read out of the spawn hot path.
+    pub fn from_env() -> Self {
+        Self {
+            tmux_cmd_override: std::env::var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV).ok(),
+        }
+    }
+}
+
 pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle> {
+    serve_with_config(addr, repo_root, DaemonConfig::from_env()).await
+}
+
+/// Like [`serve`], but takes an explicit [`DaemonConfig`] instead of reading the
+/// environment. Tests use this to seed a per-daemon `tmux_cmd_override` without
+/// mutating process-global env.
+pub async fn serve_with_config(
+    addr: SocketAddr,
+    repo_root: PathBuf,
+    config: DaemonConfig,
+) -> Result<DaemonHandle> {
     let db_dir = repo_root.join(".maestro");
     std::fs::create_dir_all(&db_dir).context("failed to create .maestro directory")?;
     let db_path = db_dir.join("maestro.db");
@@ -372,6 +416,7 @@ pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle>
         merge_lock: tokio::sync::Mutex::new(()),
         recent_writes,
         run_watcher: run_watcher.clone(),
+        tmux_cmd_override: config.tmux_cmd_override,
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -2263,6 +2308,7 @@ async fn spawn_node(
         &node.id,
         iter,
         state.port,
+        state.tmux_cmd_override.as_deref(),
     ) {
         error!("failed to spawn tmux session: {e}");
     }
@@ -3213,6 +3259,7 @@ fn spawn_manager_session(
         "__manager__",
         0,
         state.port,
+        state.tmux_cmd_override.as_deref(),
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -3901,6 +3948,7 @@ async fn node_pane(
                 &node_id,
                 iter,
                 state.port,
+                state.tmux_cmd_override.as_deref(),
             ) {
                 warn!("Failed to resume session {session_name}: {e}");
                 return Json(PaneResponse {
@@ -4154,6 +4202,7 @@ async fn spawn_merge_resolver(
         MERGE_RESOLVER_NODE_ID,
         1,
         state.port,
+        state.tmux_cmd_override.as_deref(),
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -4698,6 +4747,7 @@ async fn node_start(
         pipeline_path: &pipeline_path,
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
+        tmux_cmd_override: state.tmux_cmd_override.as_deref(),
     };
 
     let result = node_primitives::start_node(&params);
@@ -4916,6 +4966,7 @@ async fn node_retry(
         pipeline_path: &pipeline_path,
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
+        tmux_cmd_override: state.tmux_cmd_override.as_deref(),
     };
 
     let start_result = node_primitives::start_node(&start_params);
@@ -7160,6 +7211,10 @@ mod tests {
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
+            // Self-destructing no-op: should any test POST /runs and reach the
+            // spawn path, the node session runs `true` and exits immediately —
+            // never real claude, never a lingering session (#181).
+            tmux_cmd_override: Some("exec true".to_string()),
         })
     }
 
@@ -8564,6 +8619,10 @@ mod tests {
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
+            // Self-destructing no-op: should any test POST /runs and reach the
+            // spawn path, the node session runs `true` and exits immediately —
+            // never real claude, never a lingering session (#181).
+            tmux_cmd_override: Some("exec true".to_string()),
         })
     }
 
@@ -9431,8 +9490,17 @@ mod tests {
     #[test]
     fn cli_parses_daemon_subcommand() {
         let cli = Cli::try_parse_from(["maestro", "daemon"]).unwrap();
+        // With no `--port`, clap resolves the port from `MAESTRO_PORT` if set,
+        // otherwise `DEFAULT_PORT` (see the `#[arg(env = "MAESTRO_PORT", ...)]`
+        // on the Daemon variant). Compute the expectation the same way so the
+        // test is deterministic whether or not the ambient env carries
+        // `MAESTRO_PORT` — e.g. when the suite itself runs inside a Maestro node.
+        let expected = std::env::var("MAESTRO_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_PORT);
         match cli.command {
-            Commands::Daemon { port } => assert_eq!(port, DEFAULT_PORT),
+            Commands::Daemon { port } => assert_eq!(port, expected),
             _ => panic!("expected Daemon subcommand"),
         }
     }
@@ -11187,6 +11255,10 @@ edges: []
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
+            // Self-destructing no-op: should any test POST /runs and reach the
+            // spawn path, the node session runs `true` and exits immediately —
+            // never real claude, never a lingering session (#181).
+            tmux_cmd_override: Some("exec true".to_string()),
         });
         let app = build_router(state);
 
@@ -11354,6 +11426,10 @@ edges: []
             merge_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
+            // Self-destructing no-op: should any test POST /runs and reach the
+            // spawn path, the node session runs `true` and exits immediately —
+            // never real claude, never a lingering session (#181).
+            tmux_cmd_override: Some("exec true".to_string()),
         });
         let app = build_router(state);
 

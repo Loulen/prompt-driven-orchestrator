@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::Result;
-use maestro_daemon::{serve, DaemonHandle};
+use maestro_daemon::{serve_with_config, DaemonConfig, DaemonHandle};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -25,7 +25,26 @@ impl TestDaemon {
     /// Spawn a fresh daemon backed by a tempdir. The `setup` callback receives the
     /// tempdir path and may seed it (write yaml, init a git repo, etc.) before the
     /// daemon starts.
+    ///
+    /// The daemon is seeded with a **harmless tmux command override** (a long
+    /// `sleep`) so any node session it spawns runs that instead of launching a
+    /// real `claude` process. This is per-daemon config — no process-global
+    /// `std::env::set_var` — so parallel tests can't race on it (#181). Tests
+    /// that need a different tail (e.g. an immediately-exiting command) use
+    /// [`TestDaemon::spawn_with_override`].
     pub async fn spawn<F>(setup: F) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        Self::spawn_with_override(setup, Some("exec sleep 600".to_string())).await
+    }
+
+    /// Like [`TestDaemon::spawn`] but with an explicit tmux command override.
+    ///
+    /// - `Some(cmd)` → spawned node/manager sessions run `cmd` instead of claude.
+    /// - `None` → real `claude` (no test should pass this; it exists only for
+    ///   completeness / parity with production config).
+    pub async fn spawn_with_override<F>(setup: F, tmux_cmd_override: Option<String>) -> Result<Self>
     where
         F: FnOnce(&Path) -> Result<()>,
     {
@@ -41,9 +60,10 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
-        let handle = serve(
+        let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
+            DaemonConfig { tmux_cmd_override },
         )
         .await?;
 
@@ -97,6 +117,37 @@ impl Drop for TestDaemon {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.task.abort();
+        }
+
+        // Tear down the daemon's private tmux socket (#181). `task.abort()` only
+        // stops the in-process axum task — the tmux *server* and the
+        // `claude`/`sleep` children the daemon spawned via `tmux new-session`
+        // are separate processes that would otherwise outlive the test, leaking
+        // sessions and (without the command override) real claude. The socket is
+        // scoped per daemon-port (`maestro-<port>`), so killing its server can
+        // only reap *this* daemon's sessions — never another test's or a live
+        // daemon's. Best-effort throughout: a missing socket / absent tmux is
+        // fine.
+        let socket = self.tmux_socket();
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &socket, "kill-server"])
+            .output();
+
+        // `kill-server` terminates the server but leaves the stale socket *file*
+        // behind, and a test body that already killed the server itself leaves
+        // one too. Unlink it so no `maestro-<port>` socket survives the test.
+        // The socket name embeds this daemon's unique ephemeral port, so it is
+        // ours alone — never the live daemon (`maestro-6172`) or a sibling test.
+        // tmux stores sockets under `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/`; we don't
+        // know our uid without libc, so unlink the file from every readable
+        // `tmux-*` dir there (only the matching name is touched).
+        let tmux_tmp = std::env::var("TMUX_TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        if let Ok(entries) = std::fs::read_dir(&tmux_tmp) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with("tmux-") {
+                    let _ = std::fs::remove_file(entry.path().join(&socket));
+                }
+            }
         }
     }
 }

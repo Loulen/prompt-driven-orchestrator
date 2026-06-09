@@ -444,7 +444,9 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         );
         region.insert(
             serde_yaml::Value::String("members".into()),
-            serde_yaml::Value::Sequence(members.into_iter().map(serde_yaml::Value::String).collect()),
+            serde_yaml::Value::Sequence(
+                members.into_iter().map(serde_yaml::Value::String).collect(),
+            ),
         );
         regions.push(serde_yaml::Value::Mapping(region));
     }
@@ -2386,16 +2388,18 @@ edges:
 
         // The entering edge enters the member directly: lister:plan -> worker.
         assert!(
-            parsed.edges.iter().any(|e| {
-                e.source.node == "aBcD1234" && e.target.node == "wRkR5678"
-            }),
+            parsed
+                .edges
+                .iter()
+                .any(|e| { e.source.node == "aBcD1234" && e.target.node == "wRkR5678" }),
             "entering edge should land on the member directly"
         );
         // The barrier edge leaves the member to the done target: worker -> end.
         assert!(
-            parsed.edges.iter().any(|e| {
-                e.source.node == "wRkR5678" && e.target.node == "end"
-            }),
+            parsed
+                .edges
+                .iter()
+                .any(|e| { e.source.node == "wRkR5678" && e.target.node == "end" }),
             "barrier edge should leave the member to the done target"
         );
 

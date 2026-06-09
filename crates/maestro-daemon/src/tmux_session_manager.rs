@@ -11,7 +11,12 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 /// Env var that replaces the `claude …` tail in the tmux script.
-/// Used by integration tests to spawn `sleep 60` instead of claude.
+///
+/// Read **once at daemon boot** by [`crate::DaemonConfig::from_env`] and then
+/// carried as per-daemon config — never consulted in the spawn hot path. Tests
+/// must seed the override through [`crate::DaemonConfig`] / `TestDaemon`, not by
+/// mutating this process-global env (which races across cargo's parallel test
+/// threads and is `unsafe`/UB-prone under the 2024 edition).
 pub const TMUX_CMD_OVERRIDE_ENV: &str = "MAESTRO_TMUX_CMD_OVERRIDE";
 
 /// Compute the per-daemon tmux socket name (`tmux -L <name>`) for a daemon
@@ -119,28 +124,43 @@ fn wrap_with_env(
 
 /// Construct the script tmux launches for a node run.
 ///
-/// The default tail can be overridden via `TMUX_CMD_OVERRIDE_ENV`.
+/// `tmux_cmd_override` replaces the default `claude …` tail when `Some` — the
+/// per-daemon test seam (see [`TMUX_CMD_OVERRIDE_ENV`]). `None` → production
+/// claude invocation.
 pub fn build_tmux_script(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
     prompt_path: &Path,
+    tmux_cmd_override: Option<&str>,
 ) -> String {
-    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV).unwrap_or_else(|_| {
-        format!(
+    let tail_cmd = match tmux_cmd_override {
+        Some(cmd) => cmd.to_string(),
+        None => format!(
             "exec claude --dangerously-skip-permissions \"$(cat {})\"",
             sh_single_quote(&prompt_path.to_string_lossy())
-        )
-    });
+        ),
+    };
 
     wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
 }
 
 /// Build a resume script that uses `claude --continue` in the same working_dir.
-fn build_resume_script(run_id: &str, node_id: &str, iter: i64, daemon_port: u16) -> String {
-    let tail_cmd = std::env::var(TMUX_CMD_OVERRIDE_ENV)
-        .unwrap_or_else(|_| "exec claude --dangerously-skip-permissions --continue".to_string());
+///
+/// `tmux_cmd_override` replaces the default `claude --continue` tail when
+/// `Some` — the per-daemon test seam.
+fn build_resume_script(
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    daemon_port: u16,
+    tmux_cmd_override: Option<&str>,
+) -> String {
+    let tail_cmd = match tmux_cmd_override {
+        Some(cmd) => cmd.to_string(),
+        None => "exec claude --dangerously-skip-permissions --continue".to_string(),
+    };
 
     wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
 }
@@ -160,6 +180,14 @@ pub fn manager_session_name(run_id: &str) -> String {
 }
 
 /// Spawn a detached tmux session for a NodeRun.
+///
+/// `tmux_cmd_override` (per-daemon config, `AppState.tmux_cmd_override`)
+/// replaces the `claude …` tail when `Some` — how tests run a harmless command
+/// instead of launching real claude.
+// The session identity (name + run/node/iter), working dir, daemon port, and
+// command override are all irreducible inputs to a spawn; bundling them into a
+// struct would only move the argument list, not shorten it.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     session_name: &str,
     prompt: &str,
@@ -168,13 +196,21 @@ pub fn spawn(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    tmux_cmd_override: Option<&str>,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".maestro").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
     let prompt_path = prompt_dir.join(format!("{node_id}-iter-{iter}.md"));
     std::fs::write(&prompt_path, prompt)?;
 
-    let script = build_tmux_script(run_id, node_id, iter, daemon_port, &prompt_path);
+    let script = build_tmux_script(
+        run_id,
+        node_id,
+        iter,
+        daemon_port,
+        &prompt_path,
+        tmux_cmd_override,
+    );
     let socket = tmux_socket_name(daemon_port);
 
     let output = tmux(&socket)
@@ -203,8 +239,9 @@ pub fn resume(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    tmux_cmd_override: Option<&str>,
 ) -> Result<()> {
-    let script = build_resume_script(run_id, node_id, iter, daemon_port);
+    let script = build_resume_script(run_id, node_id, iter, daemon_port, tmux_cmd_override);
     let socket = tmux_socket_name(daemon_port);
 
     let output = tmux(&socket)
@@ -527,19 +564,27 @@ mod tests {
 
     #[test]
     fn build_script_default_and_override() {
-        std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
         let prompt_path = Path::new("/tmp/test-prompt.md");
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);
+
+        // None → production claude tail.
+        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None);
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("MAESTRO_RUN_ID"));
         assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
 
-        std::env::set_var(TMUX_CMD_OVERRIDE_ENV, "exec sleep 60");
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path);
+        // Some(..) → override tail, no claude. The override is passed as a
+        // parameter (per-daemon config), never read from process-global env.
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            Some("exec sleep 60"),
+        );
         assert!(script.contains("exec sleep 60"));
         assert!(!script.contains("claude"));
-        std::env::remove_var(TMUX_CMD_OVERRIDE_ENV);
     }
 
     #[test]

@@ -86,7 +86,12 @@ export default function RunsListPanel({
         )}
         {runs.map((run) => {
           const isSelected = run.run_id === selectedRunId;
-          const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
+          // A stalled run (no node running/waiting, nothing schedulable; #180)
+          // is surfaced amber and steady, overriding its still-`running`
+          // canonical status — "never a silent stall."
+          const dot = run.stalled
+            ? "bg-st-stale"
+            : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
           const isArchived = run.status === "archived";
           const canCleanup = !isArchived;
 
@@ -103,7 +108,7 @@ export default function RunsListPanel({
             >
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
-                  run.status === "running" ? "animate-pulse" : ""
+                  run.status === "running" && !run.stalled ? "animate-pulse" : ""
                 }`}
               />
               <div className="min-w-0 flex-1">

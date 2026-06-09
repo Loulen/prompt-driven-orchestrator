@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "./loopRegions";
+import {
+  collectionFanoutNudges,
+  reconcileLoopRegions,
+  regionsDestroyedByEdgeRemoval,
+} from "./loopRegions";
 import type { EdgeDef, NodeDef, PipelineDef } from "../types";
 
 // A bare review loop: start -> impl -> rev, with rev -> impl closing the cycle.
@@ -70,6 +74,98 @@ describe("regionsDestroyedByEdgeRemoval (#150)", () => {
       loops: [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     };
     expect(regionsDestroyedByEdgeRemoval(p, 0)).toEqual([]);
+  });
+});
+
+function edge(s: string, sp: string, t: string, tp: string): EdgeDef {
+  return { source: { node: s, port: sp }, target: { node: t, port: tp } };
+}
+
+describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)", () => {
+  it("destroys a bounded region whose last cycle went with the deleted member, ghost id and all", () => {
+    // Post-deletion of `rev` from [impl, rev]: rev and its edges (impl->rev,
+    // rev->impl) are gone, leaving only start->impl. The region no longer closes
+    // a cycle and names a node that no longer exists — it is destroyed, not left
+    // as an orphan with a dangling member id.
+    const p: PipelineDef = {
+      name: "rl",
+      variables: {},
+      nodes: [plainNode("start"), plainNode("impl")],
+      edges: [edge("start", "out", "impl", "task")],
+      loops: [{ id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 }],
+    };
+    expect(reconcileLoopRegions(p)).toEqual([]);
+  });
+
+  it("prunes the ghost id but keeps the region when the survivors still close a cycle", () => {
+    // [a, b, c] closed by a<->b AND a<->c. Deleting c removes a->c / c->a, but
+    // a<->b still cycles, so the region survives with c pruned from members.
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [plainNode("a"), plainNode("b")],
+      edges: [edge("a", "out", "b", "in"), edge("b", "out", "a", "in")],
+      loops: [{ id: "r", kind: "bounded", members: ["a", "b", "c"], max_iter: 3 }],
+    };
+    const out = reconcileLoopRegions(p);
+    expect(out).toHaveLength(1);
+    expect(out[0].members).toEqual(["a", "b"]);
+    expect(out[0].max_iter).toBe(3);
+  });
+
+  it("keeps a single-member bounded region when the survivor self-loops, pruned to it", () => {
+    // The other member is deleted but the survivor carries a self-edge — still a
+    // valid (one-member) bounded loop. Kept, with the ghost member pruned.
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [plainNode("worker")],
+      edges: [edge("worker", "out", "worker", "again")],
+      loops: [{ id: "spin", kind: "bounded", members: ["worker", "rev"], max_iter: 4 }],
+    };
+    const out = reconcileLoopRegions(p);
+    expect(out).toHaveLength(1);
+    expect(out[0].members).toEqual(["worker"]);
+  });
+
+  it("drops a bounded region left with no present members", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [plainNode("a")],
+      edges: [],
+      loops: [{ id: "r", kind: "bounded", members: ["gone1", "gone2"], max_iter: 3 }],
+    };
+    expect(reconcileLoopRegions(p)).toEqual([]);
+  });
+
+  it("prunes a collection region's ghost member but keeps it (born by gesture, not a cycle)", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [plainNode("fixer")],
+      edges: [],
+      loops: [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer", "gone"] }],
+    };
+    const out = reconcileLoopRegions(p);
+    expect(out).toHaveLength(1);
+    expect(out[0].members).toEqual(["fixer"]);
+  });
+
+  it("drops a collection region emptied of present members", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [],
+      edges: [],
+      loops: [{ id: "per-issue", kind: "collection", over: "issues", members: ["gone"] }],
+    };
+    expect(reconcileLoopRegions(p)).toEqual([]);
+  });
+
+  it("leaves regions untouched when the deleted node was no member (cycle intact)", () => {
+    const p = reviewLoop(); // [impl, rev] all present, the cycle is intact
+    expect(reconcileLoopRegions(p)).toEqual(p.loops);
   });
 });
 

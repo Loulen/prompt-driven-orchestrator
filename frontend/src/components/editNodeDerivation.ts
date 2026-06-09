@@ -40,17 +40,25 @@ export function deriveEditNodes(
   pipeline: PipelineDef,
   runState: RunState | null | undefined,
 ): Node[] {
-  // Single-member collection regions (#151) render as a compact `⇉ ...` badge
-  // on the member's card (no box). Pre-compute the badge text keyed by member.
-  const collectionBadgeByMember = new Map<string, string>();
+  // A single-member loop region renders as a compact badge on the member's card
+  // instead of a box (ADR-0011 / #148, #151; the LoopRegion type's "compact
+  // badge (1 member)"). A `collection` reads `⇉ <fan-out>`; a single-member
+  // `bounded` region (a self-loop, or a multi-member loop reduced to one present
+  // member, e.g. after a member is deleted — #173) reads `↻ <counter>`,
+  // mirroring the box header — so a one-member loop is never invisible (it draws
+  // no box). Keyed by member id; the kind drives the glyph and the title.
+  const loopBadgeByMember = new Map<string, { text: string; kind: LoopRegion["kind"] }>();
   for (const region of deriveLoopRegions(pipeline, runState)) {
-    if (region.kind === "collection" && region.badgeMemberId != null) {
-      collectionBadgeByMember.set(region.badgeMemberId, `⇉ ${region.counterText}`);
-    }
+    if (region.badgeMemberId == null) continue;
+    const symbol = region.kind === "collection" ? "⇉" : "↻";
+    loopBadgeByMember.set(region.badgeMemberId, {
+      text: `${symbol} ${region.counterText}`,
+      kind: region.kind,
+    });
   }
   return pipeline.nodes.map((n, i) => {
     const status = statusForNode(n.id, runState);
-    const collectionBadge = collectionBadgeByMember.get(n.id);
+    const loopBadge = loopBadgeByMember.get(n.id);
     if (n.type === "merge") {
       return {
         id: n.id,
@@ -89,9 +97,10 @@ export function deriveEditNodes(
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
         outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
         interactive: n.interactive,
-        // Compact `⇉ ...` badge for the single member of a collection region
-        // (#151). Absent on non-member nodes. Undefined ⇒ no badge.
-        collectionBadge,
+        // Compact badge for the single member of a loop region: `⇉ ...` for a
+        // collection (#151) or `↻ ...` for a single-member bounded loop (#173).
+        // Absent on non-member nodes and multi-member regions (boxed instead).
+        loopBadge,
       },
     };
   });

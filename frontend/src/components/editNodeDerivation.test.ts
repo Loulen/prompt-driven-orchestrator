@@ -158,26 +158,46 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
   });
 
   it("attaches a `⇉` collection badge to the single member's card", () => {
-    // The single-member collection's member card carries a `collectionBadge`
-    // (the `⇉ ...` text) so the canvas can render the compact badge on the card
-    // rather than a box.
+    // The single-member collection's member card carries a `loopBadge` (the
+    // `⇉ ...` text, kind `collection`) so the canvas can render the compact badge
+    // on the card rather than a box.
     const p = pipelineWith(
       [node("fixer", "code-mutating", ["fix"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
     const cards = deriveEditNodes(p, null);
     const fixer = cards.find((c) => c.id === "fixer")!;
-    expect(fixer.data.collectionBadge).toContain("⇉");
-    expect(fixer.data.collectionBadge).toContain("over issues");
+    const badge = fixer.data.loopBadge as { text: string; kind: string } | undefined;
+    expect(badge?.kind).toBe("collection");
+    expect(badge?.text).toContain("⇉");
+    expect(badge?.text).toContain("over issues");
   });
 
-  it("does not attach a collection badge to a node that is no member", () => {
+  it("attaches a `↻` badge to a single-member bounded loop's card (#173)", () => {
+    // A bounded region reduced to one present member (e.g. a member node was
+    // deleted, leaving a self-loop survivor) draws no box, so it must render a
+    // compact `↻ <counter>` badge — otherwise the loop is invisible on the
+    // canvas. The glyph is the loop glyph, not the collection `⇉`.
+    const p = pipelineWith(
+      [node("worker", "code-mutating", ["out"])],
+      [{ id: "spin", kind: "bounded", members: ["worker"], max_iter: 4 }],
+    );
+    const cards = deriveEditNodes(p, null);
+    const worker = cards.find((c) => c.id === "worker")!;
+    const badge = worker.data.loopBadge as { text: string; kind: string } | undefined;
+    expect(badge?.kind).toBe("bounded");
+    expect(badge?.text).toContain("↻");
+    expect(badge?.text).toContain("max 4");
+    expect(badge?.text).not.toContain("⇉");
+  });
+
+  it("does not attach a loop badge to a node that is no member", () => {
     const p = pipelineWith(
       [node("fixer", "code-mutating", ["fix"]), node("other", "doc-only", ["x"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
     const cards = deriveEditNodes(p, null);
     const other = cards.find((c) => c.id === "other")!;
-    expect(other.data.collectionBadge).toBeUndefined();
+    expect(other.data.loopBadge).toBeUndefined();
   });
 });

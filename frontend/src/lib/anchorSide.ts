@@ -1,4 +1,4 @@
-import type { PortSide } from "../types";
+import type { NodeType, PortSide } from "../types";
 
 /** An axis-aligned rectangle in canvas (flow) coordinates. */
 export interface AnchorRect {
@@ -10,6 +10,27 @@ export interface AnchorRect {
 
 /** The four sides an emergent body anchor can land on (#168). */
 export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "bottom"];
+
+/**
+ * Whether a node uses emergent inputs (ADR-0011 / #149, #168): incoming edges
+ * land anywhere on the node body and anchor on the side nearest the drop point,
+ * rather than binding to a declared, fixed-side input handle.
+ *
+ * The work-node types (`doc-only`, `code-mutating`) are emergent. This is keyed
+ * on the node TYPE, not the declared input count: the #149 migration that drops
+ * declared inputs was never carried through to node creation or the on-disk
+ * pipeline YAMLs, so a work node frequently still carries a single vestigial
+ * `in` input. Keying drop-anchoring on `inputs.length` therefore mis-classified
+ * every such node as a fixed-side declared port and forced its arrows to the
+ * left (the #175 bug). Keying on type makes both already-migrated (0-input) and
+ * legacy (1-input `in`) work nodes anchor by drop.
+ *
+ * `start` has no inputs; `end` (declared `result`) and structural `merge` keep
+ * their declared, fixed-side ports and are never re-anchored by drop position.
+ */
+export function isEmergentInputNode(type: NodeType): boolean {
+  return type === "doc-only" || type === "code-mutating";
+}
 
 /**
  * The xyflow handle id of the body-covering target handle on a given side

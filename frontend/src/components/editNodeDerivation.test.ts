@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, runReachedEnd } from "./editNodeDerivation";
-import type { LoopRegion, NodeDef, NodeType, PipelineDef, RunStatus } from "../types";
+import type { LoopRegion, NodeDef, NodeType, PipelineDef, PortSide, RunStatus } from "../types";
 
 describe("runReachedEnd", () => {
   it("is true only when the run completed successfully", () => {
@@ -104,6 +104,67 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("__anchor:top");
     expect(edges[1].targetHandle).toBe("__anchor:bottom");
+  });
+});
+
+describe("deriveEditEdges — work node with a vestigial declared `in` still anchors by side (#175)", () => {
+  // The #149 migration to 0-input emergent nodes was never carried through to
+  // node creation or the on-disk pipeline YAMLs, so a real work node usually
+  // still carries a single declared `in`. The old `inputs.length === 1` gate
+  // mistook that for a fixed-side declared port and forced every incoming edge
+  // to the left handle. Anchoring is keyed on node TYPE now, so a 1-input work
+  // node anchors by drop on any side, exactly like a migrated 0-input one.
+  function workNode(id: string, type: NodeType, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type,
+      // The vestigial declared `in` (side left) that real pipelines still carry.
+      inputs: [{ name: "in", repeated: false, side: "left" as const }],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+    };
+  }
+
+  function pipelineWith(targetSide: PortSide | undefined): PipelineDef {
+    return {
+      name: "p",
+      variables: {},
+      nodes: [
+        {
+          id: "src",
+          name: "src",
+          type: "doc-only",
+          inputs: [],
+          outputs: [{ name: "plan", repeated: false, side: "right" as const }],
+          interactive: false,
+        },
+        workNode("dst", "code-mutating", ["code"]),
+      ],
+      edges: [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "in" },
+          target_side: targetSide,
+        },
+      ],
+    };
+  }
+
+  it.each(["left", "right", "top", "bottom"] as const)(
+    "binds the incoming edge to the %s body anchor (not the declared `in` handle)",
+    (side) => {
+      const edges = deriveEditEdges(pipelineWith(side));
+      expect(edges[0].targetHandle).toBe(`__anchor:${side}`);
+      // The route is told to arrive from that side, not forced left->right.
+      expect(edges[0].data?.targetSide).toBe(side);
+    },
+  );
+
+  it("defaults to the left body anchor when no target_side is persisted (legacy)", () => {
+    const edges = deriveEditEdges(pipelineWith(undefined));
+    expect(edges[0].targetHandle).toBe("__anchor:left");
+    expect(edges[0].data?.targetSide).toBe("left");
   });
 });
 

@@ -59,6 +59,30 @@ describe("RunsListPanel run status rendering", () => {
       expect(screen.getByText(`pipe-${status}`)).toBeInTheDocument();
     }
   });
+
+  it("renders a stalled run with an amber, steady dot (#180)", () => {
+    // A stalled run keeps status "running" but must surface amber and NOT pulse.
+    const runs: RunListEntry[] = [
+      { run_id: "run-1", pipeline_name: "stuck-pipe", status: "running", stalled: true, started_at: null },
+    ];
+    renderPanel({ runs });
+    const dot = document.querySelector(".bg-st-stale");
+    expect(dot).toBeInTheDocument();
+    expect(dot?.className).not.toContain("animate-pulse");
+    // It must not fall through to the active-running blue dot.
+    expect(document.querySelector(".bg-st-running")).not.toBeInTheDocument();
+  });
+
+  it("renders a genuinely-running (not stalled) run blue and pulsing", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-1", pipeline_name: "live-pipe", status: "running", stalled: false, started_at: null },
+    ];
+    renderPanel({ runs });
+    const dot = document.querySelector(".bg-st-running");
+    expect(dot).toBeInTheDocument();
+    expect(dot?.className).toContain("animate-pulse");
+    expect(document.querySelector(".bg-st-stale")).not.toBeInTheDocument();
+  });
 });
 
 describe("RunsListPanel Library section", () => {

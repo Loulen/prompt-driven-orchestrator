@@ -176,6 +176,10 @@ struct RunListEntry {
     run_id: String,
     pipeline_name: String,
     status: event_log::RunStatus,
+    /// Display-only "no forward progress" overlay (#180): true when the run has
+    /// no running/waiting node and a stale node, so its dot renders amber even
+    /// though `status` stays `running`. Derived per read by `event_log::is_stalled`.
+    stalled: bool,
     started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
@@ -3320,10 +3324,12 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
             Err(_) => continue,
         };
         if let Some(run_state) = event_log::project(&events) {
+            let stalled = event_log::is_stalled(&run_state);
             runs.push(RunListEntry {
                 run_id: run_state.run_id,
                 pipeline_name: run_state.pipeline_name,
                 status: run_state.status,
+                stalled,
                 started_at: run_state.started_at,
                 name: run_state.name,
                 triggered_by: run_state.triggered_by,

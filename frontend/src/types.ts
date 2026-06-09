@@ -22,6 +22,12 @@ export interface RunListEntry {
   run_id: string;
   pipeline_name: string;
   status: RunStatus;
+  /**
+   * Display-only "no forward progress" overlay (#180): true when the run has no
+   * running/waiting node and a stale node. The dot renders amber and steady
+   * even though `status` stays `"running"`. Derived server-side per read.
+   */
+  stalled?: boolean;
   started_at: string | null;
   name?: string | null;
   /** Provenance: the id of the Trigger that created this Run, if any (#160). */

@@ -837,6 +837,41 @@ pub fn project(events: &[Event]) -> Option<RunState> {
     Some(state)
 }
 
+/// Is this Run *stalled* (#180)? A run with no node currently `running` or
+/// `waiting` and no active merge resolver, where at least one node has gone
+/// `stale`, has nothing left to drive it forward: the stale node's session is
+/// wedged (idle with incomplete outputs, per `stale_detector`) so its
+/// downstream can never be scheduled, and the scheduler — which reacts to every
+/// event — has produced no other active node. The run is therefore stuck with
+/// no forward progress, which CONTEXT.md's "never a silent stall" requires us
+/// to surface (amber dot) instead of leaving it looking active.
+///
+/// This is a **display-only** derivation: the run's canonical `status` stays
+/// `Running`, so stale detection keeps probing it and the stalled state clears
+/// automatically as soon as activity resumes (a `NodeStarted`/`NodeWaiting`
+/// flips a node back to active, or the stale node completes). We deliberately
+/// avoid a persisted `RunStatus::Stale` variant — the condition is recomputed
+/// from the projection on every read.
+pub fn is_stalled(run: &RunState) -> bool {
+    if run.status != RunStatus::Running {
+        return false;
+    }
+
+    let has_active_node = run
+        .nodes
+        .values()
+        .any(|n| matches!(n.status, NodeStatus::Running | NodeStatus::Waiting));
+    let resolver_active = run
+        .merge_resolver
+        .as_ref()
+        .is_some_and(|mr| mr.status == NodeStatus::Running);
+    if has_active_node || resolver_active {
+        return false;
+    }
+
+    run.nodes.values().any(|n| n.status == NodeStatus::Stale)
+}
+
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -2648,5 +2683,168 @@ mod tests {
             !routes.contains_key("other_loop"),
             "an unrouted sibling region has no route entry"
         );
+    }
+
+    // --- is_stalled: run-level stale derivation (#180) ---
+
+    #[test]
+    fn stalled_when_only_node_went_stale() {
+        // A node went stale and nothing else is running/waiting: the run has no
+        // forward progress, yet its canonical status stays Running.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "wedged" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStale, Some("worker"), Some(1)),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running, "status stays Running");
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Stale);
+        assert!(is_stalled(&state), "all-idle with a stale node => stalled");
+    }
+
+    #[test]
+    fn not_stalled_when_another_node_still_running() {
+        // One branch is stale but a sibling is still running: the run is making
+        // progress and must NOT be flagged stale.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "fan-out" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("b"), Some(1)),
+            make_event(EventKind::NodeStale, Some("a"), Some(1)),
+        ];
+        let state = project(&events).unwrap();
+        assert!(
+            !is_stalled(&state),
+            "a still-running sibling means the run is progressing"
+        );
+    }
+
+    #[test]
+    fn not_stalled_when_a_node_is_waiting() {
+        // A node throttled by the session cap (Waiting) is pending forward
+        // progress, so a stale sibling does not make the run stalled.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "capped" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            make_event(EventKind::NodeStale, Some("a"), Some(1)),
+            make_event(EventKind::NodeWaiting, Some("b"), Some(1)),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.nodes["b"].status, NodeStatus::Waiting);
+        assert!(!is_stalled(&state), "a waiting node is not a stall");
+    }
+
+    #[test]
+    fn stalled_clears_when_stale_node_resumes() {
+        // AC: "A Run that resumes activity leaves the stale state." The same
+        // node restarting (e.g. manual retry) flips it back to Running.
+        let mut events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "recover" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStale, Some("worker"), Some(1)),
+        ];
+        assert!(is_stalled(&project(&events).unwrap()));
+
+        events.push(make_event(EventKind::NodeStarted, Some("worker"), Some(2)));
+        let state = project(&events).unwrap();
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Running);
+        assert!(
+            !is_stalled(&state),
+            "resumed activity clears the stalled overlay"
+        );
+    }
+
+    #[test]
+    fn not_stalled_without_any_stale_node() {
+        // A plain mid-execution run (running node, no stale) is not stalled.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "healthy" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ];
+        assert!(!is_stalled(&project(&events).unwrap()));
+    }
+
+    #[test]
+    fn not_stalled_when_paused() {
+        // A paused run with a stale node is intentionally idle, not stalled.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "paused" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStale, Some("worker"), Some(1)),
+            make_event(EventKind::RunPaused, None, None),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Paused);
+        assert!(!is_stalled(&state), "a paused run is never stalled");
+    }
+
+    #[test]
+    fn not_stalled_when_merge_resolver_active() {
+        // A running merge resolver is forward progress even if a node is stale.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "merging" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStale, Some("worker"), Some(1)),
+            make_event_with_payload(
+                EventKind::MergeResolverStarted,
+                None,
+                serde_json::json!({ "conflicting_node_id": "worker", "iter": 1 }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.merge_resolver.as_ref().unwrap().status,
+            NodeStatus::Running
+        );
+        assert!(
+            !is_stalled(&state),
+            "an active merge resolver means the run is still progressing"
+        );
+    }
+
+    #[test]
+    fn not_stalled_when_completed() {
+        // A completed run has no stale nodes and a terminal status.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "done" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Completed);
+        assert!(!is_stalled(&state));
     }
 }

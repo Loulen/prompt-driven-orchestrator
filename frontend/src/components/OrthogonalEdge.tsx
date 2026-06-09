@@ -98,9 +98,12 @@ export default function OrthogonalEdge({
       );
       return [sourcePt, ...anchored, targetPt];
     }
-    return routeOrthogonal({ source: sourcePt, target: targetPt, obstacles });
+    // Auto route: arrive from the persisted anchor side (#168 / #175) rather
+    // than always horizontally from the left. Manual routes (above) arrive
+    // however the user shaped their waypoints, so this only steers auto edges.
+    return routeOrthogonal({ source: sourcePt, target: targetPt, obstacles, targetSide: data?.targetSide });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourceX, sourceY, targetX, targetY, obstacles]);
+  }, [mode, waypoints, sourceX, sourceY, targetX, targetY, obstacles, data?.targetSide]);
 
   const d = pathToSvg(points);
   const handles = useMemo(() => segmentHandles(points), [points]);

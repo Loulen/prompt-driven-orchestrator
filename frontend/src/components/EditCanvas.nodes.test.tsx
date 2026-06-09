@@ -153,6 +153,64 @@ describe("EditNode slim card (issue #149)", () => {
   });
 });
 
+describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
+  function nodeProps(
+    nodeType: NodeType,
+    inputs: { name: string; side: "left" | "right" | "top" | "bottom" }[],
+  ) {
+    return {
+      ...markerProps({ nodeType }),
+      id: nodeType,
+      data: {
+        label: nodeType,
+        nodeId: nodeType,
+        nodeType,
+        status: "pending" as NodeStatus,
+        reached: false,
+        inputs,
+        // End has no outputs; a work node's outputs are irrelevant to anchoring.
+        outputs: [],
+        interactive: false,
+      },
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it("grows all four body anchor handles on a work node that still carries a vestigial declared `in`", () => {
+    // Regression (#175): the old `inputs.length !== 1` gate suppressed the
+    // anchors on every real work node (each carries one declared `in`), so no
+    // edge could anchor by drop and they all snapped to the left. Anchoring is
+    // keyed on node TYPE now, so the per-side anchors appear regardless.
+    const { container } = render(
+      <EditNode {...nodeProps("code-mutating", [{ name: "in", side: "left" }])} />,
+      { wrapper: Wrapper },
+    );
+    const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
+      h.getAttribute("data-handleid"),
+    );
+    for (const side of ["left", "right", "top", "bottom"]) {
+      expect(handleIds).toContain(`__anchor:${side}`);
+    }
+  });
+
+  it("keeps a declared-port node (End) on its declared side and grows no anchor handles (AC3)", () => {
+    // End's `result` is a fixed-side declared port: its body handle renders on
+    // the declared side (here `top`), not a hardcoded left, and it never grows
+    // the per-side drop anchors.
+    const { container } = render(
+      <EditNode {...nodeProps("end", [{ name: "result", side: "top" }])} />,
+      { wrapper: Wrapper },
+    );
+    const handles = Array.from(container.querySelectorAll(".react-flow__handle"));
+    const handleIds = handles.map((h) => h.getAttribute("data-handleid"));
+    for (const side of ["left", "right", "top", "bottom"]) {
+      expect(handleIds).not.toContain(`__anchor:${side}`);
+    }
+    const resultHandle = handles.find((h) => h.getAttribute("data-handleid") === "result");
+    expect(resultHandle).toBeTruthy();
+    expect(resultHandle!.getAttribute("data-handlepos")).toBe("top");
+  });
+});
+
 describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
   it("renders one image chip per uploaded image, tagged by filename", () => {
     render(

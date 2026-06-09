@@ -34,7 +34,7 @@ import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import PipelineStar from "./PipelineStar";
 import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
-import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide } from "../lib/anchorSide";
+import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
 
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
@@ -45,6 +45,16 @@ const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CS
   { side: "top", position: Position.Top, style: { top: 0, left: "50%", transform: "translateX(-50%)" } },
   { side: "bottom", position: Position.Bottom, style: { bottom: 0, left: "50%", transform: "translateX(-50%)" } },
 ];
+
+// A declared input port's side maps to the xyflow `Position` its body handle
+// renders on, so a fixed-side declared port (End's `result`) arrives from its
+// own declared side rather than a hardcoded left (#168 / #175 AC3).
+const SIDE_TO_POSITION: Record<PortSide, Position> = {
+  left: Position.Left,
+  right: Position.Right,
+  top: Position.Top,
+  bottom: Position.Bottom,
+};
 
 interface EditNodeData {
   label: string;
@@ -87,17 +97,28 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
   const inputImages =
     data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
+  // Emergent work nodes (`doc-only`/`code-mutating`) anchor incoming edges by
+  // drop position; declared-port nodes (End) keep their fixed side. Keyed on
+  // node TYPE so a work node carrying a vestigial declared `in` still anchors by
+  // drop (#175) rather than being mistaken for a fixed-side declared port.
+  const emergent = isEmergentInputNode(data.nodeType);
+  // A declared port's body handle arrives from its own declared side (#175 AC3),
+  // not a hardcoded left. Moot for emergent bodies (edges bind to the per-side
+  // anchor handles below), but kept consistent.
+  const bodyHandleSide = data.inputs[0]?.side ?? "left";
+
   return (
     <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. The declared `result` input on the End node
-          keeps its handle id so routing to End still resolves; emergent nodes
-          render the highlight handle id-less. */}
+          keeps its handle id (and its declared-side `position`) so routing to End
+          still resolves on its own side; emergent nodes render the highlight
+          handle id-less and bind incoming edges to the per-side anchors below. */}
       <Handle
-        id={data.inputs.length === 1 ? data.inputs[0].name : undefined}
+        id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
-        position={Position.Left}
+        position={SIDE_TO_POSITION[bodyHandleSide]}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
         style={{
@@ -112,13 +133,13 @@ export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
           opacity: isDropTarget ? 1 : 0,
         }}
       />
-      {/* Anchor-by-drop-position (#168): an emergent node also renders one
+      {/* Anchor-by-drop-position (#168): an emergent work node also renders one
           invisible side-centre target handle PER SIDE. An incoming edge binds to
           the handle for its persisted `target_side`, so xyflow anchors the arrow
           and derives the arrival geometry from that side (no forced left->right).
           Declared-input nodes (e.g. End's `result`) keep their fixed-side handle
           and never grow these. */}
-      {data.inputs.length !== 1 &&
+      {emergent &&
         ANCHOR_HANDLE_SIDES.map(({ side, position, style }) => (
           <Handle
             key={`anchor-${side}`}
@@ -388,9 +409,9 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       setHoveredNodeId(null);
 
       // Anchor the just-drawn edge on the target side nearest the drop (#168).
-      // Only emergent bodies (no single declared input) anchor by drop position;
-      // declared/structural ports keep their fixed side. The edge `onConnect`
-      // appended is at `pendingEdgeIndexRef`.
+      // Only emergent work-node bodies anchor by drop position; declared and
+      // structural ports keep their fixed side. The edge `onConnect` appended is
+      // at `pendingEdgeIndexRef`.
       const edgeIndex = pendingEdgeIndexRef.current;
       pendingEdgeIndexRef.current = null;
       if (edgeIndex == null) return;
@@ -399,12 +420,10 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       const drop = connectionState.to;
       if (!toNode || !drop) return;
       const targetDef = pipeline?.nodes.find((n) => n.id === toNode.id);
-      // Structural nodes and single-declared-input nodes (e.g. End's `result`)
-      // keep their declared, fixed-side handle — never re-anchor those.
-      if (!targetDef || targetDef.inputs.length === 1) return;
-      if (targetDef.type === "merge") {
-        return;
-      }
+      // Declared-port nodes (End's `result`) and structural nodes (merge) keep
+      // their declared, fixed-side handle — never re-anchor those. Keyed on node
+      // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
+      if (!targetDef || !isEmergentInputNode(targetDef.type)) return;
 
       const rect = {
         x: toNode.internals.positionAbsolute.x,

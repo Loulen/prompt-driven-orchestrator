@@ -9,6 +9,8 @@
 // The router is intentionally a deep module with a tiny surface: callers hand
 // it geometry and get back a polyline, never the internal grid/search details.
 
+import type { PortSide } from "../types";
+
 export interface Point {
   x: number;
   y: number;
@@ -31,9 +33,23 @@ export interface RouteInput {
    * at a readable distance rather than grazing their borders.
    */
   margin?: number;
+  /**
+   * The target card side the arrow anchors on (#168 / #175). The bend-minimal
+   * path arrives perpendicular to this side, approaching from outside the card,
+   * instead of always horizontally from the left. Absent ⇒ `left` (legacy
+   * left-to-right arrival). Only the obstacle-free fast path honours this; the
+   * A* fallback (rare — only when a node blocks the straight route) arrives
+   * best-effort.
+   */
+  targetSide?: PortSide;
 }
 
 const DEFAULT_MARGIN = 16;
+
+// How far outside the target card the non-left arrival route turns in from, so
+// the final segment approaches the anchored side from outside the body rather
+// than crossing it (#175).
+const LEAD_IN = 22;
 
 /**
  * Routes a right-angle polyline from `source` to `target`. The returned array
@@ -49,8 +65,9 @@ const DEFAULT_MARGIN = 16;
 export function routeOrthogonal(input: RouteInput): Point[] {
   const { source, target, obstacles } = input;
   const margin = input.margin ?? DEFAULT_MARGIN;
+  const targetSide = input.targetSide ?? "left";
 
-  const simple = rawPath(source, target);
+  const simple = rawPath(source, target, targetSide);
   if (!obstacles.some((o) => polylineHitsRect(simple, o))) {
     return simple;
   }
@@ -59,19 +76,51 @@ export function routeOrthogonal(input: RouteInput): Point[] {
   return routed ?? simple;
 }
 
-// The bend-free orthogonal connection. Edges flow left-to-right by convention
-// (output dot on the right, lands on the target body), so the route leaves the
-// source horizontally, steps vertically at the horizontal midpoint, then
-// continues horizontally into the target — an "HVH" step. Collinear endpoints
-// collapse the redundant vertices.
-function rawPath(source: Point, target: Point): Point[] {
-  const midX = (source.x + target.x) / 2;
-  return simplify([
-    source,
-    { x: midX, y: source.y },
-    { x: midX, y: target.y },
-    target,
-  ]);
+// The lead-in point one stub outside the target along the anchored side's
+// outward normal — the final segment runs from here straight into the target,
+// so the arrow arrives perpendicular to `side` from outside the card (#175).
+function leadInPoint(target: Point, side: PortSide, stub: number): Point {
+  switch (side) {
+    case "right":
+      return { x: target.x + stub, y: target.y };
+    case "top":
+      return { x: target.x, y: target.y - stub };
+    case "bottom":
+      return { x: target.x, y: target.y + stub };
+    case "left":
+    default:
+      return { x: target.x - stub, y: target.y };
+  }
+}
+
+// The bend-minimal orthogonal connection. The route leaves the source
+// horizontally (output dots sit on the right by convention) and arrives
+// perpendicular to `targetSide` from outside the target card. `left` keeps the
+// legacy "HVH" step (vertical at the horizontal midpoint); the other sides turn
+// in via a lead-in stub so the arrow approaches the anchored side rather than
+// crossing the body. `simplify` collapses the redundant vertices — and, being
+// monotonicity-aware, preserves an intentional lead-in overshoot when the
+// source sits on the far side of the anchored edge.
+function rawPath(source: Point, target: Point, targetSide: PortSide = "left"): Point[] {
+  if (targetSide === "left") {
+    const midX = (source.x + target.x) / 2;
+    return simplify([
+      source,
+      { x: midX, y: source.y },
+      { x: midX, y: target.y },
+      target,
+    ]);
+  }
+  const lead = leadInPoint(target, targetSide, LEAD_IN);
+  if (targetSide === "right") {
+    // Final segment horizontal into the right edge: leave horizontally, jog
+    // vertically at the lead-in column, then run horizontally into the target.
+    return simplify([source, { x: lead.x, y: source.y }, lead, target]);
+  }
+  // top / bottom: final segment vertical into the top/bottom edge — leave
+  // horizontally into the target column, then run vertically through the lead-in
+  // into the target.
+  return simplify([source, { x: target.x, y: source.y }, lead, target]);
 }
 
 // Drops consecutive duplicate points and collinear midpoints so a straight run
@@ -88,8 +137,12 @@ function dedupe(points: Point[]): Point[] {
   return out;
 }
 
-// Removes interior vertices that lie on a straight run between their neighbours
-// (three collinear points collapse to two), keeping the polyline minimal.
+// Removes interior vertices that lie on a straight run *between* their
+// neighbours (three collinear, monotonic points collapse to two), keeping the
+// polyline minimal. A collinear vertex that overshoots — the path doubles back
+// on itself, as a lead-in stub does when the source sits on the far side of the
+// anchored edge (#175) — is kept, since dropping it would erase the detour and
+// send the arrow straight across the body.
 function simplify(points: Point[]): Point[] {
   const pts = dedupe(points);
   if (pts.length <= 2) return pts;
@@ -102,7 +155,12 @@ function simplify(points: Point[]): Point[] {
       Math.abs(prev.x - cur.x) < 1e-6 && Math.abs(cur.x - next.x) < 1e-6;
     const collinearY =
       Math.abs(prev.y - cur.y) < 1e-6 && Math.abs(cur.y - next.y) < 1e-6;
-    if (collinearX || collinearY) continue;
+    // `cur` is between its neighbours when they fall on opposite sides of it
+    // along the shared axis (product <= 0). Only then is it a redundant
+    // straight-run vertex; an overshoot (both neighbours on one side) is a real
+    // turn and must survive.
+    if (collinearX && (prev.y - cur.y) * (next.y - cur.y) <= 0) continue;
+    if (collinearY && (prev.x - cur.x) * (next.x - cur.x) <= 0) continue;
     out.push(cur);
   }
   out.push(pts[pts.length - 1]);

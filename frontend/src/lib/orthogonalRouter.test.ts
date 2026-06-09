@@ -87,3 +87,91 @@ describe("routeOrthogonal", () => {
     expect(pathCrosses(c, moved)).toBe(false);
   });
 });
+
+describe("routeOrthogonal — arrives from the anchored target side (#175)", () => {
+  // The segment just before the target tells us which side the arrow enters.
+  const target: Point = { x: 200, y: 100 };
+
+  it("defaults to a left arrival (legacy left->right) when no side is given", () => {
+    // Source to the left, vertically offset: the final segment runs in from the
+    // left (approach x < target.x, level with the target row).
+    const path = routeOrthogonal({ source: { x: 0, y: 0 }, target, obstacles: [] });
+    const approach = path[path.length - 2];
+    expect(isOrthogonal(path)).toBe(true);
+    expect(path[path.length - 1]).toEqual(target);
+    expect(approach.x).toBeLessThan(target.x);
+    expect(approach.y).toBeCloseTo(target.y, 6);
+  });
+
+  it("arrives horizontally from the right when target_side is right", () => {
+    // Natural geometry: source sits to the right of the target.
+    const path = routeOrthogonal({
+      source: { x: 400, y: 100 },
+      target,
+      obstacles: [],
+      targetSide: "right",
+    });
+    const approach = path[path.length - 2];
+    expect(isOrthogonal(path)).toBe(true);
+    expect(path[path.length - 1]).toEqual(target);
+    expect(approach.x).toBeGreaterThan(target.x);
+    expect(approach.y).toBeCloseTo(target.y, 6);
+  });
+
+  it("arrives vertically from above when target_side is top", () => {
+    // Natural geometry: source sits above the target.
+    const path = routeOrthogonal({
+      source: { x: 200, y: -100 },
+      target,
+      obstacles: [],
+      targetSide: "top",
+    });
+    const approach = path[path.length - 2];
+    expect(isOrthogonal(path)).toBe(true);
+    expect(path[path.length - 1]).toEqual(target);
+    expect(approach.y).toBeLessThan(target.y);
+    expect(approach.x).toBeCloseTo(target.x, 6);
+  });
+
+  it("arrives vertically from below when target_side is bottom", () => {
+    // Natural geometry: source sits below the target.
+    const path = routeOrthogonal({
+      source: { x: 200, y: 400 },
+      target,
+      obstacles: [],
+      targetSide: "bottom",
+    });
+    const approach = path[path.length - 2];
+    expect(isOrthogonal(path)).toBe(true);
+    expect(path[path.length - 1]).toEqual(target);
+    expect(approach.y).toBeGreaterThan(target.y);
+    expect(approach.x).toBeCloseTo(target.x, 6);
+  });
+
+  it("still enters from the right even when the source is to the left (turns in from outside)", () => {
+    // The hard case the legacy HVH got wrong: source left of target, but the
+    // arrow must still land on the right edge. The approach must come from
+    // x > target.x — never straight across the body from the left.
+    const path = routeOrthogonal({
+      source: { x: 0, y: 0 },
+      target,
+      obstacles: [],
+      targetSide: "right",
+    });
+    const approach = path[path.length - 2];
+    expect(isOrthogonal(path)).toBe(true);
+    expect(path[path.length - 1]).toEqual(target);
+    expect(approach.x).toBeGreaterThan(target.x);
+    expect(approach.y).toBeCloseTo(target.y, 6);
+  });
+
+  it("is deterministic for a given anchored side", () => {
+    const input = {
+      source: { x: 0, y: 0 },
+      target,
+      obstacles: [] as Rect[],
+      targetSide: "top" as const,
+    };
+    expect(routeOrthogonal(input)).toEqual(routeOrthogonal(input));
+  });
+});

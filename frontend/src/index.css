@@ -68,6 +68,10 @@
   /* Edit-mode chrome */
   --color-edit-tint: #a78bfa;
 
+  /* Selected edge — pastel orange (#177). Selection is the dominant edge signal
+     (PRD #143): the selected edge is orange, every other edge is grey. */
+  --color-edge-selected: #fdba74;
+
   /* Typography */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;

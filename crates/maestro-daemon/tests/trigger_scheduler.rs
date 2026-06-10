@@ -324,6 +324,44 @@ async fn guard_exit_zero_fires_with_stdout_as_input() {
 }
 
 #[tokio::test]
+async fn concurrent_ticks_fire_a_due_trigger_exactly_once() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // The guard sleeps long enough that a second tick starting mid-guard would
+    // also read the trigger as due (next_fire is only recomputed after the
+    // guard returns) and double-fire it — the race between the 30 s background
+    // loop and the test seam that made `guard_exit_zero_fires_with_stdout_as_input`
+    // flake under full-suite load. Ticks must serialize. The yearly cron keeps
+    // the recomputed next fire far away, so the second tick can't be
+    // legitimately due again. Keep the sleep under the 200 ms guard-timeout
+    // override that `guard_timeout_records_guard_error_and_skips` sets
+    // process-wide (std::env is shared across parallel tests).
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "racer",
+        "0 0 1 1 *",
+        "sleep 0.15; printf 'issue-7'",
+    )
+    .await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    tokio::join!(daemon.run_trigger_tick(), daemon.run_trigger_tick());
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1, "concurrent ticks must not double-fire");
+
+    let fired = list_fires(&daemon, &trigger_id)
+        .await
+        .iter()
+        .filter(|f| f["outcome"].as_str() == Some("fired"))
+        .count();
+    assert_eq!(fired, 1, "exactly one 'fired' record");
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
 async fn guard_exit_nonzero_skips_without_firing() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 

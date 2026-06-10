@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, SessionCount } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus } from "./types";
 
 const BASE = "";
 
@@ -18,7 +18,7 @@ export async function fetchRuns(): Promise<RunListEntry[]> {
   return resp.json();
 }
 
-export async function fetchSessions(): Promise<SessionCount> {
+export async function fetchSessions(): Promise<DaemonStatus> {
   const resp = await fetch(`${BASE}/sessions`);
   if (!resp.ok) throw new Error(`GET /sessions failed: ${resp.status}`);
   return resp.json();

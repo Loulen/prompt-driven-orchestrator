@@ -6,7 +6,7 @@ import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import type { RunListEntry, RunState, Trigger, SessionCount } from "./types";
+import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
@@ -63,7 +63,7 @@ function useRuns() {
 }
 
 function useSessions() {
-  const [sessions, setSessions] = useState<SessionCount>({ live: 0, cap: 0 });
+  const [sessions, setSessions] = useState<DaemonStatus>({ live: 0, cap: 0 });
 
   const refresh = useCallback(async () => {
     try {
@@ -723,7 +723,7 @@ function StatusBar({
   sessions,
 }: {
   status: ConnectionStatus;
-  sessions: SessionCount;
+  sessions: DaemonStatus;
 }) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
 
@@ -738,7 +738,7 @@ function StatusBar({
       </span>
       <span className="flex-1" />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
-      <span>v0.1.0</span>
+      {sessions.version && <span>v{sessions.version}</span>}
     </footer>
   );
 }

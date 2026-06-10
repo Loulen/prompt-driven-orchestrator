@@ -102,6 +102,12 @@ struct AppState {
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
+    /// Serializes Trigger scheduler ticks. A tick is read-decide-write
+    /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await on
+    /// the guard in the middle; two concurrent ticks (the 30 s background loop
+    /// and the `run_trigger_tick` test seam) can otherwise both see the same
+    /// Trigger as due and double-fire it.
+    trigger_tick_lock: tokio::sync::Mutex<()>,
     /// Paths the daemon has just written. The pipeline watcher consults this map
     /// and suppresses `pipeline_changed` broadcasts for paths it sees within the
     /// TTL window — that's how we tell our own writes apart from external ones
@@ -418,6 +424,7 @@ pub async fn serve_with_config(
         repo_root,
         port: bound_addr.port(),
         merge_lock: tokio::sync::Mutex::new(()),
+        trigger_tick_lock: tokio::sync::Mutex::new(()),
         recent_writes,
         run_watcher: run_watcher.clone(),
         tmux_cmd_override: config.tmux_cmd_override,
@@ -1417,6 +1424,8 @@ fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> Path
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
 async fn run_trigger_scheduler_tick(state: &AppState) {
+    // At most one tick in flight: see `AppState::trigger_tick_lock`.
+    let _tick = state.trigger_tick_lock.lock().await;
     let now_str = event_log::now_iso();
     let due = match trigger_store::due_triggers(&state.db, &now_str).await {
         Ok(t) => t,
@@ -3300,13 +3309,19 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
-/// `GET /sessions` — the live NodeRun-session count and the configured cap,
-/// for the bottom status-bar counter (admission control, #159). Manager
-/// sessions are excluded by construction (they are not nodes).
+/// `GET /sessions` — the live NodeRun-session count, the configured cap, and
+/// the daemon version, for the bottom status bar (admission control #159,
+/// version display #139). Manager sessions are excluded by construction (they
+/// are not nodes).
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap();
-    Json(serde_json::json!({ "live": live, "cap": cap })).into_response()
+    Json(serde_json::json!({
+        "live": live,
+        "cap": cap,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+    .into_response()
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
@@ -7215,6 +7230,7 @@ mod tests {
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -7358,6 +7374,11 @@ mod tests {
         assert!(
             json["cap"].as_u64().unwrap() >= 1,
             "cap should be a positive integer"
+        );
+        assert_eq!(
+            json["version"],
+            env!("CARGO_PKG_VERSION"),
+            "the status-bar payload carries the daemon version (#139)"
         );
     }
 
@@ -8623,6 +8644,7 @@ mod tests {
             repo_root: dir.to_path_buf(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -11259,6 +11281,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -11430,6 +11453,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the

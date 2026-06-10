@@ -6,12 +6,14 @@ export function isLiveRun(status: RunStatus): boolean {
 }
 
 /**
- * Live NodeRun-session count and the configured global cap, for the bottom
- * status-bar counter (#159 / ADR-0012). Manager sessions are excluded.
+ * Live NodeRun-session count, the configured global cap, and the daemon
+ * version, for the bottom status bar (#159 / ADR-0012, #139). Manager
+ * sessions are excluded. `version` is absent until the daemon has responded.
  */
-export interface SessionCount {
+export interface DaemonStatus {
   live: number;
   cap: number;
+  version?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

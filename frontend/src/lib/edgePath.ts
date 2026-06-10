@@ -27,6 +27,43 @@ export function connectionPreviewPath(source: Point, target: Point): string {
   return pathToSvg(routeOrthogonal({ source, target, obstacles: [] }));
 }
 
+/**
+ * The point at half the polyline's total arc length (#176). This is where the
+ * condition pill is anchored: the median *vertex* (`points[len/2]`) ignores
+ * segment lengths entirely — on an unbalanced L-route it lands exactly on the
+ * corner, and sibling edges sharing bends stack their pills on the same vertex.
+ * Walking the segments to `totalLength / 2` centers the label on the visible
+ * stroke instead. Returns null for a degenerate path (< 2 points) so the
+ * caller can pick its own fallback.
+ */
+export function pathMidpoint(points: Point[]): Point | null {
+  if (points.length < 2) return null;
+
+  let totalLength = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    totalLength +=
+      Math.abs(points[i + 1].x - points[i].x) +
+      Math.abs(points[i + 1].y - points[i].y);
+  }
+  // All segments zero-length (endpoints coincide): any vertex is the midpoint.
+  if (totalLength === 0) return { ...points[0] };
+
+  let remaining = totalLength / 2;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    // Orthogonal segments: length is the Manhattan distance (one axis is 0).
+    const segLength = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    if (remaining <= segLength) {
+      const t = remaining / segLength;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    remaining -= segLength;
+  }
+  // Floating-point underrun past the last segment: clamp to the end.
+  return { ...points[points.length - 1] };
+}
+
 export type SegmentOrientation = "horizontal" | "vertical";
 
 export interface SegmentHandle {

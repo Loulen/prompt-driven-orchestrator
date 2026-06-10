@@ -345,6 +345,11 @@ pub enum ParseError {
     },
 }
 
+/// Top-level YAML keys accepted by the unknown-field lint.
+/// MUST list every serializable field of PipelineDef — see `known_keys_cover_serialized_pipeline`.
+const KNOWN_TOP_LEVEL_KEYS: &[&str] =
+    &["name", "version", "variables", "nodes", "edges", "loops", "prompt_required"];
+
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let mut raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;
 
@@ -522,11 +527,10 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let known_keys: &[&str] = &["name", "version", "variables", "nodes", "edges", "loops"];
     if let Some(mapping) = raw.as_mapping() {
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {
-                if !known_keys.contains(&k) {
+                if !KNOWN_TOP_LEVEL_KEYS.contains(&k) {
                     diagnostics.push(Diagnostic {
                         severity: Severity::Warning,
                         message: format!("unknown field '{k}' (ignored)"),
@@ -3353,5 +3357,128 @@ nodes: []
         let result = parse_pipeline(&yaml).unwrap();
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("prompt_required"));
+    }
+
+    #[test]
+    fn prompt_required_false_emits_no_unknown_field_diagnostic() {
+        // #183: prompt_required is a legitimate PipelineDef field; the
+        // unknown-field lint must not warn about it.
+        let yaml = with_start_end(
+            r#"
+name: optional-prompt
+prompt_required: false
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(
+            result.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(!result.pipeline.prompt_required);
+    }
+
+    #[test]
+    fn truly_unknown_field_still_warns() {
+        let yaml = with_start_end(
+            r#"
+name: with-bogus
+bogus_field: 1
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].message,
+            "unknown field 'bogus_field' (ignored)"
+        );
+    }
+
+    #[test]
+    fn known_keys_cover_serialized_pipeline() {
+        // Drift guard for #183: every top-level key PipelineDef can serialize
+        // must be in KNOWN_TOP_LEVEL_KEYS, or the lint false-positives on the
+        // next freshly added field (the way #158 forgot prompt_required).
+        // Fixture sets every optional field to a non-default value so all
+        // skip_serializing_if fields are actually emitted.
+        let yaml = r#"
+name: full-fixture
+version: "1.0"
+variables:
+  max_iter_review: 3
+prompt_required: false
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: ab000002
+    name: reviewer
+    type: doc-only
+    inputs:
+      - name: code
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, FAIL]
+  - id: ab000003
+    name: verdict-switch
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: pass
+        when:
+          verdict: { in: [PASS] }
+      - name: default
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: code }
+    target: { node: ab000002, port: code }
+  - source: { node: ab000002, port: review }
+    target: { node: ab000003, port: in }
+  - source: { node: ab000003, port: pass }
+    target: { node: end, port: result }
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [ab000001, ab000002]
+    max_iter: "$max_iter_review"
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        assert!(
+            result.diagnostics.is_empty(),
+            "fixture must lint clean: {:?}",
+            result.diagnostics
+        );
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&serialized).unwrap();
+        let mapping = value.as_mapping().unwrap();
+        for key in mapping.keys() {
+            let k = key.as_str().unwrap();
+            assert!(
+                KNOWN_TOP_LEVEL_KEYS.contains(&k),
+                "field '{k}' serialized but missing from KNOWN_TOP_LEVEL_KEYS — add it or the lint will false-positive (cf. #183)"
+            );
+        }
     }
 }

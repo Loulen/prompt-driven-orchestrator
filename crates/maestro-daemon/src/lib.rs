@@ -102,6 +102,12 @@ struct AppState {
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
+    /// Serializes Trigger scheduler ticks. A tick is read-decide-write
+    /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await on
+    /// the guard in the middle; two concurrent ticks (the 30 s background loop
+    /// and the `run_trigger_tick` test seam) can otherwise both see the same
+    /// Trigger as due and double-fire it.
+    trigger_tick_lock: tokio::sync::Mutex<()>,
     /// Paths the daemon has just written. The pipeline watcher consults this map
     /// and suppresses `pipeline_changed` broadcasts for paths it sees within the
     /// TTL window — that's how we tell our own writes apart from external ones
@@ -418,6 +424,7 @@ pub async fn serve_with_config(
         repo_root,
         port: bound_addr.port(),
         merge_lock: tokio::sync::Mutex::new(()),
+        trigger_tick_lock: tokio::sync::Mutex::new(()),
         recent_writes,
         run_watcher: run_watcher.clone(),
         tmux_cmd_override: config.tmux_cmd_override,
@@ -1417,6 +1424,8 @@ fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> Path
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
 async fn run_trigger_scheduler_tick(state: &AppState) {
+    // At most one tick in flight: see `AppState::trigger_tick_lock`.
+    let _tick = state.trigger_tick_lock.lock().await;
     let now_str = event_log::now_iso();
     let due = match trigger_store::due_triggers(&state.db, &now_str).await {
         Ok(t) => t,
@@ -7221,6 +7230,7 @@ mod tests {
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -8634,6 +8644,7 @@ mod tests {
             repo_root: dir.to_path_buf(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -11270,6 +11281,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
@@ -11441,6 +11453,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the

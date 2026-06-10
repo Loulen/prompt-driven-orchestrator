@@ -61,6 +61,28 @@ describe("OutputPortDot", () => {
     expect(label.style.pointerEvents).toBe("none");
   });
 
+  it("portals the floating label to document.body, not inside the (transformed) flow pane (#174)", () => {
+    // In the real app the dot lives inside `.react-flow__viewport`, whose
+    // pan/zoom `transform` is the containing block for `position: fixed`,
+    // displacing/scaling the label by the viewport matrix. Portaling the
+    // label to <body> takes it out of that transformed subtree so `fixed`
+    // resolves against the real viewport again.
+    const { container } = render(
+      <OutputPortDot id="body" side="right" index={0} total={1} />,
+      { wrapper: Wrapper },
+    );
+    const dot = container.querySelector(".port-dot") as HTMLElement;
+    fireEvent.pointerEnter(dot, { clientX: 120, clientY: 80 });
+
+    const label = screen.getByText("body");
+    expect(label.classList.contains("port-dot-lbl")).toBe(true);
+    // the label must NOT be a descendant of the component's render subtree…
+    expect(container.contains(label)).toBe(false);
+    // …it is a direct child of <body>.
+    expect(label.parentElement).toBe(document.body);
+    expect(label.style.position).toBe("fixed");
+  });
+
   it("positions the floating label offset from the cursor and tracks it", () => {
     const { container } = render(
       <OutputPortDot id="body" side="right" index={0} total={1} />,

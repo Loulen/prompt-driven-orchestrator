@@ -22,6 +22,7 @@ export default defineConfig({
       '/pipelines': daemonTarget,
       '/library': daemonTarget,
       '/repos': daemonTarget,
+      '/triggers': daemonTarget,
     },
   },
   test: {

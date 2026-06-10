@@ -357,6 +357,7 @@ Le canvas est **toujours interactif** (ADR-0007). L'ancienne dichotomie "mode Ed
 
 - **Quand aucun Run ne tourne** sur une pipeline : l'édition modifie directement la template en bibliothèque (`~/.maestro/library/pipelines/<id>.yaml`).
 - **Quand un Run tourne** : l'édition modifie le **snapshot run-scope** (`<repo>/.maestro/runs/<run-id>/pipeline.yaml`) ET propage la même modif vers la template d'origine en bibliothèque (auto-sync montant). Le pipeline_watcher observe le snapshot run-scope et émet un event `PipelineModified` à chaque mutation ; le scheduler se réajuste au prochain tick (la fonction est pure, pas de cache à invalider).
+- **Contrat de l'event `PipelineModified`** : `payload.kind` vaut `"yaml"` (mutation de `pipeline.yaml`) ou `"prompt"` (mutation d'un fichier sous `pipeline.prompts/`), exclusivement — la décision est **par chemin** (`detect_run_scoped_change`). Les events ne sont **jamais coalescés** entre fichiers : une édition YAML et une édition prompt rapprochées produisent deux events distincts. Un même run peut légitimement émettre les deux kinds presque simultanément (la copie initiale du snapshot déclenche le watcher) ; tout consommateur qui attend un kind précis doit donc **filtrer sur `payload.kind`** plutôt que prendre le premier event venu (#182).
 
 ### Politique de mutation pendant un Run
 

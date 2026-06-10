@@ -187,14 +187,17 @@ async fn external_write_to_run_pipeline_emits_pipeline_modified() {
     std::fs::write(&yaml_path, updated_yaml).unwrap();
 
     // Should receive a pipeline_modified event within the debounce window.
-    // The watcher may also have picked up the initial prompt copy, so we look
-    // for any pipeline_modified event for this run_id.
-    let evt = next_pipeline_modified_event(&mut ws, &run_id, None, Duration::from_secs(4))
+    // Filter on kind "yaml": the watcher may also surface a "prompt" event from
+    // the initial prompt copy, and grabbing whichever event arrives first would
+    // let the test pass without the external YAML edit being detected at all
+    // (same under-assertion class as #182).
+    let evt = next_pipeline_modified_event(&mut ws, &run_id, Some("yaml"), Duration::from_secs(4))
         .await
         .expect("external write to run-scoped pipeline should emit pipeline_modified within 4s");
 
     assert_eq!(evt["kind"], "pipeline_modified");
     assert_eq!(evt["run_id"], run_id);
+    assert_eq!(evt["payload"]["kind"], "yaml");
 }
 
 #[tokio::test]

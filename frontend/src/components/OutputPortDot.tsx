@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Handle, Position } from "@xyflow/react";
 import type { PortSide } from "../types";
 
@@ -53,19 +54,26 @@ export default function OutputPortDot({
         onPointerMove={(e) => setCursor({ x: e.clientX, y: e.clientY })}
         onPointerLeave={() => setCursor(null)}
       />
-      {cursor && (
-        <span
-          className="port-dot-lbl"
-          style={{
-            position: "fixed",
-            left: cursor.x + LABEL_OFFSET_X,
-            top: cursor.y + LABEL_OFFSET_Y,
-            pointerEvents: "none",
-          }}
-        >
-          {id}
-        </span>
-      )}
+      {cursor &&
+        /* Portal to <body> so `position: fixed` resolves against the real
+         * viewport. Rendered inline, the label lives inside React Flow's
+         * `.react-flow__viewport`, whose pan/zoom `transform` becomes the
+         * containing block for fixed positioning and displaces/scales the
+         * label by the viewport matrix (#174). */
+        createPortal(
+          <span
+            className="port-dot-lbl"
+            style={{
+              position: "fixed",
+              left: cursor.x + LABEL_OFFSET_X,
+              top: cursor.y + LABEL_OFFSET_Y,
+              pointerEvents: "none",
+            }}
+          >
+            {id}
+          </span>,
+          document.body,
+        )}
     </>
   );
 }

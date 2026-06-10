@@ -6,7 +6,7 @@ import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import type { RunListEntry, RunState, Trigger, SessionCount } from "./types";
+import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
@@ -63,7 +63,7 @@ function useRuns() {
 }
 
 function useSessions() {
-  const [sessions, setSessions] = useState<SessionCount>({ live: 0, cap: 0 });
+  const [sessions, setSessions] = useState<DaemonStatus>({ live: 0, cap: 0 });
 
   const refresh = useCallback(async () => {
     try {
@@ -283,6 +283,16 @@ export default function App() {
       useRecentReposStore.getState().refresh();
     }
   }, [refreshRuns, refreshSessions, refreshTriggers]);
+
+  // A WS reconnect usually means the daemon restarted — possibly as a different
+  // binary, so the /sessions payload (version included, #139) may be stale. An
+  // idle daemon emits no event afterwards, so the subscribe-side refresh never
+  // fires; re-fetch on every transition to "connected".
+  useEffect(() => {
+    if (status === "connected") {
+      refreshSessions();
+    }
+  }, [status, refreshSessions]);
 
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
@@ -723,7 +733,7 @@ function StatusBar({
   sessions,
 }: {
   status: ConnectionStatus;
-  sessions: SessionCount;
+  sessions: DaemonStatus;
 }) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
 
@@ -738,7 +748,7 @@ function StatusBar({
       </span>
       <span className="flex-1" />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
-      <span>v0.1.0</span>
+      {sessions.version && <span>v{sessions.version}</span>}
     </footer>
   );
 }

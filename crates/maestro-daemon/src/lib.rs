@@ -3300,13 +3300,19 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
-/// `GET /sessions` — the live NodeRun-session count and the configured cap,
-/// for the bottom status-bar counter (admission control, #159). Manager
-/// sessions are excluded by construction (they are not nodes).
+/// `GET /sessions` — the live NodeRun-session count, the configured cap, and
+/// the daemon version, for the bottom status bar (admission control #159,
+/// version display #139). Manager sessions are excluded by construction (they
+/// are not nodes).
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap();
-    Json(serde_json::json!({ "live": live, "cap": cap })).into_response()
+    Json(serde_json::json!({
+        "live": live,
+        "cap": cap,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+    .into_response()
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
@@ -7358,6 +7364,11 @@ mod tests {
         assert!(
             json["cap"].as_u64().unwrap() >= 1,
             "cap should be a positive integer"
+        );
+        assert_eq!(
+            json["version"],
+            env!("CARGO_PKG_VERSION"),
+            "the status-bar payload carries the daemon version (#139)"
         );
     }
 

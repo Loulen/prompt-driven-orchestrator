@@ -21,6 +21,22 @@ async fn runs_endpoint_returns_empty_array_on_fresh_daemon() {
 }
 
 #[tokio::test]
+async fn sessions_endpoint_reports_daemon_version() {
+    // The footer reads the daemon version from `GET /sessions` (#139). The
+    // integration test crate compiles with the same package version, so
+    // strict equality against CARGO_PKG_VERSION is valid.
+    let daemon = TestDaemon::spawn(|_repo_root| Ok(())).await.unwrap();
+
+    let resp = reqwest::get(format!("{}/sessions", daemon.url()))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(json["version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
+}
+
+#[tokio::test]
 async fn ws_emits_ready_on_connect() {
     let daemon = TestDaemon::spawn(|_repo_root| Ok(())).await.unwrap();
 

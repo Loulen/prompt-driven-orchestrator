@@ -722,6 +722,13 @@ Cf. ADR-0003.
 - Plus tard : formula Homebrew (macOS), package AUR (Arch).
 - Plus tard (v2) : wrapper Tauri pour distribution desktop native, qui réutilise le même daemon Rust + le même frontend.
 
+### Versioning (#139)
+
+- **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel, ne jamais le bumper (le release flow ne touche que Cargo.toml).
+- Le daemon expose sa version compilée (`CARGO_PKG_VERSION`) dans la réponse de **`GET /sessions`** (`{ live, cap, version }`), l'endpoint qui alimente déjà la status-bar. Pas de route `GET /version` dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de plus dans la whitelist du proxy vite dev.
+- Le footer affiche `v<version>` à partir de ce payload, rafraîchi au mount et à chaque event WebSocket. Tant que le daemon n'a pas répondu, **rien n'est rendu** (pas de placeholder) ; le dot de connexion signale déjà l'injoignabilité.
+- En prod le binaire embarque le frontend, donc daemon et UI ne peuvent pas diverger. En dev le footer montre la version du daemon debug réellement joignable.
+
 ### Mono-user, local
 
 Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas de multi-user. Single-user local par design. Tout ce qu'il faut pour ça : SQLite locale, FS local, tmux local, git local. Pas de dépendance réseau.

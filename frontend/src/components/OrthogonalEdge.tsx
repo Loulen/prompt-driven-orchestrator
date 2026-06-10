@@ -57,6 +57,13 @@ export default function OrthogonalEdge({
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
   const updateEdge = useEditStore((s) => s.updateEdge);
+  // Selection drives the stroke color (#177). The store is the source of truth
+  // the edge detail panel keys off, so reading it here (mirroring `EditNode`'s
+  // own `isSelected` derivation) keeps the orange stroke and the open panel in
+  // lockstep — and the store guarantees a single selection, so at most one edge
+  // is orange at a time. It survives edge re-derivation too, unlike xyflow's
+  // transient per-element `selected` flag, which is reset when edges are rebuilt.
+  const selection = useEditStore((s) => s.selection);
   const { screenToFlowPosition } = useReactFlow();
   const [hovered, setHovered] = useState(false);
 
@@ -167,7 +174,13 @@ export default function OrthogonalEdge({
     [edgeIndex, mode, waypoints, points.length, updateEdge],
   );
 
-  const strokeColor = data?.strokeColor ?? "var(--color-fg-4)";
+  // Pastel orange when this edge is the selected one, grey otherwise (#177).
+  // The override flows through to the condition pill border and segment handles
+  // below, which both read `strokeColor`, so the whole edge reads as selected.
+  const isSelected = selection.kind === "edge" && selection.edgeIndex === edgeIndex;
+  const strokeColor = isSelected
+    ? "var(--color-edge-selected, #fdba74)"
+    : data?.strokeColor ?? "var(--color-fg-4)";
 
   const labelPoint = points[Math.floor(points.length / 2)] ?? targetPt;
 
@@ -179,7 +192,7 @@ export default function OrthogonalEdge({
         markerEnd={markerEnd}
         style={{
           stroke: strokeColor,
-          strokeWidth: 1.5,
+          strokeWidth: isSelected ? 2.5 : 1.5,
           strokeDasharray: data?.dashed ? "6 3" : undefined,
         }}
       />

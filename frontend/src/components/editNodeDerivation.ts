@@ -399,11 +399,13 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
     const isConditional = isElse || hasWhen;
 
     const isDashed = isEndEdge;
-    const strokeColor = isDashed
-      ? "var(--color-st-blocked, #f97316)"
-      : isConditional
-        ? "var(--color-acc)"
-        : "var(--color-fg-4)";
+    // Edge stroke color is no longer keyed on type (#177): every edge renders
+    // grey by default and the *selected* edge is recolored to pastel orange
+    // dynamically in `OrthogonalEdge` (selection is the dominant visual signal,
+    // PRD #143 — the prior conditional-green / end-orange tinting is dropped).
+    // The dash pattern still distinguishes the end edge; that's a separate
+    // signal carried by `isDashed`, untouched here.
+    const strokeColor = "var(--color-fg-4)";
 
     const label = isElse
       ? "else"

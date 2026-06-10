@@ -10,6 +10,7 @@ import {
 import { routeOrthogonal, type Point, type Rect } from "../lib/orthogonalRouter";
 import {
   pathToSvg,
+  pathMidpoint,
   segmentHandles,
   dragSegment,
   reanchorWaypoints,
@@ -182,7 +183,10 @@ export default function OrthogonalEdge({
     ? "var(--color-edge-selected, #fdba74)"
     : data?.strokeColor ?? "var(--color-fg-4)";
 
-  const labelPoint = points[Math.floor(points.length / 2)] ?? targetPt;
+  // Anchor the condition pill at the path's arc-length midpoint (#176) — the
+  // median vertex drifts off-center on unbalanced routes and stacks sibling
+  // pills on shared bends.
+  const labelPoint = pathMidpoint(points) ?? targetPt;
 
   return (
     <>

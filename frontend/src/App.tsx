@@ -284,6 +284,16 @@ export default function App() {
     }
   }, [refreshRuns, refreshSessions, refreshTriggers]);
 
+  // A WS reconnect usually means the daemon restarted — possibly as a different
+  // binary, so the /sessions payload (version included, #139) may be stale. An
+  // idle daemon emits no event afterwards, so the subscribe-side refresh never
+  // fires; re-fetch on every transition to "connected".
+  useEffect(() => {
+    if (status === "connected") {
+      refreshSessions();
+    }
+  }, [status, refreshSessions]);
+
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
   // Re-fires whenever the user deselects on a still-live run.

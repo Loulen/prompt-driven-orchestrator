@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useCallback } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -42,9 +42,9 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
  * Orthogonal (right-angle) edge with manual-waypoint shaping (#154, design
  * screen 14). Auto edges pathfind around other nodes via `routeOrthogonal` and
  * re-route for free when a node moves (the path is recomputed every render from
- * live node positions). Hovering reveals perpendicular-only segment handles;
- * the first drag pins the route to persisted `manual` waypoints. The reset back
- * to auto lives in the edge detail panel.
+ * live node positions). Selecting the edge reveals perpendicular-only segment
+ * handles (#178); the first drag pins the route to persisted `manual`
+ * waypoints. The reset back to auto lives in the edge detail panel.
  */
 export default function OrthogonalEdge({
   id,
@@ -66,7 +66,6 @@ export default function OrthogonalEdge({
   // transient per-element `selected` flag, which is reset when edges are rebuilt.
   const selection = useEditStore((s) => s.selection);
   const { screenToFlowPosition } = useReactFlow();
-  const [hovered, setHovered] = useState(false);
 
   // Obstacle rects: every node except this edge's own source and target. Read
   // from the flow store so a node move re-renders the edge with fresh bounds.
@@ -200,15 +199,13 @@ export default function OrthogonalEdge({
           strokeDasharray: data?.dashed ? "6 3" : undefined,
         }}
       />
-      {/* Wide invisible hit area to make hover/handles forgiving. */}
+      {/* Wide invisible hit area to make click-to-select forgiving. */}
       <path
         d={d}
         fill="none"
         stroke="transparent"
         strokeWidth={14}
         style={{ pointerEvents: "stroke", cursor: "pointer" }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
         data-testid={`orthogonal-edge-hit-${id}`}
       />
       <EdgeLabelRenderer>
@@ -233,8 +230,10 @@ export default function OrthogonalEdge({
             {data.label}
           </div>
         )}
-        {/* Perpendicular-only segment handles, revealed on hover. */}
-        {(hovered || mode === "manual") &&
+        {/* Perpendicular-only segment handles, visible while the edge is
+            selected (#178) — never on mere hover, and gone on deselect even
+            for manual-mode edges. */}
+        {isSelected &&
           handles.map((h) => (
             <div
               key={h.segmentIndex}
@@ -242,7 +241,6 @@ export default function OrthogonalEdge({
               data-testid={`edge-seg-handle-${id}-${h.segmentIndex}`}
               onPointerDown={onHandleDrag(h.segmentIndex, h.orientation)}
               onContextMenu={onHandleDelete(h.segmentIndex)}
-              onMouseEnter={() => setHovered(true)}
               style={segHandleStyle(h.x, h.y, h.orientation, strokeColor)}
             />
           ))}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   pathToSvg,
+  pathMidpoint,
   segmentHandles,
   dragSegment,
   reanchorWaypoints,
@@ -34,6 +35,78 @@ describe("pathToSvg", () => {
   it("returns an empty string for fewer than two points", () => {
     expect(pathToSvg([{ x: 1, y: 1 }])).toBe("");
     expect(pathToSvg([])).toBe("");
+  });
+});
+
+describe("pathMidpoint", () => {
+  it("returns the center of a straight two-point route", () => {
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ];
+    expect(pathMidpoint(pts)).toEqual({ x: 100, y: 0 });
+  });
+
+  it("lands on the long branch of an unbalanced L-route, not the corner", () => {
+    // 300px horizontal run then 60px vertical drop: total 360, half 180. The
+    // median vertex is the corner at (300, 0); the true midpoint is 180px along
+    // the horizontal branch.
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 300, y: 0 },
+      { x: 300, y: 60 },
+    ];
+    const mid = pathMidpoint(pts);
+    expect(mid).toEqual({ x: 180, y: 0 });
+    // Regression guard for #176: must NOT be the median vertex.
+    expect(mid).not.toEqual(pts[1]);
+  });
+
+  it("interpolates within the correct segment of a multi-waypoint route", () => {
+    // Manual route: 100 right, 80 down, 100 right. Total 280, half 140 — that
+    // is 40px into the vertical segment at x=100.
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 80 },
+      { x: 200, y: 80 },
+    ];
+    expect(pathMidpoint(pts)).toEqual({ x: 100, y: 40 });
+  });
+
+  it("separates sibling edges whose median vertices coincide (#176 stacking)", () => {
+    // Two edges leaving the same node share bends, so their median vertices
+    // carry the same x and the pills stack. Their arc-length midpoints differ
+    // because the routes have different total lengths.
+    const shortRoute: Point[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 40 },
+      { x: 160, y: 40 },
+    ];
+    const longRoute: Point[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 200 },
+      { x: 400, y: 200 },
+    ];
+    // Median vertices coincide on the shared bend column...
+    expect(shortRoute[2].x).toBe(longRoute[2].x);
+    // ...but the arc-length midpoints do not.
+    expect(pathMidpoint(shortRoute)).not.toEqual(pathMidpoint(longRoute));
+  });
+
+  it("returns null for a degenerate path (< 2 points) so the caller can fall back", () => {
+    expect(pathMidpoint([])).toBeNull();
+    expect(pathMidpoint([{ x: 5, y: 5 }])).toBeNull();
+  });
+
+  it("handles coincident endpoints (zero total length) without dividing by zero", () => {
+    const pts: Point[] = [
+      { x: 10, y: 10 },
+      { x: 10, y: 10 },
+    ];
+    expect(pathMidpoint(pts)).toEqual({ x: 10, y: 10 });
   });
 });
 

@@ -846,10 +846,25 @@ fn check_all_upstream_completed(
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
+    // Forward preconditions only (#194 / #210): a self-edge can never be
+    // satisfied before the node's own first run, and a bounded-region
+    // back-edge (member -> entry) is the region engine's concern
+    // (`handle_region_reentry`) — counting either as an upstream blocker
+    // makes the join unsatisfiable and stalls the run silently (forensic run
+    // 9c8d123: the loop-entry node never spawned, zero events for 8+ min).
     let upstream: HashSet<&str> = pipeline
         .edges
         .iter()
         .filter(|e| e.target.node == target_node_id)
+        .filter(|e| e.source.node != target_node_id)
+        .filter(|e| {
+            crate::loop_region::bounded_region_reentered_by_edge(
+                pipeline,
+                &e.source.node,
+                target_node_id,
+            )
+            .is_none()
+        })
         .map(|e| e.source.node.as_str())
         .collect();
 
@@ -4558,6 +4573,91 @@ edges:
                 iter: 2,
             }),
             "impl@2 must forward to rev@2 on the new lap, got {actions:?}"
+        );
+    }
+
+    // ── Canonical upstream preconditions (#194 / #210) ───────────────────────
+    //
+    // A forward spawn's preconditions consider only *forward* edges. A
+    // self-edge can never be satisfied before the node's own first run; a
+    // region back-edge belongs to the region engine (`handle_region_reentry`).
+    // Counting either as an upstream blocker reproduces the forensic
+    // run-9c8d123 stall: zero events, run sits Running forever.
+
+    #[test]
+    fn self_edge_is_not_an_upstream_precondition() {
+        // Forensic self-edge (ecbJixkS.screens-fixed -> ecbJixkS.in) drawn
+        // outside any region: when the real upstream completes, the node must
+        // spawn — never a silent stall on its own output.
+        let pipeline = PipelineDef {
+            name: "self-edge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("griller", &["task"], &["agentic_test"]),
+                make_node("tester", &["test", "screens"], &["screens_fixed"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("griller", "agentic_test", "tester", "test"),
+                make_edge("tester", "screens_fixed", "tester", "screens"),
+                make_end_edge("tester", "screens_fixed", "done"),
+            ],
+            loops: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("griller".into(), completed_node("griller"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "griller",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "tester".into(),
+                iter: 1,
+            }),
+            "tester must spawn when its real upstream completed; the self-edge \
+             is not a precondition, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_entry_join_spawns_on_external_feeder_completion() {
+        // The region entry (impl) is fed by an external feeder AND by the
+        // rev->impl back-edge. When the feeder completes, the entry spawns at
+        // lap 1: the back-edge is the region engine's concern, not a forward
+        // precondition (#194 loop-entry join stall).
+        let pipeline = migrated_review_loop_pipeline(3);
+
+        let mut state = empty_run_state();
+        state.nodes.insert("start".into(), completed_node("start"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 1,
+            }),
+            "region entry must spawn on feeder completion without waiting on \
+             its back-edge, got {actions:?}"
         );
     }
 }

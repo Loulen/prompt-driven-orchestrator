@@ -113,7 +113,8 @@ loops:
 
 ### Compteur d'itération
 
-- **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant ; tout nœud hors boucle est toujours `iter-1`.
+- **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant. Un nœud hors boucle garde l'`iter` de ses propres runs (1 s'il n'a couru qu'une fois) : il n'est **jamais re-spawné par un lap** (#195/#199 — seul un vrai cycle émergent ou le moteur de région peut re-lancer un nœud déjà complété ; un membre n'est jamais spawné au-delà de `max_iter`).
+- **Résolution d'inputs** (canonique, #194/#210 — module `input_resolution`) : un input se résout vers **la dernière itération complétée** du nœud source — jamais l'artefact d'une itération échouée, jamais un alignement positionnel sur l'`iter` du consommateur. Un feeder externe à une boucle continue de servir son artefact complété à n'importe quel lap.
 - `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées — absorbe le double-spawn iter+1 de #108). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure, pas une machinerie dédiée.
 - Adressage et accumulation inchangés : `reviewer/iter-2/review/output.md` ; un input `repeated: true` glob `iter-*/<port>` → un artefact par lap, ordonné.
 

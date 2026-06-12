@@ -140,13 +140,9 @@ pub fn validate_run_mutation(
         let Some(old_region) = old_regions_by_id.get(region.id.as_str()) else {
             continue;
         };
-        let in_flight = run_state
-            .loop_states
-            .get(&region.id)
-            .is_some_and(|ls| !ls.done);
-        if !in_flight {
+        let Some(loop_state) = run_state.loop_states.get(&region.id).filter(|ls| !ls.done) else {
             continue;
-        }
+        };
         let new_members: std::collections::HashSet<&str> =
             region.members.iter().map(|m| m.as_str()).collect();
         let removed: Vec<&str> = old_region
@@ -163,11 +159,7 @@ pub fn validate_run_mutation(
                      (lap {}); removing a member mid-lap would desync the lap barrier",
                     removed.join(", "),
                     region.id,
-                    run_state
-                        .loop_states
-                        .get(&region.id)
-                        .map(|ls| ls.current_iter)
-                        .unwrap_or(0)
+                    loop_state.current_iter
                 ),
             });
         }

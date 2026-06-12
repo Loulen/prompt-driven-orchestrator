@@ -536,56 +536,14 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let node_ids: std::collections::HashSet<&str> =
-        pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
-
-    // `role` is "source" or "target". For the target side of an edge that lands
-    // on a *regular* node, the input is emergent (#149): the node declares no
-    // inputs, so any target port is valid by construction (it names the emergent
-    // input). We only validate the port against declared ports for outputs and
-    // for structural-node inputs (start/end/switch/loop/for-each/merge), which
-    // keep their required, declared ports.
-    let check_endpoint = |endpoint: &EdgeEndpoint,
-                          role: &str,
-                          get_ports: fn(&NodeDef) -> &[Port]|
-     -> Option<Diagnostic> {
-        if !node_ids.contains(endpoint.node.as_str()) {
-            return Some(Diagnostic {
-                severity: Severity::Warning,
-                message: format!(
-                    "edge {role} references non-existent node '{}'",
-                    endpoint.node
-                ),
-            });
-        }
-        let node = pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == endpoint.node)
-            .unwrap();
-        // Skip the declared-port check for emergent inputs (regular-node targets).
-        if role == "target" && node.node_type.has_emergent_inputs() {
-            return None;
-        }
-        if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
-            return Some(Diagnostic {
-                severity: Severity::Warning,
-                message: format!(
-                    "edge {role} port '{}' not found on node '{}'",
-                    endpoint.port, endpoint.node
-                ),
-            });
-        }
-        None
-    };
-
-    for edge in &pipeline.edges {
-        if let Some(d) = check_endpoint(&edge.source, "source", |n| &n.outputs) {
-            diagnostics.push(d);
-        }
-        if let Some(d) = check_endpoint(&edge.target, "target", |n| &n.inputs) {
-            diagnostics.push(d);
-        }
+    // Dangling edge references stay info-only warnings at parse/edit time
+    // (ADR-0001 sharp tool); run launch turns the same findings into refusals
+    // via `dangling_edge_references` (#211 / #206).
+    for message in dangling_edge_references(&pipeline) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message,
+        });
     }
 
     // Validate start/end node constraints
@@ -643,6 +601,64 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         pipeline,
         diagnostics,
     })
+}
+
+/// Dangling edge references in a pipeline: an edge endpoint naming a node that
+/// does not exist, or a port not declared on its node. Emergent inputs are
+/// exempt — the target port of an edge landing on a *regular* node names the
+/// emergent input and is valid by construction (#149 / ADR-0011).
+///
+/// At edit time these stay info-only warnings (ADR-0001 sharp tool: the editor
+/// never blocks). At **run launch** they become refusals (#211 / #206): a run
+/// started over a dangling reference is guaranteed to stall silently mid-run,
+/// so rejecting it is a runtime-coherence invariant, not prescriptive
+/// validation. Each message names the edge (both endpoints) and the missing
+/// node or port.
+pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
+    let node_ids: HashSet<&str> = pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
+
+    let check = |edge: &EdgeDef,
+                 endpoint: &EdgeEndpoint,
+                 role: &str,
+                 get_ports: fn(&NodeDef) -> &[Port]|
+     -> Option<String> {
+        let edge_label = format!(
+            "edge '{}.{} -> {}.{}'",
+            edge.source.node, edge.source.port, edge.target.node, edge.target.port
+        );
+        if !node_ids.contains(endpoint.node.as_str()) {
+            return Some(format!(
+                "{edge_label}: {role} references non-existent node '{}'",
+                endpoint.node
+            ));
+        }
+        let node = pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == endpoint.node)
+            .unwrap();
+        if role == "target" && node.node_type.has_emergent_inputs() {
+            return None;
+        }
+        if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
+            return Some(format!(
+                "{edge_label}: {role} port '{}' not found on node '{}'",
+                endpoint.port, endpoint.node
+            ));
+        }
+        None
+    };
+
+    let mut errors = Vec::new();
+    for edge in &pipeline.edges {
+        if let Some(e) = check(edge, &edge.source, "source", |n| &n.outputs) {
+            errors.push(e);
+        }
+        if let Some(e) = check(edge, &edge.target, "target", |n| &n.inputs) {
+            errors.push(e);
+        }
+    }
+    errors
 }
 
 fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {
@@ -1250,6 +1266,109 @@ edges:
         assert_eq!(result.pipeline.edges.len(), 1);
         assert_eq!(result.pipeline.variables.len(), 2);
         assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn dangling_edge_references_names_the_edge_and_the_port() {
+        // #211 / #206 — a source-port typo is a dangling reference; the message
+        // must name both the edge and the missing port so a run launch can be
+        // refused with an actionable error instead of a silent mid-run stall.
+        let yaml = with_start_end(
+            r#"
+name: dangling
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: doc-only
+edges:
+  - source: { node: ab000001, port: plaan }
+    target: { node: ab000002, port: spec }
+"#,
+        );
+        let pipeline = parse_pipeline(&yaml).unwrap().pipeline;
+        let errors = dangling_edge_references(&pipeline);
+        assert_eq!(
+            errors.len(),
+            1,
+            "exactly one dangling reference: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("ab000001") && errors[0].contains("'plaan'"),
+            "error must name the edge endpoint and the missing port; got: {}",
+            errors[0]
+        );
+        assert!(
+            errors[0].contains("ab000002") && errors[0].contains("spec"),
+            "error must identify the edge (both endpoints); got: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn dangling_edge_references_flags_nonexistent_nodes_but_not_emergent_inputs() {
+        let yaml = with_start_end(
+            r#"
+name: dangling-node
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: doc-only
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ghost, port: plan }
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: anything }
+"#,
+        );
+        let pipeline = parse_pipeline(&yaml).unwrap().pipeline;
+        let errors = dangling_edge_references(&pipeline);
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the ghost-node edge is dangling — an emergent input on a \
+             regular node is valid by construction (#149); got: {errors:?}"
+        );
+        assert!(errors[0].contains("non-existent node 'ghost'"));
+    }
+
+    #[test]
+    fn dangling_edge_references_empty_on_well_formed_pipeline() {
+        let yaml = r#"
+name: ok
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: planner
+    type: doc-only
+    outputs:
+      - name: plan
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: plan }
+    target: { node: end, port: result }
+"#;
+        let pipeline = parse_pipeline(yaml).unwrap().pipeline;
+        assert!(dangling_edge_references(&pipeline).is_empty());
     }
 
     #[test]

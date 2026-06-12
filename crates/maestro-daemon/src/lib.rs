@@ -3076,6 +3076,23 @@ async fn create_run_inner(
 
     let pipeline = parse_result.pipeline;
 
+    // Refuse the launch on dangling edge references (#211 / #206). At edit time
+    // these are info-only warnings (ADR-0001); at launch they are runtime-
+    // coherence invariants — a run started over a dangling port is guaranteed
+    // to stall silently mid-run. No run is created.
+    let dangling = pipeline::dangling_edge_references(&pipeline);
+    if !dangling.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": format!(
+                    "cannot launch run: pipeline has dangling edge reference(s): {}",
+                    dangling.join("; ")
+                ),
+            }),
+        ));
+    }
+
     // Empty input is allowed only for prompt-optional pipelines (#158).
     if let Err(msg) = validate_run_input(pipeline.prompt_required, &req.input) {
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
@@ -13053,5 +13070,74 @@ edges:
     #[test]
     fn prompt_optional_pipeline_still_accepts_a_prompt() {
         assert!(validate_run_input(false, "extra context").is_ok());
+    }
+
+    // --- launch validation: dangling port references (#211 / #206) ---
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_refuses_pipeline_with_dangling_port() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // `worker` declares output `result`, but the edge sources `resullt`:
+        // a dangling port reference that would stall the run mid-flight.
+        let pipelines_dir = tmp.path().join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: dangling-pipe\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    outputs:\n      - name: result\nedges:\n  - source: {{ node: worker, port: resullt }}\n    target: {{ node: end, port: result }}\n"
+        );
+        std::fs::write(pipelines_dir.join("dangling-pipe.yaml"), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"pipeline": "dangling-pipe", "input": "do the thing"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "a dangling port reference must refuse the launch"
+        );
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = body["error"].as_str().unwrap();
+        assert!(
+            error.contains("'resullt'") && error.contains("worker"),
+            "error must name the missing port and the edge; got: {error}"
+        );
+        assert!(
+            error.contains("end"),
+            "error must identify the edge (both endpoints); got: {error}"
+        );
+
+        // No run must have been created.
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let runs: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(runs.is_empty(), "no run must be created on refusal");
     }
 }

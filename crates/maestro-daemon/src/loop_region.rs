@@ -81,54 +81,6 @@ pub fn resolve_lap(
     }
 }
 
-/// Auto-materializes a bounded region for every detected cycle not already
-/// covered by an existing `loops:` entry (ADR-0011 / #148). Each new region gets
-/// a generated id (deterministic from its members, so re-running is stable), the
-/// cycle's members, and `DEFAULT_MAX_ITER` — guaranteeing no cycle is ever
-/// accidentally unbounded.
-///
-/// A cycle is "covered" when an existing region's member set is identical to it.
-pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
-    let covered: Vec<std::collections::BTreeSet<&str>> = pipeline
-        .loops
-        .iter()
-        .map(|r| r.members.iter().map(String::as_str).collect())
-        .collect();
-
-    let mut out = Vec::new();
-    for cycle in graph_resolver::detect_cycles(pipeline) {
-        let cycle_set: std::collections::BTreeSet<&str> =
-            cycle.iter().map(String::as_str).collect();
-        if covered.contains(&cycle_set) {
-            continue;
-        }
-        out.push(LoopRegion {
-            id: generated_region_id(&cycle),
-            kind: LoopKind::Bounded,
-            members: cycle,
-            max_iter: Some(serde_yaml::Value::Number(DEFAULT_MAX_ITER.into())),
-            over: None,
-        });
-    }
-    out
-}
-
-/// A short, deterministic region id derived from the sorted member ids, prefixed
-/// `loop-` so it reads as a loop in the YAML.
-fn generated_region_id(members: &[String]) -> String {
-    let mut sorted = members.to_vec();
-    sorted.sort();
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for m in &sorted {
-        for b in m.as_bytes() {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash ^= 0x2f; // member separator
-    }
-    format!("loop-{hash:08x}")
-}
-
 /// Returns the global indices (into `pipeline.edges`) of a region's *re-entry*
 /// edges: edges whose source is a member and whose target is the region entry.
 /// These are the back-edges whose firing requests another lap. No edge is
@@ -247,20 +199,6 @@ pub fn bounded_region_reentered_by_edge<'a>(
                 e.source.node == source && e.target.node == target
             })
     })
-}
-
-/// Returns the `iter` to stamp on a node's artifact (ADR-0011 / #148). A node
-/// that is a member of an active region is stamped with that region's current
-/// counter; a non-member stays at `iter 1`. (A node belonging to several regions
-/// — nested loops — takes the highest active counter; flat iteration in v1 means
-/// this rarely arises.)
-pub fn iter_for_node(node_id: &str, regions: &[(LoopRegion, RegionRuntime)]) -> i64 {
-    regions
-        .iter()
-        .filter(|(region, _)| region.members.iter().any(|m| m == node_id))
-        .map(|(_, runtime)| runtime.current_iter)
-        .max()
-        .unwrap_or(1)
 }
 
 /// The outcome of an exhausted bounded region (ADR-0011 / #148).
@@ -654,49 +592,6 @@ mod tests {
             &Default::default(),
         );
         assert_eq!(outcome, ExhaustionOutcome::Unrouted);
-    }
-
-    #[test]
-    fn auto_materializes_a_region_for_an_uncovered_cycle() {
-        // A pipeline drawn with a cycle but no `loops:` entry gets a bounded
-        // region auto-materialized (generated id + default max_iter 5), so no
-        // cycle is ever accidentally unbounded.
-        let (pipeline, _region) = review_loop(); // has the impl<->rev cycle, loops: empty
-        let materialized = materialize_missing_regions(&pipeline);
-        assert_eq!(materialized.len(), 1);
-        let r = &materialized[0];
-        assert_eq!(r.kind, LoopKind::Bounded);
-        assert!(!r.id.is_empty(), "generated id must be non-empty");
-        assert_eq!(r.members, vec!["impl".to_string(), "rev".to_string()]);
-        assert_eq!(
-            r.max_iter,
-            Some(serde_yaml::Value::Number(5.into())),
-            "default max_iter is 5"
-        );
-    }
-
-    #[test]
-    fn does_not_re_materialize_a_covered_cycle() {
-        // A cycle already covered by an existing `loops:` entry is left alone.
-        let (mut pipeline, region) = review_loop();
-        pipeline.loops = vec![region];
-        assert!(materialize_missing_regions(&pipeline).is_empty());
-    }
-
-    #[test]
-    fn member_iter_is_the_region_counter_nonmember_is_one() {
-        // Member artifacts are stamped with the region iter; a non-member stays
-        // at iter 1 (it is not part of any loop).
-        let (_pipeline, region) = review_loop();
-        let runtime = RegionRuntime {
-            current_iter: 2,
-            max_iter: 3,
-            exhausted: false,
-        };
-        let regions = [(region.clone(), runtime.clone())];
-        assert_eq!(iter_for_node("impl", &regions), 2);
-        assert_eq!(iter_for_node("rev", &regions), 2);
-        assert_eq!(iter_for_node("start", &regions), 1);
     }
 
     #[test]

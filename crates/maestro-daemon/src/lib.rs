@@ -11,6 +11,7 @@ mod fire_decision;
 mod frontmatter_parser;
 pub mod graph_resolver;
 mod guard_runner;
+mod input_resolution;
 pub mod library_store;
 #[allow(dead_code)]
 mod loop_region;
@@ -2214,6 +2215,20 @@ async fn spawn_node(
         Vec::new()
     };
 
+    // Canonical input resolution (#194 / #210): re-project the run state at
+    // spawn time so each input path follows its source's latest COMPLETED
+    // iteration — a failed iteration's artifacts are never consumed, and an
+    // external feeder keeps serving its completed iter at any lap.
+    let source_iters = match reload_run_state(state, run_id).await {
+        Some((_, fresh_state)) => input_resolution::resolved_source_iters(
+            spawn_ctx.pipeline,
+            &fresh_state,
+            &node.id,
+            iter,
+        ),
+        None => HashMap::new(),
+    };
+
     let aug_ctx = prompt_augmenter::AugmentContext {
         pipeline: spawn_ctx.pipeline,
         node,
@@ -2225,6 +2240,7 @@ async fn spawn_node(
         foreach_context,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         input_images,
+        source_iters,
     };
 
     let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);

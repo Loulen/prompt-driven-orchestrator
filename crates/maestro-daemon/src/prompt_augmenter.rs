@@ -41,6 +41,12 @@ pub struct AugmentContext<'a> {
     /// pipeline worktree (doc-only, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
+    /// Canonical input resolution (#194 / #210): for each upstream source node,
+    /// the iteration whose artifacts this NodeRun reads (the source's latest
+    /// COMPLETED iteration, per `input_resolution`). A source absent from the
+    /// map falls back to the consumer's own `iter` (positional), preserving
+    /// override/injection flows where nothing has completed yet.
+    pub source_iters: HashMap<String, i64>,
 }
 
 pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
@@ -109,10 +115,18 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
                 .join(&edge.source.port)
                 .join("output.md")
         } else {
+            // Canonical resolution (#194): read the source's latest completed
+            // iteration, never a failed iteration's artifact and never a
+            // positional iter the source has not produced.
+            let source_iter = ctx
+                .source_iters
+                .get(source_node.as_str())
+                .copied()
+                .unwrap_or(ctx.iter);
             crate::blackboard::artifact_path(
                 ctx.artifacts_dir,
                 source_node,
-                ctx.iter,
+                source_iter,
                 &edge.source.port,
             )
         };
@@ -554,6 +568,7 @@ mod tests {
             foreach_context: None,
             source_worktree_dir: None,
             input_images: Vec::new(),
+            source_iters: HashMap::new(),
         }
     }
 
@@ -686,6 +701,49 @@ mod tests {
         assert_eq!(
             inputs[0].path,
             PathBuf::from("/repo/.maestro/artifacts/planner/iter-1/plan/output.md")
+        );
+    }
+
+    #[test]
+    fn input_resolves_to_latest_completed_source_iter_not_consumer_iter() {
+        // #194: the planner failed at iter 1 (its plan/ artifact is poison) and
+        // completed at iter 2. The implementer spawning at iter 1 must read the
+        // planner's iter-2 artifact — resolution follows the source's latest
+        // COMPLETED iteration, not the consumer's positional iter.
+        let mut pipeline = sample_pipeline();
+        pipeline.edges.push(EdgeDef {
+            source: EdgeEndpoint {
+                node: "planner".into(),
+                port: "plan".into(),
+            },
+            target: EdgeEndpoint {
+                node: "implementer".into(),
+                port: "plan".into(),
+            },
+            ..Default::default()
+        });
+        pipeline.nodes.push(NodeDef {
+            id: "implementer".into(),
+            name: "implementer".into(),
+            node_type: NodeType::CodeMutating,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        });
+
+        let node = &pipeline.nodes[1]; // implementer
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_iters = HashMap::from([("planner".to_string(), 2)]);
+
+        let inputs = resolve_input_paths(&ctx);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(
+            inputs[0].path,
+            PathBuf::from("/repo/.maestro/artifacts/planner/iter-2/plan/output.md")
         );
     }
 

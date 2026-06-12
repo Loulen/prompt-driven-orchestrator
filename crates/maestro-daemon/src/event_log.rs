@@ -813,11 +813,24 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                     // #199: `end_region` CLOSES the region — the projection
                     // marks its loop state done so the scheduler's region
                     // engine routes the exit instead of starting a phantom lap.
+                    // A region still on lap 1 has no loop state yet (the entry
+                    // appears when the first re-entry fires): create it closed,
+                    // so an early `end_region` is never lost. `max_iter` is
+                    // unknown to the projection (it lives in the pipeline) and
+                    // unused once the region is done.
                     if cmd == Some("end_region") {
                         if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
-                            if let Some(ls) = state.loop_states.get_mut(region_id) {
-                                ls.done = true;
-                            }
+                            state
+                                .loop_states
+                                .entry(region_id.to_string())
+                                .or_insert_with(|| LoopState {
+                                    loop_node_id: region_id.to_string(),
+                                    current_iter: 1,
+                                    max_iter: 0,
+                                    break_received: false,
+                                    done: false,
+                                })
+                                .done = true;
                         }
                     }
                 }
@@ -2641,6 +2654,33 @@ mod tests {
             .get("review_loop")
             .expect("region has a loop state");
         assert!(ls.done, "end_region closes the region in the projection");
+    }
+
+    #[test]
+    fn end_region_during_lap_one_creates_the_loop_state_closed() {
+        // A region on lap 1 has no loop state yet (the entry appears when the
+        // first re-entry fires). An end_region issued at that point must not
+        // be lost: the projection creates the state closed, so the region
+        // engine routes the exit instead of starting lap 2.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "loop-test" }),
+            ),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "end_region", "region_id": "review_loop" }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        let ls = state
+            .loop_states
+            .get("review_loop")
+            .expect("end_region creates the loop state when missing");
+        assert!(ls.done, "the created loop state is closed");
+        assert_eq!(ls.current_iter, 1, "the region never went past lap 1");
     }
 
     #[test]

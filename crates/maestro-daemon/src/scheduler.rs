@@ -349,16 +349,18 @@ pub fn evaluate_outgoing_edges_full(
                 );
 
                 if all_upstream_done {
-                    let next_iter = run_state
-                        .nodes
-                        .get(target_id.as_str())
-                        .map(|n| n.iter + 1)
-                        .unwrap_or(1);
-
-                    actions.push(SchedulerAction::Spawn {
-                        node_id: target_id.clone(),
-                        iter: next_iter,
-                    });
+                    if let Some(next_iter) = forward_spawn_iter(
+                        pipeline,
+                        run_state,
+                        completed_node_id,
+                        target_id,
+                        resolved_vars,
+                    ) {
+                        actions.push(SchedulerAction::Spawn {
+                            node_id: target_id.clone(),
+                            iter: next_iter,
+                        });
+                    }
                 }
             }
         }
@@ -440,11 +442,11 @@ fn handle_region_reentry(
     let mut actions = Vec::new();
 
     let max_iter = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
-    let current_iter = run_state
-        .loop_states
-        .get(region.id.as_str())
-        .map(|ls| ls.current_iter)
-        .unwrap_or(1);
+    let region_loop_state = run_state.loop_states.get(region.id.as_str());
+    let current_iter = region_loop_state.map(|ls| ls.current_iter).unwrap_or(1);
+    // #199: an ended region (`end_region` projected as `done`) never starts
+    // another lap — it routes its exit at the current iter, like exhaustion.
+    let ended = region_loop_state.is_some_and(|ls| ls.done);
 
     let runtime = crate::loop_region::RegionRuntime {
         current_iter,
@@ -453,7 +455,12 @@ fn handle_region_reentry(
     };
 
     // A fired back-edge means at least one re-entry was requested this lap.
-    match crate::loop_region::resolve_lap(pipeline, region, &runtime, 1) {
+    let decision = if ended {
+        crate::loop_region::LapDecision::Exhausted
+    } else {
+        crate::loop_region::resolve_lap(pipeline, region, &runtime, 1)
+    };
+    match decision {
         crate::loop_region::LapDecision::NextLap { iter, entry } => {
             actions.push(SchedulerAction::LoopIterStarted {
                 loop_node_id: region.id.clone(),
@@ -497,14 +504,22 @@ fn handle_region_reentry(
                     }
                 }
                 crate::loop_region::ExhaustionOutcome::Unrouted => {
-                    actions.push(SchedulerAction::Halt {
-                        message: format!(
+                    let message = if ended {
+                        format!(
+                            "ended — unrouted: bounded region '{}' was closed by end_region \
+                             at iter {current_iter} but no exit edge matched (route it from \
+                             the Pipeline Manager)",
+                            region.id
+                        )
+                    } else {
+                        format!(
                             "exhausted — unrouted: bounded region '{}' reached max_iter \
                              {max_iter} with the continuation condition still true and no \
                              matching exit edge (route it from the Pipeline Manager)",
                             region.id
-                        ),
-                    });
+                        )
+                    };
+                    actions.push(SchedulerAction::Halt { message });
                 }
             }
         }
@@ -512,6 +527,74 @@ fn handle_region_reentry(
     }
 
     actions
+}
+
+/// Decides the iter for a generic forward spawn of `target_id` after
+/// `source_id` completed — or `None` when the target must not spawn
+/// (#199 / #195 / #210):
+///
+/// - never run → spawn at iter 1;
+/// - already ran → re-run ONLY when the fired edge closes an emergent cycle
+///   (the target reaches the source through forward edges), at `iter + 1`.
+///   A node reached only by forward edges is never re-spawned by
+///   re-evaluation — that is the "feeder dragged into a lap" bug;
+/// - a bounded-region member is never spawned past its effective `max_iter`;
+/// - a pure self-edge (source == target) is inert outside a region (#207).
+fn forward_spawn_iter(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    source_id: &str,
+    target_id: &str,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Option<i64> {
+    if source_id == target_id {
+        return None;
+    }
+
+    let proposed = match run_state.nodes.get(target_id) {
+        None => 1,
+        Some(ts) => {
+            if reaches(pipeline, target_id, source_id) {
+                ts.iter + 1
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let member_region = pipeline.loops.iter().find(|r| {
+        r.kind == crate::pipeline::LoopKind::Bounded && r.members.iter().any(|m| m == target_id)
+    });
+    if let Some(region) = member_region {
+        let max = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
+        if proposed > max {
+            return None;
+        }
+    }
+
+    Some(proposed)
+}
+
+/// True when a directed path of forward edges leads from `from` to `to`
+/// (self-edges excluded: a node does not reach itself through its own edge).
+fn reaches(pipeline: &PipelineDef, from: &str, to: &str) -> bool {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: Vec<&str> = vec![from];
+    while let Some(current) = queue.pop() {
+        for edge in &pipeline.edges {
+            if edge.source.node != current || edge.target.node == current {
+                continue;
+            }
+            let next = edge.target.node.as_str();
+            if next == to {
+                return true;
+            }
+            if visited.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    false
 }
 
 pub fn resolve_max_iter(
@@ -1461,8 +1544,11 @@ mod tests {
 
     #[test]
     fn cycle_back_edge_increments_iter() {
-        // reviewer completes at iter 2 → back-edge fires →
-        // implementer already at iter 2, so next spawn is iter 3
+        // reviewer completes at iter 2 → the back-edge of the emergent
+        // implementer<->reviewer cycle fires → implementer already at iter 2,
+        // so next spawn is iter 3. (#210: the forward edge implementer->
+        // reviewer is part of the graph — only a real emergent cycle may
+        // re-run a completed node; a forward-only feeder never is.)
         let pipeline = PipelineDef {
             name: "cycle".into(),
             version: None,
@@ -1471,7 +1557,10 @@ mod tests {
                 make_node("implementer", &["review"], &["code"]),
                 make_node("reviewer", &["code"], &["review"]),
             ],
-            edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            edges: vec![
+                make_edge("implementer", "code", "reviewer", "code"),
+                make_edge("reviewer", "review", "implementer", "review"),
+            ],
             loops: Vec::new(),
             prompt_required: true,
         };
@@ -4658,6 +4747,164 @@ edges:
             }),
             "region entry must spawn on feeder completion without waiting on \
              its back-edge, got {actions:?}"
+        );
+    }
+
+    // ── Region closure (#199 / #210) ─────────────────────────────────────────
+
+    fn region_state(current_iter: i64, max_iter: i64, done: bool) -> crate::event_log::LoopState {
+        crate::event_log::LoopState {
+            loop_node_id: "review_loop".into(),
+            current_iter,
+            max_iter,
+            break_received: false,
+            done,
+        }
+    }
+
+    #[test]
+    fn ended_region_closes_instead_of_starting_a_phantom_lap() {
+        // #199 forensic: `end_region` on an active bounded region started a
+        // new lap (entry re-spawned at iter 4 > max_iter 3). An ended region
+        // must route its exit (or halt unrouted) at the current iter — never
+        // re-spawn the entry, never bump the counter.
+        let pipeline = migrated_review_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        // end_region projected: region closed at lap 1 (< max 3).
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(1, 3, true));
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "impl"
+            )),
+            "an ended region must never re-spawn its entry, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { .. })),
+            "an ended region must not advance its lap counter, got {actions:?}"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "ended with no matching exit edge: explicit halt, never a silent \
+             stall, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn forward_reevaluation_never_spawns_a_member_past_max_iter() {
+        // #199 forensic: after end_region, re-evaluation replayed the feeder's
+        // forward edge into the region entry and spawned it at iter 4 with
+        // max_iter 3. No code path may push a member past the region bound.
+        let pipeline = migrated_review_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 3));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 3));
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(3, 3, true));
+
+        // Re-evaluation pass replays the feeder's outgoing edges.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, iter } if node_id == "impl" && *iter > 3
+            )),
+            "a member must never spawn past max_iter, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn completed_non_member_is_never_respawned_by_forward_reevaluation() {
+        // #199 / #195 forensic: the griller — NOT a member of the region — was
+        // re-spawned at iter 4 by the lap bump. A completed node reached only
+        // by forward edges must never be re-run by re-evaluation; only a
+        // back-edge (emergent cycle) or a region lap may re-run a node.
+        let pipeline = PipelineDef {
+            name: "feeder-chain".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("griller", &["task"], &["plan"]),
+                make_node("impl", &["plan"], &["code"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "griller", "task"),
+                make_edge("griller", "plan", "impl", "plan"),
+                make_end_edge("impl", "code", "done"),
+            ],
+            loops: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("griller".into(), completed_node_iter("griller", 1));
+
+        // Re-evaluation replays start's outgoing edges; griller already ran.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "griller"
+            )),
+            "a completed non-member must never be re-spawned by forward \
+             re-evaluation, got {actions:?}"
         );
     }
 }

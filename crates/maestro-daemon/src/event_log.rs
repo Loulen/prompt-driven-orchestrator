@@ -810,6 +810,16 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                         state.status = RunStatus::Running;
                         state.completed_at = None;
                     }
+                    // #199: `end_region` CLOSES the region — the projection
+                    // marks its loop state done so the scheduler's region
+                    // engine routes the exit instead of starting a phantom lap.
+                    if cmd == Some("end_region") {
+                        if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                            if let Some(ls) = state.loop_states.get_mut(region_id) {
+                                ls.done = true;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2601,6 +2611,36 @@ mod tests {
         let route = routes.get("review_loop").expect("review_loop routed");
         assert!(route.ended, "end_region marks the region ended");
         assert_eq!(route.bumped_by, 0, "end_region adds no extra iterations");
+    }
+
+    #[test]
+    fn end_region_projects_the_region_loop_state_as_done() {
+        // #199: end_region must CLOSE the region, not start a phantom lap. The
+        // projection marks the region's loop state done, so the scheduler's
+        // region engine routes the exit instead of re-spawning the entry.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "loop-test" }),
+            ),
+            make_event_with_payload(
+                EventKind::LoopIterStarted,
+                None,
+                serde_json::json!({ "loop_node_id": "review_loop", "iter": 1, "max_iter": 3 }),
+            ),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "end_region", "region_id": "review_loop" }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        let ls = state
+            .loop_states
+            .get("review_loop")
+            .expect("region has a loop state");
+        assert!(ls.done, "end_region closes the region in the projection");
     }
 
     #[test]

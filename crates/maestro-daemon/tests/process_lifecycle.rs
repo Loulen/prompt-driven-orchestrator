@@ -257,6 +257,114 @@ async fn live_session_node_is_not_failed_by_detector() {
         .output();
 }
 
+/// Fetch the projected run-level status of `run_id`.
+async fn run_status(daemon_url: &str, run_id: &str) -> Option<String> {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["status"].as_str().map(String::from)
+}
+
+/// #214 invariant (run-level stall): once a node is Failed and the run has no
+/// live node and nothing the scheduler can spawn, the run must NOT sit Running
+/// forever. The periodic stale-detection sweep reconciles it to a terminal
+/// state (Failed) with a run-level cause — never a silent stall.
+#[tokio::test]
+async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon.url()).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+
+    // The run is Running with one live node.
+    assert_eq!(
+        run_status(&daemon.url(), &run_id).await.as_deref(),
+        Some("running")
+    );
+
+    // Kill the only node's session: the next sweep fails the node. With
+    // `worker` Failed, `end` can never receive its input — no live node, nothing
+    // schedulable. The run is wedged.
+    tmux_session_manager::kill(&socket, &session);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // One sweep fails the node AND reconciles the now-wedged run.
+    daemon.run_stale_detection_tick().await;
+
+    let (node_status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(
+        node_status.as_deref(),
+        Some("failed"),
+        "the node with the dead session must be Failed"
+    );
+
+    let status = run_status(&daemon.url(), &run_id).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("failed"),
+        "a run with no live node and nothing schedulable must be reconciled \
+         terminal, not left Running forever (silent stall)"
+    );
+}
+
+/// #214 invariant (boot path): a run left Running with a Failed node and nothing
+/// schedulable across a daemon restart is reconciled terminal at boot, instead
+/// of staying Running forever. Mirrors the two fixture runs (295be69, ec7c3ff)
+/// that were stuck Running after a mid-run kill.
+#[tokio::test]
+async fn boot_recovery_reconciles_a_run_level_stall() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon.url()).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+
+    // Simulate the crash: the session vanishes while the node is still Running.
+    tmux_session_manager::kill(&socket, &session);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Boot reconciliation: orphaned node Failed, THEN the run-level stall it
+    // leaves behind reconciled terminal in the same boot pass.
+    daemon.run_boot_recovery_tick().await;
+
+    let (node_status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(
+        node_status.as_deref(),
+        Some("failed"),
+        "the orphaned node must be Failed at boot"
+    );
+
+    let status = run_status(&daemon.url(), &run_id).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("failed"),
+        "a run wedged behind a boot-failed node must be reconciled terminal at \
+         boot, not left Running forever"
+    );
+}
+
 /// AC3: a Running node orphaned across a daemon restart — its tmux session no
 /// longer exists at boot — is reconciled to Failed with a cause naming the
 /// session, fail-fast, instead of staying Running forever and burning a slot.

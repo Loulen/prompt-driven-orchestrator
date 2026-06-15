@@ -2838,6 +2838,167 @@ async fn maybe_complete_run(
     }
 }
 
+/// Reconcile a run that is silently stalled at the **run level** (#214): no
+/// live node, nothing the scheduler can spawn, yet still `Running`. Loads the
+/// pipeline and the real scheduler outputs, runs [`run_stall_reason`], and on a
+/// stall appends a `RunFailed` with the run-level cause. A no-op for runs that
+/// can still make progress (or are already terminal).
+///
+/// Called from the periodic stale sweep and from boot recovery — the two paths
+/// where a run can be observed wedged after a node turned terminal with no
+/// downstream to drive (a Failed/Stale entry, a crash before downstream spawn).
+async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
+    let Some((events, run_state)) = reload_run_state(state, run_id).await else {
+        return;
+    };
+    if run_state.status != event_log::RunStatus::Running {
+        return;
+    }
+
+    let repo_root = effective_repo_root(state, &run_state);
+    let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+    let pipeline = parse_result.pipeline;
+    let resolved_vars = resolve_run_variables(&pipeline, &events);
+
+    let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+    let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
+
+    let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed) else {
+        return;
+    };
+
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    // Through the guard: if the run turned terminal organically since the
+    // snapshot above, the failure is dropped as a no-op.
+    if let Err(e) = append_event(state, &run_failed).await {
+        error!("reconcile_run_level_stall: failed to fail run {run_id}: {e}");
+    } else {
+        warn!("Run {run_id} reconciled to Failed — {reason}");
+        // Freed slots: re-drive throttled `waiting` nodes in other runs (#159).
+        retry_waiting_nodes(state).await;
+    }
+}
+
+/// Decide whether a `Running` run is **stuck in a terminal-but-unreconciled
+/// state** (#214, sprint invariant). A run is stuck when it has no node that
+/// can drive it forward and the scheduler can produce no new work, yet it is
+/// not `all completed` (that case is `maybe_complete_run`'s job). The remaining
+/// possibility is a run wedged behind a Failed/Stale node whose downstream can
+/// never be scheduled — a silent run-level stall the invariant forbids.
+///
+/// Returns `Some(reason)` to be recorded as the `RunFailed` cause, or `None`
+/// when the run still has a path forward (a live node, a schedulable node, a
+/// loop to seed) or is legitimately awaiting a human (`AwaitingUser`).
+///
+/// Pure over the already-computed scheduler outputs (`ready` from
+/// [`scheduler_dispatcher::compute_ready_to_spawn`], `loop_seed` from
+/// [`scheduler::seed_pending_loops`]) so the schedulability oracle is the real
+/// scheduler and this never drifts from it.
+fn run_stall_reason(
+    pipeline: &pipeline::PipelineDef,
+    run_state: &event_log::RunState,
+    ready: &[scheduler_dispatcher::ReadySpawn],
+    loop_seed: &[scheduler::SchedulerAction],
+) -> Option<String> {
+    // Only a Running run can silently stall. AwaitingUser is a legitimate live
+    // state (waiting on a human); Paused/Halted/terminal need no reconciliation.
+    if run_state.status != event_log::RunStatus::Running {
+        return None;
+    }
+
+    // A live node (or an in-flight merge resolver) means the run can still
+    // advance organically — never reconcile under it.
+    let has_live_node = run_state.nodes.values().any(|n| {
+        matches!(
+            n.status,
+            event_log::NodeStatus::Running
+                | event_log::NodeStatus::Waiting
+                | event_log::NodeStatus::AwaitingUser
+        )
+    });
+    let resolver_active = run_state
+        .merge_resolver
+        .as_ref()
+        .is_some_and(|mr| mr.status == event_log::NodeStatus::Running);
+    if has_live_node || resolver_active {
+        return None;
+    }
+
+    // The scheduler can still produce work (a ready node to spawn, a loop to
+    // seed): the run is not stuck, it just hasn't been driven yet.
+    if !ready.is_empty() || !loop_seed.is_empty() {
+        return None;
+    }
+
+    // An open (not-`done`) loop/foreach region is the Pipeline Manager's domain:
+    // an exhausted-unrouted region is surfaced as a Halt to be routed by id
+    // (manager-unstick-loop), not a fail-fast stall. Never auto-fail under one —
+    // that would steal the manager's recovery path. (Our event-driven Halt is
+    // not re-derivable from the cold projection here, so we defer rather than
+    // risk a false RunFailed on a routable region.)
+    let open_region = run_state.loop_states.values().any(|ls| !ls.done)
+        || run_state.foreach_states.values().any(|fs| !fs.done);
+    if open_region {
+        return None;
+    }
+
+    // All pipeline nodes Completed is the success case handled by
+    // `maybe_complete_run`; do not steal it here.
+    let all_completed = !pipeline.nodes.is_empty()
+        && pipeline.nodes.iter().all(|n| {
+            run_state
+                .nodes
+                .get(&n.id)
+                .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
+        });
+    if all_completed {
+        return None;
+    }
+
+    // Fail-fast only on a concrete blocker: at least one node in a terminal but
+    // non-Completed state (Failed/Stale/Stopped) whose downstream can never be
+    // scheduled. Without such a blocker we cannot attribute a cause, so we defer
+    // rather than guess — a run with only Pending/Completed nodes and nothing
+    // schedulable is a scheduler-shape we have not characterised, not a known
+    // unrecoverable stall.
+    let mut blockers: Vec<&str> = run_state
+        .nodes
+        .values()
+        .filter(|n| {
+            matches!(
+                n.status,
+                event_log::NodeStatus::Failed
+                    | event_log::NodeStatus::Stale
+                    | event_log::NodeStatus::Stopped
+            )
+        })
+        .map(|n| n.node_id.as_str())
+        .collect();
+    if blockers.is_empty() {
+        return None;
+    }
+    blockers.sort_unstable();
+
+    Some(format!(
+        "run_stalled: no live node and nothing schedulable; blocked behind: {}",
+        blockers.join(", ")
+    ))
+}
+
 fn resolve_run_variables(
     pipeline: &pipeline::PipelineDef,
     events: &[event_log::Event],
@@ -3957,6 +4118,14 @@ async fn run_boot_recovery(state: &AppState) {
         // the pipeline branch whose node has no NodeCompleted. Surface it.
         let repo_root = effective_repo_root(state, &run_state);
         detect_merged_without_event(&repo_root, run_id, &run_state);
+
+        // (3) #214: run-level stall. A run can survive a crash as `Running` with
+        // no live node and nothing schedulable — either no node ever spawned, or
+        // (1) just failed an orphan whose downstream can never run. Boot recovery
+        // for nodes (1) does not cover this run-level case; reconcile it terminal
+        // here so the run never stays Running forever. Re-reads fresh state so it
+        // sees any orphan failure appended in (1).
+        reconcile_run_level_stall(state, run_id).await;
     }
 }
 
@@ -4144,6 +4313,13 @@ async fn run_stale_detection(state: &AppState) {
                 stale_detector::Detection::Ok => {}
             }
         }
+
+        // #214: after node-level detection, a run may now have no live node and
+        // nothing schedulable (e.g. a node just turned Stale/Failed with no
+        // downstream to drive). Reconcile such a run-level stall to terminal so
+        // it never sits Running forever (sprint invariant). Re-reads fresh state
+        // so it observes any failure just appended above.
+        reconcile_run_level_stall(state, run_id).await;
     }
 }
 
@@ -9005,6 +9181,215 @@ mod tests {
             PathBuf::from(
                 "/repo/.maestro/runs/20260101-120000-abc/nodes/impl-1/pane-iter-2.snapshot"
             )
+        );
+    }
+
+    // --- run_stall_reason (run-level stall reconciliation, #214) ---
+
+    fn doc_node_def(id: &str) -> pipeline::NodeDef {
+        pipeline::NodeDef {
+            id: id.into(),
+            name: id.into(),
+            node_type: pipeline::NodeType::DocOnly,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+        }
+    }
+
+    fn edge(src: &str, tgt: &str) -> pipeline::EdgeDef {
+        pipeline::EdgeDef {
+            source: pipeline::EdgeEndpoint {
+                node: src.into(),
+                port: "out".into(),
+            },
+            target: pipeline::EdgeEndpoint {
+                node: tgt.into(),
+                port: "in".into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        }
+    }
+
+    /// Two doc-only nodes wired `a -> b`. `a` is the entry node (no incoming
+    /// edges), `b` only spawns once `a` completes.
+    fn linear_two_node_pipeline() -> pipeline::PipelineDef {
+        pipeline::PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![doc_node_def("a"), doc_node_def("b")],
+            edges: vec![edge("a", "b")],
+            loops: Vec::new(),
+            prompt_required: false,
+        }
+    }
+
+    fn run_state_failed_node(node_id: &str) -> event_log::RunState {
+        run_state_with_node(
+            "20260613-012555-stall",
+            node_id,
+            "doc-only",
+            event_log::NodeStatus::Failed,
+            1,
+        )
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_running_run_with_a_failed_entry_and_nothing_schedulable() {
+        // #214 added scope: a Running run whose only progress hinge (entry node
+        // `a`) is Failed has no live node and nothing the scheduler can spawn —
+        // `b` depends on `a` completing, which will never happen. The run would
+        // otherwise sit Running forever (silent stall). Reconcile it terminal
+        // with a cause that explains why nothing can advance.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_failed_node("a");
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(ready.is_empty(), "precondition: nothing schedulable");
+        assert!(loop_seed.is_empty(), "precondition: no loop to seed");
+
+        let reason = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed)
+            .expect("a Running run with no live node and nothing schedulable is stuck");
+        assert!(
+            reason.contains("a"),
+            "stall cause {reason:?} must name the failed node blocking progress"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_fresh_run_with_a_schedulable_entry() {
+        // A Running run where no node has started yet is the normal initial
+        // state: the entry node is schedulable. Reconciling it would kill every
+        // run the instant it is created. Must return None.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = event_log::RunState::new("20260613-fresh".into(), "linear".into());
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(!ready.is_empty(), "precondition: entry node is schedulable");
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            "a run with a schedulable node has a path forward — never reconcile it"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_run_with_a_live_node() {
+        // A node actively Running keeps the run alive even if the scheduler has
+        // nothing else queued. Reconciling here would race the live work to a
+        // false RunFailed. Must return None regardless of empty scheduler output.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_with_node(
+            "20260613-live",
+            "a",
+            "doc-only",
+            event_log::NodeStatus::Running,
+            1,
+        );
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            "a live Running node means the run can still finish — never reconcile it"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_run_awaiting_a_human() {
+        // AwaitingUser is a legitimate live state (interactive node waiting on a
+        // person). It is not a silent stall and must never be auto-failed.
+        let pipeline = linear_two_node_pipeline();
+        let mut run_state = run_state_with_node(
+            "20260613-await",
+            "a",
+            "doc-only",
+            event_log::NodeStatus::AwaitingUser,
+            1,
+        );
+        run_state.status = event_log::RunStatus::AwaitingUser;
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            "an AwaitingUser run is waiting on a human, not stalled"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_run_with_an_open_loop_region_awaiting_a_route() {
+        // A bounded region that exhausted "unrouted" is surfaced as a Halt
+        // (RunStatus::Halted) the Pipeline Manager can route by id
+        // (manager-unstick-loop scenario). But if such a run is observed while
+        // still Running with no live node — e.g. before its Halt event lands, or
+        // a region awaiting a route with no failed node — it must NOT be
+        // auto-failed: that would steal the manager's recovery path. A run with
+        // an open (not-done) loop region and no terminal-failed node is not a
+        // fail-fast stall.
+        // `a -> b` where the edge is CONDITIONAL, so `b` is never an entry/ready
+        // node (it only spawns on the producer's edge evaluation). With `a`
+        // Completed and `b` not started, NOTHING is schedulable and NOT all
+        // nodes are completed — neither the `ready` nor the `all_completed` guard
+        // can mask the loop-awareness gap this test pins.
+        let mut conditional_edge = edge("a", "b");
+        conditional_edge.when = Some(serde_yaml::from_str("iter: { gte: 99 }").unwrap());
+        let pipeline = pipeline::PipelineDef {
+            name: "cond".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![doc_node_def("a"), doc_node_def("b")],
+            edges: vec![conditional_edge],
+            loops: Vec::new(),
+            prompt_required: false,
+        };
+        let mut run_state = event_log::RunState::new("20260613-loop".into(), "cond".into());
+        // Entry node `a` completed; nothing else live or schedulable.
+        run_state.nodes.insert(
+            "a".into(),
+            event_log::NodeState {
+                node_id: "a".into(),
+                status: event_log::NodeStatus::Completed,
+                iter: 2,
+                started_at: None,
+                completed_at: None,
+                failure_reason: None,
+                iterations: Vec::new(),
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+        // An open loop region (exhausted at max_iter, not done) awaiting a route.
+        run_state.loop_states.insert(
+            "review_loop".into(),
+            event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            "a run with an open loop region awaiting a manager route must not be \
+             auto-failed — that is the manager's recovery path, not a fail-fast stall"
         );
     }
 

@@ -347,8 +347,15 @@ pub enum ParseError {
 
 /// Top-level YAML keys accepted by the unknown-field lint.
 /// MUST list every serializable field of PipelineDef — see `known_keys_cover_serialized_pipeline`.
-const KNOWN_TOP_LEVEL_KEYS: &[&str] =
-    &["name", "version", "variables", "nodes", "edges", "loops", "prompt_required"];
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
+    "name",
+    "version",
+    "variables",
+    "nodes",
+    "edges",
+    "loops",
+    "prompt_required",
+];
 
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let mut raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;

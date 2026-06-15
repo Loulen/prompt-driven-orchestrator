@@ -121,11 +121,23 @@ pub fn detection_events(
     node_id: &str,
     iter: i64,
 ) -> Vec<event_log::Event> {
+    // The session-died cause names the dead tmux session (#213 AC1) so the
+    // failure is self-explanatory in the UI/log; the other causes are
+    // node-relative and need no session name.
     let (kind, reason) = match detection {
         Detection::Ok => return vec![],
-        Detection::SessionDied => (EventKind::NodeFailed, "session_died"),
-        Detection::AutoComplete => (EventKind::NodeAutoCompleted, "auto_completed_idle_valid"),
-        Detection::Stale => (EventKind::NodeStale, "idle_outputs_incomplete"),
+        Detection::SessionDied => {
+            let session = crate::tmux_session_manager::node_session_name(run_id, node_id, iter);
+            (
+                EventKind::NodeFailed,
+                format!("session_died: tmux session {session} no longer exists"),
+            )
+        }
+        Detection::AutoComplete => (
+            EventKind::NodeAutoCompleted,
+            "auto_completed_idle_valid".to_string(),
+        ),
+        Detection::Stale => (EventKind::NodeStale, "idle_outputs_incomplete".to_string()),
     };
 
     vec![event_log::Event {
@@ -320,7 +332,13 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NodeFailed);
         assert_eq!(events[0].node_id.as_deref(), Some("node1"));
         let payload = events[0].payload.as_ref().unwrap();
-        assert_eq!(payload["reason"], "session_died");
+        // #213 AC1: the failure cause must name the dead tmux session so an
+        // operator inspecting the run can tell exactly which session vanished.
+        let reason = payload["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("maestro-run1-node1-iter-1"),
+            "session-died cause {reason:?} must name the dead session"
+        );
     }
 
     #[test]

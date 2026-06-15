@@ -85,6 +85,7 @@ pub fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
         }
         EventKind::NodeStarted | EventKind::NodeWaiting => validate_start(state, event),
         EventKind::NodeStale => validate_stale(state, event),
+        EventKind::NodeFailed => validate_fail(state, event),
         _ => Verdict::Allow,
     }
 }
@@ -169,6 +170,34 @@ fn validate_start(state: &RunState, event: &Event) -> Verdict {
     }
 
     Verdict::Allow
+}
+
+/// Validate a `NodeFailed` emitted by the liveness sweep or boot recovery
+/// (#213). These detectors snapshot the run, decide, then emit — by the time
+/// the failure lands the iteration may already have reached a terminal state
+/// organically. The guard drops the late failure as a no-op rather than
+/// overwriting a completed/failed/stopped/stale iteration, and ignores a
+/// failure for an iteration that was never started (nothing live to fail).
+/// A failure on a live (`Running`/`AwaitingUser`/`Waiting`) iteration — the
+/// reason the detectors exist — is allowed.
+fn validate_fail(state: &RunState, event: &Event) -> Verdict {
+    let Some(node_id) = event.node_id.as_deref() else {
+        return Verdict::reject("fail event without node_id");
+    };
+    let iter = event.iter.unwrap_or(1);
+
+    match iteration_status(state, node_id, iter) {
+        Some(NodeStatus::Completed)
+        | Some(NodeStatus::Failed)
+        | Some(NodeStatus::Stopped)
+        | Some(NodeStatus::Stale) => Verdict::noop(format!(
+            "node {node_id} iter {iter} is already terminal: failure ignored"
+        )),
+        None => Verdict::noop(format!(
+            "node {node_id} iter {iter} has no started iteration: failure ignored"
+        )),
+        _ => Verdict::Allow,
+    }
 }
 
 fn validate_stale(state: &RunState, event: &Event) -> Verdict {
@@ -503,6 +532,50 @@ mod tests {
         assert_eq!(verdict, Verdict::Allow);
     }
 
+    // --- NodeFailed (detection / recovery, #213) ---
+
+    #[test]
+    fn fail_on_completed_iteration_is_noop() {
+        // The liveness sweep / boot recovery snapshots the run, then emits a
+        // failure. If the node completed organically in between, the guard must
+        // drop the late failure as a no-op — never overwrite a completed node.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        ]);
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeFailed, Some("worker"), Some(1)),
+        );
+        assert_noop(verdict);
+    }
+
+    #[test]
+    fn fail_on_running_iteration_is_allowed() {
+        // The liveness sweep marking a Running node Failed (dead session) is
+        // exactly the transition #213 exists to allow.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ]);
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeFailed, Some("worker"), Some(1)),
+        );
+        assert_eq!(verdict, Verdict::Allow);
+    }
+
+    #[test]
+    fn fail_on_never_started_iteration_is_noop() {
+        let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeFailed, Some("ghost"), Some(1)),
+        );
+        assert_noop(verdict);
+    }
+
     // --- spawn_superfluous (scheduler-side dedup) ---
 
     #[test]
@@ -563,7 +636,6 @@ mod tests {
         for kind in [
             EventKind::CommandIssued,
             EventKind::RunResumed,
-            EventKind::NodeFailed,
             EventKind::NodeStopped,
             EventKind::RunCompleted,
         ] {

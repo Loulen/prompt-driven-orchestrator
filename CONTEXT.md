@@ -600,6 +600,15 @@ Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** 
 - **Les sessions Pipeline Manager ne comptent pas** dans le cap (légères, 1/Run ; les compter risquerait un soft-deadlock où N managers saturent le budget sans laisser de slot au travail réel).
 - **Valeur configurable** sur la page de réglages instance-wide (#129, n'existe pas encore).
 - **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde.
+- **Admission atomique (check-and-reserve, #213)** : la décision d'admission (compter les sessions vivantes → décider → réserver le slot en appendant `NodeStarted`/`NodeWaiting`) est sérialisée par un verrou (`admission_lock`). Sans lui, des spawns concurrents (retries des nœuds `waiting` sur plusieurs Runs) observent tous le même slot libre et dépassent le cap.
+
+### Cycle de vie process — résilience (fail-fast, #213)
+
+Posture **fail-fast** partout : jamais d'auto-réparation silencieuse, toute divergence est rendue visible (état `Failed` avec cause lisible). Toutes les transitions vers `Failed` émises ci-dessous passent par la **garde de transitions** (#212).
+
+- **Détection de mort de session (liveness sweep)** : le stale detector sonde, à chaque tick, chaque nœud `Running`/`AwaitingUser` ; si sa session tmux n'existe plus, le nœud passe `Failed` avec une cause **nommant la session** (`session_died: tmux session maestro-… no longer exists`). Plus de nœud zombie qui brûle un slot d'admission indéfiniment (#202).
+- **Reap sur état terminal (#205)** : à l'entrée d'un état terminal (`completed`/`failed`/`stopped`), un **snapshot du pane** est persisté sous `…/runs/<run>/nodes/<node>/pane-iter-<N>.snapshot` (hors du sous-worktree, donc il survit à sa suppression), **puis** la session est tuée. Invariant : **au plus une itération live par nœud** côté tmux. `GET …/pane` sert le snapshot quand la session est partie et l'indique via `source: "snapshot"` (vs `"live"` / `"resumed"`). Plus de sessions qui s'accumulent vers le point d'effondrement (#77/#78).
+- **Recovery au boot** : au démarrage, le daemon réconcilie l'état persisté avec le monde process réel. Un nœud `Running`/`AwaitingUser` sans session vivante → `Failed` avec cause. Une branche de sous-worktree mergée dans la branche pipeline sans `NodeCompleted` correspondant → divergence **détectée et signalée** (jamais complétée en silence).
 
 ### Pont UI ↔ tmux : terminal inline xterm.js
 

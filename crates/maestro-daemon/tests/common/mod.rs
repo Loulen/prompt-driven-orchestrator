@@ -96,6 +96,20 @@ impl TestDaemon {
         }
     }
 
+    /// Drive a single stale-detection sweep synchronously (test seam, #213).
+    pub async fn run_stale_detection_tick(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.run_stale_detection_tick().await;
+        }
+    }
+
+    /// Run the boot-recovery reconciliation pass synchronously (test seam, #213).
+    pub async fn run_boot_recovery_tick(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.run_boot_recovery_tick().await;
+        }
+    }
+
     /// Force a Trigger's next fire into the past so the next tick treats it as
     /// due (test seam).
     pub async fn force_trigger_due(&self, trigger_id: &str) {

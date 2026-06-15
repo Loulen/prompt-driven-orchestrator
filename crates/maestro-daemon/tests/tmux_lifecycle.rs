@@ -156,22 +156,26 @@ async fn wait_for_session_gone(socket: &str, session: &str, timeout: Duration) -
     false
 }
 
-/// Layer 3a: After node completion, the reaper kills the session once
-/// the TTL expires. Uses fast TTL (2s) and reaper interval (1s).
+/// Layer 3a: A completed node's session is reaped on the terminal transition
+/// (#205/#213) — NOT left alive until the 1h TTL as the superseded #23
+/// behaviour did. A pane snapshot is kept for post-mortem inspection. Uses a
+/// long TTL so this asserts the terminal-state reap, not the periodic reaper.
 #[tokio::test]
 // Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
 // the env-var-sensitive reaper tests from racing each other — intentional, and
 // the same allow the rest of the crate uses for serialized async tests.
 #[allow(clippy::await_holding_lock)]
-async fn reaper_kills_completed_session_after_ttl() {
+async fn completed_node_session_is_reaped_on_terminal_transition() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
     }
     let _serial = serial_guard();
 
-    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "2");
-    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "1");
+    // Long TTL + interval so the periodic reaper can't be the one doing the
+    // kill: only the terminal-state reap (#205) can.
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
@@ -192,7 +196,7 @@ async fn reaper_kills_completed_session_after_ttl() {
     std::fs::create_dir_all(&port_dir).unwrap();
     std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
 
-    // Complete the node — session stays alive per #23
+    // Complete the node — the session is reaped on the terminal transition.
     let resp = reqwest::Client::new()
         .post(format!(
             "{}/runs/{run_id}/nodes/{NODE_ID}/done",
@@ -204,16 +208,21 @@ async fn reaper_kills_completed_session_after_ttl() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Session should still be alive right after completion
+    // The session is gone promptly — the terminal reap, not the 1h TTL.
     assert!(
-        tmux_has_session(&socket, &session),
-        "session should survive node_done (stays for preview)"
+        wait_for_session_gone(&socket, &session, Duration::from_secs(5)).await,
+        "session should be reaped on the terminal transition (#205), not held for the TTL"
     );
 
-    // Wait for reaper to kill it (TTL=2s + interval=1s ≈ 3-4s)
+    // A pane snapshot survives for post-mortem inspection.
+    let snapshot = daemon
+        .repo_root()
+        .join(".maestro/runs")
+        .join(&run_id)
+        .join("nodes/worker/pane-iter-1.snapshot");
     assert!(
-        wait_for_session_gone(&socket, &session, Duration::from_secs(10)).await,
-        "reaper should kill session after TTL expires"
+        snapshot.exists(),
+        "a pane snapshot must be persisted when the session is reaped"
     );
 
     // Clean up env

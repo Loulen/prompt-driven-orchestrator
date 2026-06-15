@@ -97,6 +97,13 @@ export interface PaneResponse {
   session_name: string;
   resumed: boolean;
   stale: boolean;
+  /**
+   * Provenance of `content` (#205): "live" (captured from a running session),
+   * "resumed" (a dead latest-iter session was re-attached), "snapshot" (the
+   * persisted post-mortem pane of a reaped terminal node), or "unavailable"
+   * (no session and no snapshot).
+   */
+  source: "live" | "resumed" | "snapshot" | "unavailable";
 }
 
 export async function fetchPrompt(

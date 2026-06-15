@@ -104,6 +104,14 @@ struct AppState {
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
+    /// Serializes admission so the slot check is atomic check-and-reserve
+    /// (#213). A spawn holds this from the moment it counts live sessions until
+    /// it has appended the reservation event (`NodeStarted` / `NodeWaiting`),
+    /// after which the projected state already reflects the new session and the
+    /// next spawn's count sees it. Without it, concurrent spawns (retries of
+    /// `waiting` nodes across runs) can all observe the same free slot and
+    /// overshoot the cap.
+    admission_lock: tokio::sync::Mutex<()>,
     /// Serializes Trigger scheduler ticks. A tick is read-decide-write
     /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await on
     /// the guard in the middle; two concurrent ticks (the 30 s background loop
@@ -331,6 +339,20 @@ impl DaemonHandle {
         run_trigger_scheduler_tick(&self.state).await;
     }
 
+    /// Run a single stale-detection sweep synchronously (#213). Lets
+    /// integration tests drive liveness detection (dead session -> node Failed)
+    /// deterministically instead of waiting for the ~30 s background interval.
+    pub async fn run_stale_detection_tick(&self) {
+        run_stale_detection(&self.state).await;
+    }
+
+    /// Run the boot-recovery reconciliation pass synchronously (#213). The
+    /// daemon runs this once at startup; the seam lets integration tests drive
+    /// it deterministically (orphaned Running node -> Failed at boot).
+    pub async fn run_boot_recovery_tick(&self) {
+        run_boot_recovery(&self.state).await;
+    }
+
     /// Force a Trigger's next fire into the past so the next
     /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
     /// next-fire times come from the cron schedule.
@@ -426,6 +448,7 @@ pub async fn serve_with_config(
         repo_root,
         port: bound_addr.port(),
         merge_lock: tokio::sync::Mutex::new(()),
+        admission_lock: tokio::sync::Mutex::new(()),
         trigger_tick_lock: tokio::sync::Mutex::new(()),
         recent_writes,
         run_watcher: run_watcher.clone(),
@@ -455,14 +478,22 @@ pub async fn serve_with_config(
              skipping boot-time orphan sweep and periodic reaper. \
              This daemon will not auto-reap any tmux sessions."
         );
-    } else if let Err(e) = run_orphan_sweep(
-        &state.db,
-        &state.tmux_socket(),
-        tmux_session_manager::reaper_ttl(),
-    )
-    .await
-    {
-        warn!("Orphan sweep at boot failed: {e}");
+    } else {
+        if let Err(e) = run_orphan_sweep(
+            &state.db,
+            &state.tmux_socket(),
+            tmux_session_manager::reaper_ttl(),
+        )
+        .await
+        {
+            warn!("Orphan sweep at boot failed: {e}");
+        }
+
+        // Boot recovery (#213): reconcile persisted run state against the live
+        // process world — fail-fast on orphaned Running nodes and surface
+        // git/event-log divergence. Suppressed for a nested daemon (it stays
+        // passive on tmux state, same as the sweep/reaper).
+        run_boot_recovery(&state).await;
     }
 
     let app = build_router(state.clone());
@@ -1139,6 +1170,7 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
             | event_log::EventKind::NodeCompleted
             | event_log::EventKind::NodeAutoCompleted
             | event_log::EventKind::NodeStale
+            | event_log::EventKind::NodeFailed
     ) {
         let events = load_events(&state.db, &event.run_id).await?;
         let run_state = event_log::project(&events);
@@ -2256,10 +2288,15 @@ async fn spawn_node(
         }
     }
 
-    // Admission control (#159): bound the number of live NodeRun sessions
-    // daemon-wide. If admitting one more would exceed the cap, the node enters
-    // `waiting` and holds no session; `retry_waiting_nodes` re-drives it once a
-    // slot frees. Checked first so a throttled node creates no worktree.
+    // Admission control (#159 / #213): bound the number of live NodeRun
+    // sessions daemon-wide. The check is an ATOMIC check-and-reserve — the
+    // `admission_lock` is held from the count until the reservation event
+    // (`NodeStarted` / `NodeWaiting`) is appended, so concurrent spawns can
+    // never all observe the same free slot and overshoot the cap. If admitting
+    // one more would exceed the cap, the node enters `waiting` and holds no
+    // session; `retry_waiting_nodes` re-drives it once a slot frees. Checked
+    // first so a throttled node creates no worktree.
+    let admission_guard = state.admission_lock.lock().await;
     let cap = admission::configured_cap();
     let live = count_global_live_sessions(&state.db).await;
     if !admission::can_admit(live, cap) {
@@ -2377,6 +2414,10 @@ async fn spawn_node(
     if let Err(e) = append_event(state, &node_started).await {
         error!("failed to append node_started: {e}");
     }
+    // Reservation recorded: the projected state now counts this session, so the
+    // next spawn's admission count sees it. Release the admission lock before
+    // the (potentially slow) tmux spawn — the slot is already held.
+    drop(admission_guard);
 
     let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
     if let Err(e) = tmux_session_manager::spawn(
@@ -3824,6 +3865,165 @@ fn sync_run_pipeline_to_template(
     );
 }
 
+// --- Boot recovery (#213) ---
+
+/// Reconcile persisted run state against the live process world at daemon boot.
+///
+/// Posture: fail-fast, never silent auto-repair. After a daemon restart the
+/// event log may claim nodes are `Running`/`AwaitingUser` whose tmux sessions
+/// died with the previous process (or whose whole tmux server collapsed). Such
+/// a node would otherwise stay `Running` forever, burning an admission slot
+/// (#202). At boot we detect each one — its session is absent on our socket —
+/// and transition it to `Failed` with a cause naming the orphaned session,
+/// through the transition guard (#212, via [`append_event`]).
+///
+/// A second divergence class — a sub-worktree branch merged into the pipeline
+/// branch with no corresponding `NodeCompleted` event — is detected and
+/// surfaced (logged) so the operator sees the inconsistency; it is not
+/// silently completed (that would fabricate a transition the agent never made).
+async fn run_boot_recovery(state: &AppState) {
+    let run_ids = match load_all_run_ids(&state.db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("Boot recovery: failed to load run ids: {e}");
+            return;
+        }
+    };
+
+    let socket = state.tmux_socket();
+
+    for run_id in &run_ids {
+        let events = match load_events(&state.db, run_id).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let run_state = match event_log::project(&events) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        if run_state.status != event_log::RunStatus::Running
+            && run_state.status != event_log::RunStatus::AwaitingUser
+        {
+            continue;
+        }
+
+        // (1) Orphaned live nodes: Running/AwaitingUser with no tmux session.
+        let orphaned: Vec<(String, i64)> = run_state
+            .nodes
+            .iter()
+            .filter(|(_, ns)| {
+                matches!(
+                    ns.status,
+                    event_log::NodeStatus::Running | event_log::NodeStatus::AwaitingUser
+                )
+            })
+            .filter_map(|(id, ns)| {
+                let session = tmux_session_manager::node_session_name(run_id, id, ns.iter);
+                (!tmux_session_manager::session_exists(&socket, &session))
+                    .then(|| (id.clone(), ns.iter))
+            })
+            .collect();
+
+        for (node_id, iter) in &orphaned {
+            let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
+            let fail = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeFailed,
+                node_id: Some(node_id.clone()),
+                iter: Some(*iter),
+                payload: Some(serde_json::json!({
+                    "reason": format!(
+                        "boot_recovery: tmux session {session} no longer exists \
+                         (node was Running across a daemon restart)"
+                    )
+                })),
+            };
+            // Through the guard: if the node turned terminal organically before
+            // this pass, the failure is dropped as a no-op.
+            if let Err(e) = append_event(state, &fail).await {
+                error!("Boot recovery: failed to fail orphaned {node_id} iter {iter}: {e}");
+            } else {
+                warn!(
+                    "Boot recovery: node {node_id} iter {iter} in run {run_id} \
+                     orphaned (session {session} gone) — marked Failed"
+                );
+            }
+        }
+
+        // (2) Merged-without-event divergence: a sub-worktree branch merged into
+        // the pipeline branch whose node has no NodeCompleted. Surface it.
+        let repo_root = effective_repo_root(state, &run_state);
+        detect_merged_without_event(&repo_root, run_id, &run_state);
+    }
+}
+
+/// Detect sub-worktree branches whose work was merged into the pipeline branch
+/// but for which no `NodeCompleted` was recorded (event log / git divergence,
+/// #213 AC3). Logged as a fail-fast warning — never silently reconciled.
+fn detect_merged_without_event(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    run_state: &event_log::RunState,
+) {
+    let pipeline_branch = format!("maestro/run-{run_id}");
+    let divergent = merged_without_event_nodes(run_id, run_state, |sub_branch| {
+        branch_is_merged_into(repo_root, sub_branch, &pipeline_branch)
+    });
+    for (node_id, sub_branch, status) in divergent {
+        warn!(
+            "Boot recovery: sub-worktree branch {sub_branch} is merged into \
+             {pipeline_branch} but node {node_id} has no NodeCompleted \
+             (status {status:?}) — git/event-log divergence in run {run_id}"
+        );
+    }
+}
+
+/// Pure detection of the git/event-log divergence in #213 AC3: a node owning a
+/// sub-worktree branch (`code-mutating` / `merge`) that is **not** marked
+/// `Completed` in the event log, yet whose branch `is_merged` reports as merged
+/// into the pipeline branch. Returns `(node_id, sub_branch, status)` triples.
+///
+/// `is_merged` is injected so this is testable without a real git repo.
+fn merged_without_event_nodes<F>(
+    run_id: &str,
+    run_state: &event_log::RunState,
+    is_merged: F,
+) -> Vec<(String, String, event_log::NodeStatus)>
+where
+    F: Fn(&str) -> bool,
+{
+    let mut out = Vec::new();
+    for (node_id, ns) in &run_state.nodes {
+        let node_type = find_node_type(run_state, node_id);
+        if !matches!(node_type, Some("code-mutating") | Some("merge")) {
+            continue;
+        }
+        if matches!(ns.status, event_log::NodeStatus::Completed) {
+            continue;
+        }
+        let sub_branch = sub_worktree_branch(run_id, node_id, ns.iter);
+        if is_merged(&sub_branch) {
+            out.push((node_id.clone(), sub_branch, ns.status.clone()));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Whether `branch` has been merged into `into` (i.e. `branch`'s tip is an
+/// ancestor of `into`). Best-effort: a missing branch / non-repo returns false.
+fn branch_is_merged_into(repo_root: &std::path::Path, branch: &str, into: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", branch, into])
+        .current_dir(repo_root)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 // --- Stale detection ---
 
 async fn run_stale_detection(state: &AppState) {
@@ -3917,14 +4117,20 @@ async fn run_stale_detection(state: &AppState) {
             match detection {
                 stale_detector::Detection::SessionDied => {
                     info!("Stale detector: node {node_id} in run {run_id} — session died");
-                    // The session is gone: its slot freed. Re-drive throttled
-                    // `waiting` nodes across all runs (#159).
+                    // The session is already gone; reaping captures whatever
+                    // remains (usually nothing) and is a no-op otherwise. Its
+                    // slot freed. Re-drive throttled `waiting` nodes (#159).
+                    reap_node_session(state, &repo_root, run_id, node_id, *iter);
                     retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
                     info!(
                         "Stale detector: node {node_id} in run {run_id} — auto-completing (idle + valid outputs)"
                     );
+                    // Reap on terminal state (#205): the idle session is still
+                    // live — snapshot its pane then kill it so it never lingers
+                    // toward the tmux-collapse point (#77/#78).
+                    reap_node_session(state, &repo_root, run_id, node_id, *iter);
                     spawn_ready_after_event(state, run_id).await;
                     // The node completed: its slot freed. Re-drive throttled
                     // `waiting` nodes across all runs (#159).
@@ -3997,6 +4203,10 @@ struct PaneResponse {
     session_name: String,
     resumed: bool,
     stale: bool,
+    /// Provenance of `content` (#205): `"live"` (captured from a running
+    /// session), `"resumed"` (a dead latest-iter session was re-attached), or
+    /// `"snapshot"` (the persisted post-mortem pane of a reaped terminal node).
+    source: &'static str,
 }
 
 async fn node_pane(
@@ -4030,6 +4240,7 @@ async fn node_pane(
     let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
     let is_latest_iter = node_state.iter == iter;
     let socket = state.tmux_socket();
+    let repo_root = effective_repo_root(&state, &run_state);
 
     if let Some(content) = tmux_session_manager::capture(&socket, &session_name) {
         return Json(PaneResponse {
@@ -4037,12 +4248,44 @@ async fn node_pane(
             session_name,
             resumed: false,
             stale: !is_latest_iter,
+            source: "live",
         })
         .into_response();
     }
 
-    if is_latest_iter && node_state.status != event_log::NodeStatus::Pending {
-        let repo_root = effective_repo_root(&state, &run_state);
+    // Reaped terminal node (#205): the session is gone but we persisted a pane
+    // snapshot on the terminal transition. Serve it flagged `snapshot` — and
+    // never resurrect the session for a terminal iteration (the
+    // one-live-iteration invariant must not be violated by a pane request).
+    let iter_is_terminal = node_state
+        .iterations
+        .iter()
+        .find(|i| i.iter == iter)
+        .map(|i| {
+            matches!(
+                i.status,
+                event_log::NodeStatus::Completed
+                    | event_log::NodeStatus::Failed
+                    | event_log::NodeStatus::Stopped
+                    | event_log::NodeStatus::Stale
+            )
+        })
+        .unwrap_or(false);
+    if iter_is_terminal {
+        let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
+        if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
+            return Json(PaneResponse {
+                content,
+                session_name,
+                resumed: false,
+                stale: !is_latest_iter,
+                source: "snapshot",
+            })
+            .into_response();
+        }
+    }
+
+    if is_latest_iter && !iter_is_terminal && node_state.status != event_log::NodeStatus::Pending {
         let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
         let working_dir = tmux_session_manager::working_dir_for_node(
             &repo_root, &run_id, &node_id, iter, node_type,
@@ -4064,6 +4307,7 @@ async fn node_pane(
                     session_name,
                     resumed: false,
                     stale: false,
+                    source: "unavailable",
                 })
                 .into_response();
             }
@@ -4079,6 +4323,7 @@ async fn node_pane(
                 session_name,
                 resumed: true,
                 stale: false,
+                source: "resumed",
             })
             .into_response();
         }
@@ -4090,6 +4335,7 @@ async fn node_pane(
         session_name,
         resumed: false,
         stale: !is_latest_iter,
+        source: "unavailable",
     })
     .into_response()
 }
@@ -4707,6 +4953,11 @@ async fn node_done(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
+    // Reap on terminal state (#205): snapshot the pane then kill the session,
+    // so a completed node never holds a live session toward the tmux-collapse
+    // point (#77/#78). Post-mortem inspection survives via the snapshot.
+    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -4793,7 +5044,15 @@ async fn node_fail(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Per #23: session stays alive for terminal preview post-failure.
+    // Reap on terminal state (#205): snapshot the pane then kill the session.
+    // Post-mortem inspection of the failed node survives via the snapshot.
+    let repo_root = match load_events(&state.db, &run_id).await {
+        Ok(evs) => event_log::project(&evs)
+            .map(|s| effective_repo_root(&state, &s))
+            .unwrap_or_else(|| state.repo_root.clone()),
+        Err(_) => state.repo_root.clone(),
+    };
+    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
 
     // Mark the run as failed
     let run_failed = event_log::Event {
@@ -4961,6 +5220,12 @@ async fn node_stop(
     };
 
     let iter = ns.iter;
+
+    // Reap on terminal state (#205): snapshot the pane BEFORE the session is
+    // killed, so the stopped node's post-mortem pane survives. `stop_node`
+    // kills the session too (idempotent — reap already killed it).
+    let repo_root = effective_repo_root(&state, &run_state);
+    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
 
     let params = node_primitives::StopNodeParams {
         run_id: &run_id,
@@ -7127,6 +7392,58 @@ fn sub_worktree_branch(run_id: &str, node_id: &str, iter: i64) -> String {
     format!("maestro/sub-{run_id}-{node_id}-iter-{iter}")
 }
 
+/// Path to the persisted pane snapshot for a terminal NodeRun iteration (#205).
+///
+/// Lives in the run's node dir — NOT inside the per-iter sub-worktree — so the
+/// post-mortem pane survives worktree removal and the session reap.
+fn pane_snapshot_path(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> PathBuf {
+    repo_root
+        .join(".maestro")
+        .join("runs")
+        .join(run_id)
+        .join("nodes")
+        .join(node_id)
+        .join(format!("pane-iter-{iter}.snapshot"))
+}
+
+/// Reap a NodeRun's tmux session on its terminal transition (#205).
+///
+/// Persists a pane snapshot under the run's node dir (so post-mortem inspection
+/// — a Maestro differentiator — keeps working after the session is gone), then
+/// kills the session. Best-effort: a missing session (already reaped, never
+/// spawned) is a silent no-op; a capture/write failure still proceeds to kill
+/// so a terminal node never leaks a live session toward the tmux-collapse
+/// point (#77/#78). Honours the one-live-iteration invariant by freeing the
+/// session the moment the iteration is terminal.
+fn reap_node_session(
+    state: &AppState,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) {
+    let socket = state.tmux_socket();
+    let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
+
+    if let Some(content) = tmux_session_manager::capture(&socket, &session) {
+        let snapshot_path = pane_snapshot_path(repo_root, run_id, node_id, iter);
+        if let Some(parent) = snapshot_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&snapshot_path, content) {
+            warn!("reap: failed to persist pane snapshot for {session}: {e}");
+        }
+    }
+
+    tmux_session_manager::kill(&socket, &session);
+    info!("Reaped tmux session {session} on terminal transition");
+}
+
 fn create_sub_worktree(
     repo_root: &std::path::Path,
     sub_worktree_dir: &std::path::Path,
@@ -7387,6 +7704,7 @@ mod tests {
             repo_root: std::env::current_dir().unwrap(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
@@ -8577,6 +8895,119 @@ mod tests {
         assert_eq!(branch, "maestro/sub-20260101-120000-abc-impl-1-iter-1");
     }
 
+    fn run_state_with_node(
+        run_id: &str,
+        node_id: &str,
+        node_type: &str,
+        status: event_log::NodeStatus,
+        iter: i64,
+    ) -> event_log::RunState {
+        let mut rs = event_log::RunState::new(run_id.into(), "test".into());
+        rs.node_defs.push(event_log::NodeDefInfo {
+            id: node_id.into(),
+            name: None,
+            node_type: node_type.into(),
+            view_x: None,
+            view_y: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        });
+        rs.nodes.insert(
+            node_id.into(),
+            event_log::NodeState {
+                node_id: node_id.into(),
+                status,
+                iter,
+                started_at: None,
+                completed_at: None,
+                failure_reason: None,
+                iterations: Vec::new(),
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+        rs
+    }
+
+    #[test]
+    fn merged_without_event_flags_a_merged_uncompleted_code_node() {
+        // #213 AC3: a code-mutating node whose sub-worktree branch is merged but
+        // which never recorded a NodeCompleted is a git/event-log divergence.
+        let rs = run_state_with_node(
+            "20260101-120000-abc",
+            "impl",
+            "code-mutating",
+            event_log::NodeStatus::Running,
+            1,
+        );
+        let divergent = merged_without_event_nodes("20260101-120000-abc", &rs, |_branch| true);
+        assert_eq!(
+            divergent.len(),
+            1,
+            "the merged uncompleted node must be flagged"
+        );
+        assert_eq!(divergent[0].0, "impl");
+        assert_eq!(
+            divergent[0].1,
+            "maestro/sub-20260101-120000-abc-impl-iter-1"
+        );
+    }
+
+    #[test]
+    fn merged_without_event_ignores_completed_node() {
+        // A merged branch WITH a NodeCompleted is the normal, consistent case.
+        let rs = run_state_with_node(
+            "20260101-120000-abc",
+            "impl",
+            "code-mutating",
+            event_log::NodeStatus::Completed,
+            1,
+        );
+        let divergent = merged_without_event_nodes("20260101-120000-abc", &rs, |_branch| true);
+        assert!(divergent.is_empty(), "a completed node is not a divergence");
+    }
+
+    #[test]
+    fn merged_without_event_ignores_unmerged_and_doc_only() {
+        // Doc-only nodes own no sub-worktree branch; an unmerged branch is fine.
+        let doc = run_state_with_node(
+            "20260101-120000-abc",
+            "doc",
+            "doc-only",
+            event_log::NodeStatus::Running,
+            1,
+        );
+        assert!(merged_without_event_nodes("20260101-120000-abc", &doc, |_| true).is_empty());
+
+        let cm = run_state_with_node(
+            "20260101-120000-abc",
+            "impl",
+            "code-mutating",
+            event_log::NodeStatus::Running,
+            1,
+        );
+        assert!(merged_without_event_nodes("20260101-120000-abc", &cm, |_| false).is_empty());
+    }
+
+    #[test]
+    fn pane_snapshot_path_lives_outside_the_iter_worktree() {
+        // The snapshot must survive worktree removal (it is the post-mortem
+        // pane for a reaped terminal node, #205), so it lives in the node dir,
+        // NOT inside the per-iter sub-worktree.
+        let path = pane_snapshot_path(
+            std::path::Path::new("/repo"),
+            "20260101-120000-abc",
+            "impl-1",
+            2,
+        );
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "/repo/.maestro/runs/20260101-120000-abc/nodes/impl-1/pane-iter-2.snapshot"
+            )
+        );
+    }
+
     fn init_test_repo(dir: &std::path::Path) {
         let run = |args: &[&str]| {
             std::process::Command::new("git")
@@ -8801,6 +9232,7 @@ mod tests {
             repo_root: dir.to_path_buf(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
@@ -12152,6 +12584,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
@@ -12324,6 +12757,7 @@ edges: []
             repo_root: repo.clone(),
             port: 0,
             merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),

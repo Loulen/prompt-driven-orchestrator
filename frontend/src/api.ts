@@ -4,8 +4,17 @@ const BASE = "";
 
 async function throwStructuredSaveError(resp: Response, fallback: string): Promise<never> {
   const body = await resp.json().catch(() => null);
+  let message: string = body?.message ?? body?.error ?? fallback;
+  // A mid-run mutation rejection (409, ADR-0007 / #211) carries the "why" in
+  // `rejections[].reason` — surface it, not just "mutation rejected".
+  if (Array.isArray(body?.rejections)) {
+    const reasons = body.rejections
+      .map((r: { reason?: string }) => r?.reason)
+      .filter((r: unknown): r is string => typeof r === "string");
+    if (reasons.length > 0) message = `${message}: ${reasons.join("; ")}`;
+  }
   const err: Record<string, unknown> = {
-    message: body?.message ?? body?.error ?? fallback,
+    message,
     status: resp.status,
   };
   if (typeof body?.line === "number") err.line = body.line;

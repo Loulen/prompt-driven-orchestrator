@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::condition;
 use crate::edge_router;
-use crate::event_log::{NodeStatus, RunState, RunStatus};
+use crate::event_log::{NodeStatus, RunState};
 use crate::graph_resolver;
 use crate::pipeline::{NodeType, PipelineDef};
 use crate::switch_router;
@@ -165,9 +165,12 @@ pub fn evaluate_outgoing_edges_with_context(
 }
 
 /// Same as [`evaluate_outgoing_edges_with_context`] but with an explicit
-/// per-node frontmatter map, used by `scheduler_step` so convergence
-/// suppression (ADR-0011) can re-evaluate the conditional edges of *other*
-/// completed producers (e.g. the classifier feeding a suppressed `else` branch).
+/// per-node frontmatter map, so convergence suppression (ADR-0011) can
+/// re-evaluate the conditional edges of *other* completed producers (e.g. the
+/// classifier feeding a suppressed `else` branch). This is THE canonical
+/// scheduler entry point: the daemon's event-driven handlers
+/// (`handle_node_completion`, `re_evaluate_after_command`) call it for each
+/// completed producer.
 pub fn evaluate_outgoing_edges_full(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -346,16 +349,18 @@ pub fn evaluate_outgoing_edges_full(
                 );
 
                 if all_upstream_done {
-                    let next_iter = run_state
-                        .nodes
-                        .get(target_id.as_str())
-                        .map(|n| n.iter + 1)
-                        .unwrap_or(1);
-
-                    actions.push(SchedulerAction::Spawn {
-                        node_id: target_id.clone(),
-                        iter: next_iter,
-                    });
+                    if let Some(next_iter) = forward_spawn_iter(
+                        pipeline,
+                        run_state,
+                        completed_node_id,
+                        target_id,
+                        resolved_vars,
+                    ) {
+                        actions.push(SchedulerAction::Spawn {
+                            node_id: target_id.clone(),
+                            iter: next_iter,
+                        });
+                    }
                 }
             }
         }
@@ -437,11 +442,11 @@ fn handle_region_reentry(
     let mut actions = Vec::new();
 
     let max_iter = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
-    let current_iter = run_state
-        .loop_states
-        .get(region.id.as_str())
-        .map(|ls| ls.current_iter)
-        .unwrap_or(1);
+    let region_loop_state = run_state.loop_states.get(region.id.as_str());
+    let current_iter = region_loop_state.map(|ls| ls.current_iter).unwrap_or(1);
+    // #199: an ended region (`end_region` projected as `done`) never starts
+    // another lap — it routes its exit at the current iter, like exhaustion.
+    let ended = region_loop_state.is_some_and(|ls| ls.done);
 
     let runtime = crate::loop_region::RegionRuntime {
         current_iter,
@@ -450,7 +455,12 @@ fn handle_region_reentry(
     };
 
     // A fired back-edge means at least one re-entry was requested this lap.
-    match crate::loop_region::resolve_lap(pipeline, region, &runtime, 1) {
+    let decision = if ended {
+        crate::loop_region::LapDecision::Exhausted
+    } else {
+        crate::loop_region::resolve_lap(pipeline, region, &runtime, 1)
+    };
+    match decision {
         crate::loop_region::LapDecision::NextLap { iter, entry } => {
             actions.push(SchedulerAction::LoopIterStarted {
                 loop_node_id: region.id.clone(),
@@ -494,14 +504,22 @@ fn handle_region_reentry(
                     }
                 }
                 crate::loop_region::ExhaustionOutcome::Unrouted => {
-                    actions.push(SchedulerAction::Halt {
-                        message: format!(
+                    let message = if ended {
+                        format!(
+                            "ended — unrouted: bounded region '{}' was closed by end_region \
+                             at iter {current_iter} but no exit edge matched (route it from \
+                             the Pipeline Manager)",
+                            region.id
+                        )
+                    } else {
+                        format!(
                             "exhausted — unrouted: bounded region '{}' reached max_iter \
                              {max_iter} with the continuation condition still true and no \
                              matching exit edge (route it from the Pipeline Manager)",
                             region.id
-                        ),
-                    });
+                        )
+                    };
+                    actions.push(SchedulerAction::Halt { message });
                 }
             }
         }
@@ -509,6 +527,74 @@ fn handle_region_reentry(
     }
 
     actions
+}
+
+/// Decides the iter for a generic forward spawn of `target_id` after
+/// `source_id` completed — or `None` when the target must not spawn
+/// (#199 / #195 / #210):
+///
+/// - never run → spawn at iter 1;
+/// - already ran → re-run ONLY when the fired edge closes an emergent cycle
+///   (the target reaches the source through forward edges), at `iter + 1`.
+///   A node reached only by forward edges is never re-spawned by
+///   re-evaluation — that is the "feeder dragged into a lap" bug;
+/// - a bounded-region member is never spawned past its effective `max_iter`;
+/// - a pure self-edge (source == target) is inert outside a region (#207).
+fn forward_spawn_iter(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    source_id: &str,
+    target_id: &str,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Option<i64> {
+    if source_id == target_id {
+        return None;
+    }
+
+    let proposed = match run_state.nodes.get(target_id) {
+        None => 1,
+        Some(ts) => {
+            if reaches(pipeline, target_id, source_id) {
+                ts.iter + 1
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let member_region = pipeline.loops.iter().find(|r| {
+        r.kind == crate::pipeline::LoopKind::Bounded && r.members.iter().any(|m| m == target_id)
+    });
+    if let Some(region) = member_region {
+        let max = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
+        if proposed > max {
+            return None;
+        }
+    }
+
+    Some(proposed)
+}
+
+/// True when a directed path of forward edges leads from `from` to `to`
+/// (self-edges excluded: a node does not reach itself through its own edge).
+fn reaches(pipeline: &PipelineDef, from: &str, to: &str) -> bool {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: Vec<&str> = vec![from];
+    while let Some(current) = queue.pop() {
+        for edge in &pipeline.edges {
+            if edge.source.node != current || edge.target.node == current {
+                continue;
+            }
+            let next = edge.target.node.as_str();
+            if next == to {
+                return true;
+            }
+            if visited.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    false
 }
 
 pub fn resolve_max_iter(
@@ -843,27 +929,33 @@ fn check_all_upstream_completed(
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
-    // ADR-0011: an edge's role (forward vs. re-entry/back-edge) is *derived from
-    // the loop region*, never flagged in the YAML. A bounded region's re-entry
-    // edge (member -> entry) requests another lap; it must NOT count as an
-    // upstream precondition for the entry node, or entering the loop from an
-    // external forward edge deadlocks silently on a back-edge source that is
-    // itself downstream of the entry inside the cycle (#172). We exclude only the
-    // re-entry edge: a source that also feeds the target via a plain forward edge
-    // still counts through that edge.
-    let reentry_edges: HashSet<usize> = pipeline
-        .loops
-        .iter()
-        .filter(|r| r.kind == crate::pipeline::LoopKind::Bounded)
-        .flat_map(|r| crate::loop_region::reentry_edge_indices(pipeline, r))
-        .collect();
-
+    // Forward preconditions only (#194 / #210, preserving #172): a self-edge can
+    // never be satisfied before the node's own first run, and a bounded-region
+    // back-edge (member -> entry) is the region engine's concern
+    // (`handle_region_reentry`) — counting either as an upstream blocker
+    // makes the join unsatisfiable and stalls the run silently. Two forensic
+    // sources: #172 (entering a bounded loop from an external forward edge — the
+    // entry never spawned because its back-edge source sits downstream in the
+    // cycle), and run 9c8d123 (#194 — the loop-entry node never spawned, zero
+    // events for 8+ min). The sprint's region-engine check
+    // (`bounded_region_reentered_by_edge`) subsumes #172's edge-index exclusion
+    // and additionally drops self-edges (#207); the #172 regression tests
+    // (`external_forward_edge_spawns_bounded_loop_entry`,
+    // `bounded_loop_entry_then_forwards_to_second_member`) still guard this path.
     let upstream: HashSet<&str> = pipeline
         .edges
         .iter()
-        .enumerate()
-        .filter(|(i, e)| e.target.node == target_node_id && !reentry_edges.contains(i))
-        .map(|(_, e)| e.source.node.as_str())
+        .filter(|e| e.target.node == target_node_id)
+        .filter(|e| e.source.node != target_node_id)
+        .filter(|e| {
+            crate::loop_region::bounded_region_reentered_by_edge(
+                pipeline,
+                &e.source.node,
+                target_node_id,
+            )
+            .is_none()
+        })
+        .map(|e| e.source.node.as_str())
         .collect();
 
     upstream.iter().all(|src| {
@@ -989,240 +1081,6 @@ fn is_node_dead(
 
     visiting.remove(node_id);
     dead
-}
-
-// ---------------------------------------------------------------------------
-// Tick queue — non-reentrant sequential tick model
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TickEvent {
-    RunStarted,
-    NodeCompleted { node_id: String },
-    RunResumed,
-}
-
-#[derive(Debug)]
-pub struct TickQueue {
-    queue: VecDeque<TickEvent>,
-    processing: bool,
-}
-
-impl TickQueue {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-            processing: false,
-        }
-    }
-
-    pub fn enqueue(&mut self, event: TickEvent) {
-        self.queue.push_back(event);
-    }
-
-    /// Dequeue the next tick event and mark the queue as processing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called while another tick is already being processed
-    /// (non-reentrancy guard).
-    pub fn start_tick(&mut self) -> Option<TickEvent> {
-        assert!(
-            !self.processing,
-            "non-reentrant: cannot start a new tick while one is in progress"
-        );
-        let event = self.queue.pop_front()?;
-        self.processing = true;
-        Some(event)
-    }
-
-    pub fn end_tick(&mut self) {
-        self.processing = false;
-    }
-
-    pub fn is_processing(&self) -> bool {
-        self.processing
-    }
-
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// scheduler_step — unified entry point
-// ---------------------------------------------------------------------------
-
-/// Top-level scheduler entry point. Given the current pipeline and run state,
-/// proposes actions to execute.
-///
-/// Composes `graph_resolver::ready_nodes` for entry-point spawning with the
-/// existing control-flow handling (Switch routing, Loop iteration, ForEach
-/// expansion, End-node detection).
-///
-/// Guarantees:
-/// - **Pause gate**: returns empty if the run is paused.
-/// - **Idempotent**: never proposes spawning a node that is already
-///   running/completed/stopped, nor re-routing an already-routed Switch.
-/// - **Non-reentrant**: returns proposals only; does not trigger side effects.
-///   The caller processes proposals sequentially via `TickQueue`.
-pub fn scheduler_step(
-    pipeline: &PipelineDef,
-    run_state: &RunState,
-    resolved_vars: &HashMap<String, serde_yaml::Value>,
-    completed_node_frontmatter: &HashMap<String, HashMap<String, serde_yaml::Value>>,
-) -> Vec<SchedulerAction> {
-    // ── Pause gate ──────────────────────────────────────────────────────
-    if run_state.status == RunStatus::Paused {
-        return vec![];
-    }
-
-    // ── Terminal states — nothing to do ─────────────────────────────────
-    if matches!(
-        run_state.status,
-        RunStatus::Completed | RunStatus::Failed | RunStatus::Halted | RunStatus::Archived
-    ) {
-        return vec![];
-    }
-
-    let mut actions: Vec<SchedulerAction> = Vec::new();
-
-    // ── Phase 1: entry-point spawning via graph resolver ────────────────
-    let ready = graph_resolver::ready_nodes(pipeline, run_state);
-    for node_id in ready {
-        actions.push(SchedulerAction::Spawn { node_id, iter: 1 });
-    }
-
-    // ── Phase 2: loop bootstrapping ─────────────────────────────────────
-    actions.extend(seed_pending_loops(pipeline, run_state, resolved_vars));
-
-    // ── Phase 3: outgoing-edge evaluation for completed nodes ───────────
-    // Handles Switch routing, Loop/ForEach input triggers, and End-node
-    // detection. The idempotency filter (below) removes duplicates.
-    for (node_id, node_state) in &run_state.nodes {
-        if node_state.status != NodeStatus::Completed {
-            continue;
-        }
-        let fm = completed_node_frontmatter
-            .get(node_id)
-            .cloned()
-            .unwrap_or_default();
-        let edge_actions = evaluate_outgoing_edges_full(
-            pipeline,
-            run_state,
-            node_id,
-            resolved_vars,
-            &fm,
-            completed_node_frontmatter,
-        );
-        actions.extend(edge_actions);
-    }
-
-    // ── Phase 4: loop / foreach body completion ─────────────────────────
-    for (loop_id, loop_state) in &run_state.loop_states {
-        if !loop_state.done {
-            actions.extend(evaluate_loop_body_completion(
-                pipeline,
-                run_state,
-                loop_id,
-                resolved_vars,
-            ));
-        }
-    }
-
-    for (foreach_id, foreach_state) in &run_state.foreach_states {
-        if !foreach_state.done {
-            actions.extend(evaluate_foreach_body_completion(
-                pipeline, run_state, foreach_id,
-            ));
-        }
-    }
-
-    // ── Idempotent filter ───────────────────────────────────────────────
-    actions.retain(|action| match action {
-        SchedulerAction::Spawn { node_id, .. } => {
-            !run_state.nodes.get(node_id.as_str()).is_some_and(|ns| {
-                matches!(
-                    ns.status,
-                    NodeStatus::Running | NodeStatus::Completed | NodeStatus::Stopped
-                )
-            })
-        }
-        SchedulerAction::SwitchRouted { node_id, .. } => {
-            !run_state.switch_states.contains_key(node_id)
-        }
-        SchedulerAction::Complete | SchedulerAction::Halt { .. } => {
-            !matches!(run_state.status, RunStatus::Completed | RunStatus::Halted)
-        }
-        SchedulerAction::LoopIterStarted {
-            loop_node_id, iter, ..
-        } => run_state
-            .loop_states
-            .get(loop_node_id.as_str())
-            .is_none_or(|ls| ls.current_iter < *iter),
-        SchedulerAction::LoopDone { loop_node_id } => run_state
-            .loop_states
-            .get(loop_node_id.as_str())
-            .is_none_or(|ls| !ls.done),
-        SchedulerAction::ForEachStarted {
-            foreach_node_id, ..
-        } => !run_state.foreach_states.contains_key(foreach_node_id),
-        SchedulerAction::ForEachDone { foreach_node_id } => run_state
-            .foreach_states
-            .get(foreach_node_id.as_str())
-            .is_none_or(|fs| !fs.done),
-        _ => true,
-    });
-
-    // ── Dedup: keep first occurrence of each action ─────────────────────
-    dedup_actions(&mut actions);
-
-    actions
-}
-
-fn dedup_actions(actions: &mut Vec<SchedulerAction>) {
-    let mut seen = HashSet::new();
-    actions.retain(|action| {
-        let key = match action {
-            SchedulerAction::Spawn { node_id, iter } => format!("spawn:{node_id}:{iter}"),
-            SchedulerAction::Halt { message } => format!("halt:{message}"),
-            SchedulerAction::Complete => "complete".to_string(),
-            SchedulerAction::SwitchRouted {
-                node_id,
-                chosen_branch,
-            } => format!("switch:{node_id}:{chosen_branch}"),
-            SchedulerAction::LoopIterStarted {
-                loop_node_id, iter, ..
-            } => format!("loop_iter:{loop_node_id}:{iter}"),
-            SchedulerAction::LoopBreakReceived { loop_node_id } => {
-                format!("loop_break:{loop_node_id}")
-            }
-            SchedulerAction::LoopMaxReached {
-                loop_node_id,
-                max_iter,
-            } => format!("loop_max:{loop_node_id}:{max_iter}"),
-            SchedulerAction::LoopDone { loop_node_id } => format!("loop_done:{loop_node_id}"),
-            SchedulerAction::ForEachStarted {
-                foreach_node_id,
-                total_items,
-                ..
-            } => format!("foreach_start:{foreach_node_id}:{total_items}"),
-            SchedulerAction::ForEachEmpty { foreach_node_id } => {
-                format!("foreach_empty:{foreach_node_id}")
-            }
-            SchedulerAction::ForEachBreakReceived { foreach_node_id } => {
-                format!("foreach_break:{foreach_node_id}")
-            }
-            SchedulerAction::ForEachDone { foreach_node_id } => {
-                format!("foreach_done:{foreach_node_id}")
-            }
-        };
-        seen.insert(key)
-    });
 }
 
 #[cfg(test)]
@@ -1693,8 +1551,11 @@ mod tests {
 
     #[test]
     fn cycle_back_edge_increments_iter() {
-        // reviewer completes at iter 2 → back-edge fires →
-        // implementer already at iter 2, so next spawn is iter 3
+        // reviewer completes at iter 2 → the back-edge of the emergent
+        // implementer<->reviewer cycle fires → implementer already at iter 2,
+        // so next spawn is iter 3. (#210: the forward edge implementer->
+        // reviewer is part of the graph — only a real emergent cycle may
+        // re-run a completed node; a forward-only feeder never is.)
         let pipeline = PipelineDef {
             name: "cycle".into(),
             version: None,
@@ -1703,7 +1564,10 @@ mod tests {
                 make_node("implementer", &["review"], &["code"]),
                 make_node("reviewer", &["code"], &["review"]),
             ],
-            edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            edges: vec![
+                make_edge("implementer", "code", "reviewer", "code"),
+                make_edge("reviewer", "review", "implementer", "review"),
+            ],
             loops: Vec::new(),
             prompt_required: true,
         };
@@ -2023,37 +1887,6 @@ mod tests {
                 iter: 1,
             }),
             "merge must NOT spawn while a fired branch (hotfix) is still running: {actions:?}"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_spawns_merge_past_suppressed_branch() {
-        let pipeline = fanout_merge_pipeline();
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("classifier".into(), completed_node("classifier"));
-        state
-            .nodes
-            .insert("hotfix".into(), completed_node("hotfix"));
-        state
-            .nodes
-            .insert("security".into(), completed_node("security"));
-
-        let actions = scheduler_step(
-            &pipeline,
-            &state,
-            &HashMap::new(),
-            &classifier_high_security_fm(),
-        );
-
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
-                iter: 1,
-            }),
-            "scheduler_step must converge on merge1 past the suppressed backlog branch: {actions:?}"
         );
     }
 
@@ -4575,867 +4408,6 @@ edges:
         );
     }
 
-    // ===================================================================
-    // scheduler_step tests
-    // ===================================================================
-
-    fn step(pipeline: &PipelineDef, state: &RunState) -> Vec<SchedulerAction> {
-        scheduler_step(pipeline, state, &HashMap::new(), &HashMap::new())
-    }
-
-    fn step_with_fm(
-        pipeline: &PipelineDef,
-        state: &RunState,
-        node_fm: &HashMap<String, HashMap<String, serde_yaml::Value>>,
-    ) -> Vec<SchedulerAction> {
-        scheduler_step(pipeline, state, &HashMap::new(), node_fm)
-    }
-
-    fn paused_run_state() -> RunState {
-        let mut s = RunState::new("run-1".into(), "test".into());
-        s.status = crate::event_log::RunStatus::Paused;
-        s
-    }
-
-    #[test]
-    fn pause_gate_returns_empty_when_paused() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-            ],
-            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let state = paused_run_state();
-        let actions = step(&pipeline, &state);
-        assert!(actions.is_empty(), "paused run should produce no actions");
-    }
-
-    #[test]
-    fn resume_enables_scheduling() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-            ],
-            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        // While paused: nothing
-        let paused = paused_run_state();
-        assert!(step(&pipeline, &paused).is_empty());
-
-        // After resume (status back to Running): scheduling resumes
-        let mut resumed = RunState::new("run-1".into(), "test".into());
-        resumed.status = crate::event_log::RunStatus::Running;
-        let actions = step(&pipeline, &resumed);
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "planner".into(),
-                iter: 1,
-            }),
-            "after resume, ready nodes should be proposed"
-        );
-    }
-
-    #[test]
-    fn running_nodes_unaffected_by_pause() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-            ],
-            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = paused_run_state();
-        state
-            .nodes
-            .insert("planner".into(), running_node("planner"));
-
-        let actions = step(&pipeline, &state);
-        // Pause returns empty — no Kill/Stop action for the running node
-        assert!(
-            actions.is_empty(),
-            "pause should not produce stop actions for running nodes"
-        );
-        // The running node's status is unchanged (RunState is immutable to scheduler)
-        assert_eq!(
-            state.nodes["planner"].status,
-            NodeStatus::Running,
-            "running node status should be unchanged"
-        );
-    }
-
-    #[test]
-    fn no_new_spawns_while_paused_even_with_ready_nodes() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-            ],
-            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        // Planner completed → implementer is ready, but run is paused
-        let mut state = paused_run_state();
-        state
-            .nodes
-            .insert("planner".into(), completed_node("planner"));
-
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.is_empty(),
-            "no spawns while paused, even if nodes are ready"
-        );
-    }
-
-    #[test]
-    fn tick_queue_sequential_processing() {
-        let mut q = TickQueue::new();
-        q.enqueue(TickEvent::RunStarted);
-        q.enqueue(TickEvent::NodeCompleted {
-            node_id: "a".into(),
-        });
-
-        assert_eq!(q.len(), 2);
-
-        let first = q.start_tick();
-        assert_eq!(first, Some(TickEvent::RunStarted));
-        assert!(q.is_processing());
-
-        // End the current tick before starting the next
-        q.end_tick();
-        assert!(!q.is_processing());
-
-        let second = q.start_tick();
-        assert_eq!(
-            second,
-            Some(TickEvent::NodeCompleted {
-                node_id: "a".into(),
-            })
-        );
-        q.end_tick();
-
-        assert!(q.start_tick().is_none());
-        assert!(q.is_empty());
-    }
-
-    #[test]
-    #[should_panic(expected = "non-reentrant")]
-    fn tick_queue_panics_on_reentrant_start() {
-        let mut q = TickQueue::new();
-        q.enqueue(TickEvent::RunStarted);
-        q.enqueue(TickEvent::NodeCompleted {
-            node_id: "a".into(),
-        });
-
-        let _first = q.start_tick(); // starts processing
-                                     // Attempting to start another tick while one is in progress → panic
-        let _second = q.start_tick();
-    }
-
-    #[test]
-    fn tick_queue_enqueue_during_processing() {
-        let mut q = TickQueue::new();
-        q.enqueue(TickEvent::RunStarted);
-
-        let _ev = q.start_tick();
-        // Enqueueing during processing is fine — it goes to the back of the queue
-        q.enqueue(TickEvent::NodeCompleted {
-            node_id: "a".into(),
-        });
-        assert_eq!(q.len(), 1, "new event queued during tick processing");
-
-        q.end_tick();
-        let next = q.start_tick();
-        assert_eq!(
-            next,
-            Some(TickEvent::NodeCompleted {
-                node_id: "a".into(),
-            })
-        );
-        q.end_tick();
-    }
-
-    #[test]
-    fn idempotent_no_spawn_for_running_node() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-            ],
-            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("planner".into(), running_node("planner"));
-
-        let actions = step(&pipeline, &state);
-        assert!(
-            !actions.iter().any(
-                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "planner")
-            ),
-            "running node should not be re-proposed"
-        );
-    }
-
-    #[test]
-    fn idempotent_no_spawn_for_completed_node() {
-        let pipeline = PipelineDef {
-            name: "single".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_node("a", &["task"], &["out"])],
-            edges: vec![],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-
-        let actions = step(&pipeline, &state);
-        assert!(
-            !actions
-                .iter()
-                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "a")),
-            "completed node should not be re-proposed"
-        );
-    }
-
-    #[test]
-    fn idempotent_no_spawn_for_stopped_node() {
-        let pipeline = PipelineDef {
-            name: "single".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_node("a", &["task"], &["out"])],
-            edges: vec![],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.nodes.insert(
-            "a".into(),
-            NodeState {
-                node_id: "a".into(),
-                status: NodeStatus::Stopped,
-                iter: 1,
-                started_at: Some("t0".into()),
-                completed_at: None,
-                failure_reason: None,
-                iterations: Vec::new(),
-                frontmatter_retries: 0,
-                frontmatter_violations: Vec::new(),
-            },
-        );
-
-        let actions = step(&pipeline, &state);
-        assert!(
-            !actions
-                .iter()
-                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "a")),
-            "stopped node should not be re-proposed"
-        );
-    }
-
-    #[test]
-    fn duplicate_events_produce_no_duplicate_actions() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("a", &["task"], &["out"]),
-                make_node("b", &["in"], &["out"]),
-            ],
-            edges: vec![make_edge("a", "out", "b", "in")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        // a is completed → b should be proposed exactly once
-        let mut state = empty_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-
-        let actions = step(&pipeline, &state);
-        let spawn_b_count = actions
-            .iter()
-            .filter(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "b"))
-            .count();
-        assert_eq!(
-            spawn_b_count, 1,
-            "b should be proposed exactly once, got {spawn_b_count}"
-        );
-    }
-
-    #[test]
-    fn idempotent_switch_not_re_routed() {
-        let pipeline = PipelineDef {
-            name: "switch-idem".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["task"], &["out"]),
-                make_switch_node(
-                    "sw",
-                    vec![
-                        switch_port("pass", "verdict: { eq: PASS }"),
-                        switch_default_port(),
-                    ],
-                ),
-                make_node("pass-handler", &["in"], &["out"]),
-                make_node("default-handler", &["in"], &["out"]),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "sw", "in"),
-                make_edge("sw", "pass", "pass-handler", "in"),
-                make_edge("sw", "default", "default-handler", "in"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("upstream".into(), completed_node("upstream"));
-        // Switch already routed
-        state.switch_states.insert(
-            "sw".into(),
-            crate::event_log::SwitchState {
-                switch_node_id: "sw".into(),
-                chosen_branch: "pass".into(),
-                evaluated_at: "t1".into(),
-            },
-        );
-        // pass-handler already running
-        state
-            .nodes
-            .insert("pass-handler".into(), running_node("pass-handler"));
-
-        let fm: HashMap<String, HashMap<String, serde_yaml::Value>> = [(
-            "upstream".into(),
-            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
-                .into_iter()
-                .collect(),
-        )]
-        .into_iter()
-        .collect();
-
-        let actions = step_with_fm(&pipeline, &state, &fm);
-        assert!(
-            !actions
-                .iter()
-                .any(|a| matches!(a, SchedulerAction::SwitchRouted { .. })),
-            "already-routed switch should not be re-routed"
-        );
-        assert!(
-            !actions.iter().any(
-                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "pass-handler")
-            ),
-            "already-running node should not be re-proposed"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_uses_ready_nodes_for_entry_spawning() {
-        let pipeline = PipelineDef {
-            name: "linear".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("planner", &["task"], &["plan"]),
-                make_node("implementer", &["plan"], &["summary"]),
-                make_node("reviewer", &["summary"], &["review"]),
-            ],
-            edges: vec![
-                make_edge("planner", "plan", "implementer", "plan"),
-                make_edge("implementer", "summary", "reviewer", "summary"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        // Fresh state: only entry nodes (no upstream) should be proposed
-        let state = empty_run_state();
-        let actions = step(&pipeline, &state);
-        assert_eq!(
-            actions,
-            vec![SchedulerAction::Spawn {
-                node_id: "planner".into(),
-                iter: 1,
-            }],
-            "scheduler_step should compose ready_nodes to find entry point"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_fan_out_ready() {
-        let pipeline = PipelineDef {
-            name: "fan-out".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("a", &["task"], &["out"]),
-                make_node("b", &["in"], &["out"]),
-                make_node("c", &["in"], &["out"]),
-            ],
-            edges: vec![
-                make_edge("a", "out", "b", "in"),
-                make_edge("a", "out", "c", "in"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-
-        let actions = step(&pipeline, &state);
-        let spawn_ids: Vec<&str> = actions
-            .iter()
-            .filter_map(|a| match a {
-                SchedulerAction::Spawn { node_id, .. } => Some(node_id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(spawn_ids.contains(&"b"), "b should be ready");
-        assert!(spawn_ids.contains(&"c"), "c should be ready");
-    }
-
-    #[test]
-    fn scheduler_step_detects_run_completion() {
-        let pipeline = PipelineDef {
-            name: "complete-test".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("implementer", &["task"], &["summary"]),
-                make_end_node(),
-            ],
-            edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "implementer".into(),
-                    port: "summary".into(),
-                },
-                target: EdgeEndpoint {
-                    node: "end".into(),
-                    port: "result".into(),
-                },
-                reason: None,
-                when: None,
-                is_else: false,
-                repeated: false,
-                ..Default::default()
-            }],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("implementer".into(), completed_node("implementer"));
-
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.contains(&SchedulerAction::Complete),
-            "should detect run completion via end node, got {actions:?}"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_evaluates_switch_inline() {
-        let pipeline = PipelineDef {
-            name: "switch-step".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["task"], &["out"]),
-                make_switch_node(
-                    "sw",
-                    vec![
-                        switch_port("pass", "verdict: { eq: PASS }"),
-                        switch_default_port(),
-                    ],
-                ),
-                make_node("pass-handler", &["in"], &["out"]),
-                make_node("default-handler", &["in"], &["out"]),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "sw", "in"),
-                make_edge("sw", "pass", "pass-handler", "in"),
-                make_edge("sw", "default", "default-handler", "in"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("upstream".into(), completed_node("upstream"));
-
-        let fm: HashMap<String, HashMap<String, serde_yaml::Value>> = [(
-            "upstream".into(),
-            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
-                .into_iter()
-                .collect(),
-        )]
-        .into_iter()
-        .collect();
-
-        let actions = step_with_fm(&pipeline, &state, &fm);
-        assert!(
-            actions.contains(&SchedulerAction::SwitchRouted {
-                node_id: "sw".into(),
-                chosen_branch: "pass".into(),
-            }),
-            "scheduler_step should route switch, got {actions:?}"
-        );
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "pass-handler".into(),
-                iter: 1,
-            }),
-            "scheduler_step should spawn downstream of matched branch, got {actions:?}"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_seeds_pending_loops() {
-        let pipeline = PipelineDef {
-            name: "loop-step".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                NodeDef {
-                    id: "start".into(),
-                    name: "Start".into(),
-                    node_type: NodeType::Start,
-                    inputs: vec![],
-                    outputs: vec![Port {
-                        name: "user_prompt".into(),
-                        repeated: false,
-                        side: None,
-                        port_type: PortType::Markdown,
-                        frontmatter: None,
-                        when: None,
-                        description: None,
-                    }],
-                    interactive: false,
-                    view: None,
-                    max_iter: None,
-                    over: None,
-                },
-                make_loop_node("loop1", 3),
-                make_node("worker", &["in"], &["out"]),
-            ],
-            edges: vec![
-                make_edge("start", "user_prompt", "loop1", "in"),
-                make_edge("loop1", "body", "worker", "in"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let state = empty_run_state();
-        let actions = step(&pipeline, &state);
-
-        assert!(
-            actions.contains(&SchedulerAction::LoopIterStarted {
-                loop_node_id: "loop1".into(),
-                iter: 1,
-                max_iter: 3,
-            }),
-            "scheduler_step should seed pending loops, got {actions:?}"
-        );
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "worker".into(),
-                iter: 1,
-            }),
-            "scheduler_step should spawn loop body entries, got {actions:?}"
-        );
-    }
-
-    #[test]
-    fn scheduler_step_advances_loop_iteration() {
-        let pipeline = PipelineDef {
-            name: "loop-advance".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_loop_node("loop1", 3),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("loop1", "body", "worker", "in"),
-                make_edge("worker", "out", "loop1", "break"),
-                make_edge("loop1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.loop_states.insert(
-            "loop1".into(),
-            crate::event_log::LoopState {
-                loop_node_id: "loop1".into(),
-                current_iter: 1,
-                max_iter: 3,
-                break_received: false,
-                done: false,
-            },
-        );
-        state
-            .nodes
-            .insert("worker".into(), completed_node_iter("worker", 1));
-
-        let actions = step(&pipeline, &state);
-
-        // Worker completed and its out port goes to loop1.break,
-        // so we expect LoopBreakReceived (from evaluate_outgoing_edges)
-        assert!(
-            actions
-                .iter()
-                .any(|a| matches!(a, SchedulerAction::LoopBreakReceived { .. })),
-            "should detect loop break from outgoing edges, got {actions:?}"
-        );
-    }
-
-    #[test]
-    fn integration_full_tick_cycle() {
-        // Simulates: event → queue → tick → scheduler_step → proposals
-        // Pipeline: a → b → end
-        let pipeline = PipelineDef {
-            name: "tick-cycle".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("a", &["task"], &["out"]),
-                make_node("b", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("a", "out", "b", "in"),
-                make_edge("b", "out", "end", "result"),
-            ],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut queue = TickQueue::new();
-
-        // --- Tick 1: RunStarted ---
-        queue.enqueue(TickEvent::RunStarted);
-        let ev = queue.start_tick().unwrap();
-        assert_eq!(ev, TickEvent::RunStarted);
-
-        let state = empty_run_state();
-        let actions = step(&pipeline, &state);
-        assert!(actions.contains(&SchedulerAction::Spawn {
-            node_id: "a".into(),
-            iter: 1,
-        }));
-        queue.end_tick();
-
-        // Simulated side effect: start_node("a") → NodeStarted event
-        // → eventually NodeCompleted event queued
-
-        // --- Tick 2: a completed ---
-        queue.enqueue(TickEvent::NodeCompleted {
-            node_id: "a".into(),
-        });
-        let ev = queue.start_tick().unwrap();
-        assert_eq!(
-            ev,
-            TickEvent::NodeCompleted {
-                node_id: "a".into()
-            }
-        );
-
-        let mut state = empty_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "b".into(),
-                iter: 1,
-            }),
-            "tick 2 should propose spawning b, got {actions:?}"
-        );
-        queue.end_tick();
-
-        // --- Tick 3: b completed ---
-        queue.enqueue(TickEvent::NodeCompleted {
-            node_id: "b".into(),
-        });
-        let ev = queue.start_tick().unwrap();
-        assert_eq!(
-            ev,
-            TickEvent::NodeCompleted {
-                node_id: "b".into()
-            }
-        );
-
-        let mut state = empty_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-        state.nodes.insert("b".into(), completed_node("b"));
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.contains(&SchedulerAction::Complete),
-            "tick 3 should propose run completion, got {actions:?}"
-        );
-        queue.end_tick();
-
-        // Queue should be empty now
-        assert!(queue.is_empty());
-    }
-
-    #[test]
-    fn integration_pause_resume_flow() {
-        let pipeline = PipelineDef {
-            name: "pause-resume".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("a", &["task"], &["out"]),
-                make_node("b", &["in"], &["out"]),
-            ],
-            edges: vec![make_edge("a", "out", "b", "in")],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut queue = TickQueue::new();
-
-        // Tick 1: start → spawn a
-        queue.enqueue(TickEvent::RunStarted);
-        queue.start_tick().unwrap();
-        let actions = step(&pipeline, &empty_run_state());
-        assert!(actions.contains(&SchedulerAction::Spawn {
-            node_id: "a".into(),
-            iter: 1,
-        }));
-        queue.end_tick();
-
-        // a completes, but run is paused before tick fires
-        queue.enqueue(TickEvent::NodeCompleted {
-            node_id: "a".into(),
-        });
-        queue.start_tick().unwrap();
-        let mut state = paused_run_state();
-        state.nodes.insert("a".into(), completed_node("a"));
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.is_empty(),
-            "no actions during pause, even with completed node"
-        );
-        queue.end_tick();
-
-        // Resume
-        queue.enqueue(TickEvent::RunResumed);
-        queue.start_tick().unwrap();
-        let mut state = empty_run_state(); // status back to Running
-        state.nodes.insert("a".into(), completed_node("a"));
-        let actions = step(&pipeline, &state);
-        assert!(
-            actions.contains(&SchedulerAction::Spawn {
-                node_id: "b".into(),
-                iter: 1,
-            }),
-            "after resume, b should be proposed"
-        );
-        queue.end_tick();
-    }
-
-    // --- Terminal state tests ---
-
-    #[test]
-    fn terminal_completed_state_returns_empty() {
-        let pipeline = PipelineDef {
-            name: "done".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_node("a", &["task"], &["out"])],
-            edges: vec![],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.status = crate::event_log::RunStatus::Completed;
-        assert!(step(&pipeline, &state).is_empty());
-    }
-
-    #[test]
-    fn terminal_failed_state_returns_empty() {
-        let pipeline = PipelineDef {
-            name: "failed".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_node("a", &["task"], &["out"])],
-            edges: vec![],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.status = crate::event_log::RunStatus::Failed;
-        assert!(step(&pipeline, &state).is_empty());
-    }
-
-    #[test]
-    fn terminal_halted_state_returns_empty() {
-        let pipeline = PipelineDef {
-            name: "halted".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_node("a", &["task"], &["out"])],
-            edges: vec![],
-            loops: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state.status = crate::event_log::RunStatus::Halted;
-        assert!(step(&pipeline, &state).is_empty());
-    }
-
     // ── Bounded loop REGION iteration (ADR-0011 / #148) ──────────────────────
     //
     // The bounded-region review loop migrated from Loop+Switch: the body is the
@@ -5700,46 +4672,246 @@ edges:
         );
     }
 
+    // ── Canonical upstream preconditions (#194 / #210) ───────────────────────
+    //
+    // A forward spawn's preconditions consider only *forward* edges. A
+    // self-edge can never be satisfied before the node's own first run; a
+    // region back-edge belongs to the region engine (`handle_region_reentry`).
+    // Counting either as an upstream blocker reproduces the forensic
+    // run-9c8d123 stall: zero events, run sits Running forever.
+
     #[test]
-    fn region_reentry_via_scheduler_step_is_idempotent_at_max_iter() {
-        // Through the whole-state scheduler_step (which re-evaluates every
-        // completed node each tick), an already-exhausted region must propose at
-        // most one halt and never re-spawn a member past max_iter — the
-        // idempotent filter and the region bound together keep the tick stable.
-        let pipeline = migrated_review_loop_pipeline(2);
+    fn self_edge_is_not_an_upstream_precondition() {
+        // Forensic self-edge (ecbJixkS.screens-fixed -> ecbJixkS.in) drawn
+        // outside any region: when the real upstream completes, the node must
+        // spawn — never a silent stall on its own output.
+        let pipeline = PipelineDef {
+            name: "self-edge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("griller", &["task"], &["agentic_test"]),
+                make_node("tester", &["test", "screens"], &["screens_fixed"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("griller", "agentic_test", "tester", "test"),
+                make_edge("tester", "screens_fixed", "tester", "screens"),
+                make_end_edge("tester", "screens_fixed", "done"),
+            ],
+            loops: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("griller".into(), completed_node("griller"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "griller",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "tester".into(),
+                iter: 1,
+            }),
+            "tester must spawn when its real upstream completed; the self-edge \
+             is not a precondition, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_entry_join_spawns_on_external_feeder_completion() {
+        // The region entry (impl) is fed by an external feeder AND by the
+        // rev->impl back-edge. When the feeder completes, the entry spawns at
+        // lap 1: the back-edge is the region engine's concern, not a forward
+        // precondition (#194 loop-entry join stall).
+        let pipeline = migrated_review_loop_pipeline(3);
+
+        let mut state = empty_run_state();
+        state.nodes.insert("start".into(), completed_node("start"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 1,
+            }),
+            "region entry must spawn on feeder completion without waiting on \
+             its back-edge, got {actions:?}"
+        );
+    }
+
+    // ── Region closure (#199 / #210) ─────────────────────────────────────────
+
+    fn region_state(current_iter: i64, max_iter: i64, done: bool) -> crate::event_log::LoopState {
+        crate::event_log::LoopState {
+            loop_node_id: "review_loop".into(),
+            current_iter,
+            max_iter,
+            break_received: false,
+            done,
+        }
+    }
+
+    #[test]
+    fn ended_region_closes_instead_of_starting_a_phantom_lap() {
+        // #199 forensic: `end_region` on an active bounded region started a
+        // new lap (entry re-spawned at iter 4 > max_iter 3). An ended region
+        // must route its exit (or halt unrouted) at the current iter — never
+        // re-spawn the entry, never bump the counter.
+        let pipeline = migrated_review_loop_pipeline(3);
         let mut state = empty_run_state();
         state
             .nodes
             .insert("start".into(), completed_node_iter("start", 1));
         state
             .nodes
-            .insert("impl".into(), completed_node_iter("impl", 2));
+            .insert("impl".into(), completed_node_iter("impl", 1));
         state
             .nodes
-            .insert("rev".into(), completed_node_iter("rev", 2));
-        state.loop_states.insert(
-            "review_loop".into(),
-            crate::event_log::LoopState {
-                loop_node_id: "review_loop".into(),
-                current_iter: 2,
-                max_iter: 2,
-                break_received: false,
-                done: false,
-            },
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        // end_region projected: region closed at lap 1 (< max 3).
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(1, 3, true));
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
         );
 
-        let actions = step_with_fm(&pipeline, &state, &fail_fm());
-        let halts = actions
-            .iter()
-            .filter(|a| matches!(a, SchedulerAction::Halt { .. }))
-            .count();
-        assert_eq!(halts, 1, "exactly one exhausted halt, got {actions:?}");
         assert!(
             !actions.iter().any(|a| matches!(
                 a,
-                SchedulerAction::Spawn { node_id, .. } if node_id == "impl" || node_id == "rev"
+                SchedulerAction::Spawn { node_id, .. } if node_id == "impl"
             )),
-            "no member re-spawn past max_iter, got {actions:?}"
+            "an ended region must never re-spawn its entry, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { .. })),
+            "an ended region must not advance its lap counter, got {actions:?}"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "ended with no matching exit edge: explicit halt, never a silent \
+             stall, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn forward_reevaluation_never_spawns_a_member_past_max_iter() {
+        // #199 forensic: after end_region, re-evaluation replayed the feeder's
+        // forward edge into the region entry and spawned it at iter 4 with
+        // max_iter 3. No code path may push a member past the region bound.
+        let pipeline = migrated_review_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 3));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 3));
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(3, 3, true));
+
+        // Re-evaluation pass replays the feeder's outgoing edges.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, iter } if node_id == "impl" && *iter > 3
+            )),
+            "a member must never spawn past max_iter, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn completed_non_member_is_never_respawned_by_forward_reevaluation() {
+        // #199 / #195 forensic: the griller — NOT a member of the region — was
+        // re-spawned at iter 4 by the lap bump. A completed node reached only
+        // by forward edges must never be re-run by re-evaluation; only a
+        // back-edge (emergent cycle) or a region lap may re-run a node.
+        let pipeline = PipelineDef {
+            name: "feeder-chain".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("griller", &["task"], &["plan"]),
+                make_node("impl", &["plan"], &["code"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "griller", "task"),
+                make_edge("griller", "plan", "impl", "plan"),
+                make_end_edge("impl", "code", "done"),
+            ],
+            loops: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("griller".into(), completed_node_iter("griller", 1));
+
+        // Re-evaluation replays start's outgoing edges; griller already ran.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "griller"
+            )),
+            "a completed non-member must never be re-spawned by forward \
+             re-evaluation, got {actions:?}"
         );
     }
 

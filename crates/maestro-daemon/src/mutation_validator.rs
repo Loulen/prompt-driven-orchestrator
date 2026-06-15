@@ -47,6 +47,38 @@ pub fn validate_run_mutation(
         }
     }
 
+    // A node with a live session is immutable, including its type (ADR-0007
+    // amended, #211/#206): the session was spawned from the live pipeline while
+    // `maestro complete` replays the run snapshot — a mid-session type swap
+    // desyncs the two and breaks completion. A node not yet spawned (pending or
+    // throttled `waiting`) will be spawned from the live pipeline, so its type
+    // is freely editable.
+    let old_nodes_by_id: std::collections::HashMap<&str, &pipeline::NodeDef> =
+        old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    for new_node in &new.nodes {
+        let Some(old_node) = old_nodes_by_id.get(new_node.id.as_str()) else {
+            continue;
+        };
+        if old_node.node_type == new_node.node_type {
+            continue;
+        }
+        let status = run_state.nodes.get(&new_node.id).map(|ns| &ns.status);
+        if let Some(status_str) = match status {
+            Some(event_log::NodeStatus::Running) => Some("running"),
+            Some(event_log::NodeStatus::AwaitingUser) => Some("awaiting_user"),
+            _ => None,
+        } {
+            rejections.push(MutationRejection {
+                node_id: new_node.id.clone(),
+                reason: format!(
+                    "cannot change type of node '{}': its session is live (status '{}'); \
+                     a running node is immutable, including its type",
+                    new_node.id, status_str
+                ),
+            });
+        }
+    }
+
     for new_node in &new.nodes {
         if new_node.node_type != pipeline::NodeType::Loop {
             continue;
@@ -92,6 +124,42 @@ pub fn validate_run_mutation(
                 reason: format!(
                     "cannot set max_iter={} on loop '{}': current iteration is {}",
                     new_max, region.id, loop_state.current_iter
+                ),
+            });
+        }
+    }
+
+    // Pulling a member out of an in-flight region (live lap counter, not done)
+    // would desync the lap barrier: nodes already iterated as part of the lap
+    // would no longer be awaited (ADR-0007 amended, #211/#206). Growing the
+    // region is the safe direction (the new member joins from the next lap),
+    // and membership of a region with no live counter is freely editable.
+    let old_regions_by_id: std::collections::HashMap<&str, &pipeline::LoopRegion> =
+        old.loops.iter().map(|r| (r.id.as_str(), r)).collect();
+    for region in &new.loops {
+        let Some(old_region) = old_regions_by_id.get(region.id.as_str()) else {
+            continue;
+        };
+        let Some(loop_state) = run_state.loop_states.get(&region.id).filter(|ls| !ls.done) else {
+            continue;
+        };
+        let new_members: std::collections::HashSet<&str> =
+            region.members.iter().map(|m| m.as_str()).collect();
+        let removed: Vec<&str> = old_region
+            .members
+            .iter()
+            .map(|m| m.as_str())
+            .filter(|m| !new_members.contains(m))
+            .collect();
+        if !removed.is_empty() {
+            rejections.push(MutationRejection {
+                node_id: region.id.clone(),
+                reason: format!(
+                    "cannot remove member(s) [{}] from loop region '{}': the region is in flight \
+                     (lap {}); removing a member mid-lap would desync the lap barrier",
+                    removed.join(", "),
+                    region.id,
+                    loop_state.current_iter
                 ),
             });
         }
@@ -500,12 +568,145 @@ mod tests {
     }
 
     #[test]
+    fn rejects_removing_member_from_in_flight_region() {
+        // Extended taxonomy (#211, ADR-0007 silent case): pulling a member out
+        // of a region that is mid-lap would desync the lap barrier — nodes
+        // already iterated as part of the lap would no longer be awaited.
+        let old = pipeline_with_region(region("review_loop", 5));
+        let mut new = pipeline_with_region(region("review_loop", 5));
+        new.loops[0].members = vec!["impl".to_string()]; // "rev" pulled out
+        let mut rs = run_state_with_nodes(vec![]);
+        rs.loop_states.insert(
+            "review_loop".to_string(),
+            event_log::LoopState {
+                loop_node_id: "review_loop".to_string(),
+                current_iter: 2,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert_eq!(result.len(), 1, "got: {result:?}");
+        assert_eq!(result[0].node_id, "review_loop");
+        assert!(
+            result[0].reason.contains("rev") && result[0].reason.contains("in flight"),
+            "reason must name the removed member and say the region is in flight; got: {}",
+            result[0].reason
+        );
+    }
+
+    #[test]
+    fn allows_removing_member_from_region_not_in_flight() {
+        // No live lap counter for the region — membership is freely editable.
+        let old = pipeline_with_region(region("review_loop", 5));
+        let mut new = pipeline_with_region(region("review_loop", 5));
+        new.loops[0].members = vec!["impl".to_string()];
+        let rs = run_state_with_nodes(vec![]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(result.is_empty(), "got: {result:?}");
+    }
+
+    #[test]
+    fn allows_adding_member_to_in_flight_region() {
+        // Growing a live region is the safe direction — the new member joins
+        // the lap barrier from the next lap (same spirit as add node + edge).
+        let old = pipeline_with_region(region("review_loop", 5));
+        let mut new = pipeline_with_region(region("review_loop", 5));
+        new.loops[0].members.push("tester".to_string());
+        let mut rs = run_state_with_nodes(vec![]);
+        rs.loop_states.insert(
+            "review_loop".to_string(),
+            event_log::LoopState {
+                loop_node_id: "review_loop".to_string(),
+                current_iter: 2,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(result.is_empty(), "got: {result:?}");
+    }
+
+    #[test]
     fn region_without_active_state_allows_any_max_iter() {
         // No live counter for the region (not yet run / not iterating) ⇒ any
         // max_iter is accepted; the guard only bites a live region.
         let old = pipeline_with_region(region("review_loop", 5));
         let new = pipeline_with_region(region("review_loop", 1));
         let rs = run_state_with_nodes(vec![]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rejects_changing_type_of_running_node() {
+        // ADR-0007 (amended, #211/#206): a running node is immutable, including
+        // its type — spawn used the live pipeline, `maestro complete` replays
+        // the run snapshot; a mid-session type swap desyncs the two.
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].node_id, "a");
+        assert!(
+            result[0].reason.contains("type") && result[0].reason.contains("running"),
+            "reason must say why the type change is rejected; got: {}",
+            result[0].reason
+        );
+    }
+
+    #[test]
+    fn rejects_changing_type_of_awaiting_user_node() {
+        // An awaiting_user node still holds its tmux session — same invariant
+        // as running.
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::AwaitingUser)]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].node_id, "a");
+    }
+
+    #[test]
+    fn allows_changing_type_of_not_yet_spawned_node() {
+        // Extended taxonomy (#211, ADR-0007 silent case): a node not yet
+        // spawned (pending, or absent from run state) has no session and no
+        // snapshot to desync — its type is freely editable; the scheduler will
+        // spawn it from the live pipeline.
+        let old = pipeline(vec![
+            simple_node("a", pipeline::NodeType::DocOnly),
+            simple_node("b", pipeline::NodeType::DocOnly),
+        ]);
+        let new = pipeline(vec![
+            simple_node("a", pipeline::NodeType::CodeMutating),
+            simple_node("b", pipeline::NodeType::CodeMutating),
+        ]);
+        // "a" pending in run state, "b" not in run state at all.
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(
+            result.is_empty(),
+            "type change on an unspawned node must be allowed; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn allows_changing_type_of_completed_node() {
+        // A completed node holds no live session; it will not re-run this iter,
+        // and a future lap re-spawns from the live pipeline consistently.
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Completed)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
         assert!(result.is_empty());

@@ -112,6 +112,12 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         input_images: Vec::new(),
+        source_iters: crate::input_resolution::resolved_source_iters(
+            params.pipeline,
+            params.run_state,
+            params.node_id,
+            params.iter,
+        ),
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -220,7 +226,13 @@ fn resolve_inputs(
                     edge.source.port
                 )
             } else {
-                let source_iter = latest_iter_for_node(params.run_state, &edge.source.node);
+                // Canonical resolution (#194 / #210): the source's latest
+                // COMPLETED iteration, never a failed iteration's artifact.
+                let source_iter = crate::input_resolution::source_iter(
+                    params.run_state,
+                    &edge.source.node,
+                    params.iter,
+                );
                 blackboard::artifact_path(
                     params.artifacts_dir,
                     &edge.source.node,
@@ -238,10 +250,6 @@ fn resolve_inputs(
     }
 
     input_paths
-}
-
-fn latest_iter_for_node(run_state: &event_log::RunState, node_id: &str) -> i64 {
-    run_state.nodes.get(node_id).map(|n| n.iter).unwrap_or(1)
 }
 
 fn node_type_str(nt: &pipeline::NodeType) -> &'static str {

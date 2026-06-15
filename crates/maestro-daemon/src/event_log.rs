@@ -466,19 +466,26 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::NodeFailed => {
                 if let Some(ref node_id) = event.node_id {
                     if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.status = NodeStatus::Failed;
-                        node.completed_at = Some(event.ts.clone());
-                        if let Some(ref payload) = event.payload {
-                            node.failure_reason = payload
-                                .get("reason")
-                                .and_then(|v| v.as_str())
-                                .map(String::from);
-                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array())
-                            {
-                                node.frontmatter_violations = arr.clone();
+                        let iter = event.iter.unwrap_or(node.iter);
+                        // Node-level status derives from the LATEST iteration:
+                        // failing an older iter (e.g. kill_node on a stale
+                        // iter, #196 via #212) must not mislabel a node whose
+                        // newer iteration is still live.
+                        if iter >= node.iter {
+                            node.status = NodeStatus::Failed;
+                            node.completed_at = Some(event.ts.clone());
+                            if let Some(ref payload) = event.payload {
+                                node.failure_reason = payload
+                                    .get("reason")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from);
+                                if let Some(arr) =
+                                    payload.get("violations").and_then(|v| v.as_array())
+                                {
+                                    node.frontmatter_violations = arr.clone();
+                                }
                             }
                         }
-                        let iter = event.iter.unwrap_or(node.iter);
                         if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
                             it.status = NodeStatus::Failed;
                             it.completed_at = Some(event.ts.clone());
@@ -1058,6 +1065,36 @@ mod tests {
         assert_eq!(node.status, NodeStatus::Failed);
         assert_eq!(node.failure_reason.as_deref(), Some("could not complete"));
         assert!(node.frontmatter_violations.is_empty());
+    }
+
+    #[test]
+    fn node_failed_on_older_iter_does_not_mislabel_a_live_node() {
+        // #196 (via #212): kill_node on iter N while iter N+1 is running must
+        // not flip the node to failed — node-level status derives from the
+        // latest iteration.
+        let mut kill = make_event_with_payload(
+            EventKind::NodeFailed,
+            Some("worker"),
+            serde_json::json!({ "reason": "killed via kill_node command", "source": "kill_node" }),
+        );
+        kill.iter = Some(1);
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(2)),
+            kill,
+        ];
+
+        let state = project(&events).unwrap();
+        let node = &state.nodes["worker"];
+        assert_eq!(node.status, NodeStatus::Running, "iter 2 is still live");
+        assert_eq!(node.iter, 2);
+        assert!(node.failure_reason.is_none());
+        let it1 = node.iterations.iter().find(|i| i.iter == 1).unwrap();
+        assert_eq!(it1.status, NodeStatus::Failed);
+        let it2 = node.iterations.iter().find(|i| i.iter == 2).unwrap();
+        assert_eq!(it2.status, NodeStatus::Running);
     }
 
     #[test]

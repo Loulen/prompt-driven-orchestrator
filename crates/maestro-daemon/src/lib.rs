@@ -32,6 +32,7 @@ mod scheduler_dispatcher;
 pub mod stale_detector;
 mod switch_router;
 pub mod tmux_session_manager;
+pub mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
@@ -1127,6 +1128,32 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 }
 
 async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
+    // Transition guard backstop (#212): every lifecycle append is validated
+    // against the freshly projected state, so no emitter — present or future —
+    // can bypass the guard. Emitters with side effects (spawn, merge) must
+    // ALSO pre-validate before acting; this backstop only protects the log.
+    if matches!(
+        event.kind,
+        event_log::EventKind::NodeStarted
+            | event_log::EventKind::NodeWaiting
+            | event_log::EventKind::NodeCompleted
+            | event_log::EventKind::NodeAutoCompleted
+            | event_log::EventKind::NodeStale
+    ) {
+        let events = load_events(&state.db, &event.run_id).await?;
+        let run_state = event_log::project(&events);
+        match transition_guard::validate_transition(run_state.as_ref(), event) {
+            transition_guard::Verdict::Allow => {}
+            transition_guard::Verdict::NoOp { reason } => {
+                info!("append_event no-op ({:?}): {reason}", event.kind);
+                return Ok(());
+            }
+            transition_guard::Verdict::Reject { reason } => {
+                anyhow::bail!("transition rejected ({:?}): {reason}", event.kind);
+            }
+        }
+    }
+
     let kind_str = serde_json::to_value(&event.kind)
         .unwrap()
         .as_str()
@@ -2205,6 +2232,29 @@ async fn spawn_node(
     iter: i64,
 ) {
     let run_id = spawn_ctx.run_id;
+
+    // Transition guard (#212): refuse an illegal NodeStarted BEFORE any side
+    // effect (sub-worktree creation, tmux session spawn) — never after. This
+    // covers every caller: scheduler dispatch, resume re-evaluation,
+    // restart_node, waiting-node retries.
+    let started_probe = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeStarted,
+        node_id: Some(node.id.clone()),
+        iter: Some(iter),
+        payload: None,
+    };
+    let projected = reload_run_state(state, run_id).await.map(|(_, s)| s);
+    match transition_guard::validate_transition(projected.as_ref(), &started_probe) {
+        transition_guard::Verdict::Allow => {}
+        transition_guard::Verdict::NoOp { reason }
+        | transition_guard::Verdict::Reject { reason } => {
+            warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
+            return;
+        }
+    }
 
     // Admission control (#159): bound the number of live NodeRun sessions
     // daemon-wide. If admitting one more would exceed the cap, the node enters
@@ -3855,6 +3905,10 @@ async fn run_stale_detection(state: &AppState) {
 
             let events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
             for event in &events {
+                // Transition guard (#212): append_event re-validates against
+                // the freshly projected state, so a node that terminated
+                // organically since this loop's snapshot never receives a
+                // late NodeStale / NodeAutoCompleted (dropped as a no-op).
                 if let Err(e) = append_event(state, event).await {
                     error!("Stale detector: failed to append event: {e}");
                 }
@@ -4466,6 +4520,39 @@ async fn node_done(
 
     if node_id == MERGE_RESOLVER_NODE_ID {
         return handle_merge_resolver_done(&state, &run_id, &worktree_dir, &pre_run_state).await;
+    }
+
+    // Transition guard (#212): validate the completion against the projected
+    // state BEFORE any side effect (sub-worktree merge, doc-only cleanliness
+    // check, output validation, downstream dispatch). A duplicate completion
+    // is a no-op — it must not merge again nor re-trigger downstream spawns.
+    let completion_probe = event_log::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeCompleted,
+        node_id: Some(node_id.clone()),
+        iter: Some(iter),
+        payload: None,
+    };
+    match transition_guard::validate_transition(Some(&pre_run_state), &completion_probe) {
+        transition_guard::Verdict::Reject { reason } => {
+            warn!("node_done rejected for {node_id} iter {iter} in run {run_id}: {reason}");
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::NoOp { reason } => {
+            info!("node_done no-op for {node_id} iter {iter} in run {run_id}: {reason}");
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::Allow => {}
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -5134,21 +5221,36 @@ async fn run_command(
                 }
             };
             let run_state = event_log::project(&events);
-            if let Some(ref rs) = run_state {
-                if let Some(node) = rs.nodes.get(&node_id) {
-                    if node.status != event_log::NodeStatus::AwaitingUser
-                        && node.status != event_log::NodeStatus::Running
-                        && node.status != event_log::NodeStatus::Failed
-                    {
-                        return (
-                            StatusCode::CONFLICT,
-                            Json(serde_json::json!({
-                                "error": format!("node {} is {:?}, cannot mark done", node_id, node.status)
-                            })),
-                        )
-                            .into_response();
-                    }
+
+            // Transition guard (#212): validate the completion against the
+            // projected state BEFORE any side effect (output validation,
+            // append, downstream dispatch).
+            let completion_probe = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: None,
+            };
+            match transition_guard::validate_transition(run_state.as_ref(), &completion_probe) {
+                transition_guard::Verdict::Reject { reason } => {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({ "error": reason })),
+                    )
+                        .into_response();
                 }
+                transition_guard::Verdict::NoOp { reason } => {
+                    info!("mark_node_done no-op: {reason}");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+                    )
+                        .into_response();
+                }
+                transition_guard::Verdict::Allow => {}
             }
 
             let empty_run_state = event_log::RunState::new(run_id.clone(), String::new());
@@ -5602,6 +5704,40 @@ async fn run_command(
             };
             let iter = req.iter.unwrap_or(1);
 
+            // Transition guard (#212 / #196): restart_node is mutually
+            // exclusive with the scheduler's own re-fire — validate against
+            // the projected state BEFORE killing anything, so a stale-view
+            // restart of an old iter never races a newer live iteration.
+            {
+                let events = match load_events(&state.db, &run_id).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            .into_response();
+                    }
+                };
+                let run_state = event_log::project(&events);
+                let restart_probe = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::NodeStarted,
+                    node_id: Some(node_id.clone()),
+                    iter: Some(iter),
+                    payload: None,
+                };
+                if let transition_guard::Verdict::Reject { reason } =
+                    transition_guard::validate_transition(run_state.as_ref(), &restart_probe)
+                {
+                    warn!("restart_node rejected for {node_id} iter {iter} in {run_id}: {reason}");
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({ "error": reason })),
+                    )
+                        .into_response();
+                }
+            }
+
             // Kill existing session
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
@@ -5969,16 +6105,16 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         for action in &actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    // Only spawn if not already running/completed at this iter
-                    let already_active = run_state.nodes.get(node_id.as_str()).is_some_and(|n| {
-                        n.iter >= *iter
-                            && (n.status == event_log::NodeStatus::Running
-                                || n.status == event_log::NodeStatus::Completed)
-                    });
-                    if !already_active {
-                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                            spawn_node(state, &spawn_ctx, node, *iter).await;
-                        }
+                    // Transition guard (#212, ex-#201 dead already_active
+                    // check): a re-evaluation only schedules MISSING work —
+                    // never a node with a live iteration, never a completed
+                    // iteration.
+                    if let Some(reason) =
+                        transition_guard::spawn_superfluous(&run_state, node_id, *iter)
+                    {
+                        info!("re_evaluate_after_command: skip spawn — {reason}");
+                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                        spawn_node(state, &spawn_ctx, node, *iter).await;
                     }
                 }
                 scheduler::SchedulerAction::Halt { message } => {
@@ -6075,19 +6211,13 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         for action in &loop_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    let already_active =
-                        fresh_run_state
-                            .nodes
-                            .get(node_id.as_str())
-                            .is_some_and(|n| {
-                                n.iter >= *iter
-                                    && (n.status == event_log::NodeStatus::Running
-                                        || n.status == event_log::NodeStatus::Completed)
-                            });
-                    if !already_active {
-                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                            spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
-                        }
+                    // Transition guard (#212): schedule only missing work.
+                    if let Some(reason) =
+                        transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
+                    {
+                        info!("re_evaluate_after_command(loop): skip spawn — {reason}");
+                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
@@ -6113,19 +6243,13 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         for action in &foreach_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    let already_active =
-                        fresh_run_state
-                            .nodes
-                            .get(node_id.as_str())
-                            .is_some_and(|n| {
-                                n.iter >= *iter
-                                    && (n.status == event_log::NodeStatus::Running
-                                        || n.status == event_log::NodeStatus::Completed)
-                            });
-                    if !already_active {
-                        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                            spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
-                        }
+                    // Transition guard (#212): schedule only missing work.
+                    if let Some(reason) =
+                        transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
+                    {
+                        info!("re_evaluate_after_command(foreach): skip spawn — {reason}");
+                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
+                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
@@ -10446,7 +10570,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_node_done_accepts_failed_node_with_outputs() {
+    async fn mark_node_done_accepts_failed_node_with_outputs_after_resume() {
+        // #212: a Failed run accepts no lifecycle event — the recovery flow is
+        // resume_run first, then mark_node_done on the (hand-fixed) failed iter.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "failed-rescue";
         write_pipeline_with_outputs(tmp.path(), pipe_name);
@@ -10468,8 +10594,9 @@ mod tests {
         std::fs::create_dir_all(&report_dir).unwrap();
         std::fs::write(report_dir.join("output.md"), "# Report\nAll good.").unwrap();
 
-        let app = build_router(state.clone());
-        let resp = app
+        // While the run is Failed, mark_node_done is rejected with a readable
+        // cause (#197 family: no lifecycle event on a non-running run).
+        let resp = build_router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -10482,7 +10609,46 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            body["error"].as_str().unwrap().contains("resume"),
+            "rejection should point at resume_run, got {body}"
+        );
 
+        // resume_run lifts the failure...
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "resume_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // ...then the failed iteration is markable.
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let events = load_events(&state.db, run_id).await.unwrap();
@@ -10490,6 +10656,678 @@ mod tests {
         assert_eq!(
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Completed
+        );
+    }
+
+    // --- Transition guard wiring (#212, closes #195 #196 #197 #198 #201) ---
+
+    /// Pipeline `worker -> consumer` (both doc-only, no declared outputs) so
+    /// downstream re-spawn behavior is observable in the event log.
+    fn write_pipeline_with_consumer(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: consumer\n    name: consumer\n    type: doc-only\n    inputs:\n      - name: feed\n    outputs:\n      - name: out\nedges:\n  - source: {{ node: worker, port: result }}\n    target: {{ node: consumer, port: feed }}\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    fn count_events(
+        events: &[event_log::Event],
+        kind: event_log::EventKind,
+        node_id: &str,
+    ) -> usize {
+        events
+            .iter()
+            .filter(|e| e.kind == kind && e.node_id.as_deref() == Some(node_id))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_on_completed_iter_is_noop_without_downstream_spawn() {
+        // #198: the duplicate completion must neither re-emit node_completed
+        // nor re-trigger downstream spawns.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-dup-mark";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "guard-dup-mark-1";
+        // worker completed organically; consumer already running iter 1.
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("consumer".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["noop"], true, "duplicate completion must be a no-op");
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            1,
+            "no duplicate node_completed"
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStarted, "consumer"),
+            1,
+            "no downstream re-spawn"
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeWaiting, "consumer"),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_on_never_started_iter_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-ghost-mark";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "guard-ghost-mark-1";
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            body["error"].as_str().unwrap().contains("never started"),
+            "got {body}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            0,
+            "rejection emits no completion"
+        );
+    }
+
+    /// Seed a `blocker` run holding enough Running nodes to saturate the
+    /// global session cap, so any legitimate spawn in the run under test lands
+    /// as an observable `node_waiting` event instead of a real tmux session.
+    async fn saturate_session_cap(state: &Arc<AppState>) {
+        let run_id = "cap-blocker";
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "blocker" })),
+        };
+        append_event(state, &run_started).await.unwrap();
+        for i in 0..admission::DEFAULT_SESSION_CAP {
+            let started = event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some(format!("hog-{i}")),
+                iter: Some(1),
+                payload: None,
+            };
+            append_event(state, &started).await.unwrap();
+        }
+    }
+
+    fn seed_event(
+        run_id: &str,
+        kind: event_log::EventKind,
+        node_id: Option<&str>,
+        iter: Option<i64>,
+        payload: Option<serde_json::Value>,
+    ) -> event_log::Event {
+        event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind,
+            node_id: node_id.map(String::from),
+            iter,
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_detector_terminal_events_on_terminal_node_are_dropped() {
+        // #212: the stale detector probes a snapshot; if the node completed
+        // organically in between, its NodeStale / NodeAutoCompleted must be
+        // dropped by the guard at append time (re-checked against the freshly
+        // projected state).
+        let state = test_state().await;
+        let run_id = "guard-stale-terminal";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "test" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        for detection in [
+            stale_detector::Detection::Stale,
+            stale_detector::Detection::AutoComplete,
+        ] {
+            for event in stale_detector::detection_events(&detection, run_id, "worker", 1) {
+                // The guard turns these into no-ops, not errors.
+                append_event(&state, &event).await.unwrap();
+            }
+        }
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStale, "worker"),
+            0
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            1,
+            "no duplicate completion from the auto-complete path"
+        );
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_node_rejected_while_newer_iteration_is_live() {
+        // #196: restart_node on a stale iter must not race the scheduler's
+        // newer live iteration — reject with a readable cause, spawn nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-restart-race";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "guard-restart-race-1";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(2),
+                None,
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "restart_node", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            body["error"].as_str().unwrap().contains("live"),
+            "got {body}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        // iter 2 stays the only live iteration; iter 1 was not re-spawned.
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStarted, "worker"),
+            2,
+            "no extra node_started"
+        );
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Running
+        );
+        assert_eq!(run_state.nodes["worker"].iter, 2);
+    }
+
+    #[tokio::test]
+    async fn resume_run_schedules_only_missing_work() {
+        // #195: chain a -> b -> c with a, b completed and c never started.
+        // resume_run schedules c only; a and b are not re-iterated.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-resume-missing";
+        let pipelines_dir = tmp.path().join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: c\n    name: c\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: c, port: in }}\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{pipe_name}.yaml")), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        saturate_session_cap(&state).await;
+        let run_id = "guard-resume-missing-1";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("a"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("a"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("b"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("b"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "resume_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        // c is scheduled (waiting, because the cap is saturated)...
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeWaiting, "c")
+                + count_events(&events, event_log::EventKind::NodeStarted, "c"),
+            1,
+            "the never-started node is scheduled exactly once"
+        );
+        // ...and the completed nodes are not re-iterated.
+        for nid in ["a", "b"] {
+            assert_eq!(
+                count_events(&events, event_log::EventKind::NodeStarted, nid),
+                1,
+                "completed node {nid} must not be re-spawned"
+            );
+            assert_eq!(
+                count_events(&events, event_log::EventKind::NodeWaiting, nid),
+                0,
+                "completed node {nid} must not be re-scheduled"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_run_refuses_concurrent_iteration_and_is_idempotent() {
+        // #201: a -> b with a back-edge b -> a (emergent cycle). a completed
+        // iter 1, b still running iter 1: resume_run must NOT spawn b iter 2,
+        // and a second resume_run must be a no-op too.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-resume-live";
+        let pipelines_dir = tmp.path().join(".maestro").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: a, port: in }}\n    when: \"iter < 3\"\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{pipe_name}.yaml")), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        saturate_session_cap(&state).await;
+        let run_id = "guard-resume-live-1";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("a"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("a"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("b"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        for _ in 0..2 {
+            let resp = build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/runs/{run_id}/commands"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"kind": "resume_run"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            let events = load_events(&state.db, run_id).await.unwrap();
+            assert_eq!(
+                count_events(&events, event_log::EventKind::NodeStarted, "b"),
+                1,
+                "no concurrent second iteration of b"
+            );
+            assert_eq!(
+                count_events(&events, event_log::EventKind::NodeWaiting, "b"),
+                0,
+                "no scheduled second iteration of b"
+            );
+            assert_eq!(
+                count_events(&events, event_log::EventKind::NodeStarted, "a"),
+                1,
+                "completed a is not redone"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_run_accepts_no_completion_and_schedules_nothing() {
+        // #197: once the run is failed, node_done is rejected and the
+        // scheduler does not advance until resume_run.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-failed-sched";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "guard-failed-sched-1";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::RunFailed,
+                None,
+                None,
+                Some(serde_json::json!({ "reason": "boom" })),
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"iter": 1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            0
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStarted, "consumer")
+                + count_events(&events, event_log::EventKind::NodeWaiting, "consumer"),
+            0,
+            "a failed run schedules nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn double_node_done_is_noop_without_downstream_respawn() {
+        // #198: replaying node_done for an already-completed (node, iter) must
+        // not bump the consumer to a fresh iteration.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "guard-dup-done";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "guard-dup-done-1";
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("consumer".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"iter": 1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            1,
+            "no duplicate node_completed"
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStarted, "consumer"),
+            1,
+            "no downstream re-spawn"
         );
     }
 

@@ -162,4 +162,22 @@ describe("PipelineInspector", () => {
       useEditStore.getState().openTabs[0].pipeline.prompt_required,
     ).toBe(true);
   });
+
+  // Pipeline-wide diagnostics live on the canvas overlay (EditCanvas), which is the
+  // single source of truth — the same consolidation as the inline-star removal above.
+  // The inspector must NOT render its own copy, else the banner shows twice when no
+  // node is selected (#63).
+  it("does not render the lint banner — pipeline diagnostics live on the canvas overlay, not the inspector (#63)", () => {
+    seedTab();
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === "p1"
+          ? { ...t, diagnostics: ["node 'reviewer' receives edges from 2 code-mutating nodes without a Merge"] }
+          : t,
+      ),
+    }));
+    renderInspector([]);
+    expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument(); // inspector did mount
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument(); // but no banner
+  });
 });

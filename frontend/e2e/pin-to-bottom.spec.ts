@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-pin-to-bottom-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -28,14 +28,14 @@ edges: []
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = "exec sleep 300";
+  process.env.PDO_TMUX_CMD_OVERRIDE = "exec sleep 300";
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("scroll-up pauses rendering and shows chevron; click resumes", async ({
@@ -94,7 +94,7 @@ test("scroll-up pauses rendering and shows chevron; click resumes", async ({
   expect(isAtBottom).toBe(true);
 
   // Cleanup
-  const sessionName = `maestro-${run_id}-worker-iter-1`;
+  const sessionName = `pdo-${run_id}-worker-iter-1`;
   const { execSync } = await import("node:child_process");
   try {
     execSync(`tmux kill-session -t ${sessionName}`, { stdio: "ignore" });

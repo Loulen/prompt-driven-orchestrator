@@ -51,7 +51,7 @@ Covered by:
 - `tests/process_lifecycle.rs::boot_recovery_reconciles_a_run_level_stall` and
   `::run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal` at
   the integration layer, plus the `run_stall_reason` unit tests in
-  `crates/maestro-daemon/src/lib.rs` (pure decision logic).
+  `crates/pdo-daemon/src/lib.rs` (pure decision logic).
 
 ## Running the suite
 

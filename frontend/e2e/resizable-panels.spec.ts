@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Maestro").first()).toBeVisible();
+  await expect(page.getByText("PDO").first()).toBeVisible();
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
@@ -41,7 +41,7 @@ test("drag divider persists layout to localStorage across reload", async ({
 
   // Wait for the layout change to propagate to localStorage
   await page.waitForFunction(() => {
-    const stored = localStorage.getItem("maestro.layout.run");
+    const stored = localStorage.getItem("pdo.layout.run");
     return stored !== null;
   });
 
@@ -52,7 +52,7 @@ test("drag divider persists layout to localStorage across reload", async ({
 
   // Reload and verify size is preserved
   await page.reload();
-  await expect(page.getByText("Maestro").first()).toBeVisible();
+  await expect(page.getByText("PDO").first()).toBeVisible();
 
   const leftPanelAfterReload = page
     .locator('[data-slot="resizable-panel"]')
@@ -86,10 +86,10 @@ test("run and edit modes have independent layouts", async ({ page }) => {
   await page.mouse.up();
 
   await page.waitForFunction(() =>
-    localStorage.getItem("maestro.layout.run") !== null,
+    localStorage.getItem("pdo.layout.run") !== null,
   );
   const runLayout = await page.evaluate(() =>
-    localStorage.getItem("maestro.layout.run"),
+    localStorage.getItem("pdo.layout.run"),
   );
 
   // Toggle to edit mode
@@ -98,7 +98,7 @@ test("run and edit modes have independent layouts", async ({ page }) => {
 
   // Edit mode should NOT have the run layout in its key
   const editLayout = await page.evaluate(() =>
-    localStorage.getItem("maestro.layout.edit"),
+    localStorage.getItem("pdo.layout.edit"),
   );
   expect(editLayout).toBeNull();
 
@@ -121,15 +121,15 @@ test("run and edit modes have independent layouts", async ({ page }) => {
   await page.mouse.up();
 
   await page.waitForFunction(() =>
-    localStorage.getItem("maestro.layout.edit") !== null,
+    localStorage.getItem("pdo.layout.edit") !== null,
   );
 
   // Both keys should exist and be different
   const runAfter = await page.evaluate(() =>
-    localStorage.getItem("maestro.layout.run"),
+    localStorage.getItem("pdo.layout.run"),
   );
   const editAfter = await page.evaluate(() =>
-    localStorage.getItem("maestro.layout.edit"),
+    localStorage.getItem("pdo.layout.edit"),
   );
   expect(runAfter).toBe(runLayout);
   expect(editAfter).not.toBe(runAfter);

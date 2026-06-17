@@ -4,8 +4,8 @@ export const MIN_SIZE_PX = 100;
 const MIN_SIZE_PCT = 5;
 
 const STORAGE_KEYS = {
-  run: "maestro.layout.run",
-  edit: "maestro.layout.edit",
+  run: "pdo.layout.run",
+  edit: "pdo.layout.edit",
 } as const;
 
 export type Layout = Record<string, number>;

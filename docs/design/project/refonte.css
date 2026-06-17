@@ -1,5 +1,5 @@
 /* refonte.css — Pipeline canvas editor: interaction refonte
-   Evolves the live editor. Reuses Maestro tokens (styles.css).
+   Evolves the live editor. Reuses PDO tokens (styles.css).
    New vocab: slim node cards · per-document output dots · dot-less emergent
    inputs · always-visible condition pills on edges · translucent loop
    regions · orthogonal user-anchored edges · edge detail panel · pooled

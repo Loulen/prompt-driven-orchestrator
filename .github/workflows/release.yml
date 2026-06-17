@@ -40,7 +40,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # Frontend dist is built by maestro-daemon's build.rs during cargo build;
+      # Frontend dist is built by pdo-daemon's build.rs during cargo build;
       # we only need node_modules ready here.
       - run: cd frontend && npm ci
 
@@ -61,19 +61,19 @@ jobs:
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p maestro-daemon
+        run: cargo build --release --target ${{ matrix.target }} -p pdo-daemon
 
       - name: Package
         run: |
           TAG="${GITHUB_REF_NAME}"
-          ARCHIVE="maestro-${TAG}-${{ matrix.platform }}.tar.gz"
-          cp "target/${{ matrix.target }}/release/maestro" maestro
-          tar -czf "${ARCHIVE}" maestro
+          ARCHIVE="pdo-${TAG}-${{ matrix.platform }}.tar.gz"
+          cp "target/${{ matrix.target }}/release/pdo" pdo
+          tar -czf "${ARCHIVE}" pdo
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: maestro-${{ matrix.platform }}
+          name: pdo-${{ matrix.platform }}
           path: ${{ env.ARCHIVE }}
 
   release:
@@ -92,8 +92,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           cd artifacts
-          sha256sum maestro-*.tar.gz > "maestro-${TAG}-SHA256SUMS.txt"
-          cat "maestro-${TAG}-SHA256SUMS.txt"
+          sha256sum pdo-*.tar.gz > "pdo-${TAG}-SHA256SUMS.txt"
+          cat "pdo-${TAG}-SHA256SUMS.txt"
 
       - name: Create release
         env:
@@ -101,8 +101,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           gh release create "${TAG}" \
-            --title "Maestro ${TAG}" \
+            --title "PDO ${TAG}" \
             --generate-notes \
-            artifacts/maestro-*.tar.gz \
-            artifacts/maestro-*-SHA256SUMS.txt \
+            artifacts/pdo-*.tar.gz \
+            artifacts/pdo-*-SHA256SUMS.txt \
             install.sh

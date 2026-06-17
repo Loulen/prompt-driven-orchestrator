@@ -350,7 +350,7 @@ function App() {
     <main className="expl-doc">
       <div className="expl-head">
         <div>
-          <div className="eyebrow mono">Maestro · inspector iteration</div>
+          <div className="eyebrow mono">PDO · inspector iteration</div>
           <h1>Port row / output card / Switch branch · component sheets</h1>
         </div>
         <div className="sub">

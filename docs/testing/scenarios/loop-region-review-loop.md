@@ -12,12 +12,12 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser (single always-interactive canvas — there is
   no Edit/Run pencil toggle; the canvas is editable at all times per ADR-0011).
 - `claude` available on `PATH`.
-- A pipeline `loop-region-review-loop.yaml` exists in `.maestro/pipelines/`. If
+- A pipeline `loop-region-review-loop.yaml` exists in `.pdo/pipelines/`. If
   it isn't already there, the agent creates it before driving the UI. This is the
   bounded-region form an old `Loop`+`Switch` review loop migrates into (the body
   is a named region; routing lives on the edges):

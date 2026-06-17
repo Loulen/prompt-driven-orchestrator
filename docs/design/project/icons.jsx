@@ -1,4 +1,4 @@
-// icons.jsx — simple line icons used across Maestro chrome
+// icons.jsx — simple line icons used across PDO chrome
 // All are 14x14 unless noted. stroke-width 1.6, currentColor.
 
 const Ic = {};

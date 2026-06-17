@@ -5,17 +5,17 @@
 # they respond JSON / HTML, and kills the daemon. Exits 0 on success.
 #
 # Usage: bash tests/smoke.sh
-# Requires: target/debug/maestro built (the script will run `cargo build` if missing).
+# Requires: target/debug/pdo built (the script will run `cargo build` if missing).
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BIN="$REPO_ROOT/target/debug/maestro"
+BIN="$REPO_ROOT/target/debug/pdo"
 if [[ ! -x "$BIN" ]]; then
-  echo "[smoke] Building maestro daemon (debug)..."
-  MAESTRO_SKIP_FRONTEND_BUILD="${MAESTRO_SKIP_FRONTEND_BUILD:-}" cargo build -p maestro-daemon
+  echo "[smoke] Building pdo daemon (debug)..."
+  PDO_SKIP_FRONTEND_BUILD="${PDO_SKIP_FRONTEND_BUILD:-}" cargo build -p pdo-daemon
 fi
 
 # Pick a free port. Prefer python3 (available in CI + most dev setups);
@@ -36,7 +36,7 @@ TMPDIR=$(mktemp -d)
 LOG="$TMPDIR/daemon.log"
 echo "[smoke] Using port $PORT, working dir $TMPDIR"
 
-# Run daemon from the tempdir so its .maestro lives there, not in the repo.
+# Run daemon from the tempdir so its .pdo lives there, not in the repo.
 ( cd "$TMPDIR" && "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
 DAEMON_PID=$!
 
@@ -87,9 +87,9 @@ CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/runs")
 CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/pipelines")
 [[ "$CT" == application/json* ]] || fail "/pipelines content-type not JSON: '$CT'"
 
-# 3. GET / returns HTML containing "Maestro"
+# 3. GET / returns HTML containing "PDO"
 INDEX=$(curl -fsS "$URL/")
-echo "$INDEX" | grep -q "Maestro" || fail "index does not contain 'Maestro'"
+echo "$INDEX" | grep -q "PDO" || fail "index does not contain 'PDO'"
 
 # 4. Asset JS referenced in index.html responds 200
 ASSET_PATH=$(echo "$INDEX" | grep -oE '/assets/[^"]+\.js' | head -n1)

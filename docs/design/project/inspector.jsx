@@ -95,7 +95,7 @@ function NodeDetail({ node, awaiting, failed, libState = 'outline', onLibAction,
         <SectionHead title="Terminal preview"/>
         <div className="term-toolbar">
           <span className="tt-dot"/>
-          <span>tmux: maestro/run-a3f/impl · 80×24</span>
+          <span>tmux: pdo/run-a3f/impl · 80×24</span>
           <span className="spacer"/>
           <button className="btn ghost sm" style={{height: 22, padding: '0 6px'}}><Ic.External/> Open terminal</button>
         </div>

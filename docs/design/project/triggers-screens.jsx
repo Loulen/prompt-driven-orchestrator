@@ -93,7 +93,7 @@ function TrigStatusBar({ daemon = 'connected', activeRuns = 3, awaiting = 1, ses
 
 function TrigFrame({ children, breadcrumb, runId, sessActive = 3, sessCap = 8, activeRuns = 3, awaiting = 1 }) {
   return (
-    <div className="app-frame maestro">
+    <div className="app-frame pdo">
       <TopBar mode="run" breadcrumb={breadcrumb} runId={runId}/>
       <div className="shell">{children}</div>
       <TrigStatusBar sessActive={sessActive} sessCap={sessCap} activeRuns={activeRuns} awaiting={awaiting}/>

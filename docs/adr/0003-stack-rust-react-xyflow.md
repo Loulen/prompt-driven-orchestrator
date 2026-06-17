@@ -1,6 +1,6 @@
 # Stack Rust + React + xyflow
 
-Maestro nécessite un daemon long-running qui supervise plusieurs sessions tmux + sous-worktrees git, watch des fichiers, expose un serveur HTTP + WebSocket, persiste un event log SQLite, et un frontend visuel pour l'éditeur DAG et la viz de Runs.
+PDO nécessite un daemon long-running qui supervise plusieurs sessions tmux + sous-worktrees git, watch des fichiers, expose un serveur HTTP + WebSocket, persiste un event log SQLite, et un frontend visuel pour l'éditeur DAG et la viz de Runs.
 
 **Décision : daemon en Rust (Tokio + Axum + sqlx + notify + serde_yaml), frontend en React + Vite + xyflow + shadcn/ui.** Distribution v1 = binaires GitHub Releases + install script `curl | bash`, frontend embarqué dans le binaire (rust-embed). Le daemon expose `localhost:<port>` que le user ouvre dans son browser. Pas de npm. Tauri envisagé en v2 pour wrapper la même UI en app desktop.
 

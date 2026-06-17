@@ -8,27 +8,27 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `claude` available on `PATH`.
-- A pipeline `run-minimal-scenario.yaml` exists in `.maestro/pipelines/` (the
+- A pipeline `run-minimal-scenario.yaml` exists in `.pdo/pipelines/` (the
   same trivial start → only → end pipeline used by `run-minimal`). If it isn't
   there, create it per `run-minimal.md` Setup before driving the UI.
 - Two small image files to upload as input, created up front:
 
   ```bash
-  mkdir -p /tmp/maestro-start-imgs
+  mkdir -p /tmp/pdo-start-imgs
   # 1×1 PNGs are enough — the bytes only have to be a valid image.
-  printf '\x89PNG\r\n\x1a\n' > /tmp/maestro-start-imgs/ui-bug.png
+  printf '\x89PNG\r\n\x1a\n' > /tmp/pdo-start-imgs/ui-bug.png
   python3 - <<'PY'
   import base64, pathlib
   png = base64.b64decode(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC"
   )
-  pathlib.Path("/tmp/maestro-start-imgs/ui-bug.png").write_bytes(png)
-  pathlib.Path("/tmp/maestro-start-imgs/trace.png").write_bytes(png)
+  pathlib.Path("/tmp/pdo-start-imgs/ui-bug.png").write_bytes(png)
+  pathlib.Path("/tmp/pdo-start-imgs/trace.png").write_bytes(png)
   PY
   ```
 
@@ -42,14 +42,14 @@
 
 2. Open the **New Run** modal. Pick `run-minimal-scenario`. Provide any input
    string (e.g. `look at these`). **Attach the two images**
-   (`/tmp/maestro-start-imgs/ui-bug.png`, `/tmp/maestro-start-imgs/trace.png`)
+   (`/tmp/pdo-start-imgs/ui-bug.png`, `/tmp/pdo-start-imgs/trace.png`)
    via the modal's image upload control. Click **Launch**. Capture the
    resulting `run_id`.
 
 3. Confirm the images were stored by the daemon:
 
    ```bash
-   ls .maestro/runs/<run_id>/worktree/.maestro/artifacts/_input/
+   ls .pdo/runs/<run_id>/worktree/.pdo/artifacts/_input/
    ```
 
    Expect `output.md`, `ui-bug.png`, `trace.png`.
@@ -104,7 +104,7 @@
     -H 'content-type: application/json' -d '{"kind":"cleanup_run"}'
   ```
 
-- Remove `/tmp/maestro-start-imgs/`.
+- Remove `/tmp/pdo-start-imgs/`.
 
 ## Verdict format
 

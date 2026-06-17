@@ -14,7 +14,7 @@
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - A test pipeline named `mid-run-edit-scenario.yaml` seeded in
-  `.maestro/pipelines/`. If it isn't already there, the agent creates it
+  `.pdo/pipelines/`. If it isn't already there, the agent creates it
   before driving the UI:
 
   ```yaml
@@ -44,13 +44,13 @@
       target: { node: worker, port: task }
   ```
 
-- Seed `.maestro/pipelines/mid-run-edit-scenario.prompts/worker.md` with a
+- Seed `.pdo/pipelines/mid-run-edit-scenario.prompts/worker.md` with a
   prompt that keeps the session busy long enough to edit mid-run, e.g.
-  `Wait for further instructions. Do not call maestro complete.`
+  `Wait for further instructions. Do not call pdo complete.`
 
 ## Part 1 — launch refusal on a dangling port (#211)
 
-1. Copy the pipeline to `.maestro/pipelines/dangling-port-scenario.yaml`,
+1. Copy the pipeline to `.pdo/pipelines/dangling-port-scenario.yaml`,
    renaming `name:` to `dangling-port-scenario` and changing the first edge's
    source port to a typo: `source: { node: start, port: user_promppt }`.
 2. Open the UI, confirm **`Daemon: connected`**, and launch a run on
@@ -76,7 +76,7 @@
    (`running`). Take a screenshot.
 8. Dismiss the modal. Revert the type to **doc-only** (the rejected edit must
    not have been persisted: re-reading
-   `.maestro/runs/<run-id>/pipeline.yaml` still shows `type: doc-only` for
+   `.pdo/runs/<run-id>/pipeline.yaml` still shows `type: doc-only` for
    `worker`).
 
 ## Part 3 — safe edit in the same run applies normally
@@ -89,10 +89,10 @@
     of an unspawned node is a safe edit).
 11. Save. Assert the save **succeeds**: dirty indicator `•` clears, no
     save-error modal appears.
-12. Assert persistence: `.maestro/runs/<run-id>/pipeline.yaml` now contains
+12. Assert persistence: `.pdo/runs/<run-id>/pipeline.yaml` now contains
     the `reviewer` node and the `worker → reviewer` edge, and
-    `.maestro/runs/<run-id>/prompts/reviewer.md` equals the marker. The
-    template `.maestro/pipelines/mid-run-edit-scenario.yaml` also contains
+    `.pdo/runs/<run-id>/prompts/reviewer.md` equals the marker. The
+    template `.pdo/pipelines/mid-run-edit-scenario.yaml` also contains
     `reviewer` (auto-sync montant, ADR-0007).
 13. Complete or stop the run (e.g. stop the `worker` node) so cleanup can
     proceed.
@@ -100,9 +100,9 @@
 ## Cleanup
 
 - Stop/cleanup the run launched in Part 2 if still live.
-- Delete `.maestro/pipelines/dangling-port-scenario.yaml`.
-- Delete `.maestro/pipelines/mid-run-edit-scenario.yaml` and
-  `.maestro/pipelines/mid-run-edit-scenario.prompts/`.
+- Delete `.pdo/pipelines/dangling-port-scenario.yaml`.
+- Delete `.pdo/pipelines/mid-run-edit-scenario.yaml` and
+  `.pdo/pipelines/mid-run-edit-scenario.prompts/`.
 
 ## Verdict format
 

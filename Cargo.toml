@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/maestro-daemon"]
+members = ["crates/pdo-daemon"]
 
 [workspace.package]
 edition = "2021"

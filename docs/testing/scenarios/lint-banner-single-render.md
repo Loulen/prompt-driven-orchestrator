@@ -32,15 +32,15 @@ WT=<path-to-this-branch-worktree>     # the dir with frontend/ and crates/
 PORT=6272                             # free port; NOT 6172 (user's daemon), NOT 5172
 
 # Prereqs: pipelines dir + frontend build inputs (both are absent in a fresh worktree)
-mkdir -p "$WT/.maestro/pipelines"
+mkdir -p "$WT/.pdo/pipelines"
 ( cd "$WT/frontend" && npm ci )       # so build.rs → npm run build can produce dist
 
 # Build the worktree daemon: build.rs runs `npm run build` (→ frontend/dist) and
 # bakes the worktree's dist path into the binary (rust_embed, debug = read-from-disk).
-( cd "$WT" && cargo build -p maestro-daemon )
+( cd "$WT" && cargo build -p pdo-daemon )
 
 # Seed the trigger pipeline (one unknown top-level field → exactly one diagnostic).
-cat > "$WT/.maestro/pipelines/lint-banner-scenario.yaml" <<'YAML'
+cat > "$WT/.pdo/pipelines/lint-banner-scenario.yaml" <<'YAML'
 name: lint-banner-scenario
 version: "1.0"
 auto_merge_resolver: true   # unknown top-level key → exactly one info-only diagnostic
@@ -60,8 +60,8 @@ nodes:
 edges: []
 YAML
 
-# Launch the worktree daemon FROM the worktree CWD (it reads .maestro/ from CWD).
-( cd "$WT" && MAESTRO_PORT=$PORT ./target/debug/maestro daemon ) &
+# Launch the worktree daemon FROM the worktree CWD (it reads .pdo/ from CWD).
+( cd "$WT" && PDO_PORT=$PORT ./target/debug/pdo daemon ) &
 ```
 
 Sanity checks before driving the UI:
@@ -73,14 +73,14 @@ curl -fs "http://127.0.0.1:$PORT/pipelines" | grep -q lint-banner-scenario
 curl -fs "http://127.0.0.1:$PORT/" | grep -vq 'run the Vite frontend separately'
 ```
 
-If `curl /` returns the placeholder ("Maestro daemon running… run the Vite
+If `curl /` returns the placeholder ("PDO daemon running… run the Vite
 frontend separately"), `frontend/dist` did not build — re-run `cargo build` and
 confirm `npm ci` succeeded. Browser: Chrome DevTools MCP preferred; Playwright
 MCP works as a fallback.
 
 The diagnostic this pipeline produces is the string
 `unknown field 'auto_merge_resolver' (ignored)` (backend parser,
-`crates/maestro-daemon/src/pipeline.rs`), surfaced into `tab.diagnostics`.
+`crates/pdo-daemon/src/pipeline.rs`), surfaced into `tab.diagnostics`.
 
 ## Steps the agent executes
 
@@ -131,7 +131,7 @@ The diagnostic this pipeline produces is the string
 
 ## Cleanup
 
-- Delete `$WT/.maestro/pipelines/lint-banner-scenario.yaml`.
+- Delete `$WT/.pdo/pipelines/lint-banner-scenario.yaml`.
 - Kill the worktree daemon launched in Setup (and any Vite server, if you used
   the dev-server fallback).
 
@@ -167,7 +167,7 @@ a free port, never 6172/5172):
 ```bash
 # daemon (worktree-built, for branch fidelity) on $PORT first, then:
 cd "$WT/frontend"
-MAESTRO_PORT=$PORT npx vite --port 5274 --strictPort --cacheDir /tmp/vite-cache-lint-banner
+PDO_PORT=$PORT npx vite --port 5274 --strictPort --cacheDir /tmp/vite-cache-lint-banner
 # browse http://127.0.0.1:5274  (API calls proxied to the daemon on $PORT)
 ```
 

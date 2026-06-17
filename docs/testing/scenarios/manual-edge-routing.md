@@ -18,10 +18,10 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser.
-- A pipeline `manual-edge-routing.yaml` exists in `.maestro/pipelines/`. If it
+- A pipeline `manual-edge-routing.yaml` exists in `.pdo/pipelines/`. If it
   isn't already there, the agent creates it before driving the UI. The two work
   nodes are stacked vertically and offset so the straight line between them
   would cross the canvas at an angle — making the right-angle routing obvious:
@@ -95,7 +95,7 @@
    horizontally). Take a screenshot.
 6. **Drag a segment to pin the route** — drag one segment handle. The edge route
    bends to follow the drag and is now **pinned**: re-fetch the pipeline file
-   (`cat .maestro/pipelines/manual-edge-routing.yaml`, or
+   (`cat .pdo/pipelines/manual-edge-routing.yaml`, or
    `curl http://127.0.0.1:5172/pipelines/<id>` after the autosave) and confirm
    the corresponding edge now carries `mode: manual` and a non-empty `waypoints`
    list.

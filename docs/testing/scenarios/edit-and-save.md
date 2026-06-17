@@ -12,7 +12,7 @@
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - A test pipeline named `edit-and-save-scenario.yaml` seeded in
-  `.maestro/pipelines/`. If it isn't already there, the agent creates it
+  `.pdo/pipelines/`. If it isn't already there, the agent creates it
   before driving the UI:
 
   ```yaml
@@ -76,7 +76,7 @@
    `edit-and-save-scenario` pipeline, click the `alpha` node.
 10. Assert the prompt textarea displays **`MARKER_<timestamp>_SAVE_TEST`** —
     the value persisted through save and page reload.
-11. Read `.maestro/pipelines/edit-and-save-scenario.prompts/alpha.md` from
+11. Read `.pdo/pipelines/edit-and-save-scenario.prompts/alpha.md` from
     disk. Its content **must equal** the marker value typed in step 5 — proves
     the Save button wrote through to the filesystem.
 
@@ -97,7 +97,7 @@ under the explicit Save model.
     in-memory state. Take a screenshot.
 15. Assert the tab title still shows the dirty indicator `•` — the unsaved
     edit has not been silently discarded or auto-saved.
-16. Read `.maestro/pipelines/edit-and-save-scenario.prompts/alpha.md` from
+16. Read `.pdo/pipelines/edit-and-save-scenario.prompts/alpha.md` from
     disk. Its content **must still equal** `MARKER_<timestamp>_SAVE_TEST`
     (from the earlier explicit save in step 7) — proves no auto-save occurred.
 
@@ -113,7 +113,7 @@ The created input is named after the source document.
     Click **Save** to persist.
 18. Assert the saved YAML now has an edge `alpha.out → beta` whose **target
     port is `out`** (the emergent input inherited the source document name).
-    Read `.maestro/pipelines/edit-and-save-scenario.yaml` and confirm the edge
+    Read `.pdo/pipelines/edit-and-save-scenario.yaml` and confirm the edge
     `source: { node: alpha, port: out }`, `target: { node: beta, port: out }`.
 19. Click the **edge** between `alpha` and `beta` on the canvas. Assert:
     - The **edge detail panel** opens on the right (#147 / ADR-0011) — edge
@@ -155,8 +155,8 @@ The created input is named after the source document.
 
 ## Cleanup
 
-- Delete `.maestro/pipelines/edit-and-save-scenario.yaml`.
-- Delete `.maestro/pipelines/edit-and-save-scenario.prompts/` if it was
+- Delete `.pdo/pipelines/edit-and-save-scenario.yaml`.
+- Delete `.pdo/pipelines/edit-and-save-scenario.prompts/` if it was
   created during the run.
 
 ## Verdict format

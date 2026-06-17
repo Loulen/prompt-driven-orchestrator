@@ -11,11 +11,11 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser.
 - `claude` available on `PATH`.
-- A pipeline `loop-entry-join-termination.yaml` exists in `.maestro/pipelines/`.
+- A pipeline `loop-entry-join-termination.yaml` exists in `.pdo/pipelines/`.
   If it isn't already there, the agent creates it before driving the UI. This is
   the forensic run-9c8d123 shape in miniature: a doc-only feeder (`griller`)
   outside the region feeds the region entry (`impl`), and the back-edge
@@ -111,7 +111,7 @@
    - `griller` is **never re-spawned** by the laps (it stays at iter 1) and no
      member NodeRun ever shows `iter > 3`.
 3. **Input resolution survives a failed iteration** — create a second run
-   whose prompt asks the griller to `maestro fail` on its first iteration
+   whose prompt asks the griller to `pdo fail` on its first iteration
    (after writing its plan), then complete normally when restarted. Restart the
    failed griller (Manager or `restart_node`). When `impl` spawns, open its
    prompt/IO (`/runs/<run>/nodes/impl/io`) and verify its `task` input path

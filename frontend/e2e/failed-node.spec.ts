@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-failed-node-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -33,18 +33,18 @@ edges: []
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = "exec sleep 300";
+  process.env.PDO_TMUX_CMD_OVERRIDE = "exec sleep 300";
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
   if (runId) {
     const { execSync } = await import("node:child_process");
     try {
-      execSync(`tmux kill-session -t maestro-${runId}-worker-iter-1`, {
+      execSync(`tmux kill-session -t pdo-${runId}-worker-iter-1`, {
         stdio: "ignore",
       });
     } catch {
@@ -150,11 +150,11 @@ test("Mark complete succeeds after creating output files", async ({
   // Create the missing output files on disk
   const artifactsDir = path.join(
     WORKSPACE_ROOT,
-    ".maestro",
+    ".pdo",
     "runs",
     runId,
     "worktree",
-    ".maestro",
+    ".pdo",
     "artifacts",
   );
   const iterDir = path.join(artifactsDir, "worker", "iter-1");

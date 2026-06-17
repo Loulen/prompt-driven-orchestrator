@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-const daemonPort = process.env.MAESTRO_PORT ?? '5172'
+const daemonPort = process.env.PDO_PORT ?? '5172'
 const daemonTarget = `http://127.0.0.1:${daemonPort}`
 
 export default defineConfig({

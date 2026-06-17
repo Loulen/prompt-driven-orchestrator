@@ -1,4 +1,4 @@
-# Maestro — Glossaire métier
+# Prompt Driven Orchestrator (PDO) — Glossaire métier
 
 Glossaire vivant. Mis à jour au fil des décisions, lazy.
 
@@ -159,7 +159,7 @@ Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur 
 
 Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipeline Run. Toutes les sorties documentaires de tous les NodeRuns y sont persistées et adressées par chemin.
 
-- **Localisation** : `<pipeline-worktree>/.maestro/artifacts/`. Suit la branche du Pipeline Run, part au cleanup.
+- **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run, part au cleanup.
 - **Format** : markdown brut (`.md`) avec **YAML frontmatter** pour les métadonnées structurées (verdict, statut, références, etc.). Le corps reste lisible humainement, le frontmatter est parsable par le runtime.
 - **Wires** : dans l'éditeur, un wire de `Node A → Node B` n'est pas un transport ; c'est une **déclaration de dépendance**. Le runtime traduit en : *"avant de lancer B, attendre que A ait posé son artefact ; l'input port de B le lit depuis le Blackboard"*.
 - **Cycles + accumulation** : chaque tour de cycle écrit dans un sous-dossier `iter-<N>/`. Les ports d'entrée qui veulent accumuler (ex. `reviews_bloquantes`) lisent un glob `iter-*/review.md` → liste naturellement ordonnée.
@@ -169,7 +169,7 @@ Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipel
 Chaque artefact produit par un NodeRun a un chemin canonique :
 
 ```
-<pipeline-worktree>/.maestro/artifacts/<node-id>/iter-<N>/<port-name>.md
+<pipeline-worktree>/.pdo/artifacts/<node-id>/iter-<N>/<port-name>.md
 ```
 
 - `<node-id>` : slug stable du Node dans le pipeline (assigné à l'édition, ex. `implementer-1`).
@@ -228,10 +228,10 @@ outputs:
 
 ### Validation à la complétion + fallback tmux
 
-Quand un NodeRun signale `maestro complete`, le runtime parse la frontmatter de chaque output produit et la matche contre le schéma déclaré. Si **mismatch** :
+Quand un NodeRun signale `pdo complete`, le runtime parse la frontmatter de chaque output produit et la matche contre le schéma déclaré. Si **mismatch** :
 
 1. **Fallback** : le runtime envoie un message dans la session tmux du NodeRun (*"Ton frontmatter ne respecte pas le schéma : <champ X manquant / valeur Y hors enum>. Corrige et retry."*). Le NodeRun reste en status `running` (pas marqué failed).
-2. L'agent corrige et appelle à nouveau `maestro complete`. Le runtime re-valide.
+2. L'agent corrige et appelle à nouveau `pdo complete`. Le runtime re-valide.
 3. Si la 2e tentative échoue (limite : **1 retry max**, 2 tentatives au total), le NodeRun est marqué `failed` avec raison *"output frontmatter mismatch après retry"*.
 
 Ce mécanisme évite de fail loud sur une erreur que l'agent peut typiquement corriger seul, tout en bornant la dérive (un agent qui boucle dans le mismatch finit failé en deux tours).
@@ -260,7 +260,7 @@ Pas d'expressions calculées dans la déclaration des variables — uniquement d
 Chaque NodeRun voit son prompt construit en deux couches :
 
 1. **Prompt utilisateur** — la zone de texte que le designer du pipeline a remplie à l'édition (le "rôle" du nœud : *"Tu es un Reviewer. Tu lis le code, tu identifies les blocking issues..."*).
-2. **Préambule runtime** — généré déterministiquement à partir des ports configurés. Ne dépend pas du LLM, écrit par Maestro à chaque NodeRun.
+2. **Préambule runtime** — généré déterministiquement à partir des ports configurés. Ne dépend pas du LLM, écrit par PDO à chaque NodeRun.
 
 Le préambule contient au minimum :
 
@@ -270,9 +270,9 @@ Le préambule contient au minimum :
 - **Outputs attendus** :
   - Pour chaque port de sortie : chemin où écrire + schéma de frontmatter requis.
   - Ex. *"Tu dois produire à `<artifacts>/reviewer-1/iter-2/review.md` un fichier markdown avec frontmatter YAML contenant le champ `verdict: PASS | FAIL`. Le contenu détaillé (blocking issues, justifications) va dans le corps."*
-- **Capacités Maestro-specific (CLI)** :
-  - `maestro complete` — à appeler via Bash quand le NodeRun est terminé (cf. signal de complétion, Q10).
-  - `maestro fail --reason "..."` — à appeler en cas d'incapacité à finir.
+- **Capacités PDO-specific (CLI)** :
+  - `pdo complete` — à appeler via Bash quand le NodeRun est terminé (cf. signal de complétion, Q10).
+  - `pdo fail --reason "..."` — à appeler en cas d'incapacité à finir.
   - Ces commandes ne sont **pas** packagées comme skills Claude Code — elles sont 100% systématiques, sans bénéfice de progressive disclosure.
 - **Itération courante** : *"Tu es à l'itération {iter} de ce nœud."* Permet à l'agent d'adapter son comportement au tour de boucle (par exemple : Implementer en iter 1 implémente from scratch ; en iter 2+ il itère sur les reviews).
 - **Variables pipeline résolues** : injecte les valeurs des variables référencées dans le préambule (utile si l'agent doit savoir le `max_iter_review` pour adapter son verbosité, par exemple).
@@ -281,7 +281,7 @@ Conséquence : le designer du pipeline n'a pas à se soucier dans son prompt uti
 
 ### Skills Claude Code — délégué
 
-Maestro **ne gère pas** les skills. Les skills disponibles dans une session NodeRun sont ceux que Claude Code charge naturellement : `~/.claude/skills/`, `<target-repo>/.claude/skills/`, `<sub-worktree>/.claude/skills/`. Pas d'attachement par-Node, pas de symlink, pas de mécanisme custom. Si le user veut une capacité spécifique, il l'exprime soit dans le prompt du nœud, soit en modifiant la pipeline elle-même.
+PDO **ne gère pas** les skills. Les skills disponibles dans une session NodeRun sont ceux que Claude Code charge naturellement : `~/.claude/skills/`, `<target-repo>/.claude/skills/`, `<sub-worktree>/.claude/skills/`. Pas d'attachement par-Node, pas de symlink, pas de mécanisme custom. Si le user veut une capacité spécifique, il l'exprime soit dans le prompt du nœud, soit en modifiant la pipeline elle-même.
 
 ---
 
@@ -324,7 +324,7 @@ Si le designer dessine un fan-out `code-mutating` sans `Merge` downstream, l'éd
 
 ## Principe — Sharp tool, not safe tool
 
-L'outil ne contraint pas l'utilisateur à dessiner des pipelines "sains". Pas de validation prescriptive du graphe (genre *"interdit fan-out `code-mutating` sans Reviewer downstream"*), pas de warnings paternalistes. Si une pipeline est foireuse — fan-out non revu, accumulation infinie, deadlock conceptuel — c'est la responsabilité du designer du pipeline. Maestro fournit des primitives nettes ; l'usage est libre.
+L'outil ne contraint pas l'utilisateur à dessiner des pipelines "sains". Pas de validation prescriptive du graphe (genre *"interdit fan-out `code-mutating` sans Reviewer downstream"*), pas de warnings paternalistes. Si une pipeline est foireuse — fan-out non revu, accumulation infinie, deadlock conceptuel — c'est la responsabilité du designer du pipeline. PDO fournit des primitives nettes ; l'usage est libre.
 
 Conséquences à anticiper sur les décisions futures :
 - Schéma déclaratif côté output uniquement (cf. *Frontmatter — Schéma déclaratif par output port*) ; pas de typage côté input — l'agent fait du best-effort.
@@ -335,7 +335,7 @@ Conséquences à anticiper sur les décisions futures :
 
 ## Principe — Deliberate, then autonomous (trust-earned)
 
-Maestro ne **démarre** pas en *"set it and forget it"* : la valeur initiale est dans le **temps passé en conception**, et le défaut reste délibéré (humain dans la boucle). Mais l'autonomie est une **cible atteignable, pas un interdit** : une fois qu'un pipeline a gagné la confiance de l'utilisateur sur une classe de tâches, celui-ci **peut** le laisser aller jusqu'au bout — pousser, ouvrir une PR, merger — sans intervention.
+PDO ne **démarre** pas en *"set it and forget it"* : la valeur initiale est dans le **temps passé en conception**, et le défaut reste délibéré (humain dans la boucle). Mais l'autonomie est une **cible atteignable, pas un interdit** : une fois qu'un pipeline a gagné la confiance de l'utilisateur sur une classe de tâches, celui-ci **peut** le laisser aller jusqu'au bout — pousser, ouvrir une PR, merger — sans intervention.
 
 Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur du runtime ni du Trigger.** Le tool ne court-circuite jamais l'humain de sa propre initiative ; c'est le *designer* qui inscrit les actions durables dans le graphe (nœud Shipper avec `gh pr create`, nœud de merge vers main, etc.). Conséquence directe : un pipeline auto-shippant se comporte **à l'identique** qu'il soit lancé à la main ou par un Trigger — aucune divergence manuel/automatique. La confiance se construit et s'audite sur le *pipeline*, pas sur le déclencheur.
 
@@ -344,7 +344,7 @@ Conséquences :
 - **Tout NodeRun est attachable** en tmux à n'importe quel moment ; l'utilisateur peut intervenir, converser, corriger.
 - **Un Node peut être marqué `interactive: true`** à l'édition. Quand son NodeRun spawn, il s'arrête en attente que l'utilisateur attache la session et signale la complétion (slash command, fichier sentinelle, ou autre — TBD). Cas typique : nœud d'entrée qui grille l'utilisateur pour construire l'input du pipeline (à la `grill-with-docs`).
 - **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état. Il vit dans l'onglet info de la toolbar (cf. *UX — un seul mode d'édition unifié*).
-- **Aucune action durable auto par le runtime lui-même.** Maestro ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné dans le graphe, auditable. (Révise l'ancien « pas d'auto-merge, jamais » : l'interdit ne porte plus sur l'*effet* mais sur son *origine* — jamais le runtime, toujours le pipeline.)
+- **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné dans le graphe, auditable. (Révise l'ancien « pas d'auto-merge, jamais » : l'interdit ne porte plus sur l'*effet* mais sur son *origine* — jamais le runtime, toujours le pipeline.)
 
 À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate, then autonomous* parle du **runtime** (on ne court-circuite pas l'humain de force ; on lui laisse *choisir* d'inscrire l'autonomie dans son pipeline).
 
@@ -356,8 +356,8 @@ Le canvas est **toujours interactif** (ADR-0007). L'ancienne dichotomie "mode Ed
 
 ### Modèle de mutation
 
-- **Quand aucun Run ne tourne** sur une pipeline : l'édition modifie directement la template en bibliothèque (`~/.maestro/library/pipelines/<id>.yaml`).
-- **Quand un Run tourne** : l'édition modifie le **snapshot run-scope** (`<repo>/.maestro/runs/<run-id>/pipeline.yaml`) ET propage la même modif vers la template d'origine en bibliothèque (auto-sync montant). Le pipeline_watcher observe le snapshot run-scope et émet un event `PipelineModified` à chaque mutation ; le scheduler se réajuste au prochain tick (la fonction est pure, pas de cache à invalider).
+- **Quand aucun Run ne tourne** sur une pipeline : l'édition modifie directement la template en bibliothèque (`~/.pdo/library/pipelines/<id>.yaml`).
+- **Quand un Run tourne** : l'édition modifie le **snapshot run-scope** (`<repo>/.pdo/runs/<run-id>/pipeline.yaml`) ET propage la même modif vers la template d'origine en bibliothèque (auto-sync montant). Le pipeline_watcher observe le snapshot run-scope et émet un event `PipelineModified` à chaque mutation ; le scheduler se réajuste au prochain tick (la fonction est pure, pas de cache à invalider).
 - **Contrat de l'event `PipelineModified`** : `payload.kind` vaut `"yaml"` (mutation de `pipeline.yaml`) ou `"prompt"` (mutation d'un fichier sous `pipeline.prompts/`), exclusivement — la décision est **par chemin** (`detect_run_scoped_change`). Les events ne sont **jamais coalescés** entre fichiers : une édition YAML et une édition prompt rapprochées produisent deux events distincts. Un même run peut légitimement émettre les deux kinds presque simultanément (la copie initiale du snapshot déclenche le watcher) ; tout consommateur qui attend un kind précis doit donc **filtrer sur `payload.kind`** plutôt que prendre le premier event venu (#182).
 
 ### Politique de mutation pendant un Run
@@ -401,7 +401,7 @@ Flag racine du pipeline YAML (à côté de `variables:`), **défaut `true`** (pr
 
 ### Termination
 
-À la fin d'un Run réussi, **niveau 0** par défaut : la branche `maestro/run-<run-id>` reste en l'état, le worktree reste sur disque, l'utilisateur fait ce qu'il veut. Maestro ne fait **pas** de PR auto, **pas** de commentaire d'issue, **pas** d'auto-merge. Si un projet veut ce comportement, il l'exprime en ajoutant un nœud "Shipper" dans son pipeline (un Claude Code avec `gh pr create` dans son prompt).
+À la fin d'un Run réussi, **niveau 0** par défaut : la branche `pdo/run-<run-id>` reste en l'état, le worktree reste sur disque, l'utilisateur fait ce qu'il veut. PDO ne fait **pas** de PR auto, **pas** de commentaire d'issue, **pas** d'auto-merge. Si un projet veut ce comportement, il l'exprime en ajoutant un nœud "Shipper" dans son pipeline (un Claude Code avec `gh pr create` dans son prompt).
 
 ### Échec / blocage
 
@@ -416,10 +416,10 @@ NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event),
 
 Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner simultanément sur le même repo target. Convention de nommage qui garantit l'absence de collision :
 
-- Branche : `maestro/run-<run-id>` (ex. `maestro/run-2026-05-05-1430-a3f`).
-- Worktree pipeline : `<repo>/.maestro/runs/<run-id>/worktree/`.
-- Sous-worktrees `code-mutating` : `<repo>/.maestro/runs/<run-id>/nodes/<node-id>/iter-<N>/`.
-- Blackboard : `<pipeline-worktree>/.maestro/artifacts/...` (déjà défini).
+- Branche : `pdo/run-<run-id>` (ex. `pdo/run-2026-05-05-1430-a3f`).
+- Worktree pipeline : `<repo>/.pdo/runs/<run-id>/worktree/`.
+- Sous-worktrees `code-mutating` : `<repo>/.pdo/runs/<run-id>/nodes/<node-id>/iter-<N>/`.
+- Blackboard : `<pipeline-worktree>/.pdo/artifacts/...` (déjà défini).
 
 `<run-id>` = slug `<timestamp>-<short-uuid>` pour rester lisible humainement et garanti unique.
 
@@ -427,23 +427,23 @@ Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner s
 
 ## Trigger
 
-Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, Maestro crée un Pipeline Run *ordinaire* à partir du template.
+Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, PDO crée un Pipeline Run *ordinaire* à partir du template.
 
 - **Template de Run** = exactement la charge utile d'un `POST /runs` : pipeline (depuis la bibliothèque) + repo cible + source branch + input + overrides de variables.
 - **Start-only.** Un Trigger sait *quand* déclencher et *quel input* passer — rien de plus. Il ne décide jamais de la terminaison du Run (pas de policy de finish côté Trigger, cf. *Deliberate, then autonomous*). L'autonomie de bout-en-bout (push/PR/merge) est une propriété du **pipeline** visé (nœud Shipper), pas du Trigger.
 - **Provenance.** Un Run créé par un Trigger porte une référence `triggered_by: <trigger-id>` ; à part ça c'est un Run ordinaire, indistinguable dans son cycle de vie.
-- **Pas de chaînage interne.** Un Trigger ne déclenche pas un autre Trigger. Les pipelines se couplent par le **monde extérieur** (ex. un pipeline auditeur écrit des issues GitHub `ready-for-agent` ; un Trigger de polling les ramasse), jamais par un wiring interne Maestro — cohérent avec « les Runs ne partagent pas de blackboard ».
+- **Pas de chaînage interne.** Un Trigger ne déclenche pas un autre Trigger. Les pipelines se couplent par le **monde extérieur** (ex. un pipeline auditeur écrit des issues GitHub `ready-for-agent` ; un Trigger de polling les ramasse), jamais par un wiring interne PDO — cohérent avec « les Runs ne partagent pas de blackboard ».
 
 ### Condition de déclenchement
 
 Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script optionnel** :
 
 - **Sans guard** : à chaque tick cron, le Trigger fire — un Run est spawné. (Le pipeline visé est typiquement *self-sufficient*, cf. #137 : pas d'input requis.)
-- **Avec guard** : à chaque tick, Maestro exécute d'abord le script (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; exit non-zéro ⇒ skip** (aucun Run spawné, pas de pollution de la liste). **Le `stdout` du guard devient l'input du Run** (stdout vide ⇒ pas d'input). Exemple issue-polling : `gh issue list --label ready-for-agent --json number,title` → vide ⇒ exit 1 (skip) ; non-vide ⇒ exit 0, la liste sert d'input.
+- **Avec guard** : à chaque tick, PDO exécute d'abord le script (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; exit non-zéro ⇒ skip** (aucun Run spawné, pas de pollution de la liste). **Le `stdout` du guard devient l'input du Run** (stdout vide ⇒ pas d'input). Exemple issue-polling : `gh issue list --label ready-for-agent --json number,title` → vide ⇒ exit 1 (skip) ; non-vide ⇒ exit 0, la liste sert d'input.
 
-**Un firing = un Run.** Maestro ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
+**Un firing = un Run.** PDO ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
 
-**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `MAESTRO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable plus tard, #129), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
+**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `PDO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable plus tard, #129), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
 
 **Références cassées** : si le pipeline (library) ou le repo cible d'un Trigger a été supprimé/renommé depuis la création, le Trigger **ne fire plus et affiche un `last_outcome` d'erreur** (« pipeline not found ») dans l'onglet — pas d'auto-suppression, pas de pourrissement silencieux (*Sharp tool* : on surface, on ne masque pas).
 
@@ -451,7 +451,7 @@ Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script option
 
 ### Idempotence — déléguée au monde extérieur
 
-**Maestro ne tient aucun état de dedup.** Pas de `fired_keys`, pas de mémoire « ai-je déjà traité ce work-item ». L'idempotence est une responsabilité de l'utilisateur (*Sharp tool*), naturellement satisfaite quand le pipeline **mute l'état qu'il poll** : le nœud Shipper du fixer relabel/ferme l'issue (`ready-for-agent` → `in-progress`/closed), donc le prochain `gh issue list --label ready-for-agent` du guard ne la voit plus. Le label GitHub *est* le registre de dedup.
+**PDO ne tient aucun état de dedup.** Pas de `fired_keys`, pas de mémoire « ai-je déjà traité ce work-item ». L'idempotence est une responsabilité de l'utilisateur (*Sharp tool*), naturellement satisfaite quand le pipeline **mute l'état qu'il poll** : le nœud Shipper du fixer relabel/ferme l'issue (`ready-for-agent` → `in-progress`/closed), donc le prochain `gh issue list --label ready-for-agent` du guard ne la voit plus. Le label GitHub *est* le registre de dedup.
 
 Risque assumé : un guard qui renvoie toujours le même work + un pipeline qui ne mute pas l'état ⇒ Runs dupliqués en boucle, bornés seulement par la politique de recouvrement. Choix v1 délibéré : pas de moteur de dedup qui *devine* l'intention ; la boucle est à l'utilisateur de la fermer.
 
@@ -470,7 +470,7 @@ Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (
 
 ### Persistence — table SQLite
 
-Les Triggers vivent dans une **nouvelle table `triggers`** de `~/.maestro/maestro.db`, *pas* en YAML sur disque. Un Trigger est de la **config + état de scheduling** (créé via modale, pas un artefact canvas-backed comme un pipeline), et son état mutable (`enabled`, `next_fire_at`, `last_fired_at`, `last_outcome`) serait réécrit à chaque tick — mauvais fit YAML. La requête centrale du scheduler (« quels Triggers sont dûs ») est une requête indexée triviale.
+Les Triggers vivent dans une **nouvelle table `triggers`** de `~/.pdo/pdo.db`, *pas* en YAML sur disque. Un Trigger est de la **config + état de scheduling** (créé via modale, pas un artefact canvas-backed comme un pipeline), et son état mutable (`enabled`, `next_fire_at`, `last_fired_at`, `last_outcome`) serait réécrit à chaque tick — mauvais fit YAML. La requête centrale du scheduler (« quels Triggers sont dûs ») est une requête indexée triviale.
 
 Ligne : `id, name, pipeline_id, target_repo, source_branch, input_template, variables(JSON), cron, guard_command(nullable), overlap_policy, enabled, next_fire_at, last_fired_at, last_outcome`.
 
@@ -493,7 +493,7 @@ Agent conversationnel attaché à un Pipeline Run. Permet à l'utilisateur de **
 
 ### Cycle de vie
 
-- **Un manager par Run.** Spawn automatique au démarrage du Run dans une session tmux dédiée nommée `maestro-mgr-<run-id>`. Persiste tant que le Run n'est pas cleanup (donc aussi après success/failed/blocked, pour interrogation post-mortem).
+- **Un manager par Run.** Spawn automatique au démarrage du Run dans une session tmux dédiée nommée `pdo-mgr-<run-id>`. Persiste tant que le Run n'est pas cleanup (donc aussi après success/failed/blocked, pour interrogation post-mortem).
 - **Pas de polling actif.** Le manager ne tourne effectivement que quand l'utilisateur lui parle. Quand attaché, il lit l'état frais à la demande.
 
 ### Implémentation
@@ -501,7 +501,7 @@ Agent conversationnel attaché à un Pipeline Run. Permet à l'utilisateur de **
 - Le manager **est** une instance Claude Code standard, pas un agent custom.
 - Son **prompt système est augmenté** par le runtime avec :
   - L'identité du Run qu'il gère (`<run-id>`).
-  - La liste des **endpoints HTTP** du daemon Maestro accessibles (URL de base, schéma, exemples d'invocation curl).
+  - La liste des **endpoints HTTP** du daemon PDO accessibles (URL de base, schéma, exemples d'invocation curl).
   - La liste des **commandes** disponibles avec leur payload attendu.
 - **Pas de MCP custom.** L'agent appelle les endpoints via `bash` + `curl`. Justification : MCP est utile pour des clients agentiques distants/inconnus ; ici on possède le prompt de la session, autant documenter les endpoints en clair.
 - Pour la lecture brute (sans passer par les endpoints), le manager a accès à `bash` complet : `ls`, `cat`, `git log`, `tmux capture-pane`, etc. Tout l'état du Run est sur disque, donc grep-able.
@@ -532,7 +532,7 @@ L'effet de chaque commande est l'**append d'un événement** dans l'event log. L
 
 ### Source de vérité = event log
 
-Toutes les transitions d'état d'un Pipeline Run sont enregistrées comme **événements append-only** dans une **SQLite locale** (`~/.maestro/maestro.db`). L'état courant d'un Run = projection des événements de ce Run.
+Toutes les transitions d'état d'un Pipeline Run sont enregistrées comme **événements append-only** dans une **SQLite locale** (`~/.pdo/pdo.db`). L'état courant d'un Run = projection des événements de ce Run.
 
 Pas de "state.yaml" ou "STATE.md" stocké en plus. Seul l'event log persiste.
 
@@ -551,7 +551,7 @@ CREATE TABLE events (
 );
 ```
 
-### Daemon Maestro
+### Daemon PDO
 
 Process local toujours-actif (lazy start) qui :
 
@@ -587,8 +587,8 @@ Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmenta
 
 Chaque NodeRun = **une session tmux détachée** créée par le daemon (`tmux new-session -d -s <name>`). Le contenu de la session est Claude Code en mode interactif, lancé avec le prompt augmenté du Node. Conventions de nommage :
 
-- NodeRun : `maestro-<run-id>-<node-id>-iter-<N>`.
-- Manager : `maestro-mgr-<run-id>` (cf. section *Pipeline Manager*).
+- NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
+- Manager : `pdo-mgr-<run-id>` (cf. section *Pipeline Manager*).
 
 Les sessions sont **invisibles à l'utilisateur** par défaut — pas de fenêtre OS qui s'ouvre. Elles tournent en arrière-plan et survivent au crash de l'UI ou du daemon (le runtime peut récupérer leur état au redémarrage).
 
@@ -606,7 +606,7 @@ Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** 
 
 Posture **fail-fast** partout : jamais d'auto-réparation silencieuse, toute divergence est rendue visible (état `Failed` avec cause lisible). Toutes les transitions vers `Failed` émises ci-dessous passent par la **garde de transitions** (#212).
 
-- **Détection de mort de session (liveness sweep)** : le stale detector sonde, à chaque tick, chaque nœud `Running`/`AwaitingUser` ; si sa session tmux n'existe plus, le nœud passe `Failed` avec une cause **nommant la session** (`session_died: tmux session maestro-… no longer exists`). Plus de nœud zombie qui brûle un slot d'admission indéfiniment (#202).
+- **Détection de mort de session (liveness sweep)** : le stale detector sonde, à chaque tick, chaque nœud `Running`/`AwaitingUser` ; si sa session tmux n'existe plus, le nœud passe `Failed` avec une cause **nommant la session** (`session_died: tmux session pdo-… no longer exists`). Plus de nœud zombie qui brûle un slot d'admission indéfiniment (#202).
 - **Reap sur état terminal (#205)** : à l'entrée d'un état terminal (`completed`/`failed`/`stopped`), un **snapshot du pane** est persisté sous `…/runs/<run>/nodes/<node>/pane-iter-<N>.snapshot` (hors du sous-worktree, donc il survit à sa suppression), **puis** la session est tuée. Invariant : **au plus une itération live par nœud** côté tmux. `GET …/pane` sert le snapshot quand la session est partie et l'indique via `source: "snapshot"` (vs `"live"` / `"resumed"`). Plus de sessions qui s'accumulent vers le point d'effondrement (#77/#78).
 - **Recovery au boot** : au démarrage, le daemon réconcilie l'état persisté avec le monde process réel. Un nœud `Running`/`AwaitingUser` sans session vivante → `Failed` avec cause. Une branche de sous-worktree mergée dans la branche pipeline sans `NodeCompleted` correspondant → divergence **détectée et signalée** (jamais complétée en silence).
 - **Réconciliation au niveau Run (#214)** : la recovery par nœud ci-dessus ne couvre pas le cas **run-level**. Un Run resté `Running` mais **sans aucun nœud vivant** (`Running`/`Waiting`/`AwaitingUser`), **sans merge resolver actif**, et où l'ordonnanceur ne peut produire **aucune action** (aucun nœud `ready`, aucune boucle à amorcer) est un **stall silencieux** — typiquement coincé derrière un nœud terminal non-`Completed` (`Failed`/`Stale`/`Stopped`) dont l'aval ne pourra jamais être schedulé. Il est réconcilié vers `Failed` avec une cause `run_stalled: …` nommant le(s) nœud(s) bloquant(s), **au boot ET à chaque balayage périodique** du stale detector, au lieu de rester `Running` pour toujours. Garde-fous (jamais de faux positif) : tout statut ≠ `Running` est ignoré (`AwaitingUser` attend un humain, `Halted`/`Paused`/terminal n'ont rien à réconcilier) ; une **région de boucle/foreach ouverte** (non-`done`) n'est jamais auto-failée — un état « exhausted — unrouted » est routé par le Pipeline Manager, pas un fail-fast ; le cas « tous les nœuds `Completed` » reste géré par la complétion normale.
@@ -619,7 +619,7 @@ ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS nat
 - **Terminal interactif inline** dans le panneau de détail du nœud, rendu via xterm.js. Le daemon expose `WS /sessions/<id>/pty` : pour chaque connexion, il spawn `tmux attach -t <session>` dans un PTY (crate `portable-pty`) et bridge les bytes I/O entre le browser et le PTY. Bidirectionnel : l'utilisateur tape dedans, voit la sortie en temps réel. Plus de polling 1-2 s — la WebSocket pousse.
 - **Icônes du panneau** : (1) **agrandir** — le terminal occupe tout l'espace vertical du panneau de détail ; (2) **détacher** — fallback opt-in qui spawn une fenêtre OS native (`gnome-terminal`/`konsole`/`Terminal.app`/`kitty`) attachée à la session via `tmux attach`. Garde un escape hatch pour les cas limite (copy-paste exotique, freeze WebSocket).
 
-Détection du terminal natif (pour l'icône détacher) : variable `MAESTRO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
+Détection du terminal natif (pour l'icône détacher) : variable `PDO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
 
 Multi-client par session (deux onglets browser sur la même session tmux) : gratuit côté tmux, pas à coder. Sécurité : origin check sur la WebSocket pour éviter le DNS-rebinding (le daemon écoute sur `127.0.0.1` mais ce n'est pas suffisant en soi).
 
@@ -635,7 +635,7 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 
 ## UX — un seul mode d'édition unifié
 
-Maestro est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. ADR-0007. L'ancienne dichotomie "mode Run" vs "mode Edit (toggle crayon)" est **obsolète** — un seul mode, le canvas est toujours interactif, et son comportement s'adapte à l'état de la pipeline (running ou pas).
+PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. ADR-0007. L'ancienne dichotomie "mode Run" vs "mode Edit (toggle crayon)" est **obsolète** — un seul mode, le canvas est toujours interactif, et son comportement s'adapte à l'état de la pipeline (running ou pas).
 
 > **Source visuelle de référence** : voir [`docs/design/`](./docs/design/) pour les écrans rendus en HTML/CSS/JS. Note : les écrans pré-2026-05 reflètent l'ancienne dichotomie Run/Edit avec toggle ; à re-designer en phase suivante.
 
@@ -663,14 +663,14 @@ Maestro est un **atelier de production de code** ; la conception de pipelines es
 La toolbar du canvas (où vivent les types de nodes ajoutables) contient une icône `i` qui ouvre un panneau **info pipeline** :
 - Nom de la pipeline, statut (running, idle), variables.
 - Bouton **favoriter** (= ajouter / retirer de la bibliothèque).
-- **Pipeline Manager** : si la pipeline tourne, le terminal manager (`maestro-mgr-<run-id>`) prend la place dominante du panneau ; les métadonnées restent en haut compactes. Hors run, pas de terminal manager — juste les métadonnées.
+- **Pipeline Manager** : si la pipeline tourne, le terminal manager (`pdo-mgr-<run-id>`) prend la place dominante du panneau ; les métadonnées restent en haut compactes. Hors run, pas de terminal manager — juste les métadonnées.
 
 Realtime via WebSocket depuis le daemon → chaque événement de l'event log push une update vers l'UI.
 
 ### Workflow utilisateur typique
 
-1. **Monitor** : ouvre Maestro, voit ses Runs actifs, debug un Run bloqué via le manager (onglet info) ou en attachant directement (terminal inline).
-2. **Lancer un nouveau Run** : bouton "+ New Run", modale avec sélecteur de **pipeline depuis la bibliothèque** (dropdown peuplé par les pipelines favorites) + textarea input (free-text ou lien d'issue ou mix) + accordion "variables overrides". Confirme → POST `/runs` qui clone la pipeline depuis la bibliothèque vers `<repo>/.maestro/runs/<run-id>/pipeline.yaml` et lance le Run.
+1. **Monitor** : ouvre PDO, voit ses Runs actifs, debug un Run bloqué via le manager (onglet info) ou en attachant directement (terminal inline).
+2. **Lancer un nouveau Run** : bouton "+ New Run", modale avec sélecteur de **pipeline depuis la bibliothèque** (dropdown peuplé par les pipelines favorites) + textarea input (free-text ou lien d'issue ou mix) + accordion "variables overrides". Confirme → POST `/runs` qui clone la pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` et lance le Run.
 3. **Créer une nouvelle pipeline** : depuis la liste de gauche, bouton "+ New Pipeline" → ouvre un canvas vierge dans le scope template-bibliothèque.
 4. **Modifier une pipeline** : click dessus dans la liste, le canvas l'affiche, on édite. Pas de toggle.
 5. **Modifier pendant un Run** : click sur le Run en cours, le canvas affiche le run-snapshot, on édite à chaud. La politique d'édition pendant un Run s'applique.
@@ -692,7 +692,7 @@ Chaque entrée de la liste de gauche porte un icône coloré indiquant son statu
 
 Pas de "permanent delete" v1. Le bouton "Cleanup" sur un Run terminé :
 
-- supprime la branche `maestro/run-<run-id>`,
+- supprime la branche `pdo/run-<run-id>`,
 - supprime le worktree pipeline et tous les sous-worktrees,
 - supprime le dossier des artefacts (Blackboard) du Run.
 
@@ -748,7 +748,7 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 ### Persistance et hot-reload
 
 - **Auto-save debounced** (1-2 s d'inactivité) sur toutes les modifications du canvas. Pas de "Ctrl+S", pas de modal. Le canvas EST le fichier YAML + les fichiers prompts.
-- **Hot-reload bidirectionnel** : Maestro watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
+- **Hot-reload bidirectionnel** : PDO watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
 - **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
 
 ### Création d'un nouveau nœud
@@ -756,15 +756,15 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 - **From scratch** : "+ Add node" → nœud vide à remplir.
 - **Duplicate existing** : right-click sur un nœud → copie avec id auto-incrémenté.
 - **Depuis la bibliothèque** : drag-drop d'un node favori (cf. *Bibliothèque* ci-dessous).
-- **Pas de library de templates Maestro-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer"). La bibliothèque est exclusivement user-managed.
+- **Pas de library de templates PDO-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer"). La bibliothèque est exclusivement user-managed.
 
 ---
 
 ## Bibliothèque
 
-`~/.maestro/library/` — store user-managed à deux niveaux :
+`~/.pdo/library/` — store user-managed à deux niveaux :
 
-- **Nodes** (`~/.maestro/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty".
-- **Pipelines** (`~/.maestro/library/pipelines/`) — pipelines complètes templatées. C'est cette liste qui peuple le **dropdown du modal "+ New Run"**. Bouton favoriter dans le panneau info de la toolbar pour ajouter / retirer une pipeline de la bibliothèque.
+- **Nodes** (`~/.pdo/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty".
+- **Pipelines** (`~/.pdo/library/pipelines/`) — pipelines complètes templatées. C'est cette liste qui peuple le **dropdown du modal "+ New Run"**. Bouton favoriter dans le panneau info de la toolbar pour ajouter / retirer une pipeline de la bibliothèque.
 
-Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.maestro/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run. Les modifs pendant un Run propagent vers la template d'origine (auto-sync montant, ADR-0007).
+Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run. Les modifs pendant un Run propagent vers la template d'origine (auto-sync montant, ADR-0007).

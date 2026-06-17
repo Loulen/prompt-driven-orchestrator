@@ -3,7 +3,7 @@
 //   Component spotlights · only what the happy path doesn't already show
 //
 // Reuses Frame / TopBar / StatusBar / UnifiedLeftPanel / PanelHead / XTerm /
-// EndNode / RunOverlay and the Maestro tokens. New canvas vocab lives in
+// EndNode / RunOverlay and the PDO tokens. New canvas vocab lives in
 // refonte-canvas.jsx; detail panels in refonte-inspect.jsx.
 
 // ── Shared review-loop layout (screens 1, 2, 4) ─────────────────────────────

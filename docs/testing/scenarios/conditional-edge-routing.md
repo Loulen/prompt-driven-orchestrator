@@ -10,11 +10,11 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser.
 - `claude` available on `PATH`.
-- A pipeline `conditional-edge-routing.yaml` exists in `.maestro/pipelines/`. If
+- A pipeline `conditional-edge-routing.yaml` exists in `.pdo/pipelines/`. If
   it isn't already there, the agent creates it before driving the UI:
 
   ```yaml

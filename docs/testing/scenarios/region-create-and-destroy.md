@@ -13,12 +13,12 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser (single always-interactive canvas — there is
   no Edit/Run pencil toggle; the canvas is editable at all times per ADR-0011).
 - `claude` available on `PATH`.
-- A pipeline `region-create-and-destroy.yaml` exists in `.maestro/pipelines/`. If
+- A pipeline `region-create-and-destroy.yaml` exists in `.pdo/pipelines/`. If
   it isn't already there, the agent creates it before driving the UI. It starts
   **without** a `loops:` block and **without** the back-edge — the agent draws
   the back-edge in the UI so the region auto-materializes (the create half):

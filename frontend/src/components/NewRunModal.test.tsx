@@ -8,7 +8,7 @@ const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListE
   id: "test-pipe",
   name: "Test Pipeline",
   scope: "repo",
-  path: "/repo/.maestro/pipelines/test-pipe.yaml",
+  path: "/repo/.pdo/pipelines/test-pipe.yaml",
   node_count: 3,
   modified: null,
   variables: {},

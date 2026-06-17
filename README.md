@@ -1,25 +1,25 @@
-# Maestro
+# Prompt Driven Orchestrator (PDO)
 
 Visual orchestrator for deterministic Claude Code pipelines.
 
 ## Install
 
 ```bash
-curl -fsSL https://github.com/Loulen/Maestro/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
 ```
 
-This downloads the latest release binary for your platform (Linux/macOS, x86_64/ARM64), verifies the SHA256 checksum, and installs to `~/.local/bin/maestro`.
+This downloads the latest release binary for your platform (Linux/macOS, x86_64/ARM64), verifies the SHA256 checksum, and installs to `~/.local/bin/pdo`.
 
 To install a specific version:
 
 ```bash
-MAESTRO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/Maestro/releases/latest/download/install.sh | bash
+PDO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
 ```
 
 Then start the daemon:
 
 ```bash
-maestro daemon
+pdo daemon
 ```
 
 Open `http://localhost:5172` in your browser.
@@ -44,9 +44,9 @@ The Vite dev server starts on `http://localhost:5173` and proxies `/ws` to the d
 ### Daemon
 
 ```bash
-cargo run -p maestro-daemon -- daemon
+cargo run -p pdo-daemon -- daemon
 # or with a custom port:
-cargo run -p maestro-daemon -- daemon --port 9999
+cargo run -p pdo-daemon -- daemon --port 9999
 ```
 
 The daemon binds to `127.0.0.1:5172` by default. In dev mode it shows a placeholder page — use the Vite dev server for frontend work.
@@ -55,7 +55,7 @@ The daemon binds to `127.0.0.1:5172` by default. In dev mode it shows a placehol
 
 ```bash
 cd frontend && npm run build && cd ..
-cargo build --release -p maestro-daemon
+cargo build --release -p pdo-daemon
 ```
 
 The release binary embeds the frontend `dist/` via `rust-embed` and serves it at `/`.
@@ -63,7 +63,7 @@ The release binary embeds the frontend `dist/` via `rust-embed` and serves it at
 ### CLI
 
 ```bash
-cargo run -p maestro-daemon -- --help
+cargo run -p pdo-daemon -- --help
 ```
 
 ## Build & test commands

@@ -10,13 +10,13 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172` (the live dev daemon uses `6172`).
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `claude` available on `PATH`.
 - A two-node pipeline `lifecycle-resilience-scenario.yaml` in
-  `.maestro/pipelines/`. If absent, the agent creates it before driving the UI:
+  `.pdo/pipelines/`. If absent, the agent creates it before driving the UI:
 
   ```yaml
   name: lifecycle-resilience-scenario
@@ -49,11 +49,11 @@
       target: { node: end, port: result }
   ```
 
-  And `.maestro/pipelines/lifecycle-resilience-scenario.prompts/slow.md`:
+  And `.pdo/pipelines/lifecycle-resilience-scenario.prompts/slow.md`:
 
   ```
   Sleep for 5 minutes (run the shell command `sleep 300`) and only THEN reply
-  with `MAESTRO_LIFECYCLE_OK` and call `maestro complete`. Do nothing else in
+  with `PDO_LIFECYCLE_OK` and call `pdo complete`. Do nothing else in
   the meantime. This long delay gives the operator time to kill your session.
   ```
 
@@ -66,13 +66,13 @@
 3. From a shell, confirm the session exists:
 
    ```bash
-   tmux ls | grep "maestro-<run_id>-slow-iter-1"
+   tmux ls | grep "pdo-<run_id>-slow-iter-1"
    ```
 
 4. Kill the session out-of-band (models a tmux/OOM crash, #202):
 
    ```bash
-   tmux kill-session -t "maestro-<run_id>-slow-iter-1"
+   tmux kill-session -t "pdo-<run_id>-slow-iter-1"
    ```
 
 5. Wait up to one detector cycle (~30 s; the live daemon's stale detector runs
@@ -81,7 +81,7 @@
      `running`.
    - Selecting the node, the inspector shows a **failure cause** whose text
      **names the dead session** — it contains
-     `session_died` and the string `maestro-<run_id>-slow-iter-1`.
+     `session_died` and the string `pdo-<run_id>-slow-iter-1`.
 6. Assert the run **settles cleanly**: it does not stay perpetually `running`
    with a phantom live node. The Failed `slow` node no longer holds an admission
    slot (see Part C). The End node's `result` port is **not** marked received
@@ -96,14 +96,14 @@
 3. Assert throughout:
    - `run_id_2`'s `slow` node stays **`running`** the entire time — the detector
      never marks a live-session node Failed (no false positive).
-   - Its tmux session `maestro-<run_id_2>-slow-iter-1` stays alive (verify with
+   - Its tmux session `pdo-<run_id_2>-slow-iter-1` stays alive (verify with
      `tmux ls`).
 4. Unblock it: from the pane, interrupt the sleep and let the agent reply, OR
    write the output and Mark complete:
 
    ```bash
-   mkdir -p .maestro/runs/<run_id_2>/worktree/.maestro/artifacts/slow/iter-1
-   echo '# Out' > .maestro/runs/<run_id_2>/worktree/.maestro/artifacts/slow/iter-1/out.md
+   mkdir -p .pdo/runs/<run_id_2>/worktree/.pdo/artifacts/slow/iter-1
+   echo '# Out' > .pdo/runs/<run_id_2>/worktree/.pdo/artifacts/slow/iter-1/out.md
    ```
 
    Then click **Mark complete**. Assert the node reads **`completed`** and the
@@ -115,14 +115,14 @@
    - Its session is **gone promptly** (not lingering for the 1 h TTL):
 
      ```bash
-     tmux has-session -t "maestro-<run_id_2>-slow-iter-1"; echo "exit=$?"
+     tmux has-session -t "pdo-<run_id_2>-slow-iter-1"; echo "exit=$?"
      # exit=1 → session correctly reaped on completion
      ```
 
    - A pane snapshot was persisted for post-mortem inspection:
 
      ```bash
-     ls .maestro/runs/<run_id_2>/nodes/slow/pane-iter-1.snapshot
+     ls .pdo/runs/<run_id_2>/nodes/slow/pane-iter-1.snapshot
      ```
 
    - The terminal preview in the UI for the completed node still renders content
@@ -144,10 +144,10 @@
 ## Cleanup
 
 - Kill any sessions still alive:
-  `tmux kill-session -t maestro-<run_id>-slow-iter-1` (and the others).
+  `tmux kill-session -t pdo-<run_id>-slow-iter-1` (and the others).
 - Remove worktrees:
-  `git worktree remove --force .maestro/runs/<run_id>/worktree` per run.
-- Delete `.maestro/pipelines/lifecycle-resilience-scenario.yaml` and its
+  `git worktree remove --force .pdo/runs/<run_id>/worktree` per run.
+- Delete `.pdo/pipelines/lifecycle-resilience-scenario.yaml` and its
   `.prompts/` dir if the agent created them in Setup.
 
 ## Verdict format

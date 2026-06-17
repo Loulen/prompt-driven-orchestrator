@@ -28,7 +28,7 @@ function NewRunModal({ open, onClose }) {
           <div className="field">
             <label>Input</label>
             <textarea className="textarea mono" rows="6"
-              defaultValue={`Implement search filter for archived projects.\n\nhttps://github.com/acme/maestro/issues/142`}/>
+              defaultValue={`Implement search filter for archived projects.\n\nhttps://github.com/acme/pdo/issues/142`}/>
             <div className="help">Free-text prompt, an issue link, or a mix.</div>
           </div>
           <div className="accord">

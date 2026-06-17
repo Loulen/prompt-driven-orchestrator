@@ -22,13 +22,13 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (default `http://127.0.0.1:5172`;
+- PDO daemon running on the user's repo (default `http://127.0.0.1:5172`;
   the live dev daemon uses `6172`). tmux runs on the per-port socket
-  `maestro-<port>`.
+  `pdo-<port>`.
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `claude` available on `PATH`.
-- A three-worker pipeline `run-of-hell-scenario.yaml` in `.maestro/pipelines/`.
+- A three-worker pipeline `run-of-hell-scenario.yaml` in `.pdo/pipelines/`.
   If absent, the agent creates it before driving the UI:
 
   ```yaml
@@ -82,7 +82,7 @@
       target: { node: end, port: result }
   ```
 
-  Prompts under `.maestro/pipelines/run-of-hell-scenario.prompts/`, each keeping
+  Prompts under `.pdo/pipelines/run-of-hell-scenario.prompts/`, each keeping
   the session busy (`Sleep for 5 minutes (run \`sleep 300\`). Do nothing else.`)
   for `alpha.md`, `beta.md`, `gamma.md`. Only `alpha` feeds `End`; `beta` and
   `gamma` are the nodes we abuse.
@@ -99,8 +99,8 @@
 3. Complete `alpha` cleanly. Write its artifact and POST `done`:
 
    ```bash
-   mkdir -p .maestro/runs/<run_id>/worktree/.maestro/artifacts/alpha/iter-1/out
-   echo '# Out' > .maestro/runs/<run_id>/worktree/.maestro/artifacts/alpha/iter-1/out/output.md
+   mkdir -p .pdo/runs/<run_id>/worktree/.pdo/artifacts/alpha/iter-1/out
+   echo '# Out' > .pdo/runs/<run_id>/worktree/.pdo/artifacts/alpha/iter-1/out/output.md
    curl -s -X POST "http://127.0.0.1:<port>/runs/<run_id>/nodes/alpha/done" \
      -H 'content-type: application/json' -d '{}'
    ```
@@ -131,7 +131,7 @@
    **`cannot change type of node 'beta'`** and mentions the live session
    (`running`). Take a screenshot.
 7. Assert the edit was **not persisted**: re-reading
-   `.maestro/runs/<run_id>/pipeline.yaml` still shows `type: doc-only` for
+   `.pdo/runs/<run_id>/pipeline.yaml` still shows `type: doc-only` for
    `beta`. Dismiss the modal and revert the type in the UI.
 
 ### Adversity 3 — session killed out-of-band → node Failed → run settles (#202/#214)
@@ -139,8 +139,8 @@
 8. Kill `beta`'s and `gamma`'s sessions out-of-band (tmux crash / OOM):
 
    ```bash
-   tmux -L maestro-<port> kill-session -t "maestro-<run_id>-beta-iter-1"
-   tmux -L maestro-<port> kill-session -t "maestro-<run_id>-gamma-iter-1"
+   tmux -L pdo-<port> kill-session -t "pdo-<run_id>-beta-iter-1"
+   tmux -L pdo-<port> kill-session -t "pdo-<run_id>-gamma-iter-1"
    ```
 
 9. Trigger one detector cycle (or wait ~30 s for the background tick). Refresh
@@ -163,11 +163,11 @@
 ## Cleanup
 
 - Kill any sessions still alive:
-  `tmux -L maestro-<port> kill-session -t "maestro-<run_id>-<node>-iter-1"` for
+  `tmux -L pdo-<port> kill-session -t "pdo-<run_id>-<node>-iter-1"` for
   each of `alpha`, `beta`, `gamma`.
 - Remove the worktree:
-  `git worktree remove --force .maestro/runs/<run_id>/worktree`.
-- Delete `.maestro/pipelines/run-of-hell-scenario.yaml` and its `.prompts/` dir
+  `git worktree remove --force .pdo/runs/<run_id>/worktree`.
+- Delete `.pdo/pipelines/run-of-hell-scenario.yaml` and its `.prompts/` dir
   if the agent created them in Setup.
 
 ## Verdict format

@@ -112,7 +112,7 @@ export default function NodeDetailPanel({
     [node.node_id],
   );
 
-  const sessionName = `maestro-${runId}-${node.node_id}-iter-${selectedIter}`;
+  const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
   const interval = pollInterval(node.status);
   const isStaleIter = selectedIter !== node.iter;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;

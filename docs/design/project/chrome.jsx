@@ -5,7 +5,7 @@ function TopBar({ mode, onToggleMode, breadcrumb, runId }) {
     <div className="top-bar">
       <div className="brand">
         <span className="brand-mark"><Ic.Logo/></span>
-        Maestro
+        PDO
       </div>
       <div className="breadcrumb">
         <span className={"b-mode" + (mode === 'edit' ? " edit" : "")}>{mode === 'edit' ? 'Edit' : 'Run'}</span>

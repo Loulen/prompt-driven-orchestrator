@@ -21,7 +21,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Frontend dist is rebuilt by maestro-daemon's build.rs.
+      # Frontend dist is rebuilt by pdo-daemon's build.rs.
       # Setup Node + install deps so the build script can call `npm run build`.
       - uses: actions/setup-node@v4
         with:
@@ -77,8 +77,8 @@ jobs:
       - run: cd frontend && npx playwright install --with-deps chromium
 
       # build.rs handles the frontend bundle while building the daemon.
-      - run: cargo build -p maestro-daemon
+      - run: cargo build -p pdo-daemon
 
       - run: cd frontend && npm run e2e
         env:
-          MAESTRO_SKIP_FRONTEND_BUILD: "1"
+          PDO_SKIP_FRONTEND_BUILD: "1"

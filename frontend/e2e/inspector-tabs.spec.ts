@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-inspector-tabs-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Two chained nodes: worker-a → worker-b.
@@ -44,14 +44,14 @@ edges:
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
+  process.env.PDO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("active run: Run tab default, sticky across nodes, reload resets", async ({
@@ -116,21 +116,21 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   // Cleanup tmux sessions
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-a-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-a-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-b-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-b-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-mgr-${run_id}`, {
+    execSync(`tmux kill-session -t pdo-mgr-${run_id}`, {
       stdio: "ignore",
     });
   } catch {
@@ -202,14 +202,14 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
   // Cleanup
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-a-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-a-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-mgr-${run_id}`, {
+    execSync(`tmux kill-session -t pdo-mgr-${run_id}`, {
       stdio: "ignore",
     });
   } catch {

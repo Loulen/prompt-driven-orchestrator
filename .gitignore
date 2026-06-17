@@ -18,9 +18,9 @@ Cargo.lock.*
 .sandcastle/worktrees/
 .sandcastle/.env
 
-# Maestro local state — runtime DB, per-run worktrees, pipelines, library,
+# PDO local state — runtime DB, per-run worktrees, pipelines, library,
 # prompt snapshots. All per-user; never committed.
-.maestro/
+.pdo/
 
 # Playwright artefacts
 frontend/test-results/

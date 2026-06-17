@@ -7,7 +7,7 @@ import { test, expect } from "@playwright/test";
 test("app mounts with header and reaches Daemon: connected", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByText("Maestro").first()).toBeVisible();
+  await expect(page.getByText("PDO").first()).toBeVisible();
 
   // The footer status pill flips to "Daemon: connected" once the WebSocket
   // hello round-trips. Allow up to 10s on a cold debug-build daemon.

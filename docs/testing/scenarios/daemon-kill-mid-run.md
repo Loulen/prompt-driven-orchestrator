@@ -20,14 +20,14 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo. The agent controls the daemon
+- PDO daemon running on the user's repo. The agent controls the daemon
   process lifecycle for this scenario (it kills and restarts it), so prefer a
   **dedicated daemon on a free port** rather than the user's live dev daemon.
-  Launch it with `maestro daemon` and record its PID and URL.
+  Launch it with `pdo daemon` and record its PID and URL.
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `claude` available on `PATH`.
-- A two-worker pipeline `daemon-kill-scenario.yaml` in `.maestro/pipelines/`.
+- A two-worker pipeline `daemon-kill-scenario.yaml` in `.pdo/pipelines/`.
   If absent, the agent creates it before driving the UI:
 
   ```yaml
@@ -71,14 +71,14 @@
       target: { node: end, port: result }
   ```
 
-  And both prompts under `.maestro/pipelines/daemon-kill-scenario.prompts/`:
+  And both prompts under `.pdo/pipelines/daemon-kill-scenario.prompts/`:
 
   - `survivor.md`:
 
     ```
     Sleep for 5 minutes (run the shell command `sleep 300`) and only THEN write
-    `# Out` to `.maestro/artifacts/survivor/iter-1/out/output.md` and call
-    `maestro complete`. Do nothing else in the meantime.
+    `# Out` to `.pdo/artifacts/survivor/iter-1/out/output.md` and call
+    `pdo complete`. Do nothing else in the meantime.
     ```
 
   - `victim.md`:
@@ -93,32 +93,32 @@
 2. Launch a run of `daemon-kill-scenario` with input `daemon-kill`. Capture the
    `run_id`. Within ~2 s both `survivor` and `victim` animate to **`running`**.
 3. Confirm both sessions exist (tmux runs on the daemon's per-port socket
-   `maestro-<port>`):
+   `pdo-<port>`):
 
    ```bash
-   tmux -L maestro-<port> ls | grep "maestro-<run_id>-survivor-iter-1"
-   tmux -L maestro-<port> ls | grep "maestro-<run_id>-victim-iter-1"
+   tmux -L pdo-<port> ls | grep "pdo-<run_id>-survivor-iter-1"
+   tmux -L pdo-<port> ls | grep "pdo-<run_id>-victim-iter-1"
    ```
 
 4. **Kill the daemon process** (models a crash / restart):
    `kill <daemon_pid>`. Do **not** touch the tmux sessions — they are detached
    and survive the daemon's death. Confirm the daemon is gone (HTTP to its URL
    fails / `kill -0 <pid>` reports no process).
-5. **Restart** the daemon (`maestro daemon` on the same port and repo). Boot
+5. **Restart** the daemon (`pdo daemon` on the same port and repo). Boot
    recovery runs once at startup.
 6. Wait for `Daemon: connected` in the UI, reload the run view, and assert for
    the `survivor` node:
    - Its session is still alive (step 3 command still finds it).
    - The node is **still `running`** — boot recovery did **not** falsely fail a
      node whose session survived (no false positive), and it was **not**
-     re-spawned a second time (a single `maestro-<run_id>-survivor-iter-1`
+     re-spawned a second time (a single `pdo-<run_id>-survivor-iter-1`
      session, no `iter-2`).
 7. Unblock `survivor`: from its pane interrupt the sleep and let it write the
-   artifact + `maestro complete`, OR write the output and Mark complete:
+   artifact + `pdo complete`, OR write the output and Mark complete:
 
    ```bash
-   mkdir -p .maestro/runs/<run_id>/worktree/.maestro/artifacts/survivor/iter-1/out
-   echo '# Out' > .maestro/runs/<run_id>/worktree/.maestro/artifacts/survivor/iter-1/out/output.md
+   mkdir -p .pdo/runs/<run_id>/worktree/.pdo/artifacts/survivor/iter-1/out
+   echo '# Out' > .pdo/runs/<run_id>/worktree/.pdo/artifacts/survivor/iter-1/out/output.md
    ```
 
    (kill the `victim` session first so the run can settle on the `survivor`
@@ -136,8 +136,8 @@
     server collapsing during the outage, #202):
 
     ```bash
-    tmux -L maestro-<port> kill-session -t "maestro-<run_id_2>-survivor-iter-1"
-    tmux -L maestro-<port> kill-session -t "maestro-<run_id_2>-victim-iter-1"
+    tmux -L pdo-<port> kill-session -t "pdo-<run_id_2>-survivor-iter-1"
+    tmux -L pdo-<port> kill-session -t "pdo-<run_id_2>-victim-iter-1"
     ```
 
 11. **Restart** the daemon. Boot recovery runs.
@@ -145,7 +145,7 @@
     - Both `survivor` and `victim` are **`failed`** (red), **not** stuck
       `running`. Selecting each, the inspector shows a failure cause containing
       `session` and the dead session name
-      (`maestro-<run_id_2>-survivor-iter-1` / `…-victim-iter-1`).
+      (`pdo-<run_id_2>-survivor-iter-1` / `…-victim-iter-1`).
     - The **run** is reconciled to a clean terminal state: it is **`failed`**
       (not perpetually `running`). The run-level cause is visible and explains
       the stall — it contains `run_stalled` and names the blocking node(s)
@@ -158,12 +158,12 @@
 ## Cleanup
 
 - Kill any sessions still alive for both runs:
-  `tmux -L maestro-<port> kill-session -t "maestro-<run_id>-survivor-iter-1"`
+  `tmux -L pdo-<port> kill-session -t "pdo-<run_id>-survivor-iter-1"`
   (and the `victim` / `run_id_2` variants).
-- Remove worktrees: `git worktree remove --force .maestro/runs/<run_id>/worktree`
+- Remove worktrees: `git worktree remove --force .pdo/runs/<run_id>/worktree`
   per run.
 - Stop the dedicated daemon started for this scenario.
-- Delete `.maestro/pipelines/daemon-kill-scenario.yaml` and its `.prompts/` dir
+- Delete `.pdo/pipelines/daemon-kill-scenario.yaml` and its `.prompts/` dir
   if the agent created them in Setup.
 
 ## Verdict format

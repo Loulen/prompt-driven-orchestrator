@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -35,14 +35,14 @@ edges: []
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
+  process.env.PDO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("clicking toolbar info opens pipeline info panel with metadata", async ({
@@ -96,14 +96,14 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   // Cleanup tmux sessions
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-mgr-${run_id}`, {
+    execSync(`tmux kill-session -t pdo-mgr-${run_id}`, {
       stdio: "ignore",
     });
   } catch {
@@ -233,8 +233,8 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   // Cleanup tmux sessions
   const { execSync } = await import("node:child_process");
   for (const session of [
-    `maestro-${run_id}-worker-iter-1`,
-    `maestro-mgr-${run_id}`,
+    `pdo-${run_id}-worker-iter-1`,
+    `pdo-mgr-${run_id}`,
   ]) {
     try {
       execSync(`tmux kill-session -t ${session}`, { stdio: "ignore" });

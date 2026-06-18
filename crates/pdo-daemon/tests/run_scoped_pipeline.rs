@@ -205,11 +205,7 @@ async fn cleanup_run_removes_pipeline_copy() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon.url()).await;
 
-    let run_dir = daemon
-        .repo_root()
-        .join(".pdo")
-        .join("runs")
-        .join(&run_id);
+    let run_dir = daemon.repo_root().join(".pdo").join("runs").join(&run_id);
     assert!(run_dir.join("pipeline.yaml").exists());
 
     // Cleanup

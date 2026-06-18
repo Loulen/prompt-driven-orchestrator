@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maestro — tmux session &amp; memory audit</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --ink:#e6e8ec; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#7aa2f7; --good:#7bd88f; --warn:#e0af68; --bad:#f7768e;
+    --code:#cdd6f4; --chip:#232834;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:980px;margin:0 auto;padding:48px 24px 96px}
+  header h1{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  header .sub{color:var(--muted);font-size:14px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 8px}
+  .chip{background:var(--chip);border:1px solid var(--line);color:var(--muted);
+    padding:3px 10px;border-radius:999px;font-size:12px}
+  .chip b{color:var(--ink);font-weight:600}
+  h2{font-size:21px;margin:44px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .lead{font-size:16px;color:var(--ink)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .panel.tl{border-left:3px solid var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h4{margin:0 0 8px;font-size:15px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 8px;border-radius:6px;margin-right:6px;vertical-align:middle}
+  .t-fixed{background:rgba(123,216,143,.15);color:var(--good);border:1px solid rgba(123,216,143,.3)}
+  .t-open{background:rgba(247,118,142,.15);color:var(--bad);border:1px solid rgba(247,118,142,.3)}
+  .t-gap{background:rgba(224,175,104,.15);color:var(--warn);border:1px solid rgba(224,175,104,.3)}
+  code{background:#0b0d11;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:var(--code)}
+  pre{background:#0b0d11;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto;margin:12px 0}
+  pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.55}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  tr:last-child td{border-bottom:none}
+  td b{color:var(--ink)}
+  .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  ul{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  .callout{border-radius:10px;padding:14px 18px;margin:16px 0}
+  .callout.bad{background:rgba(247,118,142,.08);border:1px solid rgba(247,118,142,.3)}
+  .callout.warn{background:rgba(224,175,104,.08);border:1px solid rgba(224,175,104,.3)}
+  .callout.good{background:rgba(123,216,143,.08);border:1px solid rgba(123,216,143,.3)}
+  .callout .h{font-weight:700;margin-bottom:4px}
+  .do,.dont{padding:14px 16px;border-radius:10px}
+  .do{background:rgba(123,216,143,.07);border:1px solid rgba(123,216,143,.25)}
+  .dont{background:rgba(247,118,142,.07);border:1px solid rgba(247,118,142,.25)}
+  .do h4{color:var(--good)} .dont h4{color:var(--bad)}
+  a{color:var(--accent)}
+  .src{color:var(--muted);font-size:12px}
+  .toc{font-size:14px;columns:2;column-gap:32px}
+  @media(max-width:600px){.toc{columns:1}}
+  .toc a{display:block;padding:3px 0;color:var(--muted);text-decoration:none}
+  .toc a:hover{color:var(--accent)}
+  footer{margin-top:60px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:16px}
+  .kbd{font-family:ui-monospace,monospace;font-size:12px;background:#0b0d11;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Maestro — tmux session &amp; memory audit</h1>
+  <div class="sub">How sessions are spawned and reaped, where memory/slot creep still comes from, and when to start (or not start) parallel runs.</div>
+  <div class="meta">
+    <span class="chip">Date <b>2026-06-10</b></span>
+    <span class="chip">Codebase version <b>0.1.13</b></span>
+    <span class="chip">Scope <b>maestro-daemon session lifecycle</b></span>
+    <span class="chip">Method <b>code read + live issue state</b></span>
+  </div>
+</header>
+
+<div class="panel tl">
+  <strong>TL;DR</strong>
+  <p style="margin-bottom:6px">The raw resource problem I had on file is largely <b>solved</b>: there is now a global session cap (default 10), a periodic orphan reaper, and the test-leak that burned real Claude sessions is shipped-fixed. What replaced it is quieter and more important to your question:</p>
+  <ul style="margin-top:4px">
+    <li><b>The creep is no longer OOM — it's slot starvation.</b> A leaked or zombie session still counts as <code>Running</code> in the DB, so it permanently occupies one of your admission slots (cap default <b>20</b>). Fill the cap with zombies and the daemon admits nothing: every new run hangs in <code>waiting</code> forever, looking idle while actually being wedged.</li>
+    <li><b>The daemon still cannot tell when tmux dies underneath it</b> (issue #77, closed <em>not-planned</em>, never implemented). That's the main zombie source for crashes/logout.</li>
+    <li><b>Six open scheduler bugs (#194–#199)</b> actively manufacture zombies on otherwise-healthy runs: re-spawn onto non-existent inputs, self-edge stalls, double-spawn races. These are the live creep generators today.</li>
+  </ul>
+</div>
+
+<nav class="panel">
+  <div class="toc">
+    <a href="#families">1 · Two failure families</a>
+    <a href="#fixed">2 · What's already fixed</a>
+    <a href="#mechanism">3 · The real creep mechanism today</a>
+    <a href="#gaps">4 · Remaining gaps &amp; open issues</a>
+    <a href="#playbook">5 · Operational playbook (when to start sessions)</a>
+    <a href="#detect">6 · Detect &amp; recover</a>
+    <a href="#recommend">7 · Recommendations</a>
+  </div>
+</nav>
+
+<h2 id="families">1 · Two failure families</h2>
+<p class="lead">Almost everything in my notes about "memory issues with tmux sessions" collapses into two distinct families. They have different causes, different fixes, and only one of them is mostly handled.</p>
+
+<div class="grid2">
+  <div class="card">
+    <h4>A · Resource exhaustion <span class="tag t-fixed">mostly fixed</span></h4>
+    <p>Too many live Claude Code instances at once → tmux/gnome-terminal server collapses (observed once: ~30 <code>tmux-spawn-*.scope</code> units, peaks to 6.4&nbsp;GB on a single scope, server died at 00:22).</p>
+    <p>Bounded now by the admission cap. Residual risk: no per-session memory ceiling, manager sessions uncapped.</p>
+  </div>
+  <div class="card">
+    <h4>B · Bookkeeping desync (zombies) <span class="tag t-open">live problem</span></h4>
+    <p>The DB says a node is <code>running</code> but no tmux session backs it. Causes: tmux died (#77), or the scheduler re-spawned / double-spawned a node onto an input that never existed (#194–#199).</p>
+    <p>Each zombie holds a slot forever and burns Claude tokens if its session is actually alive but orphaned. This is your current pain.</p>
+  </div>
+</div>
+
+<h2 id="fixed">2 · What's already fixed (don't worry about these)</h2>
+<p>Several of my stored memories are stale — the code moved past them. Confirmed against <code>0.1.13</code>:</p>
+
+<table>
+  <thead><tr><th>Concern</th><th>Status</th><th>Evidence in code</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>No concurrency cap</b> (old #78)</td>
+      <td><span class="tag t-fixed">shipped</span></td>
+      <td><code>admission.rs</code>: global cap, default <code>DEFAULT_SESSION_CAP = 20</code> (raised from 10 on 2026-06-10), override via <code>MAESTRO_SESSION_CAP</code>. Enforced per node-spawn in <code>spawn_node</code> (<code>lib.rs:2199</code>); a denied node enters <code>waiting</code> and is retried by <code>retry_waiting_nodes</code>.</td>
+    </tr>
+    <tr>
+      <td><b>No orphan reaper</b></td>
+      <td><span class="tag t-fixed">shipped</span></td>
+      <td><code>tmux_session_manager::sweep_orphans</code>; runs at boot + every 60s (<code>MAESTRO_REAPER_INTERVAL_SECS</code>), kills sessions for archived/absent runs and node-runs completed &gt; 3600s ago (<code>MAESTRO_REAPER_TTL_SECS</code>).</td>
+    </tr>
+    <tr>
+      <td><b>Tests leak real Claude sessions</b> (#181)</td>
+      <td><span class="tag t-fixed">shipped 06-09</span></td>
+      <td>Per-daemon <code>tmux_cmd_override</code> (no global env race); <code>TestDaemon::drop</code> kills its private socket. No manual sweep needed anymore.</td>
+    </tr>
+    <tr>
+      <td><b>inotify watch exhaustion</b></td>
+      <td><span class="tag t-fixed">shipped 06-03</span></td>
+      <td>Run dirs watched non-recursively + 1s PollWatcher fallback. (Machine still sits near the 524k limit because of warp-terminal; product no longer the main consumer.)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="h">Caveat on #77/#78</div>
+  Both issues were closed <em>not-planned</em> on 2026-05-10, two hours after filing — not via a fix PR. The <b>cap</b> (#78's concern) was nonetheless built later under a separate spec (<code>admission.rs</code> cites "#77/#78" as motivation). The <b>dead-session detection</b> (#77's concern) was <b>not</b> built and does not exist in <code>0.1.13</code>. So #78 is effectively resolved; #77 is closed-but-unsolved.
+</div>
+
+<h2 id="mechanism">3 · The real creep mechanism today</h2>
+<p class="lead">This is the non-obvious part and the answer to "why does it feel like memory keeps creeping even with a cap."</p>
+
+<p>The cap counts live sessions from <em>projected DB state</em>, not from tmux reality:</p>
+<pre><code>// admission.rs — a node "holds a session" purely by its DB status
+fn node_holds_session(status) -> bool {
+    matches!(status, NodeStatus::Running | NodeStatus::AwaitingUser)
+}</code></pre>
+
+<p>Nothing in the daemon ever moves a node <em>out</em> of <code>Running</code> when its tmux session vanishes. The reaper only walks <b>tmux → DB</b> (kill sessions whose run is archived/gone); it never walks <b>DB → tmux</b> (flag nodes whose session is gone). So:</p>
+
+<div class="callout bad">
+  <div class="h">The wedge</div>
+  Every zombie node permanently occupies one admission slot. Slots never free for zombies. After enough accumulate (tmux crash, scheduler re-spawn bug, mid-run node-type edit), your effective cap (default 20) shrinks toward zero. New runs spawn, every node lands in <code>waiting</code>, and the system looks <em>idle</em> while being completely wedged. No error, no OOM — just silent starvation.
+</div>
+
+<p>Two corollaries worth internalising:</p>
+<ul>
+  <li><b>A zombie whose tmux is actually still alive</b> (orphaned by a scheduler bug, e.g. re-spawned onto a missing iter-N input per #194/#195/#199) keeps a real <code>claude</code> process running and burning tokens — on a run the UI already shows as <code>completed</code>.</li>
+  <li><b>Restarting the daemon does not clear DB zombies</b> — status lives in the event log. The reaper's TTL only helps once the <em>run</em> is archived. Until then the slot stays burnt.</li>
+</ul>
+
+<h2 id="gaps">4 · Remaining gaps &amp; open issues</h2>
+
+<h3>Product gaps (no code exists)</h3>
+<table>
+  <thead><tr><th>Gap</th><th>Impact</th></tr></thead>
+  <tbody>
+    <tr><td><b>No DB→tmux liveness check</b> (#77, closed not-planned)</td><td>tmux crash / logout / OOM-kill leaves nodes <code>running</code> forever, each burning a slot. The single biggest zombie source.</td></tr>
+    <tr><td><b>No per-session memory ceiling</b></td><td>Cap bounds <em>count</em>, not memory. 10 sessions × ~1.5&nbsp;GB ≈ 15&nbsp;GB, plus uncapped manager sessions. No <code>MemoryMax</code> on the scope, no pre-spawn <code>free -h</code> check.</td></tr>
+    <tr><td><b>Manager sessions exempt from cap</b></td><td>Deliberate (avoids manager-starvation deadlock), but means N parallel runs add N uncounted sessions on top of the 10.</td></tr>
+    <tr><td><b>No sub-worktree cleanup on completion</b></td><td><code>.maestro/runs/&lt;run&gt;/nodes/.../iter-N</code> worktrees (with their <code>target/</code> dirs) are created but not deleted until <code>cleanup_run</code>. Disk + inotify creep.</td></tr>
+  </tbody>
+</table>
+
+<h3>Open scheduler bugs that manufacture zombies — all <span class="tag t-open">ready-for-agent</span></h3>
+<table>
+  <thead><tr><th class="num">#</th><th>Bug</th><th>Zombie it creates</th></tr></thead>
+  <tbody>
+    <tr><td class="num">194</td><td>Input resolution is positional on the <em>consumer's</em> iter; consumes failed-iter artifacts; self-edge join never completes</td><td>Node stalls at a loop-entry join forever (self-edge = its own unmet precondition)</td></tr>
+    <tr><td class="num">195</td><td><code>resume_run</code> re-iterates completed non-loop nodes</td><td>Re-spawn onto a non-existent iter-N input → hangs running</td></tr>
+    <tr><td class="num">196</td><td><code>restart_node</code> races scheduler re-fire</td><td>Two live iterations of one node; <code>kill_node</code> then mislabels it failed</td></tr>
+    <tr><td class="num">197</td><td>Run status stuck <code>failed</code> while scheduler keeps executing</td><td>Run looks dead but is still spawning sessions</td></tr>
+    <tr><td class="num">198</td><td><code>mark_node_done</code> accepts an already-completed iter</td><td>Duplicate <code>node_completed</code> re-triggers downstream spawns</td></tr>
+    <tr><td class="num">199</td><td><code>end_region</code> opens a new lap past <code>max_iter</code></td><td>Entry re-spawn + non-member feeder dragged into the loop → zombie sessions on a "completed" run</td></tr>
+  </tbody>
+</table>
+<p class="src">Forensic repro for all six: run <code>20260610-110516-9c8d123</code> (kept alive deliberately). Note from the #194 grill: <code>iter_for_node</code>, <code>materialize_missing_regions</code>, and <code>scheduler_step</code>/<code>TickQueue</code> are <b>dead code</b> — only their own tests call them. The live spawn iter is a generic <code>n.iter + 1</code> for everyone, which is why non-loop feeders get dragged into laps. Don't reason about the scheduler using those functions.</p>
+
+<h3>Operational footgun</h3>
+<table>
+  <thead><tr><th>Footgun</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><b>Editing a node's <code>type</code> mid-run</b></td><td>Spawn reads live pipeline, <code>node_done</code> reads the run snapshot — they disagree on whether the node owns a sub-worktree → <code>maestro complete</code> 500s with "git add failed in sub-worktree". The node stays running = another burnt slot.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="playbook">5 · Operational playbook — when to start sessions</h2>
+<p class="lead">You want to keep running multiple sessions. The rule isn't "fewer runs" — it's "don't let zombies eat your slots, and respect the real memory budget the cap doesn't enforce."</p>
+
+<div class="grid2">
+  <div class="do">
+    <h4>✓ Start a new run when…</h4>
+    <ul>
+      <li><b>Live node sessions are well under the cap (20).</b> Check first (see §6). The cap will queue you, but a queued node behind zombies waits forever.</li>
+      <li><b>You have RAM headroom.</b> Budget ~1.5&nbsp;GB per concurrent node session + ~1&nbsp;GB per manager. <code>free -h</code> before launching 3+ heavy runs (simple-bugfix, sandcastle waves).</li>
+      <li><b>The work is genuinely independent</b> — different pipelines / unrelated issues. Parallelism pays here.</li>
+      <li><b>No self-edges in the pipeline</b> (until #194 ships). A self-edge guarantees a stall.</li>
+    </ul>
+  </div>
+  <div class="dont">
+    <h4>✗ Don't start / don't parallelise when…</h4>
+    <ul>
+      <li><b>Zombies are present.</b> Clear them first (§6) or you're launching into a shrunk cap.</li>
+      <li><b>You'd exceed ~10–12 GB of Claude sessions.</b> The cap won't stop you from OOMing the box once managers + your own dev Claude are added.</li>
+      <li><b>The pipeline has a bounded loop with a non-loop feeder upstream</b> — #199 will drag the feeder into laps and leak sessions. Run it solo and watch it.</li>
+      <li><b>You're tempted to edit the pipeline mid-run</b> to "fix" a stuck node. Editing node type breaks completion. Stop the run instead.</li>
+      <li><b>Just to "resume" a run whose tmux died.</b> Resume re-iterates nodes (#195). Use <code>cleanup_run</code> and relaunch.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout good" style="margin-top:18px">
+  <div class="h">Sessions that are <em>not</em> useful</div>
+  <ul style="margin:6px 0 0">
+    <li><b>Manager sessions on finished runs</b> — they linger until the run is archived/reaped (up to TTL). Archive or <code>cleanup_run</code> finished runs promptly to release them.</li>
+    <li><b>Interactive (<code>AwaitingUser</code>) nodes you've walked away from</b> — they hold a slot indefinitely by design. If you're not coming back, stop the run.</li>
+    <li><b>Any node on a run the UI shows <code>completed</code>/<code>failed</code> but that still has live tmux</b> — pure waste (scheduler-bug zombie). Kill on sight.</li>
+  </ul>
+</div>
+
+<h2 id="detect">6 · Detect &amp; recover</h2>
+
+<h3>Detect zombies (DB says running, tmux says no)</h3>
+<p>This is the check the daemon doesn't do for you. Run it before launching parallel work:</p>
+<pre><code># 1. How many slots does the DB think are in use? (Running / AwaitingUser nodes)
+#    via the daemon API — adjust port (live = 6172 debug here):
+curl -s localhost:6172/runs | jq '[.[] | select(.status=="running")]'
+
+# 2. What tmux sessions actually exist?
+tmux ls 2>/dev/null | grep '^maestro-'
+
+# 3. Cross-check: a node "running" in (1) with no matching session in (2) is a ZOMBIE.
+#    Session names are maestro-&lt;run_id&gt;-&lt;node_id&gt;-iter-&lt;n&gt; ; managers are maestro-mgr-&lt;run_id&gt;.
+
+# 4. RAM reality check before parallelising:
+free -h</code></pre>
+
+<h3>Recover</h3>
+<ul>
+  <li><b>Zombie / stuck-running node:</b> <code>POST /runs/{id}/commands {"kind":"cleanup_run"}</code> — releases the slot and destroys the worktree. Do <em>not</em> try to "resume".</li>
+  <li><b>Orphaned live tmux on a finished run:</b> <code>tmux kill-session -t &lt;name&gt;</code>, then archive/cleanup the run so the DB slot frees too.</li>
+  <li><b>Whole tmux server collapsed mid-run:</b> every affected node is now a zombie. <code>cleanup_run</code> each, then relaunch from scratch. Restarting the daemon alone won't fix the DB status.</li>
+  <li><b>"git add failed in sub-worktree" after a mid-run type edit:</b> recreate the expected sub-worktree at the snapshot commit so the no-op merge succeeds, then re-run <code>maestro complete</code> — or just stop and relaunch.</li>
+</ul>
+
+<h3>Tune the knobs to your machine</h3>
+<table>
+  <thead><tr><th>Env var</th><th>Default</th><th>When to change</th></tr></thead>
+  <tbody>
+    <tr><td><code>MAESTRO_SESSION_CAP</code></td><td>20</td><td>Lower to <b>4–6</b> on a 16–32&nbsp;GB box you also dev on. At the default of 20, 20 × 1.5&nbsp;GB ≈ 30&nbsp;GB + uncapped managers + your editor's Claude will OOM most dev boxes — the default favours parallelism on a big machine, not a slim margin. Tune to your RAM.</td></tr>
+    <tr><td><code>MAESTRO_REAPER_TTL_SECS</code></td><td>3600</td><td>Lower (e.g. 300) if completed runs linger and you want sessions reclaimed faster.</td></tr>
+    <tr><td><code>MAESTRO_REAPER_INTERVAL_SECS</code></td><td>60</td><td>Rarely. Leave it.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="recommend">7 · Recommendations</h2>
+
+<h3>Product (in priority order)</h3>
+<ol>
+  <li><b>Reopen the spirit of #77: add a DB→tmux liveness sweep.</b> Single highest-leverage fix. Periodically, for every node the DB marks <code>Running</code>/<code>AwaitingUser</code>, check <code>tmux has-session</code>; if gone, emit <code>node_stale</code>/<code>run_halted</code> so the slot frees and the UI tells the truth. This directly stops slot starvation. (The #194 plan already proposes a no-progress detector via a node_done epilogue + stale sweep — fold this in.)</li>
+  <li><b>Ship the #194–#199 cluster.</b> They're the active zombie factory on healthy runs. #194 (self-edge / positional-iter) and #199 (lap past max_iter dragging in feeders) are the worst leakers. ADR-0013 is the planned home for the resolution-semantics rewrite.</li>
+  <li><b>Cap or count manager sessions, or give them a tiny memory ceiling.</b> They're "light" individually but unbounded across parallel runs.</li>
+  <li><b>Delete dead scheduler code</b> (<code>iter_for_node</code>, <code>materialize_missing_regions</code>, <code>scheduler_step</code>, <code>TickQueue</code>). It actively misleads anyone reasoning about iteration — including future-you and agents working #194.</li>
+  <li><b>Sub-worktree GC on node completion / run archive</b> — bounds disk and inotify.</li>
+  <li><b>Optional: pre-spawn <code>free -h</code> guard</b> — refuse/queue admission below a memory floor, since the count cap doesn't model memory.</li>
+</ol>
+
+<h3>Operational (today, no code)</h3>
+<ul>
+  <li>Drop <code>MAESTRO_SESSION_CAP</code> to <b>5</b> for your dev box if you run heavy pipelines alongside your own work.</li>
+  <li>Run the §6 zombie cross-check before any parallel launch. If you do this twice a week you'll never hit silent starvation.</li>
+  <li><code>cleanup_run</code> finished runs promptly — don't let manager sessions and slots linger.</li>
+  <li>Never edit a running pipeline; never "resume" a tmux-dead run.</li>
+  <li>Keep run <code>9c8d123</code> until #194–#199 land (it's the repro), then <code>cleanup_run</code> it.</li>
+</ul>
+
+<div class="panel" style="margin-top:28px">
+  <strong>One-line mental model</strong>
+  <p style="margin:6px 0 0">The cap stops you from <em>melting the machine</em>. It does nothing about <em>zombies eating your slots</em> — and zombies are now the dominant failure mode. Watch the gap between "DB says running" and "tmux actually exists," and you've covered 90% of the creep.</p>
+</div>
+
+<footer>
+  Generated from a code read of <code>maestro-daemon</code> @ 0.1.13 and live GitHub issue state on 2026-06-10.
+  Stale-memory corrections applied: the "no concurrency cap" note is obsolete (cap shipped); #77 remains unsolved despite being closed.
+  Source files cited: <code>admission.rs</code>, <code>tmux_session_manager.rs</code>, <code>scheduler.rs</code>, <code>loop_region.rs</code>, <code>node_primitives.rs</code>, <code>lib.rs</code>.
+</footer>
+
+</div>
+</body>
+</html>

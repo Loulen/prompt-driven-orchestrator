@@ -21,9 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../frontend/dist");
 
     if std::env::var_os("PDO_SKIP_FRONTEND_BUILD").is_some() {
-        println!(
-            "cargo:warning=PDO_SKIP_FRONTEND_BUILD set; assuming frontend/dist is current"
-        );
+        println!("cargo:warning=PDO_SKIP_FRONTEND_BUILD set; assuming frontend/dist is current");
         return;
     }
 

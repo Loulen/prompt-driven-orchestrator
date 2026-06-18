@@ -231,11 +231,7 @@ async fn create_run_with_valid_target_repo_and_source_branch() {
     let run_id = json["run_id"].as_str().unwrap();
 
     // Artifacts should be under <target_repo>/.pdo/runs/<run-id>/
-    let run_dir = target_repo
-        .path()
-        .join(".pdo")
-        .join("runs")
-        .join(run_id);
+    let run_dir = target_repo.path().join(".pdo").join("runs").join(run_id);
     assert!(run_dir.exists(), "run dir must exist under target_repo");
 
     let worktree_dir = run_dir.join("worktree");
@@ -286,11 +282,7 @@ async fn create_run_without_target_repo_uses_daemon_repo() {
     let run_id = json["run_id"].as_str().unwrap();
 
     // Artifacts should be under daemon's repo root
-    let run_dir = daemon
-        .repo_root()
-        .join(".pdo")
-        .join("runs")
-        .join(run_id);
+    let run_dir = daemon.repo_root().join(".pdo").join("runs").join(run_id);
     assert!(
         run_dir.exists(),
         "run dir must exist under daemon repo root"

@@ -85,9 +85,8 @@ mod tests {
 
     #[test]
     fn path_arithmetic_matches_canonical_schema() {
-        let base = Path::new(
-            "/home/user/repo/.pdo/runs/20260506-1200-abc1234/worktree/.pdo/artifacts",
-        );
+        let base =
+            Path::new("/home/user/repo/.pdo/runs/20260506-1200-abc1234/worktree/.pdo/artifacts");
         let path = artifact_path(base, "implementer-1", 2, "summary");
         assert_eq!(
             path.to_str().unwrap(),

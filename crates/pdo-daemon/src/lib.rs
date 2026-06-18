@@ -269,15 +269,13 @@ fn cli_daemon_url() -> String {
 }
 
 fn cli_run_id() -> Result<String> {
-    std::env::var("PDO_RUN_ID").context(
-        "PDO_RUN_ID not set — this command must be run inside a PDO NodeRun session",
-    )
+    std::env::var("PDO_RUN_ID")
+        .context("PDO_RUN_ID not set — this command must be run inside a PDO NodeRun session")
 }
 
 fn cli_node_id() -> Result<String> {
-    std::env::var("PDO_NODE_ID").context(
-        "PDO_NODE_ID not set — this command must be run inside a PDO NodeRun session",
-    )
+    std::env::var("PDO_NODE_ID")
+        .context("PDO_NODE_ID not set — this command must be run inside a PDO NodeRun session")
 }
 
 fn cli_node_iter() -> i64 {
@@ -7111,8 +7109,7 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
             // macOS: open -a Terminal <script>
             // We create a temp script that attaches
             let script = format!("#!/bin/bash\n{tmux_cmd}\n");
-            let script_path =
-                std::env::temp_dir().join(format!("pdo-attach-{session_name}.sh"));
+            let script_path = std::env::temp_dir().join(format!("pdo-attach-{session_name}.sh"));
             std::fs::write(&script_path, &script)?;
             #[cfg(unix)]
             {
@@ -7206,10 +7203,7 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     }
 
     // Remove all branches for this run (pipeline branch + sub-worktree branches)
-    for pattern in [
-        format!("pdo/run-{run_id}"),
-        format!("pdo/sub-{run_id}*"),
-    ] {
+    for pattern in [format!("pdo/run-{run_id}"), format!("pdo/sub-{run_id}*")] {
         let branch_output = std::process::Command::new("git")
             .args(["branch", "--list", &pattern])
             .current_dir(&repo_root)
@@ -9421,10 +9415,7 @@ mod tests {
             "the merged uncompleted node must be flagged"
         );
         assert_eq!(divergent[0].0, "impl");
-        assert_eq!(
-            divergent[0].1,
-            "pdo/sub-20260101-120000-abc-impl-iter-1"
-        );
+        assert_eq!(divergent[0].1, "pdo/sub-20260101-120000-abc-impl-iter-1");
     }
 
     #[test]
@@ -9476,9 +9467,7 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from(
-                "/repo/.pdo/runs/20260101-120000-abc/nodes/impl-1/pane-iter-2.snapshot"
-            )
+            PathBuf::from("/repo/.pdo/runs/20260101-120000-abc/nodes/impl-1/pane-iter-2.snapshot")
         );
     }
 
@@ -11322,11 +11311,7 @@ mod tests {
     async fn node_prompt_returns_markdown_when_file_exists() {
         let tmp = tempfile::tempdir().unwrap();
         let run_id = "prompt-test-ok";
-        let wt_dir = tmp
-            .path()
-            .join(".pdo/runs")
-            .join(run_id)
-            .join("worktree");
+        let wt_dir = tmp.path().join(".pdo/runs").join(run_id).join("worktree");
         let prompt_dir = wt_dir.join(".pdo").join("prompts");
         std::fs::create_dir_all(&prompt_dir).unwrap();
         std::fs::write(
@@ -11371,11 +11356,7 @@ mod tests {
     async fn node_prompt_defaults_iter_to_1() {
         let tmp = tempfile::tempdir().unwrap();
         let run_id = "prompt-test-default-iter";
-        let wt_dir = tmp
-            .path()
-            .join(".pdo/runs")
-            .join(run_id)
-            .join("worktree");
+        let wt_dir = tmp.path().join(".pdo/runs").join(run_id).join("worktree");
         let prompt_dir = wt_dir.join(".pdo").join("prompts");
         std::fs::create_dir_all(&prompt_dir).unwrap();
         std::fs::write(prompt_dir.join("worker-iter-1.md"), "prompt content").unwrap();
@@ -11464,10 +11445,8 @@ mod tests {
         let pipeline_path = run_dir.join("pipeline.yaml");
         std::fs::create_dir_all(run_dir.join("worktree/.pdo/artifacts/planner/iter-1/plan"))
             .unwrap();
-        std::fs::create_dir_all(
-            run_dir.join("worktree/.pdo/artifacts/implementer/iter-1/summary"),
-        )
-        .unwrap();
+        std::fs::create_dir_all(run_dir.join("worktree/.pdo/artifacts/implementer/iter-1/summary"))
+            .unwrap();
         std::fs::create_dir_all(pipeline_path.parent().unwrap()).unwrap();
         std::fs::write(
             &pipeline_path,

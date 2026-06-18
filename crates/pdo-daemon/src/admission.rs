@@ -15,7 +15,7 @@
 //! projected run state. The dispatcher owns the side effects (spawning,
 //! emitting the `waiting` event).
 
-use crate::event_log::{NodeStatus, RunState, RunStatus};
+use crate::event_log::{NodeStatus, RunState};
 
 /// Env var that overrides the global session cap. Default: [`DEFAULT_SESSION_CAP`].
 ///
@@ -56,16 +56,24 @@ pub fn configured_cap() -> usize {
 
 /// Count the live NodeRun sessions across all known runs.
 ///
-/// A NodeRun session is "live" while its node is `Running` or `AwaitingUser`
-/// (an interactive node keeps its tmux session attachable indefinitely). Nodes
-/// that are `Pending`, `Waiting`, `Completed`, `Failed`, `Stopped` or `Stale`
-/// hold no session and do not count.
+/// Only nodes belonging to a *live* Run ([`RunStatus::is_live`]:
+/// `Running`/`AwaitingUser`/`Paused`) are counted. A terminal Run
+/// (`Completed`/`Failed`/`Halted`/`Archived`) spawns no new work, so a node it
+/// still projects as session-holding is a projection artifact — its tmux
+/// session has been (or is about to be) reaped — and must not consume an
+/// admission slot. Counting such phantoms permanently leaked a slot from the
+/// global cap (#215).
+///
+/// Within a live Run, a NodeRun session is "live" while its node is `Running`
+/// or `AwaitingUser` (an interactive node keeps its tmux session attachable
+/// indefinitely). Nodes that are `Pending`, `Waiting`, `Completed`, `Failed`,
+/// `Stopped` or `Stale` hold no session and do not count.
 ///
 /// Pipeline Manager sessions are not represented as nodes in the run state, so
 /// they are excluded by construction.
 pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>) -> usize {
     runs.into_iter()
-        .filter(|run| run.status != RunStatus::Archived)
+        .filter(|run| run.status.is_live())
         .flat_map(|run| run.nodes.values())
         .filter(|node| node_holds_session(&node.status))
         .count()
@@ -73,14 +81,17 @@ pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>
 
 /// Whether a node in the given status is currently holding a NodeRun tmux
 /// session (and therefore consuming an admission slot).
-fn node_holds_session(status: &NodeStatus) -> bool {
+///
+/// `pub(crate)` so boot recovery can reuse the canonical "session-holding"
+/// definition when reconciling dangling nodes of terminal runs (#215).
+pub(crate) fn node_holds_session(status: &NodeStatus) -> bool {
     matches!(status, NodeStatus::Running | NodeStatus::AwaitingUser)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::NodeState;
+    use crate::event_log::{NodeState, RunStatus};
 
     fn run_with_nodes(run_id: &str, statuses: &[(&str, NodeStatus)]) -> RunState {
         let mut run = RunState::new(run_id.into(), "test".into());
@@ -134,6 +145,42 @@ mod tests {
         archived.status = RunStatus::Archived;
         let live = run_with_nodes("r2", &[("b", NodeStatus::Running)]);
         assert_eq!(count_live_node_sessions([&archived, &live]), 1);
+    }
+
+    #[test]
+    fn excludes_failed_run_with_a_running_node() {
+        // #215: a run fails (fail-fast) but a sibling node is still projected
+        // Running for a window. Its phantom session must not leak a slot.
+        let mut failed = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
+        failed.status = RunStatus::Failed;
+        assert_eq!(count_live_node_sessions([&failed]), 0);
+    }
+
+    #[test]
+    fn excludes_completed_run_with_an_awaiting_user_node() {
+        // #215: an interactive node left AwaitingUser inside a Completed run is
+        // a projection artifact, not a live session.
+        let mut completed = run_with_nodes("r1", &[("a", NodeStatus::AwaitingUser)]);
+        completed.status = RunStatus::Completed;
+        assert_eq!(count_live_node_sessions([&completed]), 0);
+    }
+
+    #[test]
+    fn excludes_halted_run_with_a_running_node() {
+        // #215: Halted is terminal-but-resumable; while halted it holds no live
+        // session, so its nodes do not count.
+        let mut halted = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
+        halted.status = RunStatus::Halted;
+        assert_eq!(count_live_node_sessions([&halted]), 0);
+    }
+
+    #[test]
+    fn counts_a_running_node_in_a_paused_run() {
+        // Regression guard: Paused is *live*, not terminal. Don't over-exclude
+        // it — a paused run's Running node still holds its session and slot.
+        let mut paused = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
+        paused.status = RunStatus::Paused;
+        assert_eq!(count_live_node_sessions([&paused]), 1);
     }
 
     #[test]

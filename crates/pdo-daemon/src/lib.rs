@@ -1394,17 +1394,6 @@ async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
 
 // --- Trigger scheduler ---
 
-/// A Run is "live" (blocks an overlapping fire) while it is `running`,
-/// `awaiting_user`, or `paused`.
-fn run_status_is_live(status: &event_log::RunStatus) -> bool {
-    matches!(
-        status,
-        event_log::RunStatus::Running
-            | event_log::RunStatus::AwaitingUser
-            | event_log::RunStatus::Paused
-    )
-}
-
 /// Whether the Trigger's *own* previous Run is still live. Scans projected Run
 /// state for a run carrying this `triggered_by` whose status is live.
 async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
@@ -1421,9 +1410,7 @@ async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
             Err(_) => continue,
         };
         if let Some(state) = event_log::project(&events) {
-            if state.triggered_by.as_deref() == Some(trigger_id)
-                && run_status_is_live(&state.status)
-            {
+            if state.triggered_by.as_deref() == Some(trigger_id) && state.status.is_live() {
                 return true;
             }
         }
@@ -4062,6 +4049,64 @@ async fn run_boot_recovery(state: &AppState) {
             Some(s) => s,
             None => continue,
         };
+
+        // (0) Terminal run still projecting a session-holding node (#215).
+        // Fail-fast can mark the whole run Failed while a sibling node is still
+        // Running, so a terminal run can survive a restart with a node the
+        // projection shows as Running/AwaitingUser. Phase 1 already excludes it
+        // from the session cap, but the projection stays inconsistent until we
+        // reconcile it. Fail each dangling node at its current iter, routed
+        // through the guard (so a second boot pass is a clean no-op), then skip
+        // the live-run handling below — the run is terminal and must stay so.
+        let run_terminal = matches!(
+            run_state.status,
+            event_log::RunStatus::Completed
+                | event_log::RunStatus::Failed
+                | event_log::RunStatus::Halted
+                | event_log::RunStatus::Archived
+        );
+        if run_terminal {
+            let dangling: Vec<(String, i64, event_log::NodeStatus)> = run_state
+                .nodes
+                .iter()
+                .filter(|(_, ns)| admission::node_holds_session(&ns.status))
+                .map(|(id, ns)| (id.clone(), ns.iter, ns.status.clone()))
+                .collect();
+            for (node_id, iter, node_status) in &dangling {
+                let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
+                let fail = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::NodeFailed,
+                    node_id: Some(node_id.clone()),
+                    iter: Some(*iter),
+                    payload: Some(serde_json::json!({
+                        "reason": format!(
+                            "boot_recovery: run is {:?} (terminal) but node left \
+                             session-holding ({:?}) across a daemon restart \
+                             (session {session})",
+                            run_state.status, node_status
+                        )
+                    })),
+                };
+                // Through the guard: idempotent across reboots. validate_fail
+                // returns NoOp once the iteration is already terminal, so a
+                // second pass appends nothing.
+                if let Err(e) = append_event(state, &fail).await {
+                    error!(
+                        "Boot recovery: failed to reconcile dangling {node_id} iter {iter} \
+                         in terminal run {run_id}: {e}"
+                    );
+                } else {
+                    warn!(
+                        "Boot recovery: node {node_id} iter {iter} in terminal run {run_id} \
+                         left session-holding ({node_status:?}) — marked Failed"
+                    );
+                }
+            }
+            continue; // terminal run: orphan/stall handling below does not apply
+        }
 
         if run_state.status != event_log::RunStatus::Running
             && run_state.status != event_log::RunStatus::AwaitingUser
@@ -8034,6 +8079,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_endpoint_excludes_session_holding_node_of_a_terminal_run() {
+        // #215 repro at the HTTP boundary: a run fails (fail-fast) while a
+        // sibling node is still projected Running. `GET /sessions` must report
+        // `live: 0`, not leak a phantom slot. This is the exact symptom the
+        // issue filed (`/sessions` returned `live:1` with no live tmux).
+        let state = test_state().await;
+        let run_id = "sessions-terminal-run";
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "reason": "fail-fast" })),
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["live"], 0,
+            "a session-holding node in a terminal run must not count (#215)"
+        );
+    }
+
+    #[tokio::test]
     async fn get_nonexistent_run_returns_404() {
         let state = test_state().await;
         let app = build_router(state);
@@ -11498,6 +11603,108 @@ mod tests {
             .iter()
             .filter(|e| e.kind == kind && e.node_id.as_deref() == Some(node_id))
             .count()
+    }
+
+    /// #215: a terminal run (here `Failed` via fail-fast) that still projects a
+    /// session-holding node must be reconciled at boot — the dangling node is
+    /// marked `Failed`, the projection becomes consistent, and the pass is
+    /// idempotent across restarts.
+    #[tokio::test]
+    async fn boot_recovery_reconciles_session_holding_node_in_terminal_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "boot-rec-215";
+        write_test_pipeline(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "boot-rec-215-1";
+        // RunStarted -> NodeStarted(worker, iter 1) -> RunFailed: a terminal run
+        // whose worker node is still projected Running. Run* events bypass the
+        // transition guard, so this faithfully reproduces fail-fast leaving a
+        // sibling session-holding.
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "reason": "fail-fast: sibling failed" })),
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        // Before recovery: the projection still shows worker Running, but the
+        // Phase-1 count already excludes it (run is terminal) — the slot no
+        // longer leaks.
+        let before = event_log::project(&load_events(&state.db, run_id).await.unwrap()).unwrap();
+        assert_eq!(before.status, event_log::RunStatus::Failed);
+        assert_eq!(
+            before.nodes["worker"].status,
+            event_log::NodeStatus::Running,
+            "precondition: worker still projects Running before recovery"
+        );
+        assert_eq!(
+            admission::count_live_node_sessions([&before]),
+            0,
+            "Phase 1 already excludes terminal-run nodes from the cap"
+        );
+
+        run_boot_recovery(&state).await;
+
+        // After recovery: worker is reconciled to Failed with an explanatory
+        // reason, and no terminal run carries a session-holding node.
+        let after = event_log::project(&load_events(&state.db, run_id).await.unwrap()).unwrap();
+        assert_eq!(after.nodes["worker"].status, event_log::NodeStatus::Failed);
+        let reason = after.nodes["worker"]
+            .failure_reason
+            .as_deref()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("terminal") && reason.contains("session-holding"),
+            "reason should explain the terminal/session-holding reconciliation, got: {reason}"
+        );
+        assert!(
+            !after.status.is_live()
+                && !after.nodes.values().any(|ns| {
+                    matches!(
+                        ns.status,
+                        event_log::NodeStatus::Running | event_log::NodeStatus::AwaitingUser
+                    )
+                }),
+            "no terminal run may carry a Running/AwaitingUser node after recovery"
+        );
+
+        // Idempotency: a second pass (e.g. another reboot) appends no duplicate
+        // NodeFailed — validate_fail returns NoOp on the already-terminal iter.
+        run_boot_recovery(&state).await;
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeFailed, "worker"),
+            1,
+            "boot recovery must be idempotent: exactly one NodeFailed for worker"
+        );
+        let again = event_log::project(&events).unwrap();
+        assert_eq!(again.nodes["worker"].status, event_log::NodeStatus::Failed);
     }
 
     #[tokio::test]

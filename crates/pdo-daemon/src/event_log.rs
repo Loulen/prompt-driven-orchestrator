@@ -98,6 +98,22 @@ pub enum RunStatus {
     Archived,
 }
 
+impl RunStatus {
+    /// A Run is "live" while it is `Running`, `AwaitingUser`, or `Paused`. While
+    /// live, its session-holding nodes still consume an admission slot and a new
+    /// trigger fire is blocked by an overlapping run.
+    ///
+    /// `Completed`/`Failed`/`Halted`/`Archived` are terminal: such a run spawns
+    /// no new work, so its nodes hold no live session (#215). `Halted` is
+    /// terminal-but-resumable but, while halted, holds nothing either.
+    pub fn is_live(&self) -> bool {
+        matches!(
+            self,
+            RunStatus::Running | RunStatus::AwaitingUser | RunStatus::Paused
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {

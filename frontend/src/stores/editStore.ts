@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   PipelineListEntry,
+  PipelineScope,
   PipelineDef,
   NodeDef,
   EdgeDef,
@@ -82,7 +83,7 @@ interface EditState {
   lastSavedAt: Record<string, number>;
 
   loadPipelines: () => Promise<void>;
-  openPipeline: (id: string) => Promise<void>;
+  openPipeline: (id: string, scope?: PipelineScope) => Promise<void>;
   openRunPipeline: (runId: string) => Promise<void>;
   closeRunPipeline: (runId: string) => void;
   closeTab: (id: string) => void;
@@ -111,7 +112,7 @@ interface EditState {
   updatePrompt: (nodeId: string, content: string) => void;
 
   // Pipeline deletion
-  removePipeline: (id: string) => Promise<void>;
+  removePipeline: (id: string, scope?: PipelineScope) => Promise<void>;
 
   // Persistence
   save: (id: string) => Promise<void>;
@@ -388,14 +389,16 @@ export const useEditStore = create<EditState>((set, get) => ({
     }
   },
 
-  openPipeline: async (id: string) => {
+  openPipeline: async (id: string, scope?: PipelineScope) => {
     const existing = get().openTabs.find((t) => t.id === id);
     if (existing) {
       set({ activeTabId: id, selection: { kind: "none", id: null } });
       return;
     }
     try {
-      const detail = await fetchPipeline(id);
+      // Pass the list entry's scope so a `library` (or `user`) pipeline opens
+      // from its own store rather than a same-named repo file (#216).
+      const detail = await fetchPipeline(id, scope);
       const tab: OpenPipeline = {
         id,
         scope: detail.scope,
@@ -610,16 +613,25 @@ export const useEditStore = create<EditState>((set, get) => ({
     }));
   },
 
-  removePipeline: async (id: string) => {
-    await apiDeletePipeline(id);
+  removePipeline: async (id: string, scope?: PipelineScope) => {
+    // Pass the entry's scope so a `library` delete hits the library store, not
+    // the same-named repo `.yaml` + `.prompts/` that would otherwise be
+    // destroyed (#216).
+    await apiDeletePipeline(id, scope);
     set((s) => {
       const openTabs = s.openTabs.filter((t) => t.id !== id);
       let activeTabId = s.activeTabId;
       if (s.activeTabId === id) {
         activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : null;
       }
+      // The merged /pipelines list can hold the same id under two scopes (a repo
+      // pipeline and its promoted `library` copy). Drop only the entry whose
+      // scope was deleted, so deleting the library row doesn't also blank the
+      // surviving repo row (#216). With no scope, fall back to id-only removal.
+      const removed = (p: PipelineListEntry) =>
+        p.id === id && (scope === undefined || p.scope === scope);
       return {
-        pipelines: s.pipelines.filter((p) => p.id !== id),
+        pipelines: s.pipelines.filter((p) => !removed(p)),
         openTabs,
         activeTabId,
         selection: s.activeTabId === id ? { kind: "none" as const, id: null } : s.selection,
@@ -635,7 +647,9 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (tab.runId) {
         await saveRunPipeline(tab.runId, yaml, tab.prompts);
       } else {
-        await savePipeline(id, yaml, tab.prompts);
+        // Save back into the same store the tab was opened from, so a
+        // `library`-scoped edit never overwrites a same-named repo file (#216).
+        await savePipeline(id, yaml, tab.prompts, tab.scope);
       }
       // Mirror the save into the library entry when this tab is starred, so
       // renames-then-Save propagate to the library file (without orphaning the
@@ -713,8 +727,8 @@ export const useEditStore = create<EditState>((set, get) => ({
 
   reloadPipeline: async (id: string) => {
     try {
-      const detail = await fetchPipeline(id);
       const tab = get().openTabs.find((t) => t.id === id);
+      const detail = await fetchPipeline(id, tab?.scope);
       if (tab?.dirty) {
         set((s) => ({
           openTabs: s.openTabs.map((t) =>
@@ -808,8 +822,8 @@ export const useEditStore = create<EditState>((set, get) => ({
           lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
         }));
       } else {
-        await savePipeline(tabId, libraryYaml, tab.prompts);
-        const detail = await fetchPipeline(tabId);
+        await savePipeline(tabId, libraryYaml, tab.prompts, tab.scope);
+        const detail = await fetchPipeline(tabId, tab.scope);
         set((s) => ({
           openTabs: s.openTabs.map((t) =>
             t.id === tabId

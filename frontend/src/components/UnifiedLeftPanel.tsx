@@ -125,7 +125,10 @@ export default function UnifiedLeftPanel({
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
     try {
-      await removePipeline(deleteTarget.id);
+      // Forward scope so a `library` entry deletes from the library store, not
+      // the same-named repo pipeline file (#216).
+      await removePipeline(deleteTarget.id, deleteTarget.scope);
+      if (deleteTarget.scope === "library") onLibraryPipelinesChanged();
     } catch {
       // ignore
     }
@@ -359,7 +362,7 @@ export default function UnifiedLeftPanel({
             return (
               <button
                 key={`${p.scope}-${p.id}`}
-                onClick={() => openPipeline(p.id)}
+                onClick={() => openPipeline(p.id, p.scope)}
                 className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
                   isSelected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
                 }`}

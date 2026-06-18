@@ -564,8 +564,16 @@ export async function saveRunPipeline(
 
 // --- Pipeline CRUD ---
 
-export async function fetchPipeline(id: string): Promise<PipelineDetail> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`);
+// Pin an operation to a single store. Without it the daemon resolves a bare id
+// repo-then-user, so a `library` (or `user`) entry colliding with a same-named
+// repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the
+// historical default and are only forwarded when explicitly known.
+function scopeQuery(scope?: string): string {
+  return scope && scope !== "run" ? `?scope=${encodeURIComponent(scope)}` : "";
+}
+
+export async function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`);
   if (!resp.ok) throw new Error(`GET /pipelines/${id} failed: ${resp.status}`);
   return resp.json();
 }
@@ -574,8 +582,9 @@ export async function savePipeline(
   id: string,
   yaml: string,
   prompts: Record<string, string>,
+  scope?: string,
 ): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`, {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ yaml, prompts }),
@@ -685,8 +694,8 @@ export interface DeletePipelineError {
   message: string;
 }
 
-export async function deletePipeline(id: string): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`, {
+export async function deletePipeline(id: string, scope?: string): Promise<void> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
     method: "DELETE",
   });
   if (resp.status === 409) {

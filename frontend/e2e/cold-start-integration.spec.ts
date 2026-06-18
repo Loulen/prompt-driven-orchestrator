@@ -20,6 +20,7 @@ const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: worker
+    name: worker
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/worker.md
     inputs:
@@ -82,7 +83,7 @@ test("cold-start full flow: run → node → modal → edit toggle, no console e
 
   // 2. Create a run via the API and seed an output artifact
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "cold-start integration test",
     },

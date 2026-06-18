@@ -1,11 +1,19 @@
 import { test, expect } from "@playwright/test";
+import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Layer 3b — ForEach node E2E (refs #60).
-// Seeds a pipeline with a ForEach node, verifies edit-mode rendering,
-// then creates a run and confirms the ForEach node renders in run mode.
+//
+// Post canvas-refonte (ADR-0011 / #146 / #151 / #171): `for-each` is no longer a
+// first-class node TYPE with its own icon or toolbar add-button — a fan-out is a
+// `collection` loop *region*, not a node. A pipeline that still declares a
+// legacy `for-each` node loads and renders it verbatim as a generic agent node
+// (the `node-icon-agent` User glyph, emergent input), and the EditToolbar
+// deliberately has NO ForEach add-button. This spec asserts that current
+// behaviour: the legacy for-each node renders with its label + agent icon, and
+// the toolbar carries no foreach button (only add + merge).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -94,7 +102,7 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("foreach node renders in edit mode with foreach icon", async ({
+test("legacy foreach node renders as a generic agent node", async ({
   page,
 }) => {
   const consoleErrors: string[] = [];
@@ -107,28 +115,24 @@ test("foreach node renders in edit mode with foreach icon", async ({
     timeout: 10_000,
   });
 
-  // Switch to edit mode
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  // Select the pipeline from the list
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Verify the foreach node renders with its label
-  const feNode = page.getByText("per-item").first();
-  await expect(feNode).toBeVisible({ timeout: 5_000 });
+  // The legacy for-each node renders verbatim with its label.
+  const feCard = page.getByTestId("rf__node-fe1");
+  await expect(feCard).toBeVisible({ timeout: 5_000 });
+  await expect(feCard.getByText("per-item")).toBeVisible({ timeout: 3_000 });
 
-  // The foreach structural icon should be present
-  await expect(page.locator("[data-testid='node-icon-foreach']").first()).toBeVisible({
-    timeout: 3_000,
-  });
+  // It carries the generic agent icon (no first-class foreach icon exists).
+  await expect(feCard.locator("[data-testid='node-icon-agent']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='node-icon-foreach']")).toHaveCount(0);
 
   expect(consoleErrors).toEqual([]);
 });
 
-test("foreach toolbar button adds a new foreach node", async ({ page }) => {
+test("toolbar has no ForEach add-button (fan-out is a region, not a node)", async ({
+  page,
+}) => {
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") consoleErrors.push(msg.text());
@@ -139,24 +143,17 @@ test("foreach toolbar button adds a new foreach node", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Switch to edit mode
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  // Select the pipeline
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Click the ForEach toolbar button
-  const foreachBtn = page.locator("[data-testid='toolbar-foreach']");
-  await expect(foreachBtn).toBeVisible({ timeout: 3_000 });
-  await foreachBtn.click();
-  await page.waitForTimeout(500);
+  // The edit toolbar is present, with add + merge buttons.
+  await expect(page.getByTestId("edit-toolbar")).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByTestId("toolbar-add")).toBeVisible();
+  await expect(page.getByTestId("toolbar-merge")).toBeVisible();
 
-  // Should now have two foreach nodes visible (the seeded one + the new one)
-  const foreachIcons = page.locator("[data-testid='node-icon-foreach']");
-  await expect(foreachIcons).toHaveCount(2, { timeout: 3_000 });
+  // ...but NO ForEach add-button — a collection fan-out is created from the
+  // gesture on members, not by adding a node (#151 / #171).
+  await expect(page.getByTestId("toolbar-foreach")).toHaveCount(0);
 
   expect(consoleErrors).toEqual([]);
 });

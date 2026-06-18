@@ -19,18 +19,32 @@ function pipelineName(i: number): string {
   return `${PREFIX}-p${String(i).padStart(2, "0")}`;
 }
 
+// The strict parser (get_pipeline) requires every node to carry a `name` and the
+// pipeline to have exactly one start (output `user_prompt`) and one end (input
+// `result`) node. A pre-refonte single-bare-node seed 400s and the tab silently
+// fails to open.
 function seedYaml(name: string): string {
   return `name: ${name}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
   - id: alpha
+    name: alpha
     type: doc-only
-    prompt_file: ${name}.prompts/alpha.md
     inputs:
       - name: in
     outputs:
       - name: out
     view: { x: 100, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
 edges: []
 `;
 }
@@ -57,13 +71,21 @@ test("tabbar overflows horizontally, Save stays visible, active tab scrolls into
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Enter edit mode
-  await page.locator('[title="Toggle edit mode"]').click();
+  // Post-refonte (#146): pipelines open into the edit canvas from the Library
+  // tab — there is no pencil "Toggle edit mode" anymore.
+  await page.getByRole("tab", { name: "Library" }).click();
 
-  // Open all 12 pipelines as tabs
+  // Open all 12 pipelines as tabs by clicking their Library entries.
   for (let i = 0; i < TAB_COUNT; i++) {
     const name = pipelineName(i);
-    await page.getByRole("button", { name: new RegExp(name) }).click();
+    const entry = page.getByText(name, { exact: true }).first();
+    await expect(entry).toBeVisible({ timeout: 10_000 });
+    await entry.click();
+    // Each open adds a tab; wait for it before opening the next so the bar
+    // actually overflows.
+    await expect(page.getByTestId(`tab-title-${name}`)).toBeVisible({
+      timeout: 5_000,
+    });
   }
 
   // Save button must be visible and clickable regardless of tab count

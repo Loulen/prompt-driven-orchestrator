@@ -27,6 +27,7 @@ const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: scroller
+    name: scroller
     type: doc-only
     inputs:
       - name: in
@@ -91,7 +92,7 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e scroll wheel test",
     },

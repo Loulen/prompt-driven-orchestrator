@@ -1,12 +1,23 @@
 import { test, expect } from "@playwright/test";
+import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 3b — Port labels, semantic tooltips, and drag edge label (refs #66).
-// Seeds a pipeline with one of each node type, asserts each port has a visible
-// label, hovers a first-class port to verify the tooltip, and drags from an
-// output port to verify the dynamic label appears.
+// Layer 3b — Port labels, hover label, and drag edge label (refs #66).
+//
+// Post canvas-refonte / slim card (#149, #170): a node's INPUTS are emergent
+// (an incoming arrow lands anywhere on the body, no input pill) — the only
+// exception is the `merge` node's repeated `branches` input, which keeps a
+// labelled pill. OUTPUT ports render as plain filled dots that surface their
+// name as a cursor-relative floating label (`.port-dot-lbl`) on hover, rather
+// than an always-visible pill. Dragging an edge out of an output dot shows a
+// dynamic `out/<port>` label on the connection line.
+//
+// This spec seeds one node of each kind (legacy `switch`/`loop`/`for-each`
+// types migrate to generic agent nodes) and asserts: every output port renders
+// a dot, the merge input pill is present, hovering an output dot reveals its
+// label, and dragging from an output dot shows the dynamic edge label.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -126,58 +137,68 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("every port has a visible label on all node types", async ({ page }) => {
+test("every output port renders a dot and the merge input keeps its pill", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Switch node: input "in" and output branches
-  await expect(page.getByTestId("port-input-in").first()).toBeVisible({ timeout: 5_000 });
+  // Output ports render as dots (`port-output-<name>`). The seed declares 9
+  // output ports across the node types: user_prompt, plan, pass, default,
+  // body, done (loop), body, done (foreach), merged, out.
+  const outputDots = page.locator('[data-testid^="port-output-"]');
+  await expect(outputDots).toHaveCount(10, { timeout: 5_000 });
 
-  // Loop node: all 4 ports
-  await expect(page.getByTestId("port-input-break").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("port-output-body").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("port-output-done").first()).toBeVisible({ timeout: 3_000 });
+  // A few representative output dots are present in the DOM (the visible
+  // element is the absolutely-positioned xyflow handle, not the wrapper div).
+  await expect(page.getByTestId("port-output-plan")).toHaveCount(1);
+  await expect(page.getByTestId("port-output-merged")).toHaveCount(1);
+  // Their handle dots are rendered on the canvas.
+  await expect(
+    page.locator('.react-flow__handle[data-handleid="plan"][data-handlepos="right"]').first(),
+  ).toBeVisible({ timeout: 3_000 });
+  await expect(
+    page.locator('.react-flow__handle[data-handleid="merged"][data-handlepos="right"]').first(),
+  ).toBeVisible({ timeout: 3_000 });
 
-  // Merge node: branches + merged
-  await expect(page.getByTestId("port-input-branches")).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("port-output-merged")).toBeVisible({ timeout: 3_000 });
-
-  // Ordinary node (planner): task + plan
-  await expect(page.getByTestId("port-input-task")).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("port-output-plan")).toBeVisible({ timeout: 3_000 });
+  // Inputs are emergent (no input pill) — except the merge node's repeated
+  // `branches` input, which keeps a labelled pill.
+  await expect(page.getByTestId("port-input-branches")).toHaveCount(1);
+  // No other input pills exist for the ordinary node types.
+  await expect(page.getByTestId("port-input-task")).toHaveCount(0);
+  await expect(page.getByTestId("port-input-in")).toHaveCount(0);
 });
 
-test("hovering a first-class port shows semantic tooltip", async ({ page }) => {
+test("hovering an output port dot reveals its name as a floating label", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Hover the loop "body" output port to trigger the tooltip
-  const bodyPort = page.getByTestId("port-output-body").first();
-  await expect(bodyPort).toBeVisible({ timeout: 5_000 });
-  await bodyPort.hover();
+  // The planner's `plan` output dot is the xyflow source handle.
+  const planHandle = page
+    .locator('.react-flow__handle[data-handleid="plan"][data-handlepos="right"]')
+    .first();
+  await expect(planHandle).toBeVisible({ timeout: 5_000 });
 
-  // Wait for tooltip with the hardcoded description
-  const tooltip = page.getByTestId("tooltip-content");
-  await expect(tooltip).toBeVisible({ timeout: 3_000 });
-  await expect(tooltip).toHaveText("Fires once per iteration");
+  const box = await planHandle.boundingBox();
+  if (!box) throw new Error("plan handle not visible");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  // The cursor-relative floating label appears with the port name.
+  const dotLabel = page.locator(".port-dot-lbl");
+  await expect(dotLabel).toBeVisible({ timeout: 3_000 });
+  await expect(dotLabel).toHaveText("plan");
 });
 
 test("dragging from an output port shows dynamic edge label", async ({ page }) => {
@@ -186,11 +207,7 @@ test("dragging from an output port shows dynamic edge label", async ({ page }) =
     timeout: 10_000,
   });
 
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
   // Find an output handle and drag from it

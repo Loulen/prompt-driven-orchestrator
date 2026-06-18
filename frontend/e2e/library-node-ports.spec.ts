@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Library node round-trip preserves inputs/outputs (#71).
 // Verifies: configure a node with 2 inputs + 1 typed output, save to library,
@@ -14,9 +15,20 @@ const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
+// Post-refonte the daemon refuses to load a pipeline without exactly one
+// start + one end node (crates/pdo-daemon/src/pipeline.rs ~L572), so the
+// fixture wires reviewer between a start and an end. The test only saves the
+// reviewer node to the library.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    inputs: []
+    outputs:
+      - name: user_prompt
+    view: { x: 0, y: 200 }
   - id: reviewer
     name: reviewer
     type: doc-only
@@ -33,7 +45,18 @@ nodes:
           score:
             type: int
     view: { x: 200, y: 200 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+    outputs: []
+    view: { x: 400, y: 200 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -63,9 +86,8 @@ test("save node to library preserves ports and frontmatter schema", async ({
     timeout: 10_000,
   });
 
-  // Enter edit mode and open the pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the pipeline into the edit canvas (post-refonte: Library tab → entry).
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Click the reviewer node to select it
   await page.getByText("reviewer", { exact: true }).first().click();

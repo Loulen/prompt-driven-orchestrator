@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — #24 drag-no-teleport fix.
 // Asserts that dragging a node in EditCanvas updates the node's CSS transform
@@ -15,18 +16,40 @@ const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
+// Post-refonte schema (ADR-0011): a valid pipeline needs exactly one `start`
+// (zero inputs, one `user_prompt` output) and one `end` (one `result` input,
+// zero outputs), plus a `name` on every node — otherwise the daemon rejects
+// the YAML (400) and the edit canvas never opens. `dragger` is the node under
+// test; start/end are placed off to the sides so the drag has clear space.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 0, y: 200 }
   - id: dragger
+    name: dragger
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/dragger.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
+      - { name: out, side: right }
     view: { x: 200, y: 200 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 500, y: 200 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: dragger, port: in }
+  - source: { node: dragger, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -43,9 +66,8 @@ test("node CSS transform updates during drag, not only at drop (#24)", async ({ 
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Switch to edit mode and open the test pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the test pipeline into the edit canvas
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Wait for the node to render inside the xyflow canvas
   const node = page.locator('.react-flow__node[data-id="dragger"]');

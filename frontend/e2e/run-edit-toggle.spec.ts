@@ -49,28 +49,45 @@ test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
 });
 
+// POST /runs is multipart/form-data post-refonte (JSON 400s). `variables` must
+// be a JSON string in the form. The run entry in the Runs list renders the
+// pipeline_name (full) and a truncated run_id (`run_id.slice(0, 20)`), so we
+// select the run by its unique pipeline name rather than the full id.
+async function createRun(
+  request: import("@playwright/test").APIRequestContext,
+): Promise<string> {
+  const resp = await request.post("/runs", {
+    multipart: { pipeline: PIPELINE_NAME, input: "test input", variables: "{}" },
+  });
+  expect(resp.ok()).toBeTruthy();
+  const { run_id } = await resp.json();
+  return run_id;
+}
+
 test("unified edit mode: selecting a run opens editor canvas automatically", async ({ page, request }) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Create a run via the API
-  const resp = await request.post("/runs", {
-    data: { pipeline: PIPELINE_NAME, input: "test input", variables: {} },
-  });
-  expect(resp.ok()).toBeTruthy();
-  const { run_id } = await resp.json();
+  // Create a run via the (multipart) API
+  const run_id = await createRun(request);
 
-  // Wait for the run to appear in the sidebar and select it
-  const runEntry = page.getByText(run_id).first();
+  // Wait for the run to appear in the Runs list (default tab) and select it.
+  const runEntry = page.getByText(PIPELINE_NAME).first();
   await expect(runEntry).toBeVisible({ timeout: 5_000 });
   await runEntry.click();
 
-  // Editor canvas should open automatically — AddPalette buttons visible
-  await expect(page.getByRole("button", { name: "code" })).toBeVisible({ timeout: 5_000 });
-  await expect(page.getByRole("button", { name: "doc" })).toBeVisible();
+  // Editor canvas should open automatically — the post-refonte EditCanvas
+  // always mounts its EditToolbar (no separate "Edit this run" step). The tab
+  // bar appears too once the run-scoped edit tab is open.
+  await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("edit-toolbar")).toBeVisible();
+  await expect(page.getByTestId("toolbar-add")).toBeVisible();
 
-  // The run-scoped footnote should say "changes sync to template"
-  await expect(page.getByText("changes sync to template")).toBeVisible();
+  // The opened tab is run-scoped: its id is `__run__<run_id>`, so the editor we
+  // see is editing the run's pipeline (run-scoped edits "sync to template").
+  // On a live run a node auto-selects, so the RunInfoSidebar footnote is not a
+  // reliable signal here — the run-scoped tab id is.
+  await expect(page.getByTestId(`tab-title-__run__${run_id}`)).toBeVisible();
 });
 
 test("no pencil toggle or edit-this-run button exists", async ({ page, request }) => {
@@ -78,22 +95,18 @@ test("no pencil toggle or edit-this-run button exists", async ({ page, request }
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Create a run and select it
-  const resp = await request.post("/runs", {
-    data: { pipeline: PIPELINE_NAME, input: "test input", variables: {} },
-  });
-  expect(resp.ok()).toBeTruthy();
-  const { run_id } = await resp.json();
+  await createRun(request);
 
-  const runEntry = page.getByText(run_id).first();
+  const runEntry = page.getByText(PIPELINE_NAME).first();
   await expect(runEntry).toBeVisible({ timeout: 5_000 });
   await runEntry.click();
 
-  // Wait for editor to load
-  await expect(page.getByRole("button", { name: "code" })).toBeVisible({ timeout: 5_000 });
+  // Wait for the editor to load (toolbar present)
+  await expect(page.getByTestId("edit-toolbar")).toBeVisible({ timeout: 5_000 });
 
   // "Edit this run" button should NOT exist
-  await expect(page.getByRole("button", { name: "Edit this run" })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit this run" })).toHaveCount(0);
 
   // No pencil toggle should exist in the toolbar
-  await expect(page.getByTitle("Toggle edit mode")).not.toBeVisible();
+  await expect(page.getByTitle("Toggle edit mode")).toHaveCount(0);
 });

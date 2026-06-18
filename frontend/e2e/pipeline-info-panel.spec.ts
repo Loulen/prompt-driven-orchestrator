@@ -2,6 +2,20 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
+import type { Page } from "@playwright/test";
+
+// The dirty edit canvas raises an "External edit conflict" modal when the
+// pipeline file changes on disk while the tab has unsaved edits. Cross-test
+// file-watch noise can trip it during a full-suite run; dismiss it (keep
+// canvas) so it does not intercept toolbar clicks. No-op when absent.
+async function dismissConflictIfPresent(page: Page): Promise<void> {
+  const backdrop = page.getByTestId("conflict-modal-backdrop");
+  if (await backdrop.isVisible().catch(() => false)) {
+    await page.keyboard.press("Escape");
+    await expect(backdrop).not.toBeVisible({ timeout: 2_000 });
+  }
+}
 
 // Layer 3b — Pipeline info panel (refs #56, #69, ADR 0004).
 // Verifies:
@@ -17,6 +31,9 @@ const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
+// Post-refonte the parser requires exactly one start node (zero inputs, one
+// output named `user_prompt`) and one end node (zero outputs, one input named
+// `result`). start → worker → end is the minimal valid chain.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 variables:
@@ -24,14 +41,33 @@ variables:
     type: int
     default: 3
 nodes:
+  - id: start
+    name: Start
+    type: start
+    inputs: []
+    outputs:
+      - name: user_prompt
+    view: { x: 0, y: 100 }
   - id: worker
+    name: worker
     type: doc-only
     inputs:
       - name: in
     outputs:
       - name: out
-    view: { x: 100, y: 100 }
-edges: []
+    view: { x: 200, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+    outputs: []
+    view: { x: 400, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: in }
+  - source: { node: worker, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -56,7 +92,7 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
 
   // Create a run to get into run mode
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e info panel test",
     },
@@ -84,6 +120,12 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
 
   // Assert variables section is present
   await expect(page.getByTestId("info-panel-variables")).toBeVisible();
+
+  // The manager terminal lives under the Manager tab (post-refonte: the info
+  // panel is tabbed Info | Manager | YAML; Info is the default). Switch to it.
+  const managerTab = page.getByTestId("info-tab-manager");
+  await expect(managerTab).toBeVisible({ timeout: 3_000 });
+  await managerTab.click();
 
   // Assert the manager terminal is rendered (run is active)
   const terminal = infoPanel.getByTestId("tmux-terminal");
@@ -119,9 +161,8 @@ test("clicking a node closes the pipeline info panel (#69)", async ({
     timeout: 10_000,
   });
 
-  // Enter edit mode and open the pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the pipeline from the Library tab (post-refonte: no edit toggle).
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Open the pipeline info panel via toolbar
   const infoBtn = page.getByTestId("toolbar-info");
@@ -146,9 +187,8 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
     timeout: 10_000,
   });
 
-  // Enter edit mode and open the pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the pipeline from the Library tab (post-refonte: no edit toggle).
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Open the pipeline info panel
   const infoBtn = page.getByTestId("toolbar-info");
@@ -173,15 +213,19 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await page.getByTestId("info-panel-close").click();
   await expect(infoPanel).not.toBeVisible();
 
-  // Add a new node via toolbar
+  // Add a new node via toolbar (post-refonte: `toolbar-add` inserts a
+  // `code-mutating` node whose default name is "implementer"; node ids are now
+  // random nanoids, no longer `node-N`).
+  await dismissConflictIfPresent(page);
   await page.getByTestId("toolbar-add").click();
   await page.waitForTimeout(500);
 
   // Re-open the info panel and check YAML tab reflects the new node
+  await dismissConflictIfPresent(page);
   await infoBtn.click();
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
   await yamlTab.click();
-  await expect(yamlView).toContainText("node-", { timeout: 3_000 });
+  await expect(yamlView).toContainText("implementer", { timeout: 3_000 });
 });
 
 test("library tab after a run: panel shows template, not the previous run", async ({
@@ -195,7 +239,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
 
   // Step 1 — create + select a run so selectedRun is populated.
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: { pipeline: PIPELINE_NAME, input: "library-tab regression" },
+    multipart: { pipeline: PIPELINE_NAME, input: "library-tab regression" },
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -217,11 +261,14 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   await page.getByTestId("info-panel-close").click();
   await expect(infoPanel).not.toBeVisible();
 
-  // Step 2 — switch to a library template tab (any non-run scope).
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  // Step 2 — switch to a library template tab (any non-run scope). The run row
+  // in the Runs tab also renders the pipeline name (`run-pipeline-name`), so we
+  // must go through the Library tab to open the template, not match raw text.
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
   // Step 3 — open the info panel on the library tab.
+  await dismissConflictIfPresent(page);
   await infoBtn.click();
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 

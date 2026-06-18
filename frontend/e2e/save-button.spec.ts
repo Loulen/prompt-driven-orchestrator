@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 4 — Save button + dirty indicator + flush-on-launch (#35).
 // Verifies:
@@ -16,18 +17,39 @@ const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
+// Post-refonte schema (ADR-0011): a valid pipeline needs exactly one `start`
+// (zero inputs, one `user_prompt` output) and one `end` (one `result` input,
+// zero outputs), plus a `name` on every node — otherwise the daemon rejects
+// the YAML (400) and the edit canvas never opens.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 0, y: 100 }
   - id: alpha
+    name: alpha
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/alpha.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
-    view: { x: 100, y: 100 }
-edges: []
+      - { name: out, side: right }
+    view: { x: 200, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 400, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: alpha, port: in }
+  - source: { node: alpha, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -44,9 +66,8 @@ test("edit triggers dirty dot, Save clears it and shows relative time", async ({
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Enter edit mode and open the pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the pipeline into the edit canvas
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Tab should be clean — no • prefix
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
@@ -88,8 +109,7 @@ test("Cmd+S saves the active tab", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
   await expect(tabTitle).toBeVisible();

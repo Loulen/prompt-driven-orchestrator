@@ -18,6 +18,7 @@ const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: worker
+    name: worker
     type: doc-only
     inputs:
       - name: in
@@ -48,7 +49,7 @@ test("scroll-up pauses rendering and shows chevron; click resumes", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e pin-to-bottom test",
     },

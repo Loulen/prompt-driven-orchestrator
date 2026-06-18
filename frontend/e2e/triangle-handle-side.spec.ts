@@ -3,9 +3,18 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 4 — Triangle handle renders on correct side based on port side field (#40).
-// Creates a pipeline with side: top on the output port, launches a run,
-// and asserts the handle SVG polygon renders on the top edge of the node.
+// Layer 4 — Output port handle renders on the side named by its `side` field (#40).
+//
+// Post canvas-refonte (#149 / #170): output ports render as plain filled dots
+// (`OutputPortDot`) whose xyflow Handle carries `data-handlepos="<side>"`. The
+// old per-port SVG triangle polygon (points like "5,10 11,10 8,2") is gone, as
+// are input pills — a node's inputs are emergent (no input handle). So this spec
+// asserts the OUTPUT dot lands on the declared `side: top` (its handle has
+// `data-handlepos="top"`), and that no left/right output handle is mislaid.
+//
+// The daemon refuses to load a pipeline without exactly one start + one end node
+// (crates/pdo-daemon/src/pipeline.rs), so the seed wraps the checker between a
+// start and an end. `POST /runs` is multipart/form-data post-refonte.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -17,9 +26,17 @@ const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    inputs: []
+    outputs:
+      - name: user_prompt
+    view: { x: 0, y: 100 }
   - id: checker
     name: checker
     type: doc-only
+    prompt_file: ${PIPELINE_NAME}.prompts/checker.md
     inputs:
       - name: task
         side: left
@@ -27,7 +44,19 @@ nodes:
       - name: result
         side: top
     view: { x: 200, y: 100 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
+    outputs: []
+    view: { x: 400, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: checker, port: task }
+  - source: { node: checker, port: result }
+    target: { node: end, port: result }
 `;
 
 let runId: string;
@@ -56,7 +85,7 @@ test.afterAll(async () => {
   }
 });
 
-test("port with side:top renders handle on top edge with outward triangle", async ({
+test("output port with side:top renders its dot handle on the top edge", async ({
   page,
   baseURL,
 }) => {
@@ -66,7 +95,7 @@ test("port with side:top renders handle on top edge with outward triangle", asyn
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "triangle side test",
     },
@@ -83,28 +112,31 @@ test("port with side:top renders handle on top edge with outward triangle", asyn
   // Wait for the node to render
   await page.waitForTimeout(500);
 
-  // The output handle with side:top should be rendered as an xyflow Handle
-  // with data-handlepos="top". xyflow sets this attribute based on Position.
-  const topHandle = page.locator(
-    '.react-flow__handle[data-handlepos="top"]',
+  // The `result` output dot (#170) is the xyflow source Handle for the checker
+  // node. Declared `side: top` → xyflow stamps it `data-handlepos="top"`.
+  const resultHandle = page.locator(
+    '.react-flow__handle[data-handleid="result"]',
   );
-  await expect(topHandle).toBeVisible({ timeout: 5_000 });
+  await expect(resultHandle.first()).toBeVisible({ timeout: 5_000 });
 
-  // The triangle SVG inside should have the outward-pointing polygon for
-  // (output, top): "5,10 11,10 8,2" — pointing upward away from the node.
-  const polygon = topHandle.locator("polygon");
-  await expect(polygon).toBeVisible();
-  const points = await polygon.getAttribute("points");
-  expect(points).toBe("5,10 11,10 8,2");
-
-  // The input handle should be on the left side
-  const leftHandle = page.locator(
-    '.react-flow__handle[data-handlepos="left"]',
+  // The checker's output dot sits on the top edge.
+  const checkerTopDot = page.locator(
+    '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="top"]',
   );
-  await expect(leftHandle).toBeVisible({ timeout: 3_000 });
+  await expect(checkerTopDot).toBeVisible({ timeout: 5_000 });
+  // It is rendered as a plain dot (the slim-card output dot), not a labelled
+  // pill — the old per-port SVG triangle polygon was removed in the refonte.
+  await expect(checkerTopDot.locator("polygon")).toHaveCount(0);
 
-  // Input left triangle points inward (rightward): "2,5 2,11 10,8"
-  const leftPolygon = leftHandle.locator("polygon");
-  const leftPoints = await leftPolygon.getAttribute("points");
-  expect(leftPoints).toBe("2,5 2,11 10,8");
+  // The checker output is NOT on the left or right edge (it honours side: top).
+  await expect(
+    page.locator(
+      '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="left"]',
+    ),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(
+      '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="right"]',
+    ),
+  ).toHaveCount(0);
 });

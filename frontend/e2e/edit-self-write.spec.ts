@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — UI witness for Bug E (#17). Without the daemon-side fix, edits
 // would be wiped by the broadcast/reload cycle: the daemon's PUT triggers a
@@ -17,26 +18,51 @@ const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // `prompt_file` follows the convention save_pipeline writes to (`<id>.prompts/<node>.md`)
 // so the GET roundtrip can read back what the PUT wrote.
+// Post-refonte schema (ADR-0011): every pipeline needs exactly one `start`
+// (zero inputs, one `user_prompt` output) and one `end` (one `result` input,
+// zero outputs), and each node carries a `name`. A seed missing these is
+// rejected by the daemon parser (400 "missing field"), so the GET that opens
+// the tab silently fails and no edit canvas ever appears.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 0, y: 100 }
   - id: alpha
+    name: alpha
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/alpha.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
-    view: { x: 100, y: 100 }
+      - { name: out, side: right }
+    view: { x: 200, y: 100 }
   - id: beta
+    name: beta
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/beta.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
+      - { name: out, side: right }
     view: { x: 400, y: 100 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 600, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: alpha, port: in }
+  - source: { node: alpha, port: out }
+    target: { node: beta, port: in }
+  - source: { node: beta, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -53,8 +79,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
   const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
@@ -80,8 +105,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   // Persistence: the explicit save flushed MARKER_B to disk.
   await page.reload();
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
   const reloaded = page.getByPlaceholder("Enter the node's role prompt...");

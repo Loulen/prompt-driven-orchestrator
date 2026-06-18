@@ -18,15 +18,32 @@ const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: bottom }
+    view: { x: 100, y: 0 }
   - id: worker
+    name: worker
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/worker.md
     inputs:
-      - name: task
+      - { name: task, side: top }
     outputs:
-      - name: result
-    view: { x: 100, y: 100 }
-edges: []
+      - { name: result, side: bottom }
+    view: { x: 100, y: 150 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 100, y: 300 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 `;
 
 const ROLE_PROMPT = "You are a worker. Do the task.\n";
@@ -55,7 +72,7 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
 
   // Create a run via the API
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e initial prompt test",
     },
@@ -70,12 +87,34 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
   await expect(reactFlow).toBeVisible({ timeout: 5_000 });
   await expectNonZeroBBox(reactFlow);
 
-  // Wait for the DAG to render then click the worker node
-  await page.waitForTimeout(500);
+  // The worker node only spawns after the start node auto-completes; wait for
+  // it to enter a running state so its prompt becomes fetchable.
+  await page.waitForTimeout(1_500);
   const workerNode = page.getByText("worker", { exact: true }).first();
-  await expect(workerNode).toBeVisible({ timeout: 3_000 });
+  await expect(workerNode).toBeVisible({ timeout: 5_000 });
   await expectNonZeroBBox(workerNode);
   await workerNode.click();
+
+  // Selecting a run auto-opens the run for edit, so the right pane is the
+  // tabbed InspectorTabs. NodeDetailPanel (which owns the prompt block) lives
+  // in the Run pane — switch to it explicitly.
+  const runTab = page.getByTestId("inspector-tab-run");
+  if (await runTab.isVisible().catch(() => false)) {
+    await runTab.click();
+  }
+
+  // The auto-selected live node opens with the terminal expanded fullscreen,
+  // which hides the details pane (Inputs/Outputs/Initial Prompt). Collapse the
+  // terminal via its expand toggle to reveal the details pane.
+  const expandToggle = page.getByTestId("term-expand");
+  await expect(expandToggle).toBeVisible({ timeout: 5_000 });
+  await expandToggle.click();
+
+  // The Initial Prompt section is collapsed by default (post-refonte
+  // NodeDetailPanel.PromptSection) — expand it to reveal the prompt block.
+  const promptToggle = page.getByTestId("prompt-toggle");
+  await expect(promptToggle).toBeVisible({ timeout: 5_000 });
+  await promptToggle.click();
 
   // The prompt block should contain ## Inputs text
   const promptBlock = page.locator(".prompt-block");

@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — issue #72: conflict modal on external edit when canvas is dirty.
 // Verifies:
@@ -16,39 +17,82 @@ const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
+// Post-refonte schema (ADR-0011): both seeds need exactly one `start` (zero
+// inputs, one `user_prompt` output) and one `end` (one `result` input, zero
+// outputs), plus a `name` on every node — otherwise the daemon rejects the
+// YAML (400) and the edit canvas never opens. EXTERNAL_YAML is the diverged
+// on-disk version: a renamed pipeline with an extra `beta` node, still valid
+// so the watcher/reload path can parse it.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 0, y: 100 }
   - id: alpha
+    name: alpha
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/alpha.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
-    view: { x: 100, y: 100 }
-edges: []
+      - { name: out, side: right }
+    view: { x: 200, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 400, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: alpha, port: in }
+  - source: { node: alpha, port: out }
+    target: { node: end, port: result }
 `;
 
 const EXTERNAL_YAML = `name: ${PIPELINE_NAME}-external
 version: "2.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 0, y: 100 }
   - id: alpha
+    name: alpha
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/alpha.md
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
-    view: { x: 100, y: 100 }
+      - { name: out, side: right }
+    view: { x: 200, y: 100 }
   - id: beta
+    name: beta
     type: doc-only
     inputs:
-      - name: in
+      - { name: in, side: left }
     outputs:
-      - name: out
+      - { name: out, side: right }
     view: { x: 400, y: 100 }
-edges: []
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 600, y: 100 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: alpha, port: in }
+  - source: { node: alpha, port: out }
+    target: { node: beta, port: in }
+  - source: { node: beta, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
@@ -70,10 +114,7 @@ test("external edit on dirty tab shows conflict modal — Take external", async 
   });
 
   // Open pipeline in edit mode
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page
-    .getByRole("button", { name: new RegExp(PIPELINE_NAME) })
-    .click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Make the tab dirty by editing a prompt
   await page.getByText("alpha", { exact: true }).first().click();
@@ -122,10 +163,7 @@ test("external edit on dirty tab — Keep canvas retains local changes", async (
     timeout: 10_000,
   });
 
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page
-    .getByRole("button", { name: new RegExp(PIPELINE_NAME) })
-    .click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Make the tab dirty
   await page.getByText("alpha", { exact: true }).first().click();
@@ -169,10 +207,7 @@ test("external edit on clean tab silently re-renders (no modal)", async ({
     timeout: 10_000,
   });
 
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page
-    .getByRole("button", { name: new RegExp(PIPELINE_NAME) })
-    .click();
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
   // Tab should be clean
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);

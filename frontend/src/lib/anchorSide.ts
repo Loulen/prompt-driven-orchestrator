@@ -62,40 +62,41 @@ export function anchorsByDropOnBody(handleId: string | null | undefined): boolea
 /**
  * Chooses the side of a target card nearest a drop point (issue #168). When an
  * edge is dropped on a node's body (emergent input, ADR-0011 / #149), the
- * incoming arrow anchors on the side closest to where the user released — not
- * always the left. The decided rule: the side of the target card nearest the
- * drop point.
+ * incoming arrow anchors on the side the user aimed at — "the arrow goes where
+ * you drop it" (#219) — not always the left.
  *
- * The drop point may land inside the card or anywhere around it; we compare the
- * perpendicular distance to each of the four edges and pick the smallest. Ties
- * (equidistant edges) resolve in left, right, top, bottom order, so left wins
- * over right and the horizontal sides win over the vertical ones. (The overall
- * legacy left default is preserved by the caller, which persists a chosen side
- * only when it is NOT left — see `EditCanvas.onConnectEnd`.)
+ * The rule is the side a ray from the card centre through the drop point would
+ * exit: split the card into four triangular sectors by its diagonals and pick
+ * the sector the drop falls in. We measure the drop's offset from the centre
+ * NORMALISED by each half-extent, so the choice is aspect-ratio-aware.
+ *
+ * The earlier perpendicular-distance-to-each-edge metric (#219) was wrong on a
+ * non-square card: the default work node is short and wide (~160x35), so nearly
+ * any interior drop sits closer to the top/bottom edges than to the left/right
+ * ones and spuriously anchored top/bottom. Normalising by the half-extents
+ * removes that bias — a drop in the left third of a wide card resolves to left,
+ * not top.
+ *
+ * Ties resolve in left, right, top, bottom order: horizontal sides win over
+ * vertical ones (`|dx| >= |dy|`) and left wins over right (`dx <= 0`), so a
+ * dead-centre drop keeps the legacy left default. (That default is also enforced
+ * by the caller, which persists a chosen side only when it is NOT left — see
+ * `EditCanvas.onConnectEnd`.)
  */
 export function chooseAnchorSide(
   drop: { x: number; y: number },
   rect: AnchorRect,
 ): PortSide {
-  const left = Math.abs(drop.x - rect.x);
-  const right = Math.abs(drop.x - (rect.x + rect.width));
-  const top = Math.abs(drop.y - rect.y);
-  const bottom = Math.abs(drop.y - (rect.y + rect.height));
+  const halfW = rect.width / 2;
+  const halfH = rect.height / 2;
+  const cx = rect.x + halfW;
+  const cy = rect.y + halfH;
+  // Direction from the centre to the drop, scaled to the card's own aspect ratio.
+  const dx = halfW > 0 ? (drop.x - cx) / halfW : 0;
+  const dy = halfH > 0 ? (drop.y - cy) / halfH : 0;
 
-  // Ties resolve in left, right, top, bottom order (strict `<`), keeping the
-  // legacy left default stable for a centred drop.
-  let best: PortSide = "left";
-  let bestDist = left;
-  if (right < bestDist) {
-    best = "right";
-    bestDist = right;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx > 0 ? "right" : "left";
   }
-  if (top < bestDist) {
-    best = "top";
-    bestDist = top;
-  }
-  if (bottom < bestDist) {
-    best = "bottom";
-  }
-  return best;
+  return dy > 0 ? "bottom" : "top";
 }

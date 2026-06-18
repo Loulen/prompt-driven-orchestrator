@@ -87,9 +87,10 @@ CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/runs")
 CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/pipelines")
 [[ "$CT" == application/json* ]] || fail "/pipelines content-type not JSON: '$CT'"
 
-# 3. GET / returns HTML containing "PDO"
+# 3. GET / returns the SPA shell with the app title. (The "PDO" wordmark is
+# rendered by React at runtime; the static index only carries the <title>.)
 INDEX=$(curl -fsS "$URL/")
-echo "$INDEX" | grep -q "PDO" || fail "index does not contain 'PDO'"
+echo "$INDEX" | grep -q "Prompt Driven Orchestrator" || fail "index does not contain the app title"
 
 # 4. Asset JS referenced in index.html responds 200
 ASSET_PATH=$(echo "$INDEX" | grep -oE '/assets/[^"]+\.js' | head -n1)

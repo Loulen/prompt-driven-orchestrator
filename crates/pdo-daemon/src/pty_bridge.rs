@@ -102,6 +102,13 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
     // Pin the attach to the daemon's private socket so we don't accidentally
     // reach into another pdo daemon's tmux state on the same host.
     cmd.args(["-L", tmux_socket.as_str(), "attach", "-t", &session_id]);
+    // The consumer at the other end of this PTY is xterm.js in the browser, so
+    // declare that terminal type explicitly instead of inheriting the daemon's
+    // ambient TERM. A daemon started headless (systemd, container, CI, nohup)
+    // has TERM unset or `dumb`, which makes `tmux attach` abort with
+    // "open terminal failed: terminal does not support clear" — the inline
+    // manager/node terminal then shows that error instead of the session.
+    cmd.env("TERM", "xterm-256color");
 
     let _child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,

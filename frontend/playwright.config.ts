@@ -34,5 +34,13 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
+    // The daemon spawns a tmux session per node. In production that runs the
+    // real `claude` CLI; in e2e we MUST stub it so a run-creating test never
+    // launches (and leaks) a real Claude process — and so node-session tests
+    // are deterministic on CI where `claude` isn't installed. This env reaches
+    // the DAEMON (the per-spec `process.env.PDO_TMUX_CMD_OVERRIDE=...` lines run
+    // in the Playwright worker and never reached the already-spawned daemon, so
+    // they were no-ops). `sleep 600` keeps the node "running" with a live PTY.
+    env: { ...process.env, PDO_TMUX_CMD_OVERRIDE: "exec sleep 600" },
   },
 });

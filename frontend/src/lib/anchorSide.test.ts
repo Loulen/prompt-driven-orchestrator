@@ -26,6 +26,53 @@ describe("chooseAnchorSide", () => {
   it("anchors bottom when the drop is near the bottom edge", () => {
     expect(chooseAnchorSide({ x: 200, y: 188 }, RECT)).toBe("bottom");
   });
+
+  it("keeps the legacy left default for a dead-centre drop", () => {
+    expect(chooseAnchorSide({ x: 200, y: 140 }, RECT)).toBe("left");
+  });
+
+  it("anchors by the side the drop lands on INSIDE the body, not only outside it", () => {
+    // The reporter drops on the node body (#219), not just past its edges.
+    expect(chooseAnchorSide({ x: 120, y: 140 }, RECT)).toBe("left"); // left interior
+    expect(chooseAnchorSide({ x: 280, y: 140 }, RECT)).toBe("right"); // right interior
+    expect(chooseAnchorSide({ x: 200, y: 110 }, RECT)).toBe("top"); // upper interior
+    expect(chooseAnchorSide({ x: 200, y: 170 }, RECT)).toBe("bottom"); // lower interior
+  });
+});
+
+describe("chooseAnchorSide — short, wide card (#219 regression)", () => {
+  // The default work node is short and wide (~160x35). The old
+  // perpendicular-distance-to-each-edge metric mis-resolved interior drops here:
+  // because the card is so short, almost any body drop sat nearer the top/bottom
+  // edges and spuriously anchored top/bottom. Normalising by half-extents fixes it.
+  const WIDE = { x: 0, y: 0, width: 160, height: 35 };
+
+  it("anchors LEFT for a drop in the left portion of the body (not top/bottom)", () => {
+    // Vertically centred, ~25% across. Old metric: top/bottom (17.5) beat left (40).
+    expect(chooseAnchorSide({ x: 40, y: 17 }, WIDE)).toBe("left");
+  });
+
+  it("anchors RIGHT for a drop in the right portion of the body (not top/bottom)", () => {
+    expect(chooseAnchorSide({ x: 130, y: 18 }, WIDE)).toBe("right");
+  });
+
+  it("keeps left as the centre default on a wide card (no spurious top/bottom)", () => {
+    expect(chooseAnchorSide({ x: 80, y: 17.5 }, WIDE)).toBe("left");
+  });
+
+  it("still anchors TOP when the drop genuinely aims at the top edge", () => {
+    expect(chooseAnchorSide({ x: 80, y: 2 }, WIDE)).toBe("top");
+  });
+
+  it("still anchors BOTTOM when the drop genuinely aims at the bottom edge", () => {
+    expect(chooseAnchorSide({ x: 80, y: 33 }, WIDE)).toBe("bottom");
+  });
+
+  it("prefers the horizontal side near a wide card's corner (aspect-ratio-aware)", () => {
+    // Near the bottom-right corner of a wide card the user is aiming at the long
+    // right side, not the short bottom one: |dx| (0.875) > |dy| (0.71) -> right.
+    expect(chooseAnchorSide({ x: 150, y: 30 }, WIDE)).toBe("right");
+  });
 });
 
 describe("anchorHandleId / sideFromAnchorHandle round-trip", () => {

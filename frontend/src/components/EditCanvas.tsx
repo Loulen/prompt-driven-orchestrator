@@ -404,7 +404,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
 
   const onConnectStart = useCallback(() => setIsDraggingEdge(true), []);
   const onConnectEnd = useCallback(
-    (_event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       setIsDraggingEdge(false);
       setHoveredNodeId(null);
 
@@ -417,13 +417,22 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       if (edgeIndex == null) return;
 
       const toNode = connectionState.toNode;
-      const drop = connectionState.to;
-      if (!toNode || !drop) return;
+      if (!toNode) return;
       const targetDef = pipeline?.nodes.find((n) => n.id === toNode.id);
       // Declared-port nodes (End's `result`) and structural nodes (merge) keep
       // their declared, fixed-side handle — never re-anchor those. Keyed on node
       // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
       if (!targetDef || !isEmergentInputNode(targetDef.type)) return;
+
+      // Where the user actually released, in FLOW coordinates. We read the raw
+      // pointer (not `connectionState.to`, which xyflow snaps to a handle centre)
+      // and convert it with `screenToFlowPosition` so it shares the target rect's
+      // coordinate space. The #219 bug compared `connectionState.to` (rendered px,
+      // zoom/pan-scaled) against a rect built from flow units, so `chooseAnchorSide`
+      // got mismatched spaces and the arrow landed on the wrong side.
+      const pointer = "changedTouches" in event ? event.changedTouches[0] : event;
+      if (!pointer) return;
+      const drop = reactFlow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
 
       const rect = {
         x: toNode.internals.positionAbsolute.x,
@@ -438,7 +447,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       if (side === "left") return;
       updateEdge(edgeIndex, { target_side: side });
     },
-    [pipeline, updateEdge],
+    [pipeline, reactFlow, updateEdge],
   );
   const onNodeMouseEnter = useCallback((_: ReactMouseEvent, node: Node) => setHoveredNodeId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredNodeId(null), []);

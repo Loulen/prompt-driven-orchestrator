@@ -659,7 +659,7 @@ function TopBar() {
             <circle cx="7" cy="7" r="2" fill="currentColor" />
           </svg>
         </span>
-        Maestro
+        PDO
       </div>
 
     </header>

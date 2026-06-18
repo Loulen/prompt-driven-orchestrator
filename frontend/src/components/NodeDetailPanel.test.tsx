@@ -121,7 +121,7 @@ describe("NodeDetailPanel", () => {
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal).toBeInTheDocument();
       expect(terminal.getAttribute("data-session")).toBe(
-        "maestro-run-1-test-node-iter-1",
+        "pdo-run-1-test-node-iter-1",
       );
     });
 
@@ -148,7 +148,7 @@ describe("NodeDetailPanel", () => {
       );
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal.getAttribute("data-session")).toBe(
-        "maestro-run-abc-impl-iter-3",
+        "pdo-run-abc-impl-iter-3",
       );
     });
 

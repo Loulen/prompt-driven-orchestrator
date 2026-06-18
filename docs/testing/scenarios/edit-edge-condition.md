@@ -14,11 +14,11 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser.
 - `claude` available on `PATH`.
-- A pipeline `edit-edge-condition.yaml` exists in `.maestro/pipelines/`. If it
+- A pipeline `edit-edge-condition.yaml` exists in `.pdo/pipelines/`. If it
   isn't already there, the agent creates it before driving the UI:
 
   ```yaml
@@ -108,14 +108,14 @@
    +S). Confirm:
    - The canvas edge `reviewer → implementer` now shows a condition pill reading
      `verdict = FAIL` (or the `when:` shape).
-   - `.maestro/pipelines/edit-edge-condition.yaml` on disk now has
+   - `.pdo/pipelines/edit-edge-condition.yaml` on disk now has
      `when: { verdict: { eq: FAIL } }` on that edge.
 5. **Select the `reviewer.verdict → archiver` edge** and author a **boolean**
    condition:
    - In the field dropdown pick `is_blocking` (a `bool` field).
    - Confirm the value control is a **true/false toggle**, not a free-text input.
    - Toggle the value to `true`. Save.
-   - Confirm `.maestro/pipelines/edit-edge-condition.yaml` now has
+   - Confirm `.pdo/pipelines/edit-edge-condition.yaml` now has
      `when: { is_blocking: { eq: true } }` on that edge — the value is canonical
      `true` (a YAML boolean), not the string `"true"`, `1`, or `True`.
 6. **Confirm `iter` is selectable** — with an edge selected, open the field

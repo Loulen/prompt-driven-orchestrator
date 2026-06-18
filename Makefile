@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 
 PORT := 6172
 VITE_PORT := 5174
-SANDBOX := /tmp/maestro-dev-sandbox
+SANDBOX := /tmp/pdo-dev-sandbox
 
 help:
 	@echo "Targets:"
@@ -20,8 +20,8 @@ dev:
 	@mkdir -p $(SANDBOX)
 	@cargo build
 	@trap 'kill 0' EXIT INT TERM; \
-	  (cd $(SANDBOX) && MAESTRO_PORT=$(PORT) $(CURDIR)/target/debug/maestro daemon) & \
-	  (cd frontend && MAESTRO_PORT=$(PORT) npm run dev -- --port $(VITE_PORT)) & \
+	  (cd $(SANDBOX) && PDO_PORT=$(PORT) $(CURDIR)/target/debug/pdo daemon) & \
+	  (cd frontend && PDO_PORT=$(PORT) npm run dev -- --port $(VITE_PORT)) & \
 	  wait
 
 build:

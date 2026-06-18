@@ -687,7 +687,7 @@ function ScreenV3_A1() {
             <NodeLifecycleControls status="running"/>
             <div className="p-sect">
               <SectionHead title="Terminal"/>
-              <XTerm session="tmux: maestro/run-f7c/impl · 80×24" height={190}
+              <XTerm session="tmux: pdo/run-f7c/impl · 80×24" height={190}
                 lines={[
                   {p:'claude › ', t:'reading src/auth/middleware.ts'},
                   {d:'  ↳ 203 lines'},
@@ -799,7 +799,7 @@ function ScreenV3_A3() {
             <NodeLifecycleControls status="stopped"/>
             <div className="p-sect">
               <SectionHead title="Terminal"/>
-              <XTerm session="tmux: maestro/run-f7c/impl · 80×24" height={170}
+              <XTerm session="tmux: pdo/run-f7c/impl · 80×24" height={170}
                 lines={[
                   {p:'claude › ', t:'reading src/auth/middleware.ts'},
                   {d:'  ↳ 203 lines'},
@@ -852,7 +852,7 @@ function ScreenV3_A4() {
             <NodeLifecycleControls status="stale"/>
             <div className="p-sect">
               <SectionHead title="Terminal"/>
-              <XTerm session="tmux: maestro/run-f7c/impl · 80×24" height={200}
+              <XTerm session="tmux: pdo/run-f7c/impl · 80×24" height={200}
                 lines={[
                   {p:'claude › ', t:'reading src/auth/'},
                   {d:'  ↳ 8 files · 1.4 KB total'},
@@ -1105,7 +1105,7 @@ function ScreenV3_S11() {
               <span className="mono" style={{color:'var(--fg-3)'}}> image_list</span> ports show a directory listing instead.
             </div>
           </div>
-          <div className="maestro" style={{background:'var(--bg-2)',border:'1px solid var(--line)',borderRadius:8,overflow:'visible',boxShadow:'0 12px 40px rgba(0,0,0,0.4)'}}>
+          <div className="pdo" style={{background:'var(--bg-2)',border:'1px solid var(--line)',borderRadius:8,overflow:'visible',boxShadow:'0 12px 40px rgba(0,0,0,0.4)'}}>
             <div className="p-head">
               <h3>Outputs</h3>
               <div className="p-actions"><span className="mono" style={{fontSize:10.5,color:'var(--fg-4)'}}>2 ports</span></div>
@@ -1122,7 +1122,7 @@ function ScreenV3_S11() {
               {t:'image',    d:'Single image port. Renders in the viewer at comfortable size with prev/next for repeated ports.'},
               {t:'image_list', d:'Gallery of images from the output directory. Ordered alphabetically, each thumbnail clickable to zoom.'},
             ].map(x => (
-              <div key={x.t} className="legend-card maestro">
+              <div key={x.t} className="legend-card pdo">
                 <div className="lc-head mono">{x.t}</div>
                 <div className="lc-body">{x.d}</div>
               </div>
@@ -1171,7 +1171,7 @@ function ScreenV3_S12() {
                         <span className="dp-title">Repo copy has changed</span>
                       </div>
                       <div className="dp-desc">
-                        Promoted from <span className="mono" style={{color:'var(--fg-2)'}}>/code/myapp/.maestro/pipelines/simple-bugfix.yaml</span>.
+                        Promoted from <span className="mono" style={{color:'var(--fg-2)'}}>/code/myapp/.pdo/pipelines/simple-bugfix.yaml</span>.
                         The repo version has since been modified — 2 commits ahead.
                       </div>
                       <div className="dp-act">

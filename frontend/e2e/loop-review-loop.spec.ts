@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-loop-review-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -106,7 +106,7 @@ edges:
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE =
+  process.env.PDO_TMUX_CMD_OVERRIDE =
     "exec sh -c \"sleep 300\"";
   await fs.mkdir(PROMPTS_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
@@ -117,14 +117,14 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
   if (runId) {
     const { execSync } = await import("node:child_process");
     const sessions = [
-      `maestro-${runId}-impl1-iter-1`,
-      `maestro-${runId}-reviewer-iter-1`,
-      `maestro-${runId}-sw1-iter-1`,
-      `maestro-mgr-${runId}`,
+      `pdo-${runId}-impl1-iter-1`,
+      `pdo-${runId}-reviewer-iter-1`,
+      `pdo-${runId}-sw1-iter-1`,
+      `pdo-mgr-${runId}`,
     ];
     for (const s of sessions) {
       try {
@@ -227,11 +227,11 @@ test("loop run mode: create run and verify loop node renders with iter badge", a
   // Seed impl1 artifacts and complete it
   const artifactsBase = path.join(
     WORKSPACE_ROOT,
-    ".maestro",
+    ".pdo",
     "runs",
     runId,
     "worktree",
-    ".maestro",
+    ".pdo",
     "artifacts",
   );
   const impl1Dir = path.join(artifactsBase, "impl1", "iter-1");

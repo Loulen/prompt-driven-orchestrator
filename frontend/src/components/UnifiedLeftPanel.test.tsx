@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
-import type { RunListEntry } from "../types";
+import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { renameRun } from "../api";
+import { deletePipeline, fetchPipelines, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
+const mockDeletePipeline = vi.mocked(deletePipeline);
+const mockFetchPipelines = vi.mocked(fetchPipelines);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -14,8 +16,15 @@ vi.mock("../api", () => ({
   renameRun: vi.fn().mockResolvedValue(undefined),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
+  deletePipeline: vi.fn().mockResolvedValue(undefined),
   deleteTrigger: vi.fn().mockResolvedValue(undefined),
   fetchPipelines: vi.fn().mockResolvedValue([]),
+  fetchPipeline: vi.fn().mockResolvedValue({
+    scope: "library",
+    pipeline: { name: "simple-bugfix", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+    diagnostics: [],
+  }),
 }));
 
 const noop = () => {};
@@ -209,5 +218,38 @@ describe("UnifiedLeftPanel three-tab strip", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
     expect(screen.getByText("Nightly audit")).toBeInTheDocument();
+  });
+});
+
+// #216 — A `scope: "library"` entry surfaced in the merged /pipelines list must
+// delete via the library store. The pre-fix code called removePipeline(id) with
+// no scope, which routed to DELETE /pipelines/{id} and destroyed the same-named
+// repo YAML + .prompts/ sidecar.
+describe("UnifiedLeftPanel library-scoped delete (#216)", () => {
+  const libEntry: PipelineListEntry = {
+    id: "simple-bugfix",
+    name: "simple-bugfix",
+    scope: "library",
+    path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {},
+  };
+
+  it("forwards scope=library to deletePipeline instead of the repo path", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([libEntry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+
+    // Row renders once loadPipelines() resolves.
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("simple-bugfix", "library"),
+    );
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
-import { savePipeline, fetchPipeline, saveRunPipeline } from "../api";
+import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 vi.mock("../api", () => ({
@@ -31,10 +31,13 @@ vi.mock("../api", () => ({
   }),
   savePipeline: vi.fn().mockResolvedValue(undefined),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
+  deletePipeline: vi.fn().mockResolvedValue(undefined),
+  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "x", scope: "user" }),
 }));
 
 const mockSavePipeline = vi.mocked(savePipeline);
 const mockSaveRunPipeline = vi.mocked(saveRunPipeline);
+const mockDeletePipeline = vi.mocked(deletePipeline);
 
 function makePipeline(
   nodes: NodeDef[] = [],
@@ -1471,5 +1474,86 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges).toHaveLength(2);
     expect(tab.pipeline.edges[0].source.port).toBe("alpha");
     expect(tab.pipeline.edges[1].source.port).toBe("beta");
+  });
+});
+
+// #216 — open/delete/save must forward the list entry's scope to the API so a
+// `library` (or `user`) pipeline never resolves to a same-named repo file.
+describe("scope-qualified pipeline ops", () => {
+  it("openPipeline forwards a library scope to fetchPipeline", async () => {
+    mockFetchPipeline.mockResolvedValueOnce({
+      id: "simple-bugfix",
+      scope: "library",
+      path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
+      yaml: "name: simple-bugfix\n",
+      pipeline: { name: "simple-bugfix", version: "1.0", variables: {}, nodes: [], edges: [] },
+      prompts: {},
+      diagnostics: [],
+    });
+
+    await useEditStore.getState().openPipeline("simple-bugfix", "library");
+
+    expect(mockFetchPipeline).toHaveBeenCalledWith("simple-bugfix", "library");
+    const tab = useEditStore.getState().openTabs.find((t) => t.id === "simple-bugfix");
+    expect(tab?.scope).toBe("library");
+  });
+
+  it("removePipeline forwards a library scope to deletePipeline", async () => {
+    await useEditStore.getState().removePipeline("simple-bugfix", "library");
+    expect(mockDeletePipeline).toHaveBeenCalledWith("simple-bugfix", "library");
+  });
+
+  it("removePipeline without scope calls deletePipeline with undefined (repo/user default)", async () => {
+    await useEditStore.getState().removePipeline("repo-pipe");
+    expect(mockDeletePipeline).toHaveBeenCalledWith("repo-pipe", undefined);
+  });
+
+  it("removePipeline of a library entry leaves the same-id repo row in the list", async () => {
+    const base = {
+      id: "simple-bugfix",
+      name: "simple-bugfix",
+      path: "",
+      node_count: 3,
+      modified: null,
+      variables: {},
+    };
+    useEditStore.setState({
+      pipelines: [
+        { ...base, scope: "repo" },
+        { ...base, scope: "library" },
+      ],
+    });
+
+    await useEditStore.getState().removePipeline("simple-bugfix", "library");
+
+    const remaining = useEditStore.getState().pipelines;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].scope).toBe("repo");
+  });
+
+  it("save of a library-scoped tab forwards scope to savePipeline", async () => {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "simple-bugfix",
+          scope: "library",
+          pipeline: { name: "simple-bugfix", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: true,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "simple-bugfix",
+    });
+
+    await useEditStore.getState().save("simple-bugfix");
+
+    expect(mockSavePipeline).toHaveBeenCalledWith(
+      "simple-bugfix",
+      expect.any(String),
+      {},
+      "library",
+    );
   });
 });

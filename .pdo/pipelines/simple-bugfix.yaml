@@ -1,0 +1,124 @@
+name: simple-bugfix
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: bottom }
+    view: { x: 535, y: -194 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 523, y: 517 }
+  - id: "9LvO3oid"
+    name: Debugger
+    type: code-mutating
+    inputs:
+      - { name: in, side: top }
+    outputs:
+      - name: out
+        side: bottom
+        frontmatter:
+          Verdict:
+            allowed: [Bug, Feature, Unsure, Not Reproduced]
+            type: enum
+      - { name: how_to_reproduce, side: right }
+      - { name: bug-screenshots, side: right, port_type: image_list }
+    view: { x: 529, y: -10 }
+  - id: "2iLjeGm3"
+    name: switch
+    type: switch
+    inputs:
+      - { name: in, side: top }
+    outputs:
+      - name: its a bug
+        side: right
+        when:
+          Verdict: { eq: Bug }
+      - { name: default, side: bottom }
+    view: { x: 523, y: 203 }
+  - id: KHFCO0US
+    name: implementer
+    type: code-mutating
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - { name: out, side: bottom }
+    view: { x: 1109, y: -19 }
+  - id: HmuRVQBx
+    name: loop
+    type: loop
+    max_iter: 5
+    inputs:
+      - { name: in, side: left }
+      - { name: break, side: right }
+    outputs:
+      - { name: body, side: right }
+      - { name: done, side: bottom }
+    view: { x: 766, y: 208 }
+  - id: "9NOnrpKY"
+    name: Visual tester
+    type: code-mutating
+    inputs:
+      - { name: in, side: top }
+      - { name: steps, side: top }
+      - { name: screens, side: left }
+    outputs:
+      - name: out
+        side: bottom
+        frontmatter:
+          Verdict:
+            allowed: [Pass, Fail, Minor_changes]
+            type: enum
+      - { name: screens-fixed, side: right, port_type: image_list }
+    view: { x: 1152, y: 371 }
+  - id: SsL64qkw
+    name: switch
+    type: switch
+    inputs:
+      - { name: in, side: top }
+    outputs:
+      - name: branch
+        side: left
+        when:
+          Verdict: { eq: Pass }
+      - { name: default, side: right }
+    view: { x: 1143, y: 514 }
+  - id: mWllKR47
+    name: Ship It
+    type: code-mutating
+    inputs:
+      - { name: in, side: top }
+    outputs:
+      - { name: out, side: bottom }
+    view: { x: 748, y: 399 }
+edges:
+  - source: { node: "9LvO3oid", port: out }
+    target: { node: "2iLjeGm3", port: in }
+  - source: { node: "2iLjeGm3", port: default }
+    target: { node: end, port: result }
+  - source: { node: "2iLjeGm3", port: its a bug }
+    target: { node: HmuRVQBx, port: in }
+  - source: { node: HmuRVQBx, port: body }
+    target: { node: KHFCO0US, port: in }
+  - source: { node: KHFCO0US, port: out }
+    target: { node: "9NOnrpKY", port: in }
+  - source: { node: "9NOnrpKY", port: out }
+    target: { node: SsL64qkw, port: in }
+  - source: { node: SsL64qkw, port: branch }
+    target: { node: HmuRVQBx, port: break }
+  - source: { node: start, port: user_prompt }
+    target: { node: "9LvO3oid", port: in }
+  - source: { node: HmuRVQBx, port: done }
+    target: { node: mWllKR47, port: in }
+  - source: { node: mWllKR47, port: out }
+    target: { node: end, port: result }
+  - source: { node: "9LvO3oid", port: how_to_reproduce }
+    target: { node: "9NOnrpKY", port: steps }
+  - source: { node: start, port: user_prompt }
+    target: { node: KHFCO0US, port: in }
+  - source: { node: "9LvO3oid", port: bug-screenshots }
+    target: { node: "9NOnrpKY", port: screens }

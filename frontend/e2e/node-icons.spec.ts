@@ -1,17 +1,25 @@
 import { test, expect } from "@playwright/test";
+import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Layer 3b — Node icons E2E (refs #67).
-// Seeds a pipeline with all 6 first-class types + a code-mutating agent
-// + a doc-only agent. Asserts structural icons, no text pills, and
-// code/doc markers.
+// Post canvas-refonte (ADR-0011 / #146 / #151 / #171) the first-class node
+// types are only start / end / merge — `switch`, `loop` and `for-each` were
+// removed as node TYPES (a fan-out / cycle is now a loop *region*, not a node).
+// The backend still parses the legacy variants but migrates them onto generic
+// agent nodes, so they render with the agent icon and no code/doc marker.
+//
+// This spec seeds start + two generic agents (one doc-only, one code-mutating)
+// + merge + end and asserts: structural icons for start/end/merge, the agent
+// icon for the generics, no text pills, and exactly the two explicit code/doc
+// markers.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-node-icons-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -45,47 +53,6 @@ nodes:
       - name: out
         side: right
     view: { x: 250, y: 400 }
-  - id: gate
-    name: Gate
-    type: switch
-    inputs:
-      - name: in
-        side: left
-    outputs:
-      - name: pass
-        side: right
-      - name: default
-        side: right
-    view: { x: 500, y: 200 }
-  - id: review-loop
-    name: Review Loop
-    type: loop
-    inputs:
-      - name: in
-        side: left
-      - name: break
-        side: left
-    outputs:
-      - name: body
-        side: right
-      - name: done
-        side: right
-    max_iter: 3
-    view: { x: 500, y: 400 }
-  - id: per-item
-    name: Per Item
-    type: for-each
-    inputs:
-      - name: in
-        side: left
-      - name: break
-        side: left
-    outputs:
-      - name: body
-        side: right
-      - name: done
-        side: right
-    view: { x: 750, y: 200 }
   - id: merger
     name: Merger
     type: merge
@@ -108,17 +75,11 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: planner, port: in }
-  - source: { node: planner, port: plan }
-    target: { node: gate, port: in }
-  - source: { node: gate, port: pass }
-    target: { node: per-item, port: in }
   - source: { node: start, port: user_prompt }
     target: { node: implementer, port: in }
-  - source: { node: implementer, port: out }
-    target: { node: review-loop, port: in }
-  - source: { node: review-loop, port: done }
+  - source: { node: planner, port: plan }
     target: { node: merger, port: branches }
-  - source: { node: per-item, port: done }
+  - source: { node: implementer, port: out }
     target: { node: merger, port: branches }
   - source: { node: merger, port: merged }
     target: { node: end, port: result }
@@ -147,24 +108,15 @@ test("each node type renders its structural icon", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Switch to edit mode
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  // Select the pipeline from the list
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Each first-class type should render its structural icon
+  // First-class structural icons.
   await expect(page.locator("[data-testid='node-icon-start']").first()).toBeVisible({ timeout: 3_000 });
   await expect(page.locator("[data-testid='node-icon-end']").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.locator("[data-testid='node-icon-switch']").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.locator("[data-testid='node-icon-loop']").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.locator("[data-testid='node-icon-foreach']").first()).toBeVisible({ timeout: 3_000 });
   await expect(page.locator("[data-testid='node-icon-merge']").first()).toBeVisible({ timeout: 3_000 });
 
-  // Generic agent nodes should render the agent icon
+  // Generic agent nodes (doc-only + code-mutating) render the agent icon.
   const agentIcons = page.locator("[data-testid='node-icon-agent']");
   await expect(agentIcons).toHaveCount(2, { timeout: 3_000 });
 
@@ -177,15 +129,14 @@ test("no text pills are present on any node", async ({ page }) => {
     timeout: 10_000,
   });
 
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Wait for the canvas to render
-  await expect(page.getByText("Planner")).toBeVisible({ timeout: 5_000 });
+  // Wait for the canvas to render (scope to the canvas node, not the Library
+  // list entry which also surfaces the pipeline/node names).
+  await expect(
+    page.getByTestId("rf__node-planner").getByText("Planner"),
+  ).toBeVisible({ timeout: 5_000 });
 
   // None of the old type-pill texts should appear as bordered badge elements.
   // We target the specific pattern: a small bordered span used as a pill label.
@@ -211,11 +162,7 @@ test("code-mutating and doc-only markers are present and visually distinct", asy
     timeout: 10_000,
   });
 
-  const editToggle = page.locator("[data-testid='edit-toggle']");
-  await expect(editToggle).toBeVisible({ timeout: 3_000 });
-  await editToggle.click();
-
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
   // There should be exactly 2 code/doc markers (one per generic agent node)

@@ -4,8 +4,17 @@ const BASE = "";
 
 async function throwStructuredSaveError(resp: Response, fallback: string): Promise<never> {
   const body = await resp.json().catch(() => null);
+  let message: string = body?.message ?? body?.error ?? fallback;
+  // A mid-run mutation rejection (409, ADR-0007 / #211) carries the "why" in
+  // `rejections[].reason` — surface it, not just "mutation rejected".
+  if (Array.isArray(body?.rejections)) {
+    const reasons = body.rejections
+      .map((r: { reason?: string }) => r?.reason)
+      .filter((r: unknown): r is string => typeof r === "string");
+    if (reasons.length > 0) message = `${message}: ${reasons.join("; ")}`;
+  }
   const err: Record<string, unknown> = {
-    message: body?.message ?? body?.error ?? fallback,
+    message,
     status: resp.status,
   };
   if (typeof body?.line === "number") err.line = body.line;
@@ -88,6 +97,13 @@ export interface PaneResponse {
   session_name: string;
   resumed: boolean;
   stale: boolean;
+  /**
+   * Provenance of `content` (#205): "live" (captured from a running session),
+   * "resumed" (a dead latest-iter session was re-attached), "snapshot" (the
+   * persisted post-mortem pane of a reaped terminal node), or "unavailable"
+   * (no session and no snapshot).
+   */
+  source: "live" | "resumed" | "snapshot" | "unavailable";
 }
 
 export async function fetchPrompt(
@@ -548,8 +564,16 @@ export async function saveRunPipeline(
 
 // --- Pipeline CRUD ---
 
-export async function fetchPipeline(id: string): Promise<PipelineDetail> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`);
+// Pin an operation to a single store. Without it the daemon resolves a bare id
+// repo-then-user, so a `library` (or `user`) entry colliding with a same-named
+// repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the
+// historical default and are only forwarded when explicitly known.
+function scopeQuery(scope?: string): string {
+  return scope && scope !== "run" ? `?scope=${encodeURIComponent(scope)}` : "";
+}
+
+export async function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`);
   if (!resp.ok) throw new Error(`GET /pipelines/${id} failed: ${resp.status}`);
   return resp.json();
 }
@@ -558,8 +582,9 @@ export async function savePipeline(
   id: string,
   yaml: string,
   prompts: Record<string, string>,
+  scope?: string,
 ): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`, {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ yaml, prompts }),
@@ -669,8 +694,8 @@ export interface DeletePipelineError {
   message: string;
 }
 
-export async function deletePipeline(id: string): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}`, {
+export async function deletePipeline(id: string, scope?: string): Promise<void> {
+  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
     method: "DELETE",
   });
   if (resp.status === 409) {

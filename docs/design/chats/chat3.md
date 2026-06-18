@@ -207,7 +207,7 @@ _[tool: fork_verifier_agent]_
 
 _[tool: snip]_
 
-Winners are wired into `Maestro.html`:
+Winners are wired into `PDO.html`:
 
 - **`winners.css`** loaded after `styles-v2.css` — H1 status cadre on `.node`, P2 capsule pill on `.port-pill`, amber inspector scope, I1 hairline port rows, O3 tab-head outputs, F1 type-driven field rows, S1 AND-rail branches.
 - **`dag.jsx`** now renders `<PortPill>` (capsule with directional chevron) instead of the old triangle handle. Legacy `.tri-handle` markup elsewhere (loop / switch / screens-v2) is hidden by `winners.css` so nothing leaks visually.
@@ -246,7 +246,7 @@ _[tool: done]_
 
 _[tool: fork_verifier_agent]_
 
-Added a new **Component spotlights — picked winners** section to `Maestro.html` with three artboards:
+Added a new **Component spotlights — picked winners** section to `PDO.html` with three artboards:
 
 - **W1 · Node card** — `.spot-node` matrix across all 5 statuses, selection cohabitation, and special-node family check (Switch, Loop, Start, End)
 - **W2 · Port row** — `.port-pill` on all four sides, drop-target state, mixed-side Loop, and Switch fan-out

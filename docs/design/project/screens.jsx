@@ -1,4 +1,4 @@
-// screens.jsx — Composes the Maestro app shell into screens.
+// screens.jsx — Composes the PDO app shell into screens.
 //
 // This file has been pruned for the unified-mode iteration:
 //   • Edit/Run toggle is removed — no more edit-mode screens (was Screen4, Screen6).
@@ -24,7 +24,7 @@ const ART_H = 900;
 
 function Frame({ mode = 'run', children, daemon = 'connected', activeRuns = 3, awaiting = 1, breadcrumb, runId, banner, onToggleMode = () => {} }) {
   return (
-    <div className={"app-frame maestro" + (mode === 'edit' ? ' edit-mode' : '')}>
+    <div className={"app-frame pdo" + (mode === 'edit' ? ' edit-mode' : '')}>
       <TopBar mode={mode} onToggleMode={onToggleMode} breadcrumb={breadcrumb} runId={runId}/>
       {banner}
       <div className="shell">{children}</div>

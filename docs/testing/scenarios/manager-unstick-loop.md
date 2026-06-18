@@ -20,12 +20,12 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser (single always-interactive canvas — no
   Edit/Run pencil toggle, per ADR-0011).
 - `claude` available on `PATH`.
-- A pipeline `manager-unstick-loop.yaml` exists in `.maestro/pipelines/`. If it
+- A pipeline `manager-unstick-loop.yaml` exists in `.pdo/pipelines/`. If it
   isn't already there, the agent creates it before driving the UI. It is the
   same bounded-region review loop as `loop-region-review-loop`, deliberately
   wired with **no `iter ≥ max` exit edge**, so reaching `max_iter` blocks

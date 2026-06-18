@@ -8,10 +8,10 @@
 
 ## Setup
 
-- Daemon running and built **from the source tree under test** (`maestro daemon`,
-  or `cargo run -p maestro-daemon` with `MAESTRO_SKIP_FRONTEND_BUILD` unset so
+- Daemon running and built **from the source tree under test** (`pdo daemon`,
+  or `cargo run -p pdo-daemon` with `PDO_SKIP_FRONTEND_BUILD` unset so
   the embedded frontend is current). Daemon URL defaults to
-  `http://127.0.0.1:5172`; honor `MAESTRO_PORT` if set.
+  `http://127.0.0.1:5172`; honor `PDO_PORT` if set.
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `curl` and `jq` on PATH.

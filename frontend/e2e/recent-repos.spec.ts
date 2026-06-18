@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-recent-repos-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -40,7 +40,7 @@ edges:
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE =
+  process.env.PDO_TMUX_CMD_OVERRIDE =
     'exec sh -c "sleep 300"';
   await fs.mkdir(PROMPTS_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
@@ -50,7 +50,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("recent repos dropdown appears on focus when runs exist", async ({

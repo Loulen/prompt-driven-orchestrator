@@ -14,7 +14,7 @@
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - A test pipeline named `inspector-pooled-scenario.yaml` seeded in
-  `.maestro/pipelines/`. If it isn't already there, the agent creates it before
+  `.pdo/pipelines/`. If it isn't already there, the agent creates it before
   driving the UI. Two reviewers each produce a `review` document; both wire into
   the single `implementer` node, so the implementer's `review` input is
   **pooled** (one logical list input fed by two sources). The implementer
@@ -101,15 +101,15 @@
 
 ## Validate against the model on disk
 
-10. Read `.maestro/pipelines/inspector-pooled-scenario.yaml` and confirm both
+10. Read `.pdo/pipelines/inspector-pooled-scenario.yaml` and confirm both
     edges target `impl.review` (the source of the pooling), and that `impl`
     declares the `diff` output with the `verdict` enum + `files_changed` int
     frontmatter — i.e. what the inspector rendered matches the pipeline file.
 
 ## Cleanup
 
-- Delete `.maestro/pipelines/inspector-pooled-scenario.yaml`.
-- Delete `.maestro/pipelines/inspector-pooled-scenario.prompts/` if it was
+- Delete `.pdo/pipelines/inspector-pooled-scenario.yaml`.
+- Delete `.pdo/pipelines/inspector-pooled-scenario.prompts/` if it was
   created during the run.
 
 ## Verdict format

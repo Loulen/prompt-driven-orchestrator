@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="Loulen/Maestro"
-INSTALL_DIR="${MAESTRO_INSTALL_DIR:-$HOME/.local/bin}"
-VERSION="${MAESTRO_VERSION:-latest}"
+REPO="Loulen/prompt-driven-orchestrator"
+INSTALL_DIR="${PDO_INSTALL_DIR:-$HOME/.local/bin}"
+VERSION="${PDO_VERSION:-latest}"
 
 info() { printf '  \033[1;32m%s\033[0m %s\n' "$1" "$2"; }
 err()  { printf '  \033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
@@ -39,8 +39,8 @@ resolve_version() {
 
 download_and_verify() {
   local base_url="https://github.com/${REPO}/releases/download/${VERSION}"
-  local archive="maestro-${VERSION}-${PLATFORM}.tar.gz"
-  local checksum_file="maestro-${VERSION}-SHA256SUMS.txt"
+  local archive="pdo-${VERSION}-${PLATFORM}.tar.gz"
+  local checksum_file="pdo-${VERSION}-SHA256SUMS.txt"
 
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -75,7 +75,7 @@ download_and_verify() {
   info "Extracting" "to ${INSTALL_DIR}"
   mkdir -p "$INSTALL_DIR"
   tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"
-  install -m 755 "${tmpdir}/maestro" "${INSTALL_DIR}/maestro"
+  install -m 755 "${tmpdir}/pdo" "${INSTALL_DIR}/pdo"
 }
 
 check_path() {
@@ -91,7 +91,7 @@ check_path() {
 }
 
 main() {
-  info "Installing" "Maestro"
+  info "Installing" "PDO"
   detect_platform
   resolve_version
   info "Platform" "${PLATFORM}"
@@ -100,12 +100,12 @@ main() {
   check_path
 
   info "Verifying" "installation"
-  if "${INSTALL_DIR}/maestro" --version >/dev/null 2>&1; then
+  if "${INSTALL_DIR}/pdo" --version >/dev/null 2>&1; then
     local ver
-    ver="$("${INSTALL_DIR}/maestro" --version 2>&1)"
+    ver="$("${INSTALL_DIR}/pdo" --version 2>&1)"
     info "Installed" "${ver}"
   else
-    err "Installation verification failed — maestro binary did not run"
+    err "Installation verification failed — pdo binary did not run"
   fi
 }
 

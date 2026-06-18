@@ -7,13 +7,13 @@
 
 ## Setup
 
-- Maestro daemon running on the user's repo (`maestro daemon`). Daemon URL
+- PDO daemon running on the user's repo (`pdo daemon`). Daemon URL
   defaults to `http://127.0.0.1:5172`.
 - Frontend reachable in a browser. Chrome DevTools MCP preferred; Playwright
   MCP works as a fallback.
 - `claude` available on `PATH` (the daemon shells out to `claude
   --dangerously-skip-permissions "$(cat <prompt>)"`).
-- A pipeline `run-minimal-scenario.yaml` exists in `.maestro/pipelines/`. If it
+- A pipeline `run-minimal-scenario.yaml` exists in `.pdo/pipelines/`. If it
   isn't already there, the agent creates it before driving the UI:
 
   ```yaml
@@ -50,11 +50,11 @@
       target: { node: end, port: result }
   ```
 
-  And `.maestro/pipelines/run-minimal-scenario.prompts/xCsiuWj7.md`:
+  And `.pdo/pipelines/run-minimal-scenario.prompts/xCsiuWj7.md`:
 
   ```
-  Reply with exactly the line `MAESTRO_RUN_MINIMAL_OK` and then call the
-  `maestro complete` command. Do nothing else.
+  Reply with exactly the line `PDO_RUN_MINIMAL_OK` and then call the
+  `pdo complete` command. Do nothing else.
   ```
 
 ## Steps the agent executes
@@ -117,10 +117,10 @@ While the node is running or completed:
    from the URL or the run-list panel.
 3. Within ~2 s, the DAG node `only` should animate to **`running`**.
 4. From a shell on the host, list tmux sessions and assert one matches
-   `maestro-<run_id>-only-iter-1`:
+   `pdo-<run_id>-only-iter-1`:
 
    ```bash
-   tmux ls | grep "maestro-<run_id>-only-iter-1"
+   tmux ls | grep "pdo-<run_id>-only-iter-1"
    ```
 
 5. Verify the **terminal preview** in the UI right panel is non-empty and
@@ -138,12 +138,12 @@ While the node is running or completed:
    file was not written at spawn time.
 
    Also verify from the shell:
-   `tmux capture-pane -p -t maestro-<run_id>-only-iter-1`. The pane content
+   `tmux capture-pane -p -t pdo-<run_id>-only-iter-1`. The pane content
    must show the **claude TUI**, not just an `echo`/`cat` shell. Acceptable
    first-launch states:
    - The "Quick safety check: Is this a project you created or one you trust?"
      dialog. **First launch in a fresh worktree path always lands here.**
-     The agent confirms with `tmux send-keys -t maestro-<run_id>-only-iter-1
+     The agent confirms with `tmux send-keys -t pdo-<run_id>-only-iter-1
      Enter`.
    - After confirmation: the chat view, with the prompt body
      ("Reply with exactly the line …") visible as the **first user message**.
@@ -162,8 +162,8 @@ Before the node completes on its own, test the output validation guard:
 4. Write the output file manually:
 
    ```bash
-   mkdir -p .maestro/runs/<run_id>/worktree/.maestro/artifacts/only/iter-1
-   echo '# Out' > .maestro/runs/<run_id>/worktree/.maestro/artifacts/only/iter-1/out.md
+   mkdir -p .pdo/runs/<run_id>/worktree/.pdo/artifacts/only/iter-1
+   echo '# Out' > .pdo/runs/<run_id>/worktree/.pdo/artifacts/only/iter-1/out.md
    ```
 
 5. Click **"Mark complete"** again. This time the daemon accepts it (200 OK).
@@ -175,7 +175,7 @@ skip it — the validation path is already covered by the Layer 3b e2e test
 
 ### Step 6a — Pin-to-bottom + chevron resume (refs #34)
 
-While the node is still **running** (before `maestro complete` fires):
+While the node is still **running** (before `pdo complete` fires):
 
 1. Scroll **up** in the terminal preview `<pre>` pane. Assert:
    - The terminal content **freezes** — subsequent poll responses are not
@@ -193,9 +193,9 @@ While the node is still **running** (before `maestro complete` fires):
    - The chevron disappears without clicking it.
    - Rendering resumes.
 
-6. Wait up to ~30 s for claude to reply with `MAESTRO_RUN_MINIMAL_OK` and call
-   `maestro complete`. Re-capture the pane and assert the literal string
-   `MAESTRO_RUN_MINIMAL_OK` is present.
+6. Wait up to ~30 s for claude to reply with `PDO_RUN_MINIMAL_OK` and call
+   `pdo complete`. Re-capture the pane and assert the literal string
+   `PDO_RUN_MINIMAL_OK` is present.
 7. Refresh the run view in the UI; the node `only` should now read
    **`completed`**.
 
@@ -230,7 +230,7 @@ After the run completes (step 7):
 8. Confirm the artifact file exists:
 
    ```bash
-   ls .maestro/runs/<run_id>/worktree/.maestro/artifacts/
+   ls .pdo/runs/<run_id>/worktree/.pdo/artifacts/
    ```
 
    At minimum `_input.md` is present; depending on what claude wrote, an
@@ -250,14 +250,14 @@ preview.  Assert:
   appears.
 - Each port row displays a truncated artifact path.
 
-### Step 5d — Click output artifact → modal contains MAESTRO_RUN_MINIMAL_OK (refs #27 #33 #149)
+### Step 5d — Click output artifact → modal contains PDO_RUN_MINIMAL_OK (refs #27 #33 #149)
 
 Once step 6 confirms the node completed and the artifact exists:
 
 1. Click **anywhere on the `out` output port row** in the inspector — not just
    the "↗" icon. The entire row is the click target when files exist.
 2. Assert the **MarkdownArtifactModal** opens (`.artifact-markdown` visible).
-3. The modal body must contain the string **`MAESTRO_RUN_MINIMAL_OK`**.
+3. The modal body must contain the string **`PDO_RUN_MINIMAL_OK`**.
 4. If the output file has YAML frontmatter, a frontmatter card is displayed
    above the markdown body.
 5. Close the modal via the **X** button, **Escape** key, or backdrop click.
@@ -279,24 +279,24 @@ Inspect the `only` node's card on the DAG canvas:
 
 ## Negative checks
 
-- **Tmux session must persist** until `maestro complete` is called. If the
+- **Tmux session must persist** until `pdo complete` is called. If the
   session dies within a few seconds of launch (the original Bug A symptom),
   capture the pane *before* it dies (via repeated `tmux capture-pane` polls)
   and report the failure — that is the regression this scenario exists to
   catch.
-- **No `echo Maestro NodeRun: …` banner** — that string was the old broken
+- **No `echo PDO NodeRun: …` banner** — that string was the old broken
   command. If you see it, you're on the pre-#18 build.
-- **Daemon stderr (visible if the agent is running `maestro daemon` in the
+- **Daemon stderr (visible if the agent is running `pdo daemon` in the
   foreground) should contain INFO lines** like `Spawned tmux session: …`. If
   it's silent, Bug C is back.
 
 ## Cleanup
 
 - Kill the tmux session if still alive:
-  `tmux kill-session -t maestro-<run_id>-only-iter-1`.
+  `tmux kill-session -t pdo-<run_id>-only-iter-1`.
 - Delete the worktree:
-  `git worktree remove --force .maestro/runs/<run_id>/worktree`.
-- Delete `.maestro/pipelines/run-minimal-scenario.yaml` and its `.prompts/`
+  `git worktree remove --force .pdo/runs/<run_id>/worktree`.
+- Delete `.pdo/pipelines/run-minimal-scenario.yaml` and its `.prompts/`
   dir if the agent created them in step 0.
 
 ## Verdict format
@@ -308,11 +308,11 @@ Inspect the `only` node's card on the DAG canvas:
     "step 0c: Start→only edge rendered; arrow lands on body (no input dot)",
     "step 0d: Initial Prompt section collapsed by default, toggles on click",
     "step 0e: terminal preview wraps long lines without horizontal scroll",
-    "step 4: tmux session 'maestro-<run_id>-only-iter-1' present",
+    "step 4: tmux session 'pdo-<run_id>-only-iter-1' present",
     "step 5: pane shows claude TUI (trust dialog → chat view)",
     "step 5c: Inputs section lists emergent input 'user_prompt' (not declared 'in')",
     "step 5f: 'only' renders as a slim card with a green output dot and no input dot",
-    "step 6: pane contains 'MAESTRO_RUN_MINIMAL_OK'",
+    "step 6: pane contains 'PDO_RUN_MINIMAL_OK'",
     "step 7: UI shows node 'only' as completed"
   ],
   "anomalies": [

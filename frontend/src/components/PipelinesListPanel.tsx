@@ -36,7 +36,9 @@ export default function PipelinesListPanel() {
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
     try {
-      await removePipeline(deleteTarget.id);
+      // Forward scope so a `library` entry deletes from the library store, not
+      // the same-named repo pipeline file (#216).
+      await removePipeline(deleteTarget.id, deleteTarget.scope);
     } catch {
       // ignore — 409 or network error
     }
@@ -92,7 +94,7 @@ export default function PipelinesListPanel() {
             key={`${p.scope}-${p.id}`}
             pipeline={p}
             isSelected={p.id === activeTabId}
-            onSelect={() => openPipeline(p.id)}
+            onSelect={() => openPipeline(p.id, p.scope)}
             onDelete={() => setDeleteTarget(p)}
             onContextMenu={(x, y) => setContextMenu({ x, y, pipeline: p })}
           />

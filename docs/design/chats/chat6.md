@@ -12,7 +12,7 @@ follow the following instructions, but keep at most 4 happy paths with 4 screens
 
 _[tool: list_files]_
 
-I'll start by exploring the existing Maestro project to understand its visual language and the reference files mentioned in the prompt.
+I'll start by exploring the existing PDO project to understand its visual language and the reference files mentioned in the prompt.
 
 _[tool: read_file]_
 
@@ -86,7 +86,7 @@ Now fix A4 to select the triggered run and make the detail consistent (failed tr
 
 _[tool: str_replace_edit]_
 
-Now rewire `Maestro.html` to load the trigger files and render the new canvas.
+Now rewire `PDO.html` to load the trigger files and render the new canvas.
 
 _[tool: str_replace_edit]_
 
@@ -126,7 +126,7 @@ _[tool: eval_js_user_view]_
 
 _[tool: grep]_
 
-The old content is rendering, not my new screens. Let me verify my edit to Maestro.html actually took.
+The old content is rendering, not my new screens. Let me verify my edit to PDO.html actually took.
 
 _[tool: show_to_user]_
 
@@ -226,7 +226,7 @@ _[tool: done]_
 
 _[tool: fork_verifier_agent]_
 
-Done. The Triggers iteration is built into **Maestro.html**, matching the existing dark Maestro language (no new aesthetic) and the established tab pattern.
+Done. The Triggers iteration is built into **PDO.html**, matching the existing dark PDO language (no new aesthetic) and the established tab pattern.
 
 **Happy path A — Manage & monitor triggers** (4 screens)
 1. Triggers tab populated — the `Runs · Triggers · Library` strip, trigger rows (last-fire status dot w/ hover tooltip, name, pipeline·repo, schedule, enable toggle, next/last-fire line, hover run-now/edit/delete), session counter in the status bar
@@ -241,7 +241,7 @@ Done. The Triggers iteration is built into **Maestro.html**, matching the existi
 **Spotlights** (the cross-cutting pieces): session counter across normal/near-cap/at-cap, trigger-row anatomy across all four outcome states, and the schedule chooser + guard contract.
 
 Notes:
-- The previous refonte canvas is preserved at **Maestro - Refonte canvas.html**.
+- The previous refonte canvas is preserved at **PDO - Refonte canvas.html**.
 - Center canvas and node detail are untouched per spec — the Triggers screens show the target pipeline read-only.
 
 A background verifier is checking the build; I'll only follow up if it flags anything.
@@ -295,7 +295,7 @@ _[tool: str_replace_edit]_
 
 _[tool: str_replace_edit]_
 
-Now restructure the Maestro.html canvas: refonte happy path + 2 trigger paths (3 paths) + combined spotlights.
+Now restructure the PDO.html canvas: refonte happy path + 2 trigger paths (3 paths) + combined spotlights.
 
 _[tool: write_file]_
 
@@ -315,7 +315,7 @@ _[tool: delete_file]_
 
 A4 is clean: the provenance now reads as a quiet dashed-underline link (not a filled pill), the running canvas uses hairline nodes with the breathing pulse, and the near-cap session gauge sits in the status bar. Everything is consistent with the refonte hairline language now.
 
-Let me clean up the harness and verify the full Maestro.html.
+Let me clean up the harness and verify the full PDO.html.
 
 _[tool: update_todos]_
 
@@ -333,5 +333,5 @@ Fixed both issues:
 - C — Create a trigger (2 screens)
 - Spotlights — the refonte node system (variants, inspector pooling, region, edge shaping) **plus** the trigger-only components (session counter, trigger row, schedule/guard)
 
-The standalone refonte snapshot remains at **Maestro - Refonte canvas.html**. A background verifier is checking the build.
+The standalone refonte snapshot remains at **PDO - Refonte canvas.html**. A background verifier is checking the build.
 

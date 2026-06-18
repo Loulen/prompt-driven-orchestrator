@@ -12,13 +12,14 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-inline-terminal-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: worker
+    name: worker
     type: doc-only
     inputs:
       - name: in
@@ -29,7 +30,7 @@ edges: []
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE =
+  process.env.PDO_TMUX_CMD_OVERRIDE =
     'exec sh -c "cat"';
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
@@ -37,7 +38,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("selecting a running node shows inline xterm terminal", async ({
@@ -50,7 +51,7 @@ test("selecting a running node shows inline xterm terminal", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e inline terminal test",
     },
@@ -90,7 +91,7 @@ test("selecting a running node shows inline xterm terminal", async ({
     expect(text).toContain("hello");
   }).toPass({ timeout: 5_000 });
 
-  const sessionName = `maestro-${run_id}-worker-iter-1`;
+  const sessionName = `pdo-${run_id}-worker-iter-1`;
   const { execSync } = await import("node:child_process");
   try {
     execSync(`tmux kill-session -t ${sessionName}`, { stdio: "ignore" });
@@ -109,7 +110,7 @@ test("terminal toolbar shows expand and detach buttons", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e toolbar test",
     },
@@ -129,7 +130,7 @@ test("terminal toolbar shows expand and detach buttons", async ({
   await expect(page.getByTestId("term-expand")).toBeVisible();
   await expect(page.getByTestId("term-detach")).toBeVisible();
 
-  const sessionName = `maestro-${run_id}-worker-iter-1`;
+  const sessionName = `pdo-${run_id}-worker-iter-1`;
   const { execSync } = await import("node:child_process");
   try {
     execSync(`tmux kill-session -t ${sessionName}`, { stdio: "ignore" });

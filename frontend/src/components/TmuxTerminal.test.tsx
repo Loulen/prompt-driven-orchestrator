@@ -154,24 +154,24 @@ describe("TmuxTerminal", () => {
   });
 
   it("renders terminal container and toolbar", () => {
-    render(<TmuxTerminal session="maestro-run1-node1-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-node1-iter-1" />);
     expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     expect(screen.getByTestId("term-toolbar")).toBeInTheDocument();
     expect(screen.getByTestId("xterm-container")).toBeInTheDocument();
   });
 
   it("connects WebSocket to /sessions/<id>/pty", () => {
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     expect(wsInstances.length).toBe(1);
     expect(wsInstances[0].url).toContain(
-      "/sessions/maestro-run1-impl-iter-1/pty",
+      "/sessions/pdo-run1-impl-iter-1/pty",
     );
   });
 
   it("displays session name in toolbar", () => {
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     expect(
-      screen.getByText("maestro-run1-impl-iter-1"),
+      screen.getByText("pdo-run1-impl-iter-1"),
     ).toBeInTheDocument();
   });
 
@@ -179,7 +179,7 @@ describe("TmuxTerminal", () => {
     const onExpand = vi.fn();
     render(
       <TmuxTerminal
-        session="maestro-run1-impl-iter-1"
+        session="pdo-run1-impl-iter-1"
         onExpand={onExpand}
       />,
     );
@@ -190,12 +190,12 @@ describe("TmuxTerminal", () => {
   });
 
   it("shows detach button", () => {
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     expect(screen.getByTestId("term-detach")).toBeInTheDocument();
   });
 
   it("sends resize message on WebSocket open", async () => {
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     // Wait for async open event
     await new Promise((r) => setTimeout(r, 10));
 
@@ -220,7 +220,7 @@ describe("TmuxTerminal", () => {
   // not even send these in the first place.
   it("does not send a resize message when proposeDimensions returns zero cols", async () => {
     proposeDimensionsImpl.current = () => ({ cols: 0, rows: 24 });
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     await new Promise((r) => setTimeout(r, 10));
 
     const ws = wsInstances[0];
@@ -232,7 +232,7 @@ describe("TmuxTerminal", () => {
 
   it("does not send a resize message when proposeDimensions returns zero rows", async () => {
     proposeDimensionsImpl.current = () => ({ cols: 80, rows: 0 });
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     await new Promise((r) => setTimeout(r, 10));
 
     const ws = wsInstances[0];
@@ -244,7 +244,7 @@ describe("TmuxTerminal", () => {
 
   it("does not send a resize message when proposeDimensions returns undefined", async () => {
     proposeDimensionsImpl.current = () => undefined;
-    render(<TmuxTerminal session="maestro-run1-impl-iter-1" />);
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     await new Promise((r) => setTimeout(r, 10));
 
     const ws = wsInstances[0];

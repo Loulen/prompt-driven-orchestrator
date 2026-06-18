@@ -3,7 +3,6 @@ import type { VariableDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
 import { saveLibraryPipeline } from "../api";
-import LintBanner from "./LintBanner";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 
@@ -24,7 +23,6 @@ export default function PipelineInspector({
   if (!tab || selection.kind !== "none") return null;
 
   const pipeline = tab.pipeline;
-  const diagnostics = tab.diagnostics ?? [];
   const variables = Object.entries(pipeline.variables);
 
   // Show the scope control only when the pipeline is actually in the library —
@@ -161,9 +159,6 @@ export default function PipelineInspector({
             onDelete={() => handleDeleteVariable(name)}
           />
         ))}
-
-        {/* Diagnostics */}
-        <LintBanner diagnostics={diagnostics} />
 
         {/* Stats */}
         <SectionHead title="Stats" />

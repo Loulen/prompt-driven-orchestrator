@@ -12,7 +12,7 @@ import { expectNonZeroBBox } from "./assertions";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-io-modal-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -40,7 +40,7 @@ const ROLE_PROMPT = "You are a reviewer. Review the code.\n";
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = "exec sleep 300";
+  process.env.PDO_TMUX_CMD_OVERRIDE = "exec sleep 300";
   await fs.mkdir(PROMPTS_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
   await fs.writeFile(path.join(PROMPTS_DIR, "reviewer.md"), ROLE_PROMPT);
@@ -49,11 +49,11 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
   if (runId) {
     const { execSync } = await import("node:child_process");
     try {
-      execSync(`tmux kill-session -t maestro-${runId}-reviewer-iter-1`, {
+      execSync(`tmux kill-session -t pdo-${runId}-reviewer-iter-1`, {
         stdio: "ignore",
       });
     } catch {
@@ -78,11 +78,11 @@ async function createRunAndSeedArtifacts(baseURL: string) {
   // Seed output artifacts for the reviewer node
   const artifactsDir = path.join(
     WORKSPACE_ROOT,
-    ".maestro",
+    ".pdo",
     "runs",
     runId,
     "worktree",
-    ".maestro",
+    ".pdo",
     "artifacts",
   );
 

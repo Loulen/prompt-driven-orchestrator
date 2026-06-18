@@ -1,4 +1,4 @@
-/* Maestro — dark dev-tool aesthetic
+/* PDO — dark dev-tool aesthetic
    Cool dark base #0f1115, emerald accent, Geist Sans + Geist Mono */
 
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
@@ -58,7 +58,7 @@
 
 * { box-sizing: border-box; }
 
-.maestro {
+.pdo {
   font-family: var(--font-sans);
   color: var(--fg);
   background: var(--bg-1);

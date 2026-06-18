@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Inspector Run/Edit tabs (refs #68, refs #1).
 // Verifies:
@@ -13,15 +14,26 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-inspector-tabs-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Two chained nodes: worker-a → worker-b.
 // With TMUX_CMD_OVERRIDE='cat', worker-a stays running, worker-b stays pending.
+// Post-refonte the parser requires exactly one start node (zero inputs, one
+// output named `user_prompt`) and one end node (zero outputs, one input named
+// `result`). The chain start → worker-a → worker-b → end keeps worker-a running
+// (TMUX override `cat`) and worker-b pending.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 variables: {}
 nodes:
+  - id: start
+    name: Start
+    type: start
+    inputs: []
+    outputs:
+      - name: user_prompt
+    view: { x: 0, y: 100 }
   - id: worker-a
     name: Worker A
     type: doc-only
@@ -29,7 +41,7 @@ nodes:
       - name: in
     outputs:
       - name: out
-    view: { x: 100, y: 100 }
+    view: { x: 200, y: 100 }
   - id: worker-b
     name: Worker B
     type: doc-only
@@ -38,20 +50,31 @@ nodes:
     outputs:
       - name: out
     view: { x: 400, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+    outputs: []
+    view: { x: 600, y: 100 }
 edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker-a, port: in }
   - source: { node: worker-a, port: out }
     target: { node: worker-b, port: in }
+  - source: { node: worker-b, port: out }
+    target: { node: end, port: result }
 `;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
+  process.env.PDO_TMUX_CMD_OVERRIDE = 'exec sh -c "cat"';
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
 test("active run: Run tab default, sticky across nodes, reload resets", async ({
@@ -65,7 +88,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
 
   // Create a run
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: { pipeline: PIPELINE_NAME, input: "tab test" },
+    multipart: { pipeline: PIPELINE_NAME, input: "tab test" },
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -116,21 +139,21 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   // Cleanup tmux sessions
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-a-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-a-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-b-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-b-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-mgr-${run_id}`, {
+    execSync(`tmux kill-session -t pdo-mgr-${run_id}`, {
       stdio: "ignore",
     });
   } catch {
@@ -144,8 +167,8 @@ test("idle pipeline: Edit tab default", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Click pipeline template in the library (not a run)
-  await page.getByText(PIPELINE_NAME).first().click({ timeout: 5_000 });
+  // Open the pipeline template from the Library tab (post-refonte: no edit toggle).
+  await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
   // Click on a node
@@ -171,7 +194,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
 
   // Create a run — worker-a runs, worker-b stays pending
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: { pipeline: PIPELINE_NAME, input: "pending test" },
+    multipart: { pipeline: PIPELINE_NAME, input: "pending test" },
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -202,14 +225,14 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
   // Cleanup
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`tmux kill-session -t maestro-${run_id}-worker-a-iter-1`, {
+    execSync(`tmux kill-session -t pdo-${run_id}-worker-a-iter-1`, {
       stdio: "ignore",
     });
   } catch {
     // ok
   }
   try {
-    execSync(`tmux kill-session -t maestro-mgr-${run_id}`, {
+    execSync(`tmux kill-session -t pdo-mgr-${run_id}`, {
       stdio: "ignore",
     });
   } catch {

@@ -19,7 +19,7 @@
 }
 
 @theme {
-  /* Maestro surfaces */
+  /* PDO surfaces */
   --color-bg-0: #0a0c10;
   --color-bg-1: #0f1115;
   --color-bg-2: #14171d;
@@ -27,25 +27,25 @@
   --color-bg-4: #232831;
   --color-bg-5: #2c323d;
 
-  /* Maestro lines */
+  /* PDO lines */
   --color-line: #1f242c;
   --color-line-strong: #2a313b;
   --color-line-soft: #181c22;
 
-  /* Maestro text */
+  /* PDO text */
   --color-fg: #e6e8eb;
   --color-fg-2: #aab1bd;
   --color-fg-3: #767e8c;
   --color-fg-4: #525a68;
   --color-fg-5: #383e48;
 
-  /* Maestro accent */
+  /* PDO accent */
   --color-acc: #10b981;
   --color-acc-dim: #0e8f66;
   --color-acc-bg: rgba(16, 185, 129, 0.12);
   --color-acc-border: rgba(16, 185, 129, 0.32);
 
-  /* Maestro status */
+  /* PDO status */
   --color-st-running: #3b82f6;
   --color-st-running-bg: rgba(59, 130, 246, 0.14);
   --color-st-await: #f59e0b;

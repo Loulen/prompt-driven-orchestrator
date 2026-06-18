@@ -60,14 +60,14 @@ describe("useResizableLayout", () => {
     });
 
     const stored = JSON.parse(
-      localStorage.getItem("maestro.layout.run") ?? "null",
+      localStorage.getItem("pdo.layout.run") ?? "null",
     );
     expect(stored).toEqual(makeLayout(20, 55, 25));
   });
 
   it("restores layout from localStorage on mount", () => {
     localStorage.setItem(
-      "maestro.layout.run",
+      "pdo.layout.run",
       JSON.stringify(makeLayout(25, 50, 25)),
     );
     const { result } = renderHook(() =>
@@ -78,11 +78,11 @@ describe("useResizableLayout", () => {
 
   it("uses separate keys for run and edit modes", () => {
     localStorage.setItem(
-      "maestro.layout.run",
+      "pdo.layout.run",
       JSON.stringify(makeLayout(20, 55, 25)),
     );
     localStorage.setItem(
-      "maestro.layout.edit",
+      "pdo.layout.edit",
       JSON.stringify(makeLayout(30, 40, 30)),
     );
 
@@ -109,24 +109,24 @@ describe("useResizableLayout", () => {
       runHook.current.onLayoutChanged(makeLayout(22, 53, 25));
     });
 
-    expect(localStorage.getItem("maestro.layout.run")).toBeTruthy();
-    expect(localStorage.getItem("maestro.layout.edit")).toBeNull();
+    expect(localStorage.getItem("pdo.layout.run")).toBeTruthy();
+    expect(localStorage.getItem("pdo.layout.edit")).toBeNull();
 
     act(() => {
       editHook.current.onLayoutChanged(makeLayout(30, 40, 30));
     });
 
     expect(
-      JSON.parse(localStorage.getItem("maestro.layout.run")!),
+      JSON.parse(localStorage.getItem("pdo.layout.run")!),
     ).toEqual(makeLayout(22, 53, 25));
     expect(
-      JSON.parse(localStorage.getItem("maestro.layout.edit")!),
+      JSON.parse(localStorage.getItem("pdo.layout.edit")!),
     ).toEqual(makeLayout(30, 40, 30));
   });
 
   it("clamps stored sizes below minimum percentage", () => {
     localStorage.setItem(
-      "maestro.layout.run",
+      "pdo.layout.run",
       JSON.stringify(makeLayout(2, 94, 4)),
     );
     const { result } = renderHook(() =>
@@ -138,7 +138,7 @@ describe("useResizableLayout", () => {
   });
 
   it("ignores malformed localStorage data", () => {
-    localStorage.setItem("maestro.layout.run", "not-json");
+    localStorage.setItem("pdo.layout.run", "not-json");
     const { result } = renderHook(() =>
       useResizableLayout("run", PANEL_IDS, defaults),
     );
@@ -147,7 +147,7 @@ describe("useResizableLayout", () => {
 
   it("ignores stored object with missing panel ids", () => {
     localStorage.setItem(
-      "maestro.layout.run",
+      "pdo.layout.run",
       JSON.stringify({ left: 50, center: 50 }),
     );
     const { result } = renderHook(() =>

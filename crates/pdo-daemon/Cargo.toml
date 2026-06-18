@@ -1,0 +1,46 @@
+[package]
+name = "pdo-daemon"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "pdo_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdo"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_yaml.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+portable-pty.workspace = true
+futures-util = "0.3"
+sha2.workspace = true
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.26"
+tower = { version = "0.5", features = ["util"] }
+pretty_assertions.workspace = true
+insta.workspace = true
+tempfile.workspace = true
+filetime = "0.2"
+chrono-tz = "0.10"

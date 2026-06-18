@@ -58,7 +58,7 @@ _[tool: read_file]_
 
 _[tool: update_todos]_
 
-Now I have everything. Let me build all three new files and update Maestro.html.
+Now I have everything. Let me build all three new files and update PDO.html.
 
 _[tool: write_file]_
 
@@ -68,13 +68,13 @@ _[tool: write_file]_
 
 _[tool: str_replace_edit]_
 
-Now update `Maestro.html` to wire in the new files and add the new design section.
+Now update `PDO.html` to wire in the new files and add the new design section.
 
 _[tool: str_replace_edit]_
 
 _[tool: str_replace_edit]_
 
-Now add the new section to the DesignCanvas in `Maestro.html`:
+Now add the new section to the DesignCanvas in `PDO.html`:
 
 _[tool: show_html]_
 

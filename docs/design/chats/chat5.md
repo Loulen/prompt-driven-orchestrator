@@ -77,7 +77,7 @@ Now the screens — one happy path (4) plus spotlights for components not shown.
 
 _[tool: str_replace_edit]_
 
-Now rewire Maestro.html — add the new stylesheet and scripts, and replace the sprawling canvas with the trimmed sections.Now replace the whole DesignCanvas body with the two trimmed sections:
+Now rewire PDO.html — add the new stylesheet and scripts, and replace the sprawling canvas with the trimmed sections.Now replace the whole DesignCanvas body with the two trimmed sections:
 
 _[tool: str_replace_edit]_
 
@@ -163,7 +163,7 @@ _[tool: update_todos]_
 
 _[tool: fork_verifier_agent]_
 
-I've reworked Maestro's pipeline editor into the trimmed deliverable you asked for.
+I've reworked PDO's pipeline editor into the trimmed deliverable you asked for.
 
 **Now just 2 sections (8 frames), down from ~50:**
 
@@ -230,7 +230,7 @@ My lean: **V1** or **V5** are the slickest and least card-like; **V3** is the sa
 
 Two open threads, your call on sequencing:
 - **The "3–4 distinct paths" point** — you're right, I built 4 *frames* of one path. I can restructure into 3–4 separate user journeys (e.g. *build a conditional loop* · *shape & route edges* · *run + recover from exhaustion*). Want me to do that next?
-- The verifier flagged one real bug in the old Maestro frame 4 (run overlay clipping) — minor, I'll fold it into the restructure rather than patch in isolation.
+- The verifier flagged one real bug in the old PDO frame 4 (run overlay clipping) — minor, I'll fold it into the restructure rather than patch in isolation.
 
 ## User
 
@@ -256,7 +256,7 @@ I need to keep the node geometry aligned with the hand-authored edge coordinates
 
 _[tool: show_html]_
 
-Let me render Maestro and check the new node treatment on the canvas.
+Let me render PDO and check the new node treatment on the canvas.
 
 _[tool: eval_js]_
 
@@ -264,7 +264,7 @@ _[tool: save_screenshot]_
 
 _[tool: done]_
 
-The Maestro design-canvas can't be pixel-captured in my context, but the DOM confirms the hairline outline is applied (uniform 1px border, no band, transparent icon, flush fill). Let me surface it and have the verifier confirm it reads well.
+The PDO design-canvas can't be pixel-captured in my context, but the DOM confirms the hairline outline is applied (uniform 1px border, no band, transparent icon, flush fill). Let me surface it and have the verifier confirm it reads well.
 
 _[tool: fork_verifier_agent]_
 
@@ -403,7 +403,7 @@ Now flatten the badges and filter-chips (de-pill the chrome) and retint them to 
 
 _[tool: read_file]_
 
-Now the app's runtime accent override in Maestro.html. Let me read and update it.
+Now the app's runtime accent override in PDO.html. Let me read and update it.
 
 _[tool: str_replace_edit]_
 

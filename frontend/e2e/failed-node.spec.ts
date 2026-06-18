@@ -13,38 +13,55 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-failed-node-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: bottom }
+    view: { x: 100, y: 0 }
   - id: worker
+    name: worker
     type: doc-only
     inputs:
-      - name: task
+      - { name: task, side: top }
     outputs:
-      - name: summary
-      - name: report
-    view: { x: 100, y: 100 }
-edges: []
+      - { name: summary, side: bottom }
+      - { name: report, side: right }
+    view: { x: 100, y: 150 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 100, y: 300 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: summary }
+    target: { node: end, port: result }
 `;
 
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE = "exec sleep 300";
+  process.env.PDO_TMUX_CMD_OVERRIDE = "exec sleep 300";
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
   if (runId) {
     const { execSync } = await import("node:child_process");
     try {
-      execSync(`tmux kill-session -t maestro-${runId}-worker-iter-1`, {
+      execSync(`tmux kill-session -t pdo-${runId}-worker-iter-1`, {
         stdio: "ignore",
       });
     } catch {
@@ -55,7 +72,7 @@ test.afterAll(async () => {
 
 async function createRunAndFailNode(baseURL: string, page: import("@playwright/test").Page) {
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "e2e failed-node test",
     },
@@ -75,6 +92,19 @@ async function createRunAndFailNode(baseURL: string, page: import("@playwright/t
   expect(failResp.status()).toBe(200);
 }
 
+// Open the run, select the worker node, and switch the right pane to the Run
+// inspector tab. A failed run is not "active", so the inspector defaults to the
+// Edit tab; the failure banner / Mark-complete button live in the Run pane
+// (NodeDetailPanel), so the test must click the Run tab to reveal them.
+async function selectFailedWorker(page: import("@playwright/test").Page) {
+  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+  const workerNode = page.getByText("worker", { exact: true }).first();
+  await expect(workerNode).toBeVisible({ timeout: 3_000 });
+  await workerNode.click();
+  await page.getByTestId("inspector-tab-run").click({ timeout: 5_000 });
+}
+
 test("failed node shows failure banner and Mark complete button", async ({
   page,
   baseURL,
@@ -86,14 +116,8 @@ test("failed node shows failure banner and Mark complete button", async ({
 
   await createRunAndFailNode(baseURL!, page);
 
-  // Navigate to the run
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-
-  // Click the worker node
-  await page.waitForTimeout(500);
-  const workerNode = page.getByText("worker", { exact: true }).first();
-  await expect(workerNode).toBeVisible({ timeout: 3_000 });
-  await workerNode.click();
+  // Navigate to the run, select the failed node, switch to the Run pane
+  await selectFailedWorker(page);
 
   // Assert the red failure banner is visible with the failure reason
   await expect(
@@ -118,9 +142,7 @@ test("Mark complete with missing outputs shows 409 sub-banner", async ({
   }
 
   // Navigate to the run and select the failed node
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("worker", { exact: true }).first().click();
+  await selectFailedWorker(page);
   await expect(page.getByText("Mark complete")).toBeVisible({ timeout: 5_000 });
 
   // Click Mark complete — no output files exist, expect 409 sub-banner
@@ -150,11 +172,11 @@ test("Mark complete succeeds after creating output files", async ({
   // Create the missing output files on disk
   const artifactsDir = path.join(
     WORKSPACE_ROOT,
-    ".maestro",
+    ".pdo",
     "runs",
     runId,
     "worktree",
-    ".maestro",
+    ".pdo",
     "artifacts",
   );
   const iterDir = path.join(artifactsDir, "worker", "iter-1");
@@ -163,9 +185,7 @@ test("Mark complete succeeds after creating output files", async ({
   await fs.writeFile(path.join(iterDir, "report.md"), "# Report\nAll good.");
 
   // Navigate to the run and select the failed node
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("worker", { exact: true }).first().click();
+  await selectFailedWorker(page);
   await expect(page.getByText("Mark complete")).toBeVisible({ timeout: 5_000 });
 
   // Click Mark complete — should succeed now

@@ -41,7 +41,7 @@ export default function PipelineInfoPanel({
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
   const variables = pipeline?.variables ?? {};
   const variableEntries = Object.entries(variables);
-  const managerSession = run ? `maestro-mgr-${run.run_id}` : null;
+  const managerSession = run ? `pdo-mgr-${run.run_id}` : null;
 
   const hasManager = !!managerSession;
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "info");

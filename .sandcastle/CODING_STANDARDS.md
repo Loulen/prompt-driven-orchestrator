@@ -1,4 +1,4 @@
-# Coding Standards — Maestro
+# Coding Standards — PDO
 
 The reviewer loads this file via `@.sandcastle/CODING_STANDARDS.md`. The implementer reads it as a reference. Keep it tight.
 

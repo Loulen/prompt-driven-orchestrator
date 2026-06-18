@@ -1,16 +1,16 @@
-# Maestro — Visual Editor & Run Dashboard Design Brief
+# PDO — Visual Editor & Run Dashboard Design Brief
 
 > Self-contained design brief for a visual generation tool (Figma Make / v0 / Lovable / Bolt / etc.). Hand this whole document to the tool as the prompt. No external context required.
 
 ---
 
-## 1. What Maestro Is
+## 1. What PDO Is
 
-Maestro is a desktop-style web application (runs as a local web app in v1, will move to a Tauri desktop app later) that lets a software engineer **design and execute deterministic AI-agent pipelines** to produce code. The user is a senior engineer working alone on their own laptop. Maestro is *not* a SaaS, *not* multi-user, *not* mobile.
+PDO is a desktop-style web application (runs as a local web app in v1, will move to a Tauri desktop app later) that lets a software engineer **design and execute deterministic AI-agent pipelines** to produce code. The user is a senior engineer working alone on their own laptop. PDO is *not* a SaaS, *not* multi-user, *not* mobile.
 
 Mental model: think "Apache Airflow for AI coding agents" but with a single-user offline-first focus, and where **each node in the DAG is an autonomous Claude Code session running in its own tmux session inside a dedicated git worktree**. The pipeline DAG is fixed at design time (no LLM-driven routing); only the leaf agents are stochastic. Conditional edges are allowed but evaluate only deterministic predicates (iteration counters, frontmatter fields, pipeline variables) — never LLM judgment.
 
-**Core value proposition for the user**: Maestro is an **atelier of code production**, not a fire-and-forget orchestrator. The user spends real time crafting pipelines and inspecting runs. The UI must reward attention, not fight it.
+**Core value proposition for the user**: PDO is an **atelier of code production**, not a fire-and-forget orchestrator. The user spends real time crafting pipelines and inspecting runs. The UI must reward attention, not fight it.
 
 ---
 
@@ -42,7 +42,7 @@ Both modes share the same **3-panel layout** (left list / center main / right de
 
 A top bar, ~48px tall:
 
-- **Left**: app logo + name "Maestro" (small).
+- **Left**: app logo + name "PDO" (small).
 - **Center**: breadcrumb showing current context (e.g. "Run / `feature-with-review` / Run #2026-05-06-1430-a3f", or "Edit / `feature-with-review.yaml`").
 - **Right**: pencil icon (mode toggle), settings gear, dark/light theme toggle.
 
@@ -242,7 +242,7 @@ Dark mode uses lighter shades of the same hues.
 
 - **No runs yet** (Run mode left panel): centered illustration + text "No runs yet. Create one to get started." + prominent "+ New Run" button.
 - **No pipelines yet** (Edit mode left panel): "No pipelines yet. Create one or import a YAML." + "+ New Pipeline" button.
-- **Daemon disconnected**: a banner across the top (red) "Maestro daemon not reachable. Retrying…" with manual "Retry" button.
+- **Daemon disconnected**: a banner across the top (red) "PDO daemon not reachable. Retrying…" with manual "Retry" button.
 - **Run blocked with halt**: in the run metadata overlay, the halt message is rendered in an orange callout. The manager attach button is highlighted as the next action.
 - **Merge conflict during fan-in**: a special node-level visual cue ("conflict resolver running" → "auto-resolved" → continues) to make this visible during a run.
 - **Terminal preview offline** (if `tmux capture-pane` fails for any reason): show a placeholder "Preview unavailable. Click Open terminal to attach directly."
@@ -256,7 +256,7 @@ Do **not** design:
 - A login screen, account management, billing, or anything multi-user.
 - Mobile or tablet layouts. Desktop-only, min width ~1200 px.
 - A dedicated "logs" tab — logs live in the terminal preview and the manager session.
-- A node template library / palette of pre-built nodes. Maestro v1 ships zero pre-built node templates by intent.
+- A node template library / palette of pre-built nodes. PDO v1 ships zero pre-built node templates by intent.
 - Embedded chat with the manager. Manager is in a native OS terminal, period.
 - Notifications, sound, badges on the OS dock.
 - Any "help / tutorial / onboarding" overlay. Assume the user has read the docs.

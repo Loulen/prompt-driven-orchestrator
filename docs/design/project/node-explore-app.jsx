@@ -303,7 +303,7 @@ function App(){
     <div className="expl-doc">
       <header className="expl-head">
         <div>
-          <div className="eyebrow mono">MAESTRO · ITERATION</div>
+          <div className="eyebrow mono">PDO · ITERATION</div>
           <h1>Node card status outline + port row variations</h1>
         </div>
         <div className="sub">

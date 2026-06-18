@@ -76,7 +76,7 @@ the user preference in localStorage.
 - Follow the existing zustand store pattern in src/state/library.ts
 
 ## Reference
-- https://github.com/acme/maestro/issues/142
+- https://github.com/acme/pdo/issues/142
 - See the related spike from last week: src/filters/__spike__/`}
         </div>
         <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 8}}>

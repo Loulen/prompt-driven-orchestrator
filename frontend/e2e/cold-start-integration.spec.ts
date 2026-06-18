@@ -12,7 +12,7 @@ import { expectNonZeroBBox } from "./assertions";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-cold-start-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".maestro", "pipelines");
+const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -20,6 +20,7 @@ const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: worker
+    name: worker
     type: doc-only
     prompt_file: ${PIPELINE_NAME}.prompts/worker.md
     inputs:
@@ -39,7 +40,7 @@ const ROLE_PROMPT = "You are a worker. Do the task.\n";
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.MAESTRO_TMUX_CMD_OVERRIDE =
+  process.env.PDO_TMUX_CMD_OVERRIDE =
     "exec sh -c \"printf '\\033[32mhello ansi\\033[0m\\n'; sleep 300\"";
   await fs.mkdir(PROMPTS_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
@@ -49,11 +50,11 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
-  delete process.env.MAESTRO_TMUX_CMD_OVERRIDE;
+  delete process.env.PDO_TMUX_CMD_OVERRIDE;
   if (runId) {
     const { execSync } = await import("node:child_process");
     try {
-      execSync(`tmux kill-session -t maestro-${runId}-worker-iter-1`, {
+      execSync(`tmux kill-session -t pdo-${runId}-worker-iter-1`, {
         stdio: "ignore",
       });
     } catch {
@@ -82,7 +83,7 @@ test("cold-start full flow: run → node → modal → edit toggle, no console e
 
   // 2. Create a run via the API and seed an output artifact
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: {
+    multipart: {
       pipeline: PIPELINE_NAME,
       input: "cold-start integration test",
     },
@@ -94,11 +95,11 @@ test("cold-start full flow: run → node → modal → edit toggle, no console e
   // Seed an output artifact so the Outputs section is populated
   const artifactsDir = path.join(
     WORKSPACE_ROOT,
-    ".maestro",
+    ".pdo",
     "runs",
     runId,
     "worktree",
-    ".maestro",
+    ".pdo",
     "artifacts",
   );
   const workerArtifactDir = path.join(artifactsDir, "worker", "iter-1");

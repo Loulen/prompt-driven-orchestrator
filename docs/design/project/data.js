@@ -1,4 +1,4 @@
-// data.js — sample data for Maestro mockup
+// data.js — sample data for PDO mockup
 
 const RUNS = [
   {

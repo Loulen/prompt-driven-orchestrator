@@ -5,9 +5,9 @@
 
 // ─────────── Helper: inline xterm.js terminal (typeable, scrollback) ───────────
 
-function XTerm({ session = 'maestro/run-a3f/impl · 80×24', height = 220, expanded = false, onExpand, onDetach, lines, awaiting, focused = true, scrolled = false }) {
+function XTerm({ session = 'pdo/run-a3f/impl · 80×24', height = 220, expanded = false, onExpand, onDetach, lines, awaiting, focused = true, scrolled = false }) {
   const def = lines || [
-    { p: '$ ', t: 'tail -F .maestro/runs/a3f/impl/iter-2/log' },
+    { p: '$ ', t: 'tail -F .pdo/runs/a3f/impl/iter-2/log' },
     { d: '[14:32:08] worker started · pid 48211' },
     { p: 'claude › ', t: 'reading plan.md' },
     { d: '  ↳ 247 lines, last edited 4 m ago' },
@@ -393,7 +393,7 @@ function NodeDetailV2({ node, retry = false, failedValidation = false, expanded 
       <div className="p-sect" style={expanded ? {padding: '8px 10px', borderBottom: 'none'} : null}>
         {!expanded && <SectionHead title="Terminal"/>}
         <XTerm height={expanded ? null : 220} expanded={expanded} onExpand={onExpand}
-          session={`tmux: maestro/${node.runSlug || 'run-a3f'}/${node.id} · 80×24`}
+          session={`tmux: pdo/${node.runSlug || 'run-a3f'}/${node.id} · 80×24`}
           awaiting={node.status === 'awaiting_user'}/>
       </div>
 
@@ -499,9 +499,9 @@ function PipelineInfoPanel({ run = null, starState = 'synced', popoverOpen = fal
           <div className="pip-mgr-head">
             <Ic.Manager/>
             <span>Pipeline Manager</span>
-            <span className="mono" style={{color:'var(--fg-4)', fontSize: 10.5}}>maestro-mgr-{run.id.slice(-8)}</span>
+            <span className="mono" style={{color:'var(--fg-4)', fontSize: 10.5}}>pdo-mgr-{run.id.slice(-8)}</span>
           </div>
-          <XTerm session={`tmux: maestro-mgr-${run.id.slice(-8)} · 100×30`}
+          <XTerm session={`tmux: pdo-mgr-${run.id.slice(-8)} · 100×30`}
             height={420}
             lines={[
               { d: '[14:28:01] manager session attached · 4 worker(s)' },
@@ -1178,7 +1178,7 @@ function ScreenS10() {
               <span className="badge code">code</span>
             </div>
             <div style={{flex: 1, padding: '0 10px 10px', display: 'flex', flexDirection: 'column'}}>
-              <XTerm expanded session="tmux: maestro/run-a3f/impl · 80×40"
+              <XTerm expanded session="tmux: pdo/run-a3f/impl · 80×40"
                 lines={[
                   { p: 'claude › ', t: 'reading plan.md' },
                   { d: '  ↳ 247 lines, last edited 4 m ago' },

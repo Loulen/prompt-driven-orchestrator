@@ -1383,41 +1383,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "maestro-daemon"
-version = "0.1.13"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "chrono-tz",
- "clap",
- "filetime",
- "futures-util",
- "insta",
- "mime_guess",
- "notify",
- "notify-debouncer-mini",
- "portable-pty",
- "pretty_assertions",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1719,6 +1684,41 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pdo-daemon"
+version = "0.1.15"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "filetime",
+ "futures-util",
+ "insta",
+ "mime_guess",
+ "notify",
+ "notify-debouncer-mini",
+ "portable-pty",
+ "pretty_assertions",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

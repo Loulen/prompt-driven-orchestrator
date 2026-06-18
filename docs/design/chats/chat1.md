@@ -104,7 +104,7 @@ _[tool: done]_
 
 _[tool: fork_verifier_agent]_
 
-**Maestro** — 8 écrans sur design canvas, dark dev-tool aesthetic, accent emerald, Geist Sans/Mono.
+**PDO** — 8 écrans sur design canvas, dark dev-tool aesthetic, accent emerald, Geist Sans/Mono.
 
 - Run mode (3 états : running / blocked / awaiting user)
 - Edit mode (3 inspecteurs : node / edge `when:` / pipeline-level)
@@ -138,7 +138,7 @@ Plan d'attaque, dans cet ordre :
 1. **Start node** in `dag.jsx` (new `StartNode` + edges from start, special inspector). Add CSS for `.start-node` + `.run-edit-mode`.
 2. **Markdown viewer modal** (new `md-modal.jsx` with sample content + repeated-port nav).
 3. **Edit-this-run** (new `RunOverlay` button + 9b screen reusing `NodeInspectorEdit` with runs-list left panel).
-4. Wire all into `screens.jsx`, add screens 9 / 10 / 11 / 12 to `Maestro.html`.
+4. Wire all into `screens.jsx`, add screens 9 / 10 / 11 / 12 to `PDO.html`.
 
 Let me extend the CSS first, then the components.
 
@@ -152,7 +152,7 @@ _[tool: write_file]_
 
 _[tool: write_file]_
 
-Let me check the current state of Maestro.html and related files to understand what's already built.
+Let me check the current state of PDO.html and related files to understand what's already built.
 
 _[tool: list_files]_
 
@@ -190,7 +190,7 @@ _[tool: read_file]_
 
 _[tool: snip]_
 
-Now I have all context. Let me implement the three additions. I'll work in this order: data updates → start node integration in DAG → screens.jsx updates → Maestro.html.
+Now I have all context. Let me implement the three additions. I'll work in this order: data updates → start node integration in DAG → screens.jsx updates → PDO.html.
 
 First, update the run-overlay to take an `onEditRun` button + footnote, and the AddPalette to be cleaner. Let me check existing styles for the run-overlay buttons since prompt #3 specifies height 22px / fontSize 10px in a column layout:
 
@@ -265,7 +265,7 @@ Let me execute. Plan:
 6. Update inspector.jsx (NodeDetail header w/ id, NodeInspectorEdit w/ id read-only + Side dropdown, FailedNodeDetail variant)
 7. Update modal.jsx (TabBar with Save + dirty dot + saved-time)
 8. Update screens.jsx (Start+End in edit mode, new RunCanvas with End, Screen11 failed, Screen12 + reorder)
-9. Update Maestro.html — register all screens
+9. Update PDO.html — register all screens
 
 _[tool: str_replace_edit]_
 
@@ -311,7 +311,7 @@ _[tool: read_file]_
 
 _[tool: snip]_
 
-Let me read the current Maestro.html and check what's there.
+Let me read the current PDO.html and check what's there.
 
 _[tool: read_file]_
 
@@ -327,7 +327,7 @@ _[tool: read_file]_
 
 _[tool: read_file]_
 
-Looking at the current state: items 11, 13, 14, 17 are already implemented. I need to wire End node into edit-mode screens (12), add Save button to TabBar (15), add a failed state Screen 12 (16), and re-verify Maestro.html (18). Let me check TabBar and finish.
+Looking at the current state: items 11, 13, 14, 17 are already implemented. I need to wire End node into edit-mode screens (12), add Save button to TabBar (15), add a failed state Screen 12 (16), and re-verify PDO.html (18). Let me check TabBar and finish.
 
 _[tool: grep]_
 
@@ -366,7 +366,7 @@ Tout est en place sur le canvas — j'ai ajouté :
 - **End node** (mirror du Start) câblé sur les écrans Edit (04/05/06)
 - **Screen 12** — état failed avec banner d'erreur + 409 validation sub-banner
 - **Save button** dans TabBar avec point dirty + timestamp "Saved {time}"
-- Wiring complet dans Maestro.html
+- Wiring complet dans PDO.html
 
 Le canvas affiche maintenant **12 artboards** répartis en 3 sections (Run mode · Edit mode · Modals & states).
 
@@ -920,7 +920,7 @@ _[tool: str_replace_edit]_
 
 _[tool: str_replace_edit]_
 
-Screen5 isn't referenced from Maestro.html — clean deletion. Now executing the 6 fixes:
+Screen5 isn't referenced from PDO.html — clean deletion. Now executing the 6 fixes:
 
 **Fix 6**: Delete `AddPalette`:**Fix 4**: Delete Screen5 + EdgeInspector. **Fix 3**: Switch sample data. **Fix 2**: Loop port `out` → `done`.
 

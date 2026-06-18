@@ -1,0 +1,33 @@
+name: planner
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 288, y: 374 }
+  - id: D3InFdSK
+    name: Planner-grill-me
+    type: doc-only
+    interactive: true
+    inputs:
+      - { name: in, side: top }
+    outputs:
+      - name: Plan
+        side: bottom
+        frontmatter:
+          nb_tasks: { allowed: null, type: int }
+    view: { x: 254, y: 206 }
+edges:
+  - source: { node: D3InFdSK, port: out }
+    target: { node: end, port: result }
+  - source: { node: D3InFdSK, port: Plan }
+    target: { node: end, port: result }
+  - source: { node: start, port: user_prompt }
+    target: { node: D3InFdSK, port: in }

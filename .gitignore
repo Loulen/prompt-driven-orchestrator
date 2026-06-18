@@ -18,9 +18,16 @@ Cargo.lock.*
 .sandcastle/worktrees/
 .sandcastle/.env
 
-# PDO local state — runtime DB, per-run worktrees, pipelines, library,
-# prompt snapshots. All per-user; never committed.
-.pdo/
+# PDO local state — runtime DB, per-run worktrees, library, prompt
+# snapshots. All per-user; never committed — EXCEPT the builtin seed
+# pipelines below, which build.rs embeds via include_str!; they must be in
+# git so a fresh checkout (CI / new clone) compiles.
+.pdo/*
+!.pdo/pipelines/
+.pdo/pipelines/*
+!.pdo/pipelines/review-loop.yaml
+!.pdo/pipelines/simple-bugfix.yaml
+!.pdo/pipelines/planner.yaml
 
 # Playwright artefacts
 frontend/test-results/

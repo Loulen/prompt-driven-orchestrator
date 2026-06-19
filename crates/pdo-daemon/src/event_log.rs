@@ -757,13 +757,25 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             }
             EventKind::PipelineModified => {
                 // The run-scoped pipeline changed on disk. Node_defs/edges are
-                // re-parsed from the file at augmentation time. However, if the
-                // run was already Completed, reopen it so the scheduler can
-                // evaluate whether newly-added nodes need spawning.
-                if state.status == RunStatus::Completed {
-                    state.status = RunStatus::Running;
-                    state.completed_at = None;
-                }
+                // re-parsed from the file at scheduling time
+                // (`spawn_ready_after_event`), which picks up newly-added nodes
+                // for a *live* (Running/AwaitingUser) run on the next tick — no
+                // status change is needed for that, and none happens here.
+                //
+                // Terminal-state integrity (#221): a `PipelineModified` is a
+                // passive signal. It can be emitted by a stray or foreign file
+                // write — even for a node that is not in this run's DAG at all —
+                // so it must NEVER un-terminalize a run. A run that reached
+                // `RunCompleted` (like one that reached `RunFailed`/`RunHalted`,
+                // handled below) stays terminal. Reopening a Completed run here
+                // left genuinely-finished runs phantom-`running` forever (there
+                // was no reliable re-completion path), held their manager
+                // session and worktree, made overlap-`skip` triggers skip every
+                // subsequent fire, and let a later `resume_run` re-spawn already
+                // satisfied loops (the transition guard sees `Running` instead
+                // of the true terminal state). Resuming a finished run to pick
+                // up newly-added work is an explicit operation (`resume_run`),
+                // not a side effect of the file watcher. No status change.
             }
             EventKind::RunCompleted => {
                 state.status = RunStatus::Completed;
@@ -1292,7 +1304,12 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_modified_after_completed_reopens_run() {
+    fn pipeline_modified_after_completed_stays_completed() {
+        // #221: a `PipelineModified` is a passive signal (it can be a stray or
+        // foreign file write) and must NEVER un-terminalize a genuinely-
+        // completed run. Reopening it left runs phantom-`running` forever with
+        // no reliable re-completion path. A terminal run stays terminal — the
+        // same way Failed/Halted are not reopened.
         let events = vec![
             make_event_with_payload(
                 EventKind::RunStarted,
@@ -1308,8 +1325,64 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(
             state.status,
-            RunStatus::Running,
-            "PipelineModified after RunCompleted should reopen the run"
+            RunStatus::Completed,
+            "PipelineModified after RunCompleted must NOT reopen the run (#221)"
+        );
+        assert!(
+            state.completed_at.is_some(),
+            "completed_at must be preserved across a post-completion PipelineModified"
+        );
+    }
+
+    #[test]
+    fn pipeline_modified_storm_after_completed_stays_completed() {
+        // The incident (#221) saw a foreign prompt write followed by more
+        // pipeline churn. No quantity of passive PipelineModified events may
+        // flip a terminal run back to running.
+        let mut events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test-pipe" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("planner"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("planner"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+        ];
+        for _ in 0..5 {
+            events.push(make_event(EventKind::PipelineModified, None, None));
+        }
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Completed);
+        assert!(state.completed_at.is_some());
+    }
+
+    #[test]
+    fn pipeline_modified_after_halted_stays_halted() {
+        // Parity with the Failed case: a halted run is terminal and is not
+        // reopened by a passive pipeline modification either.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test-pipe" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event_with_payload(
+                EventKind::RunHalted,
+                None,
+                serde_json::json!({ "message": "exhausted — unrouted" }),
+            ),
+            make_event(EventKind::PipelineModified, None, None),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.status,
+            RunStatus::Halted,
+            "PipelineModified should not reopen a Halted run"
         );
     }
 

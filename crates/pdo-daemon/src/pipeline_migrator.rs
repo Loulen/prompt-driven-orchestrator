@@ -1290,6 +1290,132 @@ pub fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
     Ok(count)
 }
 
+/// One-shot boot migration for #231. The run-scoped pipeline save used to write
+/// node prompts to a flat `<pipelines>/prompts/<id>.md` directory that no reader
+/// ever consults — the canonical location is
+/// `<pipelines>/<stem>.prompts/<id>.md`. As a result, prompts edited from inside
+/// a run were saved to disk but appeared blank in the editor and to freshly
+/// spawned nodes.
+///
+/// For each pipeline YAML in `pipelines_dir`, every declared node id whose prompt
+/// is stranded in the flat dir is moved into that pipeline's canonical
+/// `<stem>.prompts/` dir. Node ids are globally unique (nanoids), so each flat
+/// file reattaches to at most one pipeline.
+///
+/// Move semantics mirror [`migrate_pipeline_file`]: a flat prompt is moved only
+/// when the canonical file is *missing*. An existing canonical file is never
+/// clobbered — it is authoritative (the writer fix keeps it current), and the
+/// stale flat duplicate is left in place so the conflict stays visible.
+///
+/// Afterward the flat dir is removed *only if the migration emptied it*. A
+/// non-empty remainder (a prompt for a deleted pipeline, or a flat duplicate of
+/// an existing canonical file) is preserved rather than destroyed.
+///
+/// Returns the number of prompt files moved.
+pub fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usize, String> {
+    let flat_dir = pipelines_dir.join("prompts");
+    if !flat_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = std::fs::read_dir(pipelines_dir)
+        .map_err(|e| format!("read dir {}: {e}", pipelines_dir.display()))?;
+
+    let mut moved = 0usize;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
+        let path = entry.path();
+        let is_yaml = path
+            .extension()
+            .is_some_and(|ext| ext == "yaml" || ext == "yml");
+        if !is_yaml {
+            continue;
+        }
+
+        let yaml_text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e,
+                    "skipped flat-prompt migration: read failed");
+                continue;
+            }
+        };
+        let doc: serde_yaml::Value = match serde_yaml::from_str(&yaml_text) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e,
+                    "skipped flat-prompt migration: YAML parse failed");
+                continue;
+            }
+        };
+        let nodes = match doc.get("nodes").and_then(|n| n.as_sequence()) {
+            Some(seq) => seq,
+            None => continue,
+        };
+
+        for node in nodes {
+            let Some(node_id) = node.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let flat_path = flat_dir.join(format!("{node_id}.md"));
+            if !flat_path.is_file() {
+                continue;
+            }
+            let canonical = pipeline::canonical_prompt_path(&path, node_id);
+            if canonical.exists() {
+                // Canonical is authoritative; never clobber. Leave the dead flat
+                // duplicate so the flat dir survives and the conflict is visible.
+                warn!(
+                    flat = %flat_path.display(),
+                    canonical = %canonical.display(),
+                    "flat prompt has a canonical counterpart — leaving flat copy in place (#231)"
+                );
+                continue;
+            }
+            if let Some(parent) = canonical.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            }
+            std::fs::rename(&flat_path, &canonical).map_err(|e| {
+                format!(
+                    "rename {} -> {}: {e}",
+                    flat_path.display(),
+                    canonical.display()
+                )
+            })?;
+            info!(
+                from = %flat_path.display(),
+                to = %canonical.display(),
+                "moved stranded flat prompt to canonical dir (#231)"
+            );
+            moved += 1;
+        }
+    }
+
+    // Remove the flat dir only if the migration emptied it. A non-empty
+    // remainder means files we could not reattach — preserve them.
+    match std::fs::read_dir(&flat_dir) {
+        Ok(mut it) => {
+            if it.next().is_none() {
+                match std::fs::remove_dir(&flat_dir) {
+                    Ok(()) => info!(path = %flat_dir.display(),
+                        "removed dead flat prompts dir (#231)"),
+                    Err(e) => warn!(path = %flat_dir.display(), error = %e,
+                        "failed to remove empty flat prompts dir"),
+                }
+            } else {
+                warn!(path = %flat_dir.display(),
+                    "flat prompts dir not empty after migration — \
+                     leaving unreattached prompts in place (#231)");
+            }
+        }
+        Err(e) => warn!(path = %flat_dir.display(), error = %e,
+            "could not re-scan flat prompts dir after migration"),
+    }
+
+    Ok(moved)
+}
+
 /// Detects fan-outs where 2+ code-mutating nodes share a common downstream
 /// target but no Merge node sits between them and the target.
 ///
@@ -2590,5 +2716,158 @@ edges:
             !parsed.edges.iter().any(|e| e.when.is_some() || e.is_else),
             "planner has no switch, so no conditional edges should appear"
         );
+    }
+
+    // --- #231: stranded flat-prompt boot migration ---
+
+    /// Writes a minimal pipeline YAML declaring the given node ids.
+    fn write_pipeline_with_nodes(dir: &Path, stem: &str, node_ids: &[&str]) {
+        let mut yaml = String::from("name: ");
+        yaml.push_str(stem);
+        yaml.push_str("\nversion: \"1.0\"\nnodes:\n");
+        for id in node_ids {
+            yaml.push_str(&format!(
+                "  - id: {id}\n    name: {id}\n    type: doc-only\n    outputs:\n      - name: out\n"
+            ));
+        }
+        yaml.push_str("edges: []\n");
+        std::fs::write(dir.join(format!("{stem}.yaml")), yaml).unwrap();
+    }
+
+    #[test]
+    fn migrate_flat_prompts_moves_to_canonical_and_removes_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "auto-issue", &["AAAAAAAA", "BBBBBBBB"]);
+
+        let flat = dir.join("prompts");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("AAAAAAAA.md"), "prompt A").unwrap();
+        std::fs::write(flat.join("BBBBBBBB.md"), "prompt B").unwrap();
+
+        let moved = migrate_stranded_flat_prompts(dir).unwrap();
+        assert_eq!(moved, 2);
+
+        // Both prompts now live in the canonical `<stem>.prompts/` dir, intact.
+        let canon = dir.join("auto-issue.prompts");
+        assert_eq!(
+            std::fs::read_to_string(canon.join("AAAAAAAA.md")).unwrap(),
+            "prompt A"
+        );
+        assert_eq!(
+            std::fs::read_to_string(canon.join("BBBBBBBB.md")).unwrap(),
+            "prompt B"
+        );
+        // The emptied flat dir is removed.
+        assert!(!flat.exists(), "flat prompts dir should be removed once emptied");
+    }
+
+    #[test]
+    fn migrate_flat_prompts_does_not_clobber_existing_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "bugfix", &["CCCCCCCC"]);
+
+        // Canonical already holds authoritative text.
+        let canon = dir.join("bugfix.prompts");
+        std::fs::create_dir_all(&canon).unwrap();
+        std::fs::write(canon.join("CCCCCCCC.md"), "canonical text").unwrap();
+
+        // A stale flat duplicate exists.
+        let flat = dir.join("prompts");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("CCCCCCCC.md"), "stale flat text").unwrap();
+
+        let moved = migrate_stranded_flat_prompts(dir).unwrap();
+        assert_eq!(moved, 0, "must not move when canonical exists");
+
+        // Canonical is untouched; the flat duplicate is preserved (not destroyed),
+        // so the conflict stays visible and the dir is kept.
+        assert_eq!(
+            std::fs::read_to_string(canon.join("CCCCCCCC.md")).unwrap(),
+            "canonical text"
+        );
+        assert!(flat.join("CCCCCCCC.md").exists());
+        assert!(flat.exists(), "non-empty flat dir must be preserved");
+    }
+
+    #[test]
+    fn migrate_flat_prompts_preserves_orphan_for_unknown_node() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "alpha", &["KNOWN001"]);
+
+        let flat = dir.join("prompts");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("KNOWN001.md"), "known").unwrap();
+        // No pipeline declares this id (e.g. a deleted pipeline).
+        std::fs::write(flat.join("ORPHAN99.md"), "orphan").unwrap();
+
+        let moved = migrate_stranded_flat_prompts(dir).unwrap();
+        assert_eq!(moved, 1);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("alpha.prompts/KNOWN001.md")).unwrap(),
+            "known"
+        );
+        // The unmatched orphan is preserved, and so is the dir holding it.
+        assert!(flat.join("ORPHAN99.md").exists(), "orphan prompt must not be destroyed");
+        assert!(flat.exists());
+    }
+
+    #[test]
+    fn migrate_flat_prompts_noop_without_flat_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "alpha", &["AAAAAAAA"]);
+        // No flat `prompts/` dir at all.
+        let moved = migrate_stranded_flat_prompts(dir).unwrap();
+        assert_eq!(moved, 0);
+    }
+
+    #[test]
+    fn migrate_flat_prompts_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "auto-issue", &["AAAAAAAA"]);
+
+        let flat = dir.join("prompts");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("AAAAAAAA.md"), "prompt A").unwrap();
+
+        assert_eq!(migrate_stranded_flat_prompts(dir).unwrap(), 1);
+        // Second run: flat dir is gone → no-op.
+        assert_eq!(migrate_stranded_flat_prompts(dir).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("auto-issue.prompts/AAAAAAAA.md")).unwrap(),
+            "prompt A"
+        );
+    }
+
+    #[test]
+    fn migrate_flat_prompts_routes_each_id_to_its_owning_pipeline() {
+        // Two pipelines, one flat prompt each — each must land in its own
+        // canonical dir (ids are globally unique).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_pipeline_with_nodes(dir, "alpha", &["AAAAAAAA"]);
+        write_pipeline_with_nodes(dir, "beta", &["BBBBBBBB"]);
+
+        let flat = dir.join("prompts");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("AAAAAAAA.md"), "a").unwrap();
+        std::fs::write(flat.join("BBBBBBBB.md"), "b").unwrap();
+
+        let moved = migrate_stranded_flat_prompts(dir).unwrap();
+        assert_eq!(moved, 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("alpha.prompts/AAAAAAAA.md")).unwrap(),
+            "a"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("beta.prompts/BBBBBBBB.md")).unwrap(),
+            "b"
+        );
+        assert!(!flat.exists());
     }
 }

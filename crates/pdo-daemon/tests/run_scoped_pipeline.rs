@@ -257,6 +257,61 @@ async fn external_prompt_edit_in_run_emits_pipeline_modified() {
     );
 }
 
+#[tokio::test]
+async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
+    // #231: saving a prompt edit from inside a run (PUT /runs/:id/pipeline) must
+    // land in the template's canonical `<name>.prompts/` dir — the one every
+    // reader (GET /pipelines/:id, node spawn) consults — and never the flat
+    // `prompts/` dir that no reader looks in. A round-trip: the edit must then be
+    // visible to the normal editor via GET /pipelines/:id.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon.url()).await;
+
+    const EDITED: &str = "You are an EDITED planner via run-scoped save.\n";
+    let resp = reqwest::Client::new()
+        .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
+        .json(&serde_json::json!({
+            "yaml": PIPELINE_YAML,
+            "prompts": { "planner": EDITED }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "run-scoped save should succeed, got {}",
+        resp.status()
+    );
+
+    let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
+
+    // The edit landed in the canonical template prompts dir...
+    let canonical = pipelines.join(format!("{PIPELINE_NAME}.prompts")).join("planner.md");
+    assert_eq!(
+        std::fs::read_to_string(&canonical).unwrap(),
+        EDITED,
+        "prompt must sync to the canonical <name>.prompts/ dir"
+    );
+
+    // ...and NOT in a flat `prompts/` dir.
+    assert!(
+        !pipelines.join("prompts").join("planner.md").exists(),
+        "run-scoped save must not write to the flat prompts/ dir"
+    );
+
+    // Round-trip: GET /pipelines/:id (the normal editor's source) shows the edit.
+    let resp = reqwest::get(format!("{}/pipelines/{PIPELINE_NAME}", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["prompts"]["planner"].as_str(),
+        Some(EDITED),
+        "normal editor should see the run-scoped prompt edit, got: {body:?}"
+    );
+}
+
 /// Wait for a specific event kind + node_id on the WebSocket.
 async fn next_event_for_node(
     ws: &mut tokio_tungstenite::WebSocketStream<

@@ -436,6 +436,42 @@ mod tests {
     }
 
     #[test]
+    fn start_on_completed_run_is_rejected() {
+        // #221: once a run reaches RunCompleted it is terminal. A re-evaluation
+        // path (e.g. resume_run on a finished run) must not re-spawn an already
+        // satisfied node/loop — the guard rejects scheduling on a non-running
+        // run. This is the backstop that keeps the projection fix honest even if
+        // some path tries to schedule against a completed run.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            ev(EventKind::RunCompleted, None, None),
+        ]);
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeStarted, Some("worker"), Some(2)),
+        );
+        assert_reject(verdict, "non-running run");
+    }
+
+    #[test]
+    fn completion_on_completed_run_is_rejected() {
+        // Symmetric to the start case: no node lifecycle on a terminal run.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            ev(EventKind::RunCompleted, None, None),
+        ]);
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        );
+        assert_reject(verdict, "resume the run");
+    }
+
+    #[test]
     fn start_of_fresh_node_is_allowed() {
         let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
         let verdict = validate_transition(

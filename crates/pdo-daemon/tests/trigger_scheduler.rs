@@ -651,6 +651,120 @@ async fn patch_missing_trigger_is_404() {
     assert_eq!(resp.status(), 404);
 }
 
+// --- #222: timezone fix, panic isolation, health signal ---
+
+async fn get_health(daemon: &TestDaemon) -> serde_json::Value {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/health", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// #222 write-side: a created Trigger stores `next_fire_at` as canonical UTC
+/// (`…Z`), not a local offset, and it round-trips through GET unchanged. The
+/// load-bearing read-side regression (a past-due local-offset row staying due)
+/// lives in `trigger_store`'s unit tests, where it can fail pre-fix on any host.
+#[tokio::test]
+async fn created_trigger_stores_next_fire_in_utc() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "utc-check", "*/15 * * * *").await;
+    let next = trigger["next_fire_at"].as_str().expect("a next fire");
+    assert!(
+        next.ends_with('Z'),
+        "next_fire_at must be stored as canonical UTC (…Z), got {next}"
+    );
+    let fetched = get_trigger(&daemon, trigger["id"].as_str().unwrap()).await;
+    assert_eq!(
+        fetched["next_fire_at"].as_str(),
+        Some(next),
+        "next_fire_at must round-trip through GET unchanged"
+    );
+}
+
+/// #222 ask #1: a tick that panics no longer kills the scheduler. The panic is
+/// contained at the supervised `tokio::spawn` boundary, so the driving call
+/// returns normally and the next tick keeps firing due Triggers.
+#[tokio::test]
+async fn a_panicking_tick_does_not_disable_the_scheduler() {
+    let daemon = TestDaemon::spawn_with_panic_trigger(seed, "poison")
+        .await
+        .unwrap();
+
+    let healthy = create_trigger(&daemon, "healthy", "* * * * *").await;
+    let healthy_id = healthy["id"].as_str().unwrap().to_string();
+    let poison = create_trigger(&daemon, "poison", "* * * * *").await;
+    let poison_id = poison["id"].as_str().unwrap().to_string();
+
+    // Tick 1: only `poison` is due (a freshly created `* * * * *` Trigger's next
+    // fire is the upcoming whole minute, so `healthy` is not yet due). The poison
+    // tick panics — but the supervised boundary contains it, so this call returns
+    // NORMALLY. Pre-fix, the panic would unwind the test task right here.
+    daemon.force_trigger_due(&poison_id).await;
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "the panicking tick must not have created a run"
+    );
+
+    // Retire the poison pill (an operator disables the bad Trigger) and tick
+    // again. This is the payload: a dead scheduler loop could never fire here.
+    let resp = patch_trigger(&daemon, &poison_id, serde_json::json!({ "enabled": false })).await;
+    assert_eq!(resp.status(), 200);
+    daemon.force_trigger_due(&healthy_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "the scheduler must keep firing after a contained panic"
+    );
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(healthy_id.as_str()));
+    let fires = list_fires(&daemon, &healthy_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #222 ask #2: `GET /triggers/health` exposes the scheduler's last tick and the
+/// configured interval, and the timestamp advances as ticks run.
+#[tokio::test]
+async fn triggers_health_reports_last_tick_and_advances() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let h = get_health(&daemon).await;
+    assert_eq!(
+        h["tick_interval_secs"].as_u64(),
+        Some(30),
+        "health must report the configured tick interval"
+    );
+
+    // Drive a tick; last_tick_at becomes non-null.
+    daemon.run_trigger_tick().await;
+    let t1 = get_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at set after a tick")
+        .to_string();
+
+    // A later tick advances it (canonical-UTC strings compare chronologically;
+    // tolerate extra background-loop ticks — the value only moves forward).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    daemon.run_trigger_tick().await;
+    let t2 = get_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at still set")
+        .to_string();
+
+    assert!(
+        t2 > t1,
+        "last_tick_at must advance across ticks: {t1} then {t2}"
+    );
+}
+
 fn seed_prompt_required(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;

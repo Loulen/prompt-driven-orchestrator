@@ -63,7 +63,41 @@ impl TestDaemon {
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
-            DaemonConfig { tmux_cmd_override },
+            DaemonConfig {
+                tmux_cmd_override,
+                panic_on_trigger_name: None,
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon that **panics** the scheduler tick when a due Trigger named
+    /// `panic_name` is processed (#222 fault injection). Lets a test prove the
+    /// panic is isolated and the scheduler keeps firing. Per-daemon config, so no
+    /// process-global env race (#181). Uses the same harmless `sleep` tmux tail as
+    /// [`TestDaemon::spawn`].
+    pub async fn spawn_with_panic_trigger<F>(setup: F, panic_name: &str) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override: Some("exec sleep 600".to_string()),
+                panic_on_trigger_name: Some(panic_name.to_string()),
+            },
         )
         .await?;
 

@@ -463,8 +463,10 @@ Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (
 
 ### Mécanisme cron & cycle de vie
 
-- **Format** : expression cron 5 champs (crate cron + `chrono`), timezone locale (single-user). L'UI propose des presets (toutes les 15 min / horaire / quotidien 09:00) compilés en cron + une échappatoire expression brute.
+- **Format** : expression cron 5 champs (crate cron + `chrono`), interprétée en **UTC** (cohérente entre première planification et recalculs). L'UI propose des presets (toutes les 15 min / horaire / quotidien 09:00) compilés en cron + une échappatoire expression brute. (Cron en heure *locale* = enhancement séparé ; cf. #222, hors scope.)
 - **Scheduler** : nouvelle task background (`tokio::time::interval`, sœur du reaper/stale) qui tick ~toutes les 30 s ; résolution cron à la minute. À chaque tick : pour chaque Trigger activé dont `next_fire ≤ now`, applique le skip de recouvrement, exécute le guard, spawn le Run, recalcule `next_fire`.
+- **Invariant `next_fire_at` = UTC canonique (`…Z`)** (#222) : tout writer (création/édition/scheduler) stocke en UTC, et la requête « quels Triggers sont dûs » compare/ordonne via `julianday()` (tz-normalisé), donc une ligne à offset local (donnée legacy ou régression `Local::now()`) ne peut plus se mettre en dormance silencieuse pendant des heures.
+- **Résilience du tick** (#222) : un panic pendant un tick est **isolé** (frontière `tokio::spawn`) — la boucle survit et le tick suivant rattrape les Triggers non firés (forward-only). `GET /triggers/health` expose `last_tick_at` + l'intervalle, pour qu'un scheduler mort/bloqué soit observable plutôt que silencieux.
 - **Fires manqués = forward-only, pas de backfill.** Daemon down pendant 50 slots ⇒ au redémarrage `next_fire` est recalculé depuis *now*, les slots manqués ne sont pas rejoués. Correct *par construction* : le dedup étant externe, un seul poll forward voit *tout* le travail accumulé (`gh issue list` ramène toutes les issues en attente d'un coup).
 - **Daemon best-effort (v1)** : les Triggers ne firent que tant que le process daemon est vivant (survit à la fermeture de l'UI, meurt au reboot). L'onglet Triggers l'affiche clairement. Service unit persistant (systemd/launchd) traité séparément → #156.
 

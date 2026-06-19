@@ -39,6 +39,11 @@ pub struct Trigger {
     /// `"skip"` (default) or `"allow"`.
     pub overlap_policy: String,
     pub enabled: bool,
+    /// The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
+    /// Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
+    /// stores UTC, so a lexicographic string compare equals a chronological one.
+    /// The due query ([`due_triggers`]) is nonetheless tz-normalised so a legacy
+    /// or stray-offset row can never silently go dormant (#222).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_fire_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,9 +168,7 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .execute(db)
     .await?;
 
-    get(db, &id)
-        .await
-        .map(|t| t.expect("just-inserted trigger"))
+    get(db, &id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
@@ -218,11 +221,21 @@ pub async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
 
 /// Enabled Triggers whose `next_fire_at` is at or before `now`. The scheduler's
 /// central query.
+///
+/// Comparison and ordering are **timezone-normalised** via `julianday()` rather
+/// than a raw string compare (#222): `next_fire_at` is invariably canonical UTC
+/// (`…Z`) — see [`Trigger::next_fire_at`] — so a string compare *would* be
+/// correct, but a stray local-offset row (legacy data, or `chrono::Local::now()`
+/// slipping back into a writer) sorts lexicographically *after* a `…Z` now-string
+/// and would silently go dormant for hours. `julianday()` parses `Z`/`±HH:MM`/
+/// fractional-second RFC3339 to a UTC instant, so any offset compares correctly.
+/// `now` is a canonical-UTC RFC3339-millis now-string (`…Z`).
 pub async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT * FROM triggers
-         WHERE enabled = 1 AND next_fire_at IS NOT NULL AND next_fire_at <= ?
-         ORDER BY next_fire_at ASC",
+         WHERE enabled = 1 AND next_fire_at IS NOT NULL
+               AND julianday(next_fire_at) <= julianday(?)
+         ORDER BY julianday(next_fire_at) ASC",
     )
     .bind(now)
     .fetch_all(db)
@@ -515,6 +528,56 @@ mod tests {
         let selected = due_triggers(&db, "2026-06-06T10:00:00.000Z").await.unwrap();
         let ids: Vec<&str> = selected.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec![due.id.as_str()]);
+    }
+
+    #[tokio::test]
+    async fn due_triggers_includes_a_past_due_local_offset_row() {
+        // Regression for #222. A row stored with a local offset (a CEST box's
+        // `chrono::Local::now()` before the UTC write-side fix) represents an
+        // instant already in the past, yet sorts lexicographically *after* the
+        // UTC now-string. A raw string compare drops it → silent dormancy; the
+        // tz-normalised `julianday` compare keeps it. Fails pre-fix on any host
+        // (it does not rely on the test machine being non-UTC).
+        let db = test_db().await;
+        let mut t = sample("legacy-offset", "* * * * *");
+        // 19:15 +02:00 == 17:15Z, i.e. before the 17:30Z "now" → genuinely due.
+        t.next_fire_at = Some("2026-06-18T19:15:00.000+02:00".to_string());
+        let t = create(&db, t).await.unwrap();
+
+        let now = "2026-06-18T17:30:00.000Z";
+        // The bug's precondition: the stored string sorts *after* `now`.
+        assert!(
+            t.next_fire_at.as_deref().unwrap() > now,
+            "precondition: the local-offset string must sort after the UTC now-string"
+        );
+
+        let due = due_triggers(&db, now).await.unwrap();
+        assert_eq!(
+            due.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec![t.id.as_str()],
+            "a past-due local-offset row must still be selected (tz-normalised compare)"
+        );
+    }
+
+    #[tokio::test]
+    async fn due_triggers_orders_by_instant_not_string() {
+        // Ordering must also be tz-normalised: an earlier instant carried on a
+        // `+02:00` offset must sort before a later `…Z` instant even though it
+        // sorts *after* it as a string.
+        let db = test_db().await;
+        let mut early = sample("early", "* * * * *");
+        early.next_fire_at = Some("2026-06-18T19:00:00.000+02:00".to_string()); // 17:00Z
+        let early = create(&db, early).await.unwrap();
+        let mut late = sample("late", "* * * * *");
+        late.next_fire_at = Some("2026-06-18T17:30:00.000Z".to_string()); // 17:30Z
+        let late = create(&db, late).await.unwrap();
+
+        let due = due_triggers(&db, "2026-06-18T18:00:00.000Z").await.unwrap();
+        assert_eq!(
+            due.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec![early.id.as_str(), late.id.as_str()],
+            "due triggers must be ordered by instant (17:00Z before 17:30Z), not by string"
+        );
     }
 
     #[tokio::test]

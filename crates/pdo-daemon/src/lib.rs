@@ -132,6 +132,18 @@ struct AppState {
     /// [`DaemonConfig`] by `TestDaemon::spawn`, so no test ever launches real
     /// claude and no `std::env::set_var` race can clobber it (#181).
     tmux_cmd_override: Option<String>,
+    /// Epoch-millis of the **start** of the most recent Trigger scheduler tick,
+    /// or `0` if it has never ticked. Process-lifetime only (a restart resets it
+    /// *and* revives the scheduler). Surfaced by `GET /triggers/health` so a
+    /// dead/stalled scheduler is observable instead of silent (#222). Written at
+    /// tick start so a wedged tick freezes the value; an isolated panic still
+    /// advances it (the loop is alive).
+    last_trigger_tick_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Debug-only fault-injection knob (#222): when a due Trigger's name matches,
+    /// its tick `panic!`s, exercising the scheduler's panic isolation. `None` in
+    /// production unless `PDO_DEBUG_PANIC_TRIGGER` is set; tests seed it
+    /// per-daemon via [`DaemonConfig`] (never process-global env — #181).
+    panic_on_trigger_name: Option<String>,
 }
 
 impl AppState {
@@ -344,7 +356,7 @@ impl DaemonHandle {
     /// tests drive firing deterministically instead of waiting for the ~30 s
     /// background interval.
     pub async fn run_trigger_tick(&self) {
-        run_trigger_scheduler_tick(&self.state).await;
+        run_trigger_scheduler_tick_supervised(&self.state).await;
     }
 
     /// Run a single stale-detection sweep synchronously (#213). Lets
@@ -387,6 +399,11 @@ pub struct DaemonConfig {
     /// command instead of launching a real `claude` process. `None` →
     /// production default (real claude).
     pub tmux_cmd_override: Option<String>,
+    /// Debug-only chaos knob (#222): when a due Trigger's name matches, its
+    /// scheduler tick panics, so a test (or the Layer-5 scenario) can prove the
+    /// panic is isolated and the next tick recovers. `None` in production unless
+    /// `PDO_DEBUG_PANIC_TRIGGER` is set.
+    pub panic_on_trigger_name: Option<String>,
 }
 
 impl DaemonConfig {
@@ -398,6 +415,9 @@ impl DaemonConfig {
     pub fn from_env() -> Self {
         Self {
             tmux_cmd_override: std::env::var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV).ok(),
+            // Debug-only chaos knob (#222); mirrors the PDO_TMUX_CMD_OVERRIDE
+            // precedent — read once at boot, off unless explicitly set.
+            panic_on_trigger_name: std::env::var("PDO_DEBUG_PANIC_TRIGGER").ok(),
         }
     }
 }
@@ -461,6 +481,8 @@ pub async fn serve_with_config(
         recent_writes,
         run_watcher: run_watcher.clone(),
         tmux_cmd_override: config.tmux_cmd_override,
+        last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        panic_on_trigger_name: config.panic_on_trigger_name,
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -561,7 +583,7 @@ pub async fn serve_with_config(
                 time::interval(Duration::from_secs(trigger_scheduler::TICK_INTERVAL_SECS));
             loop {
                 tick.tick().await;
-                run_trigger_scheduler_tick(&trigger_state).await;
+                run_trigger_scheduler_tick_supervised(&trigger_state).await;
             }
         }))
     };
@@ -690,6 +712,20 @@ fn default_overlap_policy() -> String {
     "skip".to_string()
 }
 
+/// The first scheduled fire for a freshly created or rescheduled Trigger, as
+/// **canonical UTC RFC3339-millis** (`…Z`). Both `create_trigger` and
+/// `patch_trigger` go through here so the write-side timezone can't drift between
+/// them (#222): `next_fire_after` is fed `chrono::Utc::now()`, so the stored
+/// string is always `…Z` and the due query's comparison stays correct. Using
+/// `chrono::Local::now()` here is the original bug — on a non-UTC host it stored
+/// a `…±HH:MM` offset that `due_triggers` then mis-compared, dormanting the
+/// Trigger for hours.
+fn first_next_fire(schedule: &cron_schedule::CronSchedule) -> Option<String> {
+    schedule
+        .next_fire_after(chrono::Utc::now())
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
 async fn create_trigger(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateTriggerRequest>,
@@ -771,9 +807,7 @@ async fn create_trigger(
         }
     }
 
-    let next_fire_at = schedule
-        .next_fire_after(chrono::Local::now())
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    let next_fire_at = first_next_fire(&schedule);
 
     let variables = serde_json::to_value(&req.variables).unwrap_or(serde_json::json!({}));
 
@@ -945,10 +979,7 @@ async fn patch_trigger(
     if let Some(ref cron) = req.cron {
         match cron_schedule::CronSchedule::parse(cron) {
             Ok(schedule) => {
-                let next = schedule
-                    .next_fire_after(chrono::Local::now())
-                    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-                next_fire_at = Some(next);
+                next_fire_at = Some(first_next_fire(&schedule));
             }
             Err(e) => {
                 return (
@@ -1134,6 +1165,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
         .route("/triggers", get(list_triggers).post(create_trigger))
+        // Static segment beside the `{trigger_id}` param: axum 0.8 allows this
+        // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
+        // `/triggers` proxy prefix already covers it — no vite proxy edit (#222).
+        .route("/triggers/health", get(triggers_health))
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -1476,12 +1511,39 @@ fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> Path
         .unwrap_or_else(|| state.repo_root.clone())
 }
 
+/// Run one scheduler tick under panic isolation (#222). A panic in the tick is
+/// contained at this `tokio::spawn` boundary; the caller — the ~30 s background
+/// loop *or* the [`DaemonHandle::run_trigger_tick`] test seam — survives, and the
+/// next tick recomputes `due_triggers` and recovers any unfired Triggers
+/// (forward-only, ADR-0012). Both paths go through here, so production and the
+/// synchronous test seam behave identically: a panicking tick returns normally
+/// instead of unwinding the caller, which is exactly what lets the background
+/// loop keep ticking and a regression test drive a panicking tick and assert
+/// recovery on the next one. (`tokio::sync::Mutex` does not poison, so the
+/// `trigger_tick_lock` is released cleanly on unwind.)
+async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
+    let tick_state = state.clone();
+    let join = tokio::spawn(async move { run_trigger_scheduler_tick(&tick_state).await });
+    if let Err(e) = join.await {
+        if e.is_panic() {
+            warn!("trigger scheduler: tick panicked, isolated — next tick recovers (#222): {e}");
+        }
+    }
+}
+
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
 async fn run_trigger_scheduler_tick(state: &AppState) {
     // At most one tick in flight: see `AppState::trigger_tick_lock`.
     let _tick = state.trigger_tick_lock.lock().await;
-    let now_str = event_log::now_iso();
+    let now = chrono::Utc::now();
+    // Record liveness at tick start (#222): a wedged tick freezes this; an
+    // isolated panic still advanced it, so `GET /triggers/health` answers "is the
+    // loop alive?".
+    state
+        .last_trigger_tick_ms
+        .store(now.timestamp_millis(), std::sync::atomic::Ordering::Relaxed);
+    let now_str = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let due = match trigger_store::due_triggers(&state.db, &now_str).await {
         Ok(t) => t,
         Err(e) => {
@@ -1489,9 +1551,16 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
             return;
         }
     };
-    let now = chrono::Utc::now();
 
     for trigger in due {
+        // Debug-only fault injection (#222): prove the tick's panic is isolated.
+        if state.panic_on_trigger_name.as_deref() == Some(trigger.name.as_str()) {
+            panic!(
+                "PDO_DEBUG_PANIC_TRIGGER fault injection (#222): trigger {}",
+                trigger.name
+            );
+        }
+
         // A dangling pipeline/repo reference: surface an error outcome and stop
         // firing (clear next_fire) rather than rot silently or auto-delete.
         if let Some(reason) = trigger_dangling_reason(state, &trigger) {
@@ -3746,6 +3815,26 @@ async fn sessions(State(state): State<Arc<AppState>>) -> Response {
         "live": live,
         "cap": cap,
         "version": env!("CARGO_PKG_VERSION"),
+    }))
+    .into_response()
+}
+
+/// `GET /triggers/health` — scheduler liveness (#222). Reports `last_tick_at`
+/// (ISO-8601 millis of the most recent tick start, or `null` if it has never
+/// ticked) and the configured tick interval, so a dead/stalled Trigger scheduler
+/// is observable instead of silently dormant. Additive sub-route under the
+/// `/triggers` prefix (already proxied) — does not touch the `/triggers` array.
+async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
+    let ms = state
+        .last_trigger_tick_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let last_tick_at = (ms != 0)
+        .then(|| chrono::DateTime::from_timestamp_millis(ms))
+        .flatten()
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    Json(serde_json::json!({
+        "last_tick_at": last_tick_at,
+        "tick_interval_secs": trigger_scheduler::TICK_INTERVAL_SECS,
     }))
     .into_response()
 }
@@ -8120,6 +8209,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: None,
         })
     }
 
@@ -9912,6 +10003,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: None,
         })
     }
 
@@ -13539,6 +13632,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: None,
         });
         let app = build_router(state);
 
@@ -13712,6 +13807,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: None,
         });
         let app = build_router(state);
 

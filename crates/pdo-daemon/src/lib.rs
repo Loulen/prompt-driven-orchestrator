@@ -446,6 +446,26 @@ pub async fn serve_with_config(
 
     init_db(&db).await?;
 
+    // #231: one-shot migration of prompts stranded in the flat
+    // `<repo>/.pdo/pipelines/prompts/` dir by the old run-scoped sync into each
+    // pipeline's canonical `<stem>.prompts/` dir. Runs before the file watcher
+    // attaches so the moves don't surface as spurious pipeline-modified events.
+    // A pure filesystem fix-up — unrelated to tmux, so it is not gated on
+    // `nested_daemon`. Scoped to the repo store (where the bug stranded prompts,
+    // and what the daemon owns); the writer fix + readers are store-agnostic, so
+    // any user-store pipeline self-heals on its next save.
+    {
+        let repo_pipelines = repo_root.join(".pdo").join("pipelines");
+        match pipeline_migrator::migrate_stranded_flat_prompts(&repo_pipelines) {
+            Ok(n) if n > 0 => info!(
+                "#231 migration: moved {n} stranded prompt(s) in {}",
+                repo_pipelines.display()
+            ),
+            Ok(_) => {}
+            Err(e) => warn!("#231 migration failed: {e}"),
+        }
+    }
+
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
     let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
 
@@ -4235,12 +4255,11 @@ fn sync_run_pipeline_to_template(
         return;
     }
 
-    let template_prompts_dir = template_path
-        .parent()
-        .unwrap_or(&state.repo_root)
-        .join("prompts");
+    // #231: write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md`
+    // location every reader consults — NOT a flat `<dir>/prompts/<id>.md` dir
+    // (which no reader looks in, silently swallowing run-scoped prompt edits).
     for (node_id, content) in prompts {
-        let prompt_path = template_prompts_dir.join(format!("{node_id}.md"));
+        let prompt_path = pipeline::canonical_prompt_path(&template_path, node_id);
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -10017,6 +10036,40 @@ mod tests {
             "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_run_pipeline_writes_canonical_prompt_path() {
+        // #231: run-scoped sync must write each prompt to the canonical
+        // `<stem>.prompts/<id>.md` (where every reader looks) — never the flat
+        // `prompts/<id>.md` dir that no reader consults.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_test_pipeline(dir, "auto-issue");
+        let state = test_state_with_dir(dir).await;
+
+        let mut prompts = HashMap::new();
+        prompts.insert("worker".to_string(), "the role prompt".to_string());
+
+        let yaml = std::fs::read_to_string(
+            dir.join(".pdo").join("pipelines").join("auto-issue.yaml"),
+        )
+        .unwrap();
+        sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
+
+        let pipelines = dir.join(".pdo").join("pipelines");
+        let canonical = pipelines.join("auto-issue.prompts").join("worker.md");
+        let flat = pipelines.join("prompts").join("worker.md");
+
+        assert_eq!(
+            std::fs::read_to_string(&canonical).unwrap(),
+            "the role prompt",
+            "prompt must be written to the canonical <stem>.prompts/ dir"
+        );
+        assert!(
+            !flat.exists(),
+            "the flat prompts/ dir must never be written"
+        );
     }
 
     /// RAII guard that sets HOME to a temporary directory and restores it on drop.

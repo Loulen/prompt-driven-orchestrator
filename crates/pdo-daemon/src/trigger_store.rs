@@ -352,6 +352,12 @@ pub async fn set_next_fire(
 #[derive(Debug, Clone, Default)]
 pub struct UpdateTrigger {
     pub name: Option<String>,
+    /// Repoint the Trigger to a different library pipeline (#230). The route is
+    /// responsible for validating the target exists; both `pipeline_id` and the
+    /// denormalised `pipeline_name` are updated together so list rendering can't
+    /// show a stale name.
+    pub pipeline_id: Option<String>,
+    pub pipeline_name: Option<String>,
     pub target_repo: Option<Option<String>>,
     pub source_branch: Option<Option<String>>,
     pub input_template: Option<String>,
@@ -368,6 +374,8 @@ pub struct UpdateTrigger {
 impl UpdateTrigger {
     fn is_empty(&self) -> bool {
         self.name.is_none()
+            && self.pipeline_id.is_none()
+            && self.pipeline_name.is_none()
             && self.target_repo.is_none()
             && self.source_branch.is_none()
             && self.input_template.is_none()
@@ -395,6 +403,12 @@ pub async fn update(
     let mut sets: Vec<&str> = Vec::new();
     if edit.name.is_some() {
         sets.push("name = ?");
+    }
+    if edit.pipeline_id.is_some() {
+        sets.push("pipeline_id = ?");
+    }
+    if edit.pipeline_name.is_some() {
+        sets.push("pipeline_name = ?");
     }
     if edit.target_repo.is_some() {
         sets.push("target_repo = ?");
@@ -427,6 +441,12 @@ pub async fn update(
     let sql = format!("UPDATE triggers SET {} WHERE id = ?", sets.join(", "));
     let mut query = sqlx::query(&sql);
     if let Some(v) = &edit.name {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.pipeline_id {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.pipeline_name {
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repo {
@@ -773,6 +793,44 @@ mod tests {
             .unwrap()
             .guard_command
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn update_can_repoint_pipeline() {
+        // #230: a Trigger must be movable to a different pipeline. Both the id and
+        // the denormalised display name update together; unrelated fields survive.
+        let db = test_db().await;
+        let t = create(&db, sample("repointable", "0 9 * * *")).await.unwrap();
+        assert_eq!(t.pipeline_id, "lib-pipe-1");
+        assert_eq!(t.pipeline_name, "Auditor");
+
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                pipeline_id: Some("lib-pipe-2".to_string()),
+                pipeline_name: Some("Bugfixer".to_string()),
+                next_fire_at: Some(Some("2027-03-01T00:00:00.000Z".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let after = get(&db, &t.id).await.unwrap().unwrap();
+        assert_eq!(after.pipeline_id, "lib-pipe-2");
+        assert_eq!(after.pipeline_name, "Bugfixer");
+        // A revived next fire (the dormant-on-rename recovery path).
+        assert_eq!(
+            after.next_fire_at.as_deref(),
+            Some("2027-03-01T00:00:00.000Z")
+        );
+        // Everything else is left untouched.
+        assert_eq!(after.name, "repointable");
+        assert_eq!(after.cron, "0 9 * * *");
+        assert_eq!(after.input_template, "audit the codebase");
+        assert_eq!(after.target_repo.as_deref(), Some("/repos/foo"));
+        assert!(after.enabled);
     }
 
     #[tokio::test]

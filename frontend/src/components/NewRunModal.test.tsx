@@ -883,6 +883,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
   beforeEach(() => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: "repo", prompt_required: false }),
     ]);
   });
 
@@ -969,6 +970,9 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
         "trg-9",
         expect.objectContaining({
           name: "Nightly audit",
+          // The current pipeline is always sent so an unchanged edit is a no-op
+          // repoint server-side (#230).
+          pipeline_id: "p1",
           cron: "0 * * * *",
           input_template: "audit harder",
         }),
@@ -1014,5 +1018,46 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
         }),
       );
     });
+  });
+
+  it("edit repoints the trigger to the newly selected pipeline (#230)", async () => {
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        prefillTrigger={{ trigger: sampleTrigger, mode: "edit" }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    // Prefilled with the trigger's current pipeline.
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
+    });
+
+    // Let the debounced repo validation resolve so the form is submittable.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Change the pipeline — the dropdown is interactive in edit mode, and the
+    // change must now actually reach the server (it used to be silently dropped).
+    fireEvent.change(screen.getByTestId("pipeline-select"), {
+      target: { value: "p2" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({ pipeline_id: "p2" }),
+      );
+    });
+    expect(createTrigger).not.toHaveBeenCalled();
   });
 });

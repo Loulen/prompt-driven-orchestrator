@@ -15,8 +15,25 @@
 pub enum OverlapPolicy {
     /// Skip this tick while the previous Run is live (the default).
     Skip,
-    /// Allow a concurrent fire.
+    /// Allow a concurrent fire — unbounded, or capped by `max_concurrent` (#239).
     Allow,
+}
+
+/// Effective concurrency ceiling for one tick. `None` = unbounded (#239).
+///
+///   Skip        → Some(1)  (never stack on my own live run)
+///   Allow+None  → None     (unbounded)
+///   Allow+Some  → Some(m)  (m clamped to >= 1 defensively, so a stray 0 from a
+///                           legacy/unvalidated row can never make a bounded-allow
+///                           Trigger fire forever — `n < 0` is never true)
+///
+/// The scheduler's guard-gate and `decide` both route through here so the cap can
+/// never drift between "should the guard run?" and "should we fire?".
+pub fn overlap_ceiling(overlap: OverlapPolicy, max_concurrent: Option<usize>) -> Option<usize> {
+    match overlap {
+        OverlapPolicy::Skip => Some(1),
+        OverlapPolicy::Allow => max_concurrent.map(|m| m.max(1)),
+    }
 }
 
 /// Outcome of running a guard command (slice #161 will populate this; the
@@ -37,7 +54,13 @@ pub struct FireInputs<'a> {
     pub enabled: bool,
     pub due: bool,
     pub overlap: OverlapPolicy,
-    pub has_live_run: bool,
+    /// Count of this Trigger's *own* live Runs at tick time (#239). With
+    /// `OverlapPolicy::Skip` any count >= 1 skips; with `Allow` it is compared
+    /// against the `max_concurrent` ceiling.
+    pub live_run_count: usize,
+    /// Bounded-`allow` ceiling: max simultaneous live Runs (#239). `None` =
+    /// unbounded. Ignored entirely unless `overlap == Allow`.
+    pub max_concurrent: Option<usize>,
     /// `None` when the trigger has no guard (cron-only).
     pub guard: Option<GuardResult>,
     /// Static input template configured on the trigger (may be empty).
@@ -63,6 +86,8 @@ pub enum FireDecision {
 pub enum SkipReason {
     /// The Trigger's own previous Run is still active.
     OverlapPreviousRunLive,
+    /// The Trigger is at its bounded-`allow` ceiling: `live` >= `max` (#239).
+    OverlapMaxConcurrentReached { live: usize, max: usize },
     /// Guard exited non-zero (no work to do).
     GuardExitNonZero,
     /// Guard could not be evaluated (spawn error or timeout).
@@ -76,11 +101,22 @@ pub fn decide(inputs: &FireInputs) -> FireDecision {
         return FireDecision::Skip { reason: None };
     }
 
-    // Overlap policy: never stack on the Trigger's own live Run unless allowed.
-    if inputs.has_live_run && inputs.overlap == OverlapPolicy::Skip {
-        return FireDecision::Skip {
-            reason: Some(SkipReason::OverlapPreviousRunLive),
-        };
+    // Overlap policy collapses to one effective ceiling (#239): `skip` ⇒ 1,
+    // `allow+None` ⇒ unbounded, `allow+Some(m)` ⇒ m. Fire iff the count is below
+    // the ceiling.
+    if let Some(ceiling) = overlap_ceiling(inputs.overlap, inputs.max_concurrent) {
+        if inputs.live_run_count >= ceiling {
+            let reason = match inputs.overlap {
+                OverlapPolicy::Skip => SkipReason::OverlapPreviousRunLive,
+                OverlapPolicy::Allow => SkipReason::OverlapMaxConcurrentReached {
+                    live: inputs.live_run_count,
+                    max: ceiling,
+                },
+            };
+            return FireDecision::Skip {
+                reason: Some(reason),
+            };
+        }
     }
 
     // Guard branches (slice #161). Cron-only triggers pass `None`.
@@ -136,7 +172,8 @@ mod tests {
             enabled: true,
             due: true,
             overlap: OverlapPolicy::Skip,
-            has_live_run: false,
+            live_run_count: 0,
+            max_concurrent: None,
             guard: None,
             input_template: "do the thing",
             prompt_required: true,
@@ -164,7 +201,7 @@ mod tests {
     #[test]
     fn due_with_live_run_and_skip_policy_skips_with_overlap_reason() {
         let inputs = FireInputs {
-            has_live_run: true,
+            live_run_count: 1,
             overlap: OverlapPolicy::Skip,
             ..base()
         };
@@ -179,7 +216,7 @@ mod tests {
     #[test]
     fn due_with_live_run_and_allow_policy_fires() {
         let inputs = FireInputs {
-            has_live_run: true,
+            live_run_count: 1,
             overlap: OverlapPolicy::Allow,
             ..base()
         };
@@ -189,6 +226,101 @@ mod tests {
                 input: "do the thing".to_string()
             }
         );
+    }
+
+    // --- #239: bounded-`allow` concurrency cap ---
+
+    #[test]
+    fn allow_unbounded_fires_regardless_of_count() {
+        let inputs = FireInputs {
+            overlap: OverlapPolicy::Allow,
+            max_concurrent: None,
+            live_run_count: 5,
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Fire {
+                input: "do the thing".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn allow_bounded_fires_below_cap() {
+        let inputs = FireInputs {
+            overlap: OverlapPolicy::Allow,
+            max_concurrent: Some(2),
+            live_run_count: 1,
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Fire {
+                input: "do the thing".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn allow_bounded_skips_at_cap() {
+        let inputs = FireInputs {
+            overlap: OverlapPolicy::Allow,
+            max_concurrent: Some(2),
+            live_run_count: 2,
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Skip {
+                reason: Some(SkipReason::OverlapMaxConcurrentReached { live: 2, max: 2 })
+            }
+        );
+    }
+
+    #[test]
+    fn allow_bounded_skips_above_cap() {
+        let inputs = FireInputs {
+            overlap: OverlapPolicy::Allow,
+            max_concurrent: Some(2),
+            live_run_count: 3,
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Skip {
+                reason: Some(SkipReason::OverlapMaxConcurrentReached { live: 3, max: 2 })
+            }
+        );
+    }
+
+    #[test]
+    fn skip_policy_ignores_max_concurrent() {
+        // Regression: a stray `max_concurrent` is inert under the `skip` policy —
+        // the ceiling is always 1, so any live run skips with the previous-run
+        // reason (not the bounded-allow one).
+        let inputs = FireInputs {
+            overlap: OverlapPolicy::Skip,
+            max_concurrent: Some(5),
+            live_run_count: 1,
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Skip {
+                reason: Some(SkipReason::OverlapPreviousRunLive)
+            }
+        );
+    }
+
+    #[test]
+    fn overlap_ceiling_collapses_each_mode() {
+        assert_eq!(overlap_ceiling(OverlapPolicy::Skip, None), Some(1));
+        assert_eq!(overlap_ceiling(OverlapPolicy::Skip, Some(9)), Some(1));
+        assert_eq!(overlap_ceiling(OverlapPolicy::Allow, None), None);
+        assert_eq!(overlap_ceiling(OverlapPolicy::Allow, Some(3)), Some(3));
+        // Defensive clamp: a stray 0 must never become an unfireable ceiling.
+        assert_eq!(overlap_ceiling(OverlapPolicy::Allow, Some(0)), Some(1));
     }
 
     #[test]

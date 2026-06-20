@@ -106,4 +106,34 @@ describe("TriggerDetailPanel", () => {
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
     expect(await screen.findByText(/no fires yet/i)).toBeInTheDocument();
   });
+
+  it("shows the concurrency cap for a bounded-allow trigger (#239)", () => {
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ overlap_policy: "allow", max_concurrent: 3 })}
+        onSelectRun={noop}
+      />,
+    );
+    expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent("max 3 concurrent");
+  });
+
+  it("shows unlimited for an allow trigger without a cap (#239)", () => {
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ overlap_policy: "allow", max_concurrent: null })}
+        onSelectRun={noop}
+      />,
+    );
+    expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent(/unlimited/i);
+  });
+
+  it("shows skip (default) for a skip trigger (#239 regression)", () => {
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ overlap_policy: "skip" })}
+        onSelectRun={noop}
+      />,
+    );
+    expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent("skip (default)");
+  });
 });

@@ -245,6 +245,8 @@ export interface CreateTriggerRequest {
   variables?: Record<string, unknown>;
   guard_command?: string;
   overlap_policy?: string;
+  /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; omit/undefined = unbounded. */
+  max_concurrent?: number | null;
 }
 
 export async function fetchTriggers(): Promise<Trigger[]> {
@@ -287,6 +289,8 @@ export interface UpdateTriggerRequest {
   source_branch?: string | null;
   guard_command?: string | null;
   variables?: Record<string, unknown>;
+  /** Bounded-`allow` ceiling (#239): number sets, null clears to unbounded, undefined leaves unchanged. */
+  max_concurrent?: number | null;
 }
 
 export async function updateTrigger(

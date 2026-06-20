@@ -801,6 +801,64 @@ describe("NewRunModal — Trigger mode (#160)", () => {
       );
     });
   });
+
+  // --- #239: bounded-allow overlap control ---
+
+  it("reveals the max-concurrent input only when the allow checkbox is checked", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("overlap-allow-checkbox")).toBeInTheDocument();
+    expect(screen.queryByTestId("max-concurrent-input")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("overlap-allow-checkbox"));
+    expect(screen.getByTestId("max-concurrent-input")).toBeInTheDocument();
+  });
+
+  it("creates an allow trigger with the chosen max_concurrent cap", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bounded" },
+    });
+    fireEvent.click(screen.getByTestId("overlap-allow-checkbox"));
+    fireEvent.change(screen.getByTestId("max-concurrent-input"), {
+      target: { value: "2" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Bounded",
+          overlap_policy: "allow",
+          max_concurrent: 2,
+        }),
+      );
+    });
+  });
+
+  it("creates a skip trigger with no cap when the box is unchecked", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Default" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Default",
+          overlap_policy: "skip",
+          max_concurrent: undefined,
+        }),
+      );
+    });
+  });
 });
 
 describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
@@ -918,5 +976,43 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     });
     // Editing never creates a brand-new trigger.
     expect(createTrigger).not.toHaveBeenCalled();
+  });
+
+  it("edit-prefills the allow checkbox and cap from a bounded-allow trigger (#239)", async () => {
+    const bounded = { ...sampleTrigger, overlap_policy: "allow", max_concurrent: 3 };
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        prefillTrigger={{ trigger: bounded, mode: "edit" }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    // The box is pre-checked and the cap input pre-filled.
+    await waitFor(() => {
+      expect(screen.getByTestId("overlap-allow-checkbox")).toBeChecked();
+    });
+    expect(screen.getByTestId("max-concurrent-input")).toHaveValue(3);
+
+    // Saving round-trips the policy + cap (no silent reset to skip).
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({
+          overlap_policy: "allow",
+          max_concurrent: 3,
+        }),
+      );
+    });
   });
 });

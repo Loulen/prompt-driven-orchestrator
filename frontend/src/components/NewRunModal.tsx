@@ -48,6 +48,11 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
   const [dailyMinute, setDailyMinute] = useState(0);
   const [rawCron, setRawCron] = useState("");
   const [guardCommand, setGuardCommand] = useState("");
+  // Overlap policy (#239): unchecked → "skip"; checked → "allow", with an
+  // optional concurrency cap (blank = unbounded). `maxConcurrent` is a string so
+  // an empty input maps cleanly to "no cap".
+  const [allowOverlap, setAllowOverlap] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState("");
   const [varsOpen, setVarsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +126,10 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
       setEditingTriggerId(trigger.id);
       setTriggerName(trigger.name);
       setGuardCommand(trigger.guard_command ?? "");
+      // Overlap policy (#239): round-trip the real policy instead of resetting it
+      // to skip. Pre-check the box for an `allow` Trigger and fill its cap.
+      setAllowOverlap(trigger.overlap_policy === "allow");
+      setMaxConcurrent(trigger.max_concurrent != null ? String(trigger.max_concurrent) : "");
       // Map the stored cron back onto a preset (or the raw escape hatch).
       const preset = cronToPreset(trigger.cron);
       setCronPresetId(preset);
@@ -404,7 +413,11 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
           guard_command: guardCommand.trim() || null,
           target_repo: targetRepo.trim() || null,
           source_branch: sourceBranch || null,
-          overlap_policy: undefined,
+          // Round-trip the real overlap policy (#239). Previously hard-coded to
+          // `undefined`, which silently reset every edited trigger toward skip.
+          // `null` clears a stale cap when overlap is off or the input is blank.
+          overlap_policy: allowOverlap ? "allow" : "skip",
+          max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : null,
           variables,
         });
       } else {
@@ -416,6 +429,8 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
           guard_command: guardCommand.trim() || undefined,
           target_repo: targetRepo.trim() || undefined,
           source_branch: sourceBranch || undefined,
+          overlap_policy: allowOverlap ? "allow" : "skip",
+          max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
           variables,
         });
       }
@@ -423,6 +438,8 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
       setTriggerName("");
       setInput("");
       setGuardCommand("");
+      setAllowOverlap(false);
+      setMaxConcurrent("");
       setOverrides({});
       setMode("run");
       setEditingTriggerId(null);
@@ -447,6 +464,8 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
     resolvedCron,
     input,
     guardCommand,
+    allowOverlap,
+    maxConcurrent,
     targetRepo,
     sourceBranch,
     flushPendingSaves,
@@ -838,6 +857,42 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
                   <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
                     Runs before each fire from the target repo. Exit 0 fires (its stdout becomes the
                     Run input); a non-zero exit skips. Bounded by a 60s timeout.
+                  </span>
+                </div>
+
+                {/* Overlap policy (#239): allow concurrent fires, optionally capped. */}
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    className="flex items-center gap-1.5 font-medium text-fg-2"
+                    style={{ fontSize: "11.5px" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={allowOverlap}
+                      onChange={(e) => setAllowOverlap(e.target.checked)}
+                      className="accent-acc"
+                      data-testid="overlap-allow-checkbox"
+                    />
+                    Allow concurrent fires
+                  </label>
+                  {allowOverlap && (
+                    <div className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
+                      <span className="text-fg-3">Max concurrent runs</span>
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder="∞"
+                        value={maxConcurrent}
+                        onChange={(e) => setMaxConcurrent(e.target.value)}
+                        className="w-16 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg focus:border-acc focus:outline-none"
+                        data-testid="max-concurrent-input"
+                      />
+                      <span className="text-fg-4">Blank = unlimited</span>
+                    </div>
+                  )}
+                  <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                    By default a trigger skips a tick while its previous run is still live. Allow
+                    concurrent fires to let runs stack, optionally capped at N simultaneous runs.
                   </span>
                 </div>
               </div>

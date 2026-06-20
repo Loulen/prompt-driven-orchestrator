@@ -52,6 +52,8 @@ export interface Trigger {
   cron: string;
   guard_command?: string | null;
   overlap_policy: string;
+  /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; null = unbounded. */
+  max_concurrent?: number | null;
   enabled: boolean;
   next_fire_at?: string | null;
   last_fired_at?: string | null;

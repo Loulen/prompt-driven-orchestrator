@@ -35,12 +35,14 @@ pub struct TickPlan {
 
 /// Decide what to do for one Trigger at `now`, given the observable world.
 ///
-/// `has_live_run` is whether the Trigger's *own* previous Run is still active.
-/// `guard` is the guard result (always `None` in the cron-only slice).
+/// `live_run_count` is the number of the Trigger's *own* Runs still live (#239):
+/// compared against the overlap ceiling (`skip` ⇒ 1, bounded `allow` ⇒
+/// `max_concurrent`). `guard` is the guard result (always `None` in the cron-only
+/// slice).
 pub fn plan_tick(
     trigger: &Trigger,
     now: DateTime<Utc>,
-    has_live_run: bool,
+    live_run_count: usize,
     guard: Option<GuardResult>,
     prompt_required: bool,
 ) -> TickPlan {
@@ -94,7 +96,11 @@ pub fn plan_tick(
         enabled: trigger.enabled,
         due,
         overlap,
-        has_live_run,
+        live_run_count,
+        // Store holds `Option<i64>`; convert to the decision core's `usize` at
+        // this one boundary (clamp a stray negative to 0, then `overlap_ceiling`
+        // clamps a 0 ceiling up to 1 defensively).
+        max_concurrent: trigger.max_concurrent.map(|m| m.max(0) as usize),
         guard,
         input_template: &trigger.input_template,
         prompt_required,
@@ -126,6 +132,16 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
         } => Some(FireRecord {
             outcome: "skipped-overlap".to_string(),
             reason: Some("previous run still active".to_string()),
+            run_id: None,
+        }),
+        // A bounded-`allow` skip keeps the `skipped-overlap` outcome (#239) — no
+        // new status-dot to teach the UI — but carries the cap in its reason so
+        // the history panel answers "why" precisely.
+        FireDecision::Skip {
+            reason: Some(SkipReason::OverlapMaxConcurrentReached { live, max }),
+        } => Some(FireRecord {
+            outcome: "skipped-overlap".to_string(),
+            reason: Some(format!("max concurrent runs reached ({live}/{max})")),
             run_id: None,
         }),
         FireDecision::Skip {
@@ -168,6 +184,7 @@ mod tests {
             cron: cron.to_string(),
             guard_command: None,
             overlap_policy: "skip".to_string(),
+            max_concurrent: None,
             enabled: true,
             next_fire_at: next_fire_at.map(str::to_string),
             last_fired_at: None,
@@ -183,7 +200,7 @@ mod tests {
     fn due_cron_only_trigger_plans_a_fire_and_recomputes_next() {
         let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, false, None, false);
+        let plan = plan_tick(&t, now, 0, None, false);
         assert_eq!(
             plan.decision,
             FireDecision::Fire {
@@ -202,7 +219,7 @@ mod tests {
     fn overlap_skip_while_own_run_is_live_records_skip_and_still_recomputes() {
         let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, true, None, false);
+        let plan = plan_tick(&t, now, 1, None, false);
         assert!(matches!(
             plan.decision,
             FireDecision::Skip { reason: Some(_) }
@@ -217,10 +234,48 @@ mod tests {
     }
 
     #[test]
+    fn bounded_allow_skip_at_cap_records_skipped_overlap_with_count() {
+        // #239: an `allow` Trigger at its `max_concurrent` cap skips, audited as
+        // `skipped-overlap` with the cap in the reason, and the schedule still
+        // advances.
+        let mut t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
+        t.overlap_policy = "allow".to_string();
+        t.max_concurrent = Some(2);
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 2, None, false);
+        assert!(matches!(
+            plan.decision,
+            FireDecision::Skip { reason: Some(_) }
+        ));
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "skipped-overlap");
+        assert!(
+            record.reason.as_deref().unwrap().contains("(2/2)"),
+            "reason must carry the cap: {:?}",
+            record.reason
+        );
+        assert_eq!(
+            plan.next_fire_at.as_deref(),
+            Some("2026-06-06T10:01:00.000Z")
+        );
+    }
+
+    #[test]
+    fn bounded_allow_below_cap_fires() {
+        let mut t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
+        t.overlap_policy = "allow".to_string();
+        t.max_concurrent = Some(2);
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 1, None, false);
+        assert!(matches!(plan.decision, FireDecision::Fire { .. }));
+        assert_eq!(plan.record.as_ref().unwrap().outcome, "fired");
+    }
+
+    #[test]
     fn not_due_trigger_is_a_silent_noop_with_no_audit_row() {
         let t = trigger("* * * * *", Some("2999-01-01T00:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, false, None, false);
+        let plan = plan_tick(&t, now, 0, None, false);
         assert_eq!(plan.decision, FireDecision::Skip { reason: None });
         assert!(plan.record.is_none());
     }
@@ -231,7 +286,7 @@ mod tests {
         // jumps forward from `now`, never replaying the missed slots.
         let t = trigger("0 * * * *", Some("2026-06-01T09:00:00.000Z"));
         let now = at("2026-06-06T10:30:00.000Z");
-        let plan = plan_tick(&t, now, false, None, false);
+        let plan = plan_tick(&t, now, 0, None, false);
         assert!(matches!(plan.decision, FireDecision::Fire { .. }));
         // The single next fire is the *next* hourly slot after now, not a
         // backfill of June 1.
@@ -245,7 +300,7 @@ mod tests {
     fn invalid_cron_yields_error_outcome_and_stops_firing() {
         let t = trigger("not a cron", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, false, None, false);
+        let plan = plan_tick(&t, now, 0, None, false);
         assert!(matches!(plan.decision, FireDecision::Reject { .. }));
         assert_eq!(plan.record.as_ref().unwrap().outcome, "error");
         // No next fire: the broken trigger stops firing until edited.
@@ -258,7 +313,7 @@ mod tests {
         let mut t = trigger("* * * * *", Some("2020-01-01T00:00:00.000Z"));
         t.enabled = false;
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, false, None, false);
+        let plan = plan_tick(&t, now, 0, None, false);
         assert_eq!(plan.decision, FireDecision::Skip { reason: None });
         assert!(plan.record.is_none());
     }

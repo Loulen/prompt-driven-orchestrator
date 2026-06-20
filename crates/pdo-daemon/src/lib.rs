@@ -726,10 +726,39 @@ struct CreateTriggerRequest {
     guard_command: Option<String>,
     #[serde(default = "default_overlap_policy")]
     overlap_policy: String,
+    /// Bounded-`allow` ceiling (#239): max simultaneous live Runs. `None` =
+    /// unbounded. Inert unless `overlap_policy == "allow"`.
+    #[serde(default)]
+    max_concurrent: Option<i64>,
 }
 
 fn default_overlap_policy() -> String {
     "skip".to_string()
+}
+
+/// Validate a `max_concurrent` cap (#239): when present it must be >= 1. `None`
+/// (unbounded) is always valid. Shared by create and patch so the rule can't
+/// drift between them. A cap set while `overlap_policy == "skip"` is accepted —
+/// it stays inert (the frontend nulls it; the API is lenient).
+fn validate_max_concurrent(v: Option<i64>) -> Result<(), &'static str> {
+    match v {
+        Some(n) if n < 1 => Err("max_concurrent must be >= 1"),
+        _ => Ok(()),
+    }
+}
+
+/// Deserialize a double-`Option` PATCH field so a present `null` maps to
+/// `Some(None)` (explicit "clear to NULL"), distinct from absent → `None`
+/// ("leave untouched"). serde's default for `Option<Option<T>>` collapses both to
+/// `None`; this helper — only invoked when the key is present — recovers the
+/// three-way distinction. #239 needs it: editing a bounded `allow` Trigger back to
+/// blank must clear the stored cap to unbounded, not silently keep the old value.
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 /// The first scheduled fire for a freshly created or rescheduled Trigger, as
@@ -770,6 +799,15 @@ async fn create_trigger(
                 .into_response();
         }
     };
+
+    // A bounded-allow cap, when present, must be >= 1 (#239).
+    if let Err(msg) = validate_max_concurrent(req.max_concurrent) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
 
     // Resolve the target pipeline and its prompt_required flag.
     let yaml =
@@ -846,6 +884,7 @@ async fn create_trigger(
         } else {
             "skip".to_string()
         },
+        max_concurrent: req.max_concurrent,
         next_fire_at,
     };
 
@@ -956,6 +995,13 @@ struct PatchTriggerRequest {
     guard_command: Option<Option<String>>,
     #[serde(default)]
     variables: Option<HashMap<String, serde_yaml::Value>>,
+    /// Bounded-`allow` ceiling (#239), double-wrapped: absent = leave, present
+    /// `null` = clear to unbounded, `n` = set. The custom deserializer is what
+    /// makes the present-`null` → `Some(None)` distinction reachable from JSON
+    /// (the sibling `Option<Option<_>>` fields above use plain `#[serde(default)]`,
+    /// where present-`null` collapses to `None` and cannot clear).
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    max_concurrent: Option<Option<i64>>,
 }
 
 async fn patch_trigger(
@@ -1022,6 +1068,17 @@ async fn patch_trigger(
         }
     }
 
+    // Validate a max_concurrent edit (Some(Some(n)) sets; Some(None) clears) (#239).
+    if let Some(Some(n)) = req.max_concurrent {
+        if let Err(msg) = validate_max_concurrent(Some(n)) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
     // Re-apply the fire_decision reject rule against the *resulting* config: if
     // the pipeline requires a prompt and the edit would leave neither a guard
     // nor an input template, refuse (mirrors create-time validation).
@@ -1065,6 +1122,7 @@ async fn patch_trigger(
                 "skip".to_string()
             }
         }),
+        max_concurrent: req.max_concurrent,
         next_fire_at,
     };
 
@@ -1457,16 +1515,20 @@ async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
 
 // --- Trigger scheduler ---
 
-/// Whether the Trigger's *own* previous Run is still live. Scans projected Run
-/// state for a run carrying this `triggered_by` whose status is live.
-async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
+/// How many of the Trigger's *own* Runs are still live (#239). Scans projected
+/// Run state for runs carrying this `triggered_by` whose status is live. A
+/// finished/failed Run drops out of the count, freeing a slot — exactly the
+/// "max simultaneous *live*" semantics, with no new state to track. Same O(runs)
+/// projection scan as before, just without the short-circuit.
+async fn trigger_live_run_count(db: &sqlx::SqlitePool, trigger_id: &str) -> usize {
     let run_ids = match load_all_run_ids(db).await {
         Ok(ids) => ids,
         Err(e) => {
             warn!("trigger scheduler: failed to load run ids: {e}");
-            return false;
+            return 0;
         }
     };
+    let mut count = 0usize;
     for run_id in run_ids {
         let events = match load_events(db, &run_id).await {
             Ok(e) => e,
@@ -1474,11 +1536,11 @@ async fn trigger_has_live_run(db: &sqlx::SqlitePool, trigger_id: &str) -> bool {
         };
         if let Some(state) = event_log::project(&events) {
             if state.triggered_by.as_deref() == Some(trigger_id) && state.status.is_live() {
-                return true;
+                count += 1;
             }
         }
     }
-    false
+    count
 }
 
 /// Load a Trigger's target pipeline yaml from the library (falling back to a
@@ -1594,13 +1656,24 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
             continue;
         }
 
-        let has_live = trigger_has_live_run(&state.db, &trigger.id).await;
+        let live_count = trigger_live_run_count(&state.db, &trigger.id).await;
         let prompt_required = trigger_prompt_required(state, &trigger);
 
         // Run the guard (if any) off the tick, bounded by a hard timeout, but
         // only when overlap wouldn't already skip — never spend a guard run on a
-        // tick we'd skip anyway.
-        let overlap_skips = has_live && trigger.overlap_policy != "allow";
+        // tick we'd skip anyway. Route this through the same `overlap_ceiling`
+        // the decision core uses (#239) so the guard-gate can never drift from
+        // the fire decision (fire past the cap, or waste a guard run at it).
+        let overlap = if trigger.overlap_policy == "allow" {
+            fire_decision::OverlapPolicy::Allow
+        } else {
+            fire_decision::OverlapPolicy::Skip
+        };
+        let overlap_skips = fire_decision::overlap_ceiling(
+            overlap,
+            trigger.max_concurrent.map(|m| m.max(0) as usize),
+        )
+        .is_some_and(|ceiling| live_count >= ceiling);
         let guard = match (&trigger.guard_command, overlap_skips) {
             (Some(cmd), false) if !cmd.trim().is_empty() => {
                 let cwd = trigger_guard_cwd(state, &trigger);
@@ -1609,7 +1682,7 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
             _ => None,
         };
 
-        let plan = trigger_scheduler::plan_tick(&trigger, now, has_live, guard, prompt_required);
+        let plan = trigger_scheduler::plan_tick(&trigger, now, live_count, guard, prompt_required);
 
         // Recompute the next fire (forward-only).
         if let Err(e) =

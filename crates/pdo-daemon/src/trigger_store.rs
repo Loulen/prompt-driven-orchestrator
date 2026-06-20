@@ -38,6 +38,10 @@ pub struct Trigger {
     pub guard_command: Option<String>,
     /// `"skip"` (default) or `"allow"`.
     pub overlap_policy: String,
+    /// Bounded-`allow` ceiling: max simultaneous live Runs of this Trigger (#239).
+    /// `None` = unbounded (also the effective value under the `skip` policy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent: Option<i64>,
     pub enabled: bool,
     /// The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
     /// Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
@@ -65,6 +69,8 @@ pub struct NewTrigger {
     pub cron: String,
     pub guard_command: Option<String>,
     pub overlap_policy: String,
+    /// Bounded-`allow` ceiling (#239); `None` = unbounded.
+    pub max_concurrent: Option<i64>,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
 }
@@ -106,6 +112,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             cron TEXT NOT NULL,
             guard_command TEXT,
             overlap_policy TEXT NOT NULL DEFAULT 'skip',
+            max_concurrent INTEGER,
             enabled INTEGER NOT NULL DEFAULT 1,
             next_fire_at TEXT,
             last_fired_at TEXT,
@@ -129,6 +136,23 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
+    // Additive migration (#239): a `~/.pdo/pdo.db` created before this column
+    // existed got the table via `CREATE TABLE IF NOT EXISTS` above, which is a
+    // no-op there — so the column must be added out-of-band. There is no
+    // migration runner; this PRAGMA-guarded ALTER is the only durable path. The
+    // guard keeps it idempotent (a bare `ALTER … ADD COLUMN` errors "duplicate
+    // column name" on an already-migrated DB), and is preferred over swallowing
+    // the ALTER error blindly — a swallowed error would hide genuine failures.
+    let has_col = sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'")
+        .fetch_optional(db)
+        .await?
+        .is_some();
+    if !has_col {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN max_concurrent INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -149,8 +173,8 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -163,6 +187,7 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .bind(&new.cron)
     .bind(&new.guard_command)
     .bind(&new.overlap_policy)
+    .bind(new.max_concurrent)
     .bind(&new.next_fire_at)
     .bind(&now)
     .execute(db)
@@ -186,6 +211,7 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         cron: row.get("cron"),
         guard_command: row.get("guard_command"),
         overlap_policy: row.get("overlap_policy"),
+        max_concurrent: row.get("max_concurrent"),
         enabled: row.get::<i64, _>("enabled") != 0,
         next_fire_at: row.get("next_fire_at"),
         last_fired_at: row.get("last_fired_at"),
@@ -333,6 +359,9 @@ pub struct UpdateTrigger {
     pub cron: Option<String>,
     pub guard_command: Option<Option<String>>,
     pub overlap_policy: Option<String>,
+    /// Bounded-`allow` ceiling (#239), double-wrapped like the other nullable
+    /// fields: `None` leaves it, `Some(None)` clears to NULL, `Some(Some(n))` sets.
+    pub max_concurrent: Option<Option<i64>>,
     pub next_fire_at: Option<Option<String>>,
 }
 
@@ -346,6 +375,7 @@ impl UpdateTrigger {
             && self.cron.is_none()
             && self.guard_command.is_none()
             && self.overlap_policy.is_none()
+            && self.max_concurrent.is_none()
             && self.next_fire_at.is_none()
     }
 }
@@ -387,6 +417,9 @@ pub async fn update(
     if edit.overlap_policy.is_some() {
         sets.push("overlap_policy = ?");
     }
+    if edit.max_concurrent.is_some() {
+        sets.push("max_concurrent = ?");
+    }
     if edit.next_fire_at.is_some() {
         sets.push("next_fire_at = ?");
     }
@@ -416,6 +449,9 @@ pub async fn update(
     }
     if let Some(v) = &edit.overlap_policy {
         query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.max_concurrent {
+        query = query.bind(*v);
     }
     if let Some(v) = &edit.next_fire_at {
         query = query.bind(v.clone());
@@ -465,6 +501,7 @@ mod tests {
             cron: cron.to_string(),
             guard_command: None,
             overlap_policy: "skip".to_string(),
+            max_concurrent: None,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }
     }
@@ -761,5 +798,164 @@ mod tests {
             .is_empty());
         set_enabled(&db, &t.id, true).await.unwrap();
         assert!(get(&db, &t.id).await.unwrap().unwrap().enabled);
+    }
+
+    // --- #239: bounded-`allow` max_concurrent persistence ---
+
+    #[tokio::test]
+    async fn create_then_get_round_trips_max_concurrent() {
+        let db = test_db().await;
+
+        let mut bounded = sample("bounded", "0 9 * * *");
+        bounded.overlap_policy = "allow".to_string();
+        bounded.max_concurrent = Some(3);
+        let created = create(&db, bounded).await.unwrap();
+        assert_eq!(created.max_concurrent, Some(3));
+        assert_eq!(
+            get(&db, &created.id).await.unwrap().unwrap().max_concurrent,
+            Some(3)
+        );
+
+        // The default (unbounded) round-trips as NULL.
+        let unbounded = create(&db, sample("unbounded", "0 9 * * *"))
+            .await
+            .unwrap();
+        assert_eq!(unbounded.max_concurrent, None);
+        assert_eq!(
+            get(&db, &unbounded.id).await.unwrap().unwrap().max_concurrent,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn update_sets_and_clears_max_concurrent() {
+        let db = test_db().await;
+        let t = create(&db, sample("capped", "0 9 * * *")).await.unwrap();
+        assert_eq!(t.max_concurrent, None);
+
+        // Some(Some(n)) sets it.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                max_concurrent: Some(Some(5)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().max_concurrent,
+            Some(5)
+        );
+
+        // An unrelated edit (None) leaves it untouched.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                input_template: Some("changed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().max_concurrent,
+            Some(5)
+        );
+
+        // Some(None) clears it back to NULL.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                max_concurrent: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db, &t.id).await.unwrap().unwrap().max_concurrent, None);
+    }
+
+    /// #239 migration: a `~/.pdo/pdo.db` created before `max_concurrent` existed
+    /// must pick up the column on the next `init`, idempotently. `init`'s
+    /// `CREATE TABLE IF NOT EXISTS` is a no-op against a pre-existing table, so
+    /// the PRAGMA-guarded `ALTER` is the only path that migrates it. This builds
+    /// the legacy schema by hand (the real failure mode `sqlite::memory:` after a
+    /// plain `init` cannot reproduce, since a fresh DB already has the column).
+    #[tokio::test]
+    async fn init_is_idempotent_and_adds_max_concurrent_to_legacy_table() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Pre-#239 schema: the `triggers` table WITHOUT `max_concurrent`.
+        sqlx::query(
+            "CREATE TABLE triggers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                pipeline_id TEXT NOT NULL,
+                pipeline_name TEXT NOT NULL DEFAULT '',
+                target_repo TEXT,
+                source_branch TEXT,
+                input_template TEXT NOT NULL DEFAULT '',
+                variables JSON NOT NULL DEFAULT '{}',
+                cron TEXT NOT NULL,
+                guard_command TEXT,
+                overlap_policy TEXT NOT NULL DEFAULT 'skip',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                next_fire_at TEXT,
+                last_fired_at TEXT,
+                last_outcome TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // A legacy row predating the column.
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, cron, created_at)
+             VALUES ('trg-legacy', 'legacy', 'lib-pipe', '0 9 * * *', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // The column does not exist yet.
+        let before = sqlx::query(
+            "SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'",
+        )
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+        assert!(before.is_none(), "precondition: legacy table lacks the column");
+
+        // init migrates it additively.
+        init(&db).await.unwrap();
+
+        let after = sqlx::query(
+            "SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'",
+        )
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+        assert!(after.is_some(), "init must add the max_concurrent column");
+
+        // The legacy row reads back with a NULL (unbounded) cap.
+        let migrated = get(&db, "trg-legacy").await.unwrap().unwrap();
+        assert_eq!(migrated.max_concurrent, None);
+
+        // A second init is a no-op (the PRAGMA guard prevents a duplicate-column ALTER).
+        init(&db).await.unwrap();
+        assert_eq!(
+            get(&db, "trg-legacy").await.unwrap().unwrap().max_concurrent,
+            None
+        );
     }
 }

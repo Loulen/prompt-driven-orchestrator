@@ -460,6 +460,8 @@ Risque assumé : un guard qui renvoie toujours le même work + un pipeline qui n
 
 Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (`running`/`awaiting_user`/`blocked`). Le tick est sauté (loggué « skipped — previous run still active »), pas mis en file. Justification : ferme la fenêtre de course du dedup-par-label (Q4) — tant que le fixer-run-1 travaille l'issue #42, l'issue reste `ready-for-agent`, donc sans skip les polls suivants re-firent sur #42. Le skip est le défaut, surchargeable en `allow` par-Trigger pour qui veut des fires concurrents.
 
+**Recouvrement borné — `allow` + `max_concurrent`** (#239) : `allow` accepte un plafond optionnel `max_concurrent` (entier ≥ 1, nullable). `None`/vide ⇒ concurrence illimitée (compat ascendante des `allow` existants) ; `Some(m)` ⇒ fire tant que le Trigger a `< m` Runs vivants *à lui*, puis skip. Les trois modes se ramènent à un **plafond effectif** unique : `skip` ⇒ plafond 1 (jamais d'empilement sur son propre Run vivant), `allow+None` ⇒ illimité, `allow+Some(m)` ⇒ m. La décision (`fire_decision::overlap_ceiling`) et la gate du guard passent toutes deux par ce même plafond, donc le guard ne tourne jamais sur un tick qu'on sauterait. Le décompte est dérivé de la provenance `triggered_by` (Runs vivants), pas d'un état neuf : un Run qui se termine libère un slot.
+
 **Pas d'empilement de Runs en attente.** On ne crée jamais un Run entièrement « en attente ». La seule attente possible est *au niveau nœud* (back-pressure du cap de sessions, ci-dessous), à l'intérieur d'un Run déjà admis.
 
 ### Mécanisme cron & cycle de vie
@@ -475,11 +477,11 @@ Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (
 
 Les Triggers vivent dans une **nouvelle table `triggers`** de `~/.pdo/pdo.db`, *pas* en YAML sur disque. Un Trigger est de la **config + état de scheduling** (créé via modale, pas un artefact canvas-backed comme un pipeline), et son état mutable (`enabled`, `next_fire_at`, `last_fired_at`, `last_outcome`) serait réécrit à chaque tick — mauvais fit YAML. La requête centrale du scheduler (« quels Triggers sont dûs ») est une requête indexée triviale.
 
-Ligne : `id, name, pipeline_id, target_repo, source_branch, input_template, variables(JSON), cron, guard_command(nullable), overlap_policy, enabled, next_fire_at, last_fired_at, last_outcome`.
+Ligne : `id, name, pipeline_id, target_repo, source_branch, input_template, variables(JSON), cron, guard_command(nullable), overlap_policy, max_concurrent(nullable), enabled, next_fire_at, last_fired_at, last_outcome`. (Pas de migration runner : la colonne `max_concurrent` est ajoutée à `init` via un `ALTER TABLE … ADD COLUMN` idempotent, gardé par un `pragma_table_info`, pour migrer les `pdo.db` antérieurs à #239.)
 
 Ne viole pas l'event-sourcing : l'event log reste la vérité du **Run** (keyé `run_id`) ; un Trigger *produit* des Runs (eux event-sourcés normalement, avec provenance `triggered_by`).
 
-**Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif — `fired→run_id` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`. Répond à la question #1 du debug (« pourquoi mon Trigger n'a pas firé cette nuit ? »). L'onglet Triggers la lit pour « last fired / last skipped + raison ».
+**Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif — `fired→run_id` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`. Répond à la question #1 du debug (« pourquoi mon Trigger n'a pas firé cette nuit ? »). L'onglet Triggers la lit pour « last fired / last skipped + raison ». Un skip dû au plafond borné (#239) **réutilise l'outcome `skipped-overlap`** (pas de nouveau statut à apprendre à l'UI), le plafond étant porté dans la *raison* (« max concurrent runs reached (2/2) ») — la colonne raison du panneau d'historique répond au « pourquoi » précisément.
 
 ### UI — onglet Triggers
 

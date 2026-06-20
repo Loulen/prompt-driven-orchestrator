@@ -100,7 +100,11 @@ export default function TriggerDetailPanel({ trigger, onSelectRun }: Props) {
 
         <ConfigRow icon={<Layers size={12} />} label="Overlap">
           <span className="text-fg-2" data-testid="trigger-detail-overlap">
-            {trigger.overlap_policy === "allow" ? "allow (concurrent fires)" : "skip (default)"}
+            {trigger.overlap_policy === "allow"
+              ? trigger.max_concurrent != null
+                ? `allow (max ${trigger.max_concurrent} concurrent)`
+                : "allow (unlimited concurrent fires)"
+              : "skip (default)"}
           </span>
         </ConfigRow>
 

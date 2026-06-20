@@ -122,6 +122,33 @@ async fn create_trigger_with_guard(
     resp.json().await.unwrap()
 }
 
+/// Create a Trigger with an explicit overlap policy and optional concurrency cap
+/// (#239). `max_concurrent: None` posts no cap (unbounded under `allow`).
+async fn create_trigger_with_overlap(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    overlap_policy: &str,
+    max_concurrent: Option<i64>,
+) -> reqwest::Response {
+    let mut body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "input_template": "audit the codebase",
+        "overlap_policy": overlap_policy,
+    });
+    if let Some(m) = max_concurrent {
+        body["max_concurrent"] = serde_json::json!(m);
+    }
+    reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
 async fn list_runs(daemon: &TestDaemon) -> Vec<serde_json::Value> {
     reqwest::Client::new()
         .get(format!("{}/runs", daemon.url()))
@@ -235,6 +262,64 @@ async fn overlap_skip_while_previous_run_is_live() {
     assert_eq!(fires[1]["outcome"].as_str(), Some("fired"));
 
     cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn bounded_allow_fires_up_to_cap_then_skips() {
+    // #239: an `allow` Trigger with max_concurrent=2 fires while fewer than 2 of
+    // its own Runs are live, then skips once the cap is reached. Each fire leaves
+    // a live Run (the seed pipeline's `solo` node stays running), so the live
+    // count climbs 0 → 1 → 2 and the third tick skips.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let resp = create_trigger_with_overlap(&daemon, "bounded", "* * * * *", "allow", Some(2)).await;
+    assert_eq!(resp.status(), 201, "POST /triggers (bounded allow) should succeed");
+    let trigger: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        trigger["max_concurrent"].as_i64(),
+        Some(2),
+        "the cap must round-trip on create"
+    );
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Tick 1: 0 < 2 → fire. One live Run.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(list_runs(&daemon).await.len(), 1, "first fire (0<2)");
+
+    // Tick 2: 1 < 2 → fire. Two live Runs (concurrency allowed under the cap).
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(list_runs(&daemon).await.len(), 2, "second fire (1<2)");
+
+    // Tick 3: 2 >= 2 → skip. Still two Runs.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        2,
+        "third tick must skip at the cap (2>=2)"
+    );
+
+    // The skip is audited as skipped-overlap, with the cap in the reason.
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("skipped-overlap"));
+    assert!(
+        fires[0]["reason"].as_str().unwrap_or("").contains("2/2"),
+        "the skip reason must carry the cap, got {:?}",
+        fires[0]["reason"]
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn create_rejects_zero_max_concurrent() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = create_trigger_with_overlap(&daemon, "zero", "* * * * *", "allow", Some(0)).await;
+    assert_eq!(resp.status(), 400, "max_concurrent=0 must be rejected");
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("max_concurrent"));
 }
 
 #[tokio::test]
@@ -610,6 +695,7 @@ async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
             "cron": "*/15 * * * *",
             "input_template": "do the new thing",
             "overlap_policy": "allow",
+            "max_concurrent": 4,
         }),
     )
     .await;
@@ -619,12 +705,44 @@ async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
     assert_eq!(after["cron"].as_str(), Some("*/15 * * * *"));
     assert_eq!(after["input_template"].as_str(), Some("do the new thing"));
     assert_eq!(after["overlap_policy"].as_str(), Some("allow"));
+    // The bounded-allow cap round-trips on GET (#239).
+    assert_eq!(after["max_concurrent"].as_i64(), Some(4));
     // Changing the schedule recomputes next_fire_at forward from the new cron.
     let new_next = after["next_fire_at"].as_str().unwrap();
     assert_ne!(
         new_next, original_next,
         "a schedule edit must recompute next_fire_at"
     );
+
+    // Clearing the cap (Some(null)) returns it to unbounded.
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "max_concurrent": null }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        get_trigger(&daemon, &trigger_id).await["max_concurrent"].is_null(),
+        "patching max_concurrent to null must clear the cap"
+    );
+}
+
+#[tokio::test]
+async fn patch_rejects_zero_max_concurrent() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "max_concurrent": 0 }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400, "patching max_concurrent=0 must be rejected");
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("max_concurrent"));
 }
 
 #[tokio::test]

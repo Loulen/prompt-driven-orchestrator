@@ -979,6 +979,11 @@ async fn get_trigger(
 struct PatchTriggerRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Repoint the Trigger to a different library pipeline (#230). Validated
+    /// against the library/repo before applying; the denormalised display name
+    /// and a revived next-fire follow from it.
+    #[serde(default)]
+    pipeline_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
@@ -1057,6 +1062,55 @@ async fn patch_trigger(
         }
     }
 
+    // A pipeline repoint (#230): the target must exist. Resolve and parse its
+    // YAML to capture the display name (denormalised on the row) and the
+    // prompt_required flag (used by the reject rule below). A no-op repoint to
+    // the same id is ignored. Without this, serde silently dropped `pipeline_id`
+    // and a Trigger could never be moved off a wrong or renamed pipeline.
+    let mut repoint: Option<(String, String)> = None;
+    let mut repoint_prompt_required: Option<bool> = None;
+    if let Some(ref new_pid) = req.pipeline_id {
+        if *new_pid != existing.pipeline_id {
+            let yaml = library_store::pipelines::get_yaml(&state.repo_root, new_pid).or_else(|| {
+                std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok()
+            });
+            let yaml = match yaml {
+                Some(y) => y,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("pipeline not found: {new_pid}")
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+            match pipeline::parse_pipeline(&yaml) {
+                Ok(r) => {
+                    repoint_prompt_required = Some(r.pipeline.prompt_required);
+                    repoint = Some((new_pid.clone(), r.pipeline.name.clone()));
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("pipeline parse error: {e}") })),
+                    )
+                        .into_response();
+                }
+            }
+            // Revive the next fire from the existing cron unless a schedule edit
+            // already recomputed it, so a Trigger that went dormant on a
+            // pipeline-id rename comes back to life on repoint instead of
+            // staying dead (Sharp tool; ADR-0012).
+            if next_fire_at.is_none() {
+                if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
+                    next_fire_at = Some(first_next_fire(&schedule));
+                }
+            }
+        }
+    }
+
     // Validate a target-repo edit (Some(Some(path)) means set; Some(None) clears).
     if let Some(Some(ref repo)) = req.target_repo {
         if let Err(msg) = validate_target_repo(repo) {
@@ -1090,7 +1144,10 @@ async fn patch_trigger(
         .input_template
         .clone()
         .unwrap_or_else(|| existing.input_template.clone());
-    let prompt_required = trigger_prompt_required(&state, &existing);
+    // When repointing, the reject rule must judge the *new* pipeline's
+    // prompt_required, not the old one's.
+    let prompt_required =
+        repoint_prompt_required.unwrap_or_else(|| trigger_prompt_required(&state, &existing));
     if prompt_required
         && resulting_guard.as_deref().unwrap_or("").trim().is_empty()
         && resulting_input.trim().is_empty()
@@ -1107,6 +1164,8 @@ async fn patch_trigger(
 
     let edit = trigger_store::UpdateTrigger {
         name: req.name,
+        pipeline_id: repoint.as_ref().map(|(id, _)| id.clone()),
+        pipeline_name: repoint.as_ref().map(|(_, name)| name.clone()),
         target_repo: req.target_repo,
         source_branch: req.source_branch,
         input_template: req.input_template,
@@ -10111,6 +10170,17 @@ mod tests {
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
 
+    /// A prompt-optional repo pipeline, so trigger create/repoint never trips the
+    /// prompt-required reject rule in these route tests.
+    fn write_optional_pipeline(dir: &std::path::Path, id: &str) {
+        let pipelines_dir = dir.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {id}\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{id}.yaml")), yaml).unwrap();
+    }
+
     #[tokio::test]
     async fn sync_run_pipeline_writes_canonical_prompt_path() {
         // #231: run-scoped sync must write each prompt to the canonical
@@ -10254,6 +10324,142 @@ mod tests {
         assert_eq!(required["prompt_required"], serde_json::json!(true));
         let optional = list.iter().find(|p| p["id"] == "optional-pipe").unwrap();
         assert_eq!(optional["prompt_required"], serde_json::json!(false));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_trigger_repoints_to_another_pipeline() {
+        // #230: PATCH /triggers/{id} {pipeline_id} must move the trigger to the
+        // new pipeline — id *and* denormalised name — and persist it, instead of
+        // serde silently dropping an unknown field. Driven end-to-end through the
+        // router so the deserialization path itself is under test.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        write_optional_pipeline(tmp.path(), "weekly-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+
+        // Create a trigger bound to watch-pipe.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "PDO Weekly",
+                            "pipeline_id": "watch-pipe",
+                            "cron": "0 4 * * 1",
+                            "input_template": "x"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["pipeline_id"], "watch-pipe");
+        assert_eq!(created["pipeline_name"], "watch-pipe");
+
+        // Repoint it to weekly-pipe.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/triggers/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "pipeline_id": "weekly-pipe" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated["pipeline_id"], "weekly-pipe");
+        assert_eq!(updated["pipeline_name"], "weekly-pipe");
+
+        // Persisted in the store, not merely echoed back.
+        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
+        assert_eq!(after.pipeline_id, "weekly-pipe");
+        assert_eq!(after.pipeline_name, "weekly-pipe");
+        // The repoint revived the next fire from the trigger's own cron.
+        assert!(after.next_fire_at.is_some());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_trigger_rejects_repoint_to_unknown_pipeline() {
+        // #230: a repoint to a non-existent pipeline is a loud 400, never a
+        // silent success that leaves the trigger dangling.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "T",
+                            "pipeline_id": "watch-pipe",
+                            "cron": "0 4 * * 1",
+                            "input_template": "x"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/triggers/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "pipeline_id": "ghost-pipe" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // The trigger is left exactly as it was.
+        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
+        assert_eq!(after.pipeline_id, "watch-pipe");
     }
 
     #[tokio::test]

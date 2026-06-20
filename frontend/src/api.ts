@@ -281,6 +281,8 @@ export async function fetchTrigger(triggerId: string): Promise<Trigger> {
  */
 export interface UpdateTriggerRequest {
   name?: string;
+  /** Repoint the trigger to a different pipeline (#230). Validated server-side. */
+  pipeline_id?: string;
   enabled?: boolean;
   cron?: string;
   input_template?: string;

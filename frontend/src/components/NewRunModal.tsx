@@ -405,9 +405,12 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
       await flushPendingSaves();
       if (editingTriggerId) {
         // Edit (#162): PATCH the existing Trigger's editable fields. `Some(None)`
-        // semantics: an emptied guard clears it.
+        // semantics: an emptied guard clears it. `pipeline_id` repoints the
+        // trigger to a different pipeline (#230) — previously the editable
+        // dropdown was a phantom control whose change was silently dropped.
         await updateTrigger(editingTriggerId, {
           name: triggerName.trim(),
+          pipeline_id: selectedPipeline.id,
           cron: resolvedCron,
           input_template: input.trim(),
           guard_command: guardCommand.trim() || null,

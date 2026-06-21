@@ -1,4 +1,4 @@
-export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "halted" | "paused" | "archived";
+export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "skipped" | "halted" | "paused" | "archived";
 export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale";
 
 export function isLiveRun(status: RunStatus): boolean {

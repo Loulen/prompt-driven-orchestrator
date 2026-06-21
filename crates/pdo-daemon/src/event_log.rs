@@ -67,6 +67,11 @@ pub enum EventKind {
     PipelineModified,
     RunCompleted,
     RunFailed,
+    /// Graceful no-op (#245): the run fired but there was legitimately nothing
+    /// to do (e.g. an auto-issue selector found its eligible pool emptied
+    /// between guard-eval and node-run). A distinct terminal status from
+    /// `RunFailed` so honest history is not polluted with spurious failures.
+    RunSkipped,
     RunHalted,
     RunPaused,
     RunResumed,
@@ -93,6 +98,10 @@ pub enum RunStatus {
     AwaitingUser,
     Completed,
     Failed,
+    /// Graceful no-op terminal state (#245): the run fired but had nothing to
+    /// do. Terminal and non-`is_live`, distinct from `Completed` (did work) and
+    /// `Failed` (genuine error), so "fired but nothing to do" stays honest.
+    Skipped,
     Halted,
     Paused,
     Archived,
@@ -103,9 +112,10 @@ impl RunStatus {
     /// live, its session-holding nodes still consume an admission slot and a new
     /// trigger fire is blocked by an overlapping run.
     ///
-    /// `Completed`/`Failed`/`Halted`/`Archived` are terminal: such a run spawns
-    /// no new work, so its nodes hold no live session (#215). `Halted` is
-    /// terminal-but-resumable but, while halted, holds nothing either.
+    /// `Completed`/`Failed`/`Skipped`/`Halted`/`Archived` are terminal: such a
+    /// run spawns no new work, so its nodes hold no live session (#215).
+    /// `Skipped` is a graceful no-op (#245); `Halted` is terminal-but-resumable
+    /// but, while halted, holds nothing either.
     pub fn is_live(&self) -> bool {
         matches!(
             self,
@@ -793,6 +803,14 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 state.status = RunStatus::Failed;
                 state.completed_at = Some(event.ts.clone());
             }
+            EventKind::RunSkipped => {
+                // Graceful no-op (#245): terminal, like RunFailed/RunCompleted.
+                // The run reached no `end` node (the selector short-circuited),
+                // so end-node ports stay pending — only the run status reflects
+                // "fired but nothing to do".
+                state.status = RunStatus::Skipped;
+                state.completed_at = Some(event.ts.clone());
+            }
             EventKind::RunHalted => {
                 state.status = RunStatus::Halted;
                 state.completed_at = Some(event.ts.clone());
@@ -1093,6 +1111,38 @@ mod tests {
         assert_eq!(node.status, NodeStatus::Failed);
         assert_eq!(node.failure_reason.as_deref(), Some("could not complete"));
         assert!(node.frontmatter_violations.is_empty());
+    }
+
+    #[test]
+    fn run_skipped_is_a_distinct_terminal_status() {
+        // #245: a graceful no-op completes the selector node and marks the run
+        // Skipped — distinct from Completed (did work) and Failed (error).
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("selector"), Some(1)),
+            make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("selector"),
+                serde_json::json!({ "skipped": true, "reason": "no eligible issue" }),
+            ),
+            make_event_with_payload(
+                EventKind::RunSkipped,
+                None,
+                serde_json::json!({ "reason": "no eligible issue" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Skipped);
+        assert!(!state.status.is_live(), "skipped run must not be live");
+        assert!(state.completed_at.is_some());
+        // The node that skipped is honestly terminal-Completed (it ran and
+        // reached a decision); only the run reflects "nothing to do".
+        assert_eq!(state.nodes["selector"].status, NodeStatus::Completed);
+        assert!(
+            !is_stalled(&state),
+            "a terminal Skipped run is never stalled"
+        );
     }
 
     #[test]

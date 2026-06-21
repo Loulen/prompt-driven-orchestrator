@@ -95,6 +95,15 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
+    /// Graceful no-op (#245): there is legitimately nothing to do, so end the
+    /// run as `skipped` instead of `failed`. Use when a node cannot do its work
+    /// because the input/pool is empty (e.g. an auto-issue selector whose
+    /// eligible issues were all claimed between guard-eval and node-run), NOT
+    /// for genuine errors — reserve `fail` for those.
+    Skip {
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 struct AppState {
@@ -236,6 +245,13 @@ struct NodeFailRequest {
 }
 
 #[derive(Deserialize)]
+struct NodeSkipRequest {
+    reason: String,
+    #[serde(default)]
+    iter: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct RunCommandRequest {
     kind: String,
     #[serde(default)]
@@ -337,6 +353,34 @@ pub fn run_fail(reason: String) -> Result<()> {
 
     if resp.status().is_success() {
         eprintln!("Node {nid} marked failed.");
+    } else {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        anyhow::bail!("daemon returned {status}: {body}");
+    }
+    Ok(())
+}
+
+/// Graceful no-op (#245): mark the current node done-but-skipped and end the run
+/// as `skipped` rather than `failed`. Short-circuits downstream (the run reaches
+/// no `end` node) so a fired-into-an-empty-pool run stays out of the failure
+/// signal.
+pub fn run_skip(reason: String) -> Result<()> {
+    let url = cli_daemon_url();
+    let rid = cli_run_id()?;
+    let nid = cli_node_id()?;
+    let iter = cli_node_iter();
+
+    let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/skip");
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&endpoint)
+        .json(&serde_json::json!({ "reason": reason, "iter": iter }))
+        .send()
+        .context("failed to reach daemon")?;
+
+    if resp.status().is_success() {
+        eprintln!("Node {nid} skipped (graceful no-op); run marked skipped.");
     } else {
         let status = resp.status();
         let body = resp.text().unwrap_or_default();
@@ -1256,6 +1300,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
+        .route("/runs/{run_id}/nodes/{node_id}/skip", post(node_skip))
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
         .route("/runs/{run_id}/nodes/{node_id}/prompt", get(node_prompt))
         .route("/runs/{run_id}/nodes/{node_id}/io", get(node_io))
@@ -5691,6 +5736,119 @@ async fn node_fail(
     (StatusCode::OK, "ok").into_response()
 }
 
+/// Graceful no-op (#245). A node that legitimately has nothing to do (e.g. an
+/// auto-issue selector whose eligible pool emptied between guard-eval and
+/// node-run) calls `pdo skip --reason …` instead of `pdo fail`. The node is
+/// recorded as completed (it ran and reached a decision) and the run ends in the
+/// distinct terminal state `Skipped` — short-circuiting downstream so no bogus
+/// input is propagated, and keeping the failure signal honest. Reserve `fail`
+/// for genuine errors.
+async fn node_skip(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Json(req): Json<NodeSkipRequest>,
+) -> Response {
+    let iter = req.iter.unwrap_or(1);
+
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let pre_run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        }
+    };
+
+    // Same guard as a completion (#212): the skip terminalizes the node as
+    // Completed, so a duplicate skip / a skip on a terminal run must be
+    // rejected/no-op'd exactly like `node_done`, never double-appended.
+    let completion_probe = event_log::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeCompleted,
+        node_id: Some(node_id.clone()),
+        iter: Some(iter),
+        payload: None,
+    };
+    match transition_guard::validate_transition(Some(&pre_run_state), &completion_probe) {
+        transition_guard::Verdict::Reject { reason } => {
+            warn!("node_skip rejected for {node_id} iter {iter} in run {run_id}: {reason}");
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::NoOp { reason } => {
+            info!("node_skip no-op for {node_id} iter {iter} in run {run_id}: {reason}");
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::Allow => {}
+    }
+
+    // Terminalize the node as Completed with a no-op marker. A graceful no-op
+    // produced no outputs and made no code changes, so — unlike `node_done` —
+    // we deliberately skip the sub-worktree merge and output validation: there
+    // is nothing to merge or validate, and the run will not reach downstream.
+    let node_completed = event_log::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeCompleted,
+        node_id: Some(node_id.clone()),
+        iter: Some(iter),
+        payload: Some(serde_json::json!({ "skipped": true, "reason": req.reason })),
+    };
+    if let Err(e) = append_event(&state, &node_completed).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+    }
+
+    // Reap on terminal state (#205): snapshot the pane then kill the session.
+    let repo_root = effective_repo_root(&state, &pre_run_state);
+    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+
+    // End the run as a graceful no-op (#245) — distinct from RunFailed. This
+    // short-circuits downstream: `spawn_ready_after_event` only spawns for a
+    // Running/AwaitingUser run, so no downstream node is dispatched on a
+    // now-`Skipped` run.
+    let run_skipped = event_log::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunSkipped,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": req.reason })),
+    };
+    if let Err(e) = append_event(&state, &run_skipped).await {
+        error!("failed to append run_skipped: {e}");
+    }
+
+    // The run ended: its other NodeRun sessions (if any) will be reaped, freeing
+    // slots. Re-drive throttled `waiting` nodes in other runs (#159).
+    retry_waiting_nodes(&state).await;
+
+    info!(
+        "Node {node_id} skipped (graceful no-op) in run {run_id}: {}",
+        req.reason
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "skipped": true, "reason": req.reason })),
+    )
+        .into_response()
+}
+
 async fn node_start(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -6807,6 +6965,7 @@ async fn run_command(
                 run_state.status,
                 event_log::RunStatus::Completed
                     | event_log::RunStatus::Failed
+                    | event_log::RunStatus::Skipped
                     | event_log::RunStatus::Halted
             );
             if !is_terminal {
@@ -8688,6 +8847,141 @@ mod tests {
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Failed
         );
+    }
+
+    #[tokio::test]
+    async fn node_skip_marks_run_skipped_not_failed() {
+        // #245: a graceful no-op terminalizes the node as Completed and the run
+        // as Skipped — never Failed, and downstream is short-circuited.
+        let state = test_state().await;
+
+        let run_id = "test-skip-run";
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        let node_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("selector".into()),
+            iter: Some(1),
+            payload: None,
+        };
+        append_event(&state, &node_started).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-skip-run/nodes/selector/skip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason": "no eligible issue"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Skipped);
+        assert_ne!(run_state.status, event_log::RunStatus::Failed);
+        // The selector itself is honestly terminal-Completed, not Failed.
+        assert_eq!(
+            run_state.nodes["selector"].status,
+            event_log::NodeStatus::Completed
+        );
+        // No RunFailed event was ever appended.
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "graceful no-op must not append a RunFailed event"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_node_skip_cannot_corrupt_a_terminal_run() {
+        // The first skip terminalizes the run (Skipped). A second skip is then
+        // rejected by the transition guard (409 — "run is Skipped, resume
+        // first"), exactly like a duplicate `pdo complete` on a terminal run
+        // (#212). Crucially, it must NEVER double-append RunSkipped/NodeCompleted.
+        let state = test_state().await;
+
+        let run_id = "test-skip-idem";
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("selector".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let app = build_router(state.clone());
+        let skip = || {
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/test-skip-idem/nodes/selector/skip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason": "nothing to do"}"#))
+                    .unwrap(),
+            )
+        };
+
+        assert_eq!(skip().await.unwrap().status(), StatusCode::OK);
+        // Second skip: rejected because the run is already terminal (Skipped).
+        assert_eq!(skip().await.unwrap().status(), StatusCode::CONFLICT);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let skips = events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::RunSkipped)
+            .count();
+        assert_eq!(skips, 1, "duplicate skip must not double-append RunSkipped");
+        let completions = events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::NodeCompleted)
+            .count();
+        assert_eq!(
+            completions, 1,
+            "duplicate skip must not re-complete the node"
+        );
+        // And the run is still cleanly Skipped — not flipped to Failed.
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Skipped);
     }
 
     async fn seed_completed_run(state: &Arc<AppState>, run_id: &str) {

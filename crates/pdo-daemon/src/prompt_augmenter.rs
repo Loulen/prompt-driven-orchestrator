@@ -356,6 +356,13 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              If you cannot complete the task, signal failure:\n\
              ```\n\
              pdo fail --reason \"<description of the problem>\"\n\
+             ```\n\n\
+             If there is legitimately nothing to do — your input/pool is empty \
+             through no error (e.g. the eligible items were all claimed before \
+             you ran) — record a graceful no-op instead of a failure. This ends \
+             the run as `skipped` (not `failed`) and short-circuits downstream:\n\
+             ```\n\
+             pdo skip --reason \"<why there is nothing to do>\"\n\
              ```\n\n",
         );
     }
@@ -615,6 +622,8 @@ mod tests {
         let preamble = build_preamble(&ctx);
         assert!(preamble.contains("pdo complete"));
         assert!(preamble.contains("pdo fail --reason"));
+        // #245: non-interactive nodes learn the graceful no-op primitive.
+        assert!(preamble.contains("pdo skip --reason"));
     }
 
     #[test]

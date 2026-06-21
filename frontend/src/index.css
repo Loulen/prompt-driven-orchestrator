@@ -56,6 +56,10 @@
   --color-st-blocked-bg: rgba(249, 115, 22, 0.14);
   --color-st-failed: #ef4444;
   --color-st-failed-bg: rgba(239, 68, 68, 0.14);
+  /* Graceful no-op terminal (#245): a calm slate, distinct from failed (red),
+     done (green) and archived (gray) — "fired but nothing to do". */
+  --color-st-skipped: #64748b;
+  --color-st-skipped-bg: rgba(100, 116, 139, 0.14);
   --color-st-archived: #6b7280;
   --color-st-stopped: #9ca3af;
   --color-st-stopped-bg: rgba(156, 163, 175, 0.14);

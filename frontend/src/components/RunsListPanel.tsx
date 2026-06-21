@@ -11,6 +11,7 @@ const STATUS_STYLES: Record<RunStatus, { dot: string; bg: string }> = {
   awaiting_user: { dot: "bg-st-await", bg: "bg-st-await-bg" },
   completed: { dot: "bg-st-done", bg: "bg-st-done-bg" },
   failed: { dot: "bg-st-failed", bg: "bg-st-failed-bg" },
+  skipped: { dot: "bg-st-skipped", bg: "bg-st-skipped-bg" },
   halted: { dot: "bg-st-blocked", bg: "bg-st-blocked-bg" },
   paused: { dot: "bg-st-paused", bg: "bg-st-paused-bg" },
   archived: { dot: "bg-st-archived", bg: "bg-st-archived-bg" },

@@ -44,9 +44,21 @@ describe("RunsListPanel run status rendering", () => {
     expect(dot).toBeInTheDocument();
   });
 
+  it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-1", pipeline_name: "noop-pipe", status: "skipped", started_at: null },
+    ];
+    renderPanel({ runs });
+    const dot = document.querySelector(".bg-st-skipped");
+    expect(dot).toBeInTheDocument();
+    // A skipped run is terminal: it must not read as failed/running.
+    expect(document.querySelector(".bg-st-failed")).not.toBeInTheDocument();
+    expect(document.querySelector(".bg-st-running")).not.toBeInTheDocument();
+  });
+
   it("renders all run statuses without errors", () => {
     const statuses: RunListEntry["status"][] = [
-      "running", "awaiting_user", "completed", "failed", "halted", "paused", "archived",
+      "running", "awaiting_user", "completed", "failed", "skipped", "halted", "paused", "archived",
     ];
     const runs: RunListEntry[] = statuses.map((status, i) => ({
       run_id: `run-${i}`,

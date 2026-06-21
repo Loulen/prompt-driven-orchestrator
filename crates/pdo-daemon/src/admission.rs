@@ -175,6 +175,15 @@ mod tests {
     }
 
     #[test]
+    fn excludes_skipped_run_with_a_running_node() {
+        // #245: a graceful no-op (Skipped) is terminal; a node still projected
+        // Running inside it is a phantom and must not consume an admission slot.
+        let mut skipped = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
+        skipped.status = RunStatus::Skipped;
+        assert_eq!(count_live_node_sessions([&skipped]), 0);
+    }
+
+    #[test]
     fn counts_a_running_node_in_a_paused_run() {
         // Regression guard: Paused is *live*, not terminal. Don't over-exclude
         // it — a paused run's Running node still holds its session and slot.

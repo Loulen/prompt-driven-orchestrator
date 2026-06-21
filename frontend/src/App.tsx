@@ -6,6 +6,7 @@ import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
+import { rightPaneOwner } from "./lib/rightPaneOwner";
 import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
@@ -188,12 +189,45 @@ export default function App() {
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
 
-  // The Trigger backing the right-panel detail view (#162). Shown when a Trigger
-  // is selected and no pipeline/run edit tab owns the canvas.
+  // The Trigger backing the right-panel detail view (#162), shown whenever a
+  // Trigger is selected and the info overlay is closed — even while a run-edit
+  // tab owns the canvas (#247).
+  //
+  // A Trigger detail and a canvas selection compete for the right pane (#247).
+  // The Trigger now wins over a *persistent* run-edit tab (see rightPaneOwner),
+  // so we need an explicit way for the canvas to reclaim the pane — otherwise a
+  // once-selected Trigger would shadow every later node/edge/region inspector.
+  // Selecting a Trigger touches neither `selection` nor the active tab, so the
+  // canvas-focus signal below never fires on a fresh Trigger selection; any
+  // later canvas focus (a node/edge/region selection, or a tab switch/open —
+  // all of which change `selection` or `editActiveTabId`) clears it. Adjusting
+  // state during render (React's recommended reset-on-change pattern) rather
+  // than in an effect avoids painting one stale frame of the Trigger detail.
+  const [lastCanvasFocus, setLastCanvasFocus] = useState({
+    selection,
+    tabId: editActiveTabId,
+  });
+  if (
+    lastCanvasFocus.selection !== selection ||
+    lastCanvasFocus.tabId !== editActiveTabId
+  ) {
+    setLastCanvasFocus({ selection, tabId: editActiveTabId });
+    if (selectedTriggerId !== null) setSelectedTriggerId(null);
+  }
+
   const selectedTrigger =
     selectedTriggerId != null
       ? triggers.find((t) => t.id === selectedTriggerId) ?? null
       : null;
+
+  // Which view owns the right-hand detail pane (#247). A selected Trigger now
+  // wins over a persistent run-edit tab; the canvas-focus reconciliation above
+  // clears `selectedTriggerId` the moment the canvas is touched again.
+  const paneOwner = rightPaneOwner({
+    triggerSelected: selectedTrigger != null,
+    infoPanelOpen,
+    hasEditTab,
+  });
 
   const openTriggerModal = useCallback((prefill: TriggerPrefill | null) => {
     setTriggerPrefill(prefill);
@@ -508,13 +542,13 @@ export default function App() {
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right" className="panel-r">
-            {selectedTrigger && !hasEditTab && !infoPanelOpen ? (
+            {paneOwner === "trigger" && selectedTrigger ? (
               <TriggerDetailPanel
                 key={selectedTrigger.id}
                 trigger={selectedTrigger}
                 onSelectRun={handleSelectRun}
               />
-            ) : infoPanelOpen ? (
+            ) : paneOwner === "info" ? (
               <PipelineInfoPanel
                 key={infoPanelInitialTab ?? "default"}
                 run={isEditingRun ? selectedRun : null}
@@ -525,7 +559,7 @@ export default function App() {
                 initialTab={infoPanelInitialTab}
                 scrollToLine={infoPanelScrollToLine}
               />
-            ) : hasEditTab ? (
+            ) : paneOwner === "editTab" ? (
               <>
                 {selection.kind === "node" && editNodeType != null && editNodeType !== "start" && editNodeType !== "end" ? (
                   <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>

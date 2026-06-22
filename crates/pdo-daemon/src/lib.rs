@@ -1342,6 +1342,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/library/pipelines/{id}",
             axum::routing::delete(delete_library_pipeline),
         )
+        // Static segment after the `{id}` param: axum 0.8 allows this (same
+        // precedent as `/triggers/health` beside `/triggers/{trigger_id}`); the
+        // `/library` proxy prefix already covers it — no vite proxy edit (#224).
+        .route(
+            "/library/pipelines/{id}/duplicate",
+            post(duplicate_library_pipeline),
+        )
         .route("/pipelines/{pipeline_id}/promote", post(promote_pipeline))
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
@@ -2372,6 +2379,42 @@ async fn delete_library_pipeline(
         Ok(false) => (StatusCode::NOT_FOUND, "pipeline template not found").into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// Duplicate a library pipeline template into a clean, unlinked clone (#224).
+/// 404 if the source id is unknown (pre-checked, since `duplicate` returns a
+/// flat `Result<String, String>` that cannot distinguish not-found from a write
+/// error); any other `Err` ⇒ 400. Success mirrors `save_library_pipeline`'s
+/// `201 {id, scope, entry}` body.
+async fn duplicate_library_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if library_store::pipelines::get_path(&state.repo_root, &id).is_none() {
+        return (StatusCode::NOT_FOUND, "pipeline template not found").into_response();
+    }
+    match library_store::pipelines::duplicate(&state.repo_root, &id) {
+        Ok(new_id) => {
+            let scope = library_store::pipelines::get_scope(&state.repo_root, &new_id);
+            let entry = library_store::pipelines::list(&state.repo_root)
+                .into_iter()
+                .find(|e| e.id == new_id);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": new_id,
+                    "scope": scope.map(|s| s.as_str()),
+                    "entry": entry,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e })),
         )
             .into_response(),
@@ -11242,6 +11285,72 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // #224 — POST /library/pipelines/{id}/duplicate.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn duplicate_library_pipeline_returns_201() {
+        let _fake_home = FakeHome::new();
+        // A repo root distinct from HOME so the repo-scope and user-scope library
+        // dirs do not collapse onto one path (they share a relative layout but
+        // different roots in production). Promoting writes to the HOME user dir,
+        // so the entry is genuinely user-scope.
+        let repo = tempfile::tempdir().unwrap();
+        write_test_pipeline(repo.path(), "dupable");
+        library_store::pipelines::promote(repo.path(), "dupable").unwrap();
+
+        let state = test_state_with_dir(repo.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/library/pipelines/dupable/duplicate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_ne!(result["id"].as_str().unwrap(), "dupable");
+        assert_eq!(result["scope"], "user");
+        assert!(result["entry"].is_object());
+
+        // The clone is a separate, unlinked file with the "(copy)" name.
+        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
+        let copy_id = result["id"].as_str().unwrap();
+        assert!(lib_dir.join(format!("{copy_id}.yaml")).exists());
+        assert!(!lib_dir.join(format!("{copy_id}.meta.json")).exists());
+        assert_eq!(result["entry"]["name"], "dupable (copy)");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn duplicate_nonexistent_library_pipeline_returns_404() {
+        let fake_home = FakeHome::new();
+
+        let state = test_state_with_dir(fake_home.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/library/pipelines/does-not-exist/duplicate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

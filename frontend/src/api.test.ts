@@ -4,7 +4,13 @@
 // message must include each rejection reason.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deletePipeline, fetchPipeline, savePipeline, saveRunPipeline } from "./api";
+import {
+  deletePipeline,
+  duplicateLibraryPipeline,
+  fetchPipeline,
+  savePipeline,
+  saveRunPipeline,
+} from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -110,5 +116,32 @@ describe("scope-qualified pipeline ops", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/pipelines/simple-bugfix?scope=library");
     expect(init).toMatchObject({ method: "PUT" });
+  });
+});
+
+// #224 — duplicate a library pipeline template via POST .../duplicate.
+describe("duplicateLibraryPipeline", () => {
+  it("POSTs to /library/pipelines/{id}/duplicate and returns the body", async () => {
+    const fetchMock = captureFetch(201, {
+      id: "fixture-copy",
+      scope: "user",
+      entry: { id: "fixture-copy", name: "fixture (copy)" },
+    });
+    const result = await duplicateLibraryPipeline("fixture");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/library/pipelines/fixture/duplicate");
+    expect(init).toMatchObject({ method: "POST" });
+    expect(result).toMatchObject({ id: "fixture-copy", scope: "user" });
+  });
+
+  it("encodes the id in the URL", async () => {
+    const fetchMock = captureFetch(201, { id: "x", scope: "user", entry: null });
+    await duplicateLibraryPipeline("a b/c");
+    expect(fetchMock.mock.calls[0][0]).toBe("/library/pipelines/a%20b%2Fc/duplicate");
+  });
+
+  it("throws on a non-2xx response", async () => {
+    captureFetch(404, "pipeline template not found");
+    await expect(duplicateLibraryPipeline("ghost")).rejects.toThrow(/404/);
   });
 });

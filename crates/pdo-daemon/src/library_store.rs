@@ -574,6 +574,140 @@ pub mod pipelines {
         Ok(pipeline_id.to_string())
     }
 
+    /// Strip a single trailing ` (copy)` / ` (copy <digits>)` tail from a name,
+    /// yielding the base. Case-sensitive; removes exactly one tail (plus one
+    /// preceding space if present) then re-trims. An all-tail name (e.g.
+    /// `(copy)`) collapses to the empty string — the caller maps that to
+    /// `Untitled`.
+    fn strip_copy_tail(name: &str) -> String {
+        let s = name.trim();
+        strip_one_copy_tail(s).unwrap_or(s).trim().to_string()
+    }
+
+    /// If `s` ends with a `(copy)` / `(copy <digits>)` parenthetical, return the
+    /// slice before the opening `(` (which may carry a trailing space the caller
+    /// re-trims). `None` if there is no such tail. Case-sensitive on `copy`.
+    fn strip_one_copy_tail(s: &str) -> Option<&str> {
+        let inner = s.strip_suffix(')')?; // drop the closing ')'
+        let open = inner.rfind('(')?; // opening paren of the last group
+        let body = &inner[open + 1..]; // content between '(' and ')'
+        let is_copy = body == "copy"
+            || body
+                .strip_prefix("copy ")
+                .map(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+                .unwrap_or(false);
+        if is_copy {
+            // `open` is a byte offset into `inner`, which is a prefix of `s`
+            // (only the final ')' was dropped), so it indexes `s` too.
+            Some(&s[..open])
+        } else {
+            None
+        }
+    }
+
+    /// Pick the first free `"{base} (copy)"`, `"{base} (copy 2)"`, … name,
+    /// compared case-sensitively against `existing`. Empty base ⇒ `Untitled`.
+    fn compute_copy_name(base: &str, existing: &[String]) -> String {
+        let base = if base.is_empty() { "Untitled" } else { base };
+        let first = format!("{base} (copy)");
+        if !existing.iter().any(|e| e == &first) {
+            return first;
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{base} (copy {n})");
+            if !existing.iter().any(|e| e == &candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
+    /// Emit `s` as a double-quoted, escaped YAML scalar. A JSON string literal
+    /// is a valid YAML double-quoted scalar (same `\`/`"`/control-char escapes),
+    /// so we lean on `serde_json` rather than hand-rolling an escaper.
+    fn quote_yaml_scalar(s: &str) -> String {
+        serde_json::to_string(s).unwrap_or_else(|_| format!("{s:?}"))
+    }
+
+    /// Rewrite **only** the value of the single column-0 `name:` line, preserving
+    /// every other byte (comments, key order, unknown top-level keys like
+    /// `auto_merge_resolver`, and per-line terminators). Node `name:` lines are
+    /// indented, so anchoring on a column-0 `name:` is unambiguous. Returns `Err`
+    /// if no such line exists (the source would fail the required-`name` parse).
+    fn rewrite_top_level_name(yaml: &str, new_name: &str) -> Result<String, String> {
+        let quoted = quote_yaml_scalar(new_name);
+        let mut out = String::with_capacity(yaml.len() + quoted.len());
+        let mut replaced = false;
+        for line in yaml.split_inclusive('\n') {
+            if !replaced {
+                let (content, term): (&str, &str) = if let Some(c) = line.strip_suffix("\r\n") {
+                    (c, "\r\n")
+                } else if let Some(c) = line.strip_suffix('\n') {
+                    (c, "\n")
+                } else {
+                    (line, "")
+                };
+                // `starts_with("name:")` already implies column 0 (no leading
+                // whitespace) — a 'n' can't follow indentation.
+                if content.starts_with("name:") {
+                    out.push_str("name: ");
+                    out.push_str(&quoted);
+                    out.push_str(term);
+                    replaced = true;
+                    continue;
+                }
+            }
+            out.push_str(line);
+        }
+        if !replaced {
+            return Err("no top-level `name:` line found".to_string());
+        }
+        Ok(out)
+    }
+
+    /// Duplicate a library pipeline into a clean, **unlinked** fork: fresh id,
+    /// name suffixed `(copy)` / `(copy N)`, and NO `meta.json` / `promoted_from`.
+    /// The copy lands in the same scope as the source. Returns the new id.
+    ///
+    /// The source YAML is rewritten **verbatim except its top-level `name:`
+    /// line** (never re-serialized) so unknown top-level keys, comments, and
+    /// formatting survive a round-trip — see `rewrite_top_level_name`.
+    pub fn duplicate(repo_root: &Path, id: &str) -> Result<String, String> {
+        // 1. Locate source (repo OR user) — one call yields path + scope.
+        let (source_path, scope) =
+            locate(repo_root, id).ok_or_else(|| format!("pipeline not found: {id}"))?;
+
+        // 2. Read raw YAML verbatim (do NOT re-serialize the document).
+        let yaml = std::fs::read_to_string(&source_path)
+            .map_err(|e| format!("cannot read source pipeline: {e}"))?;
+
+        // 3. Source prompts (empty map if .prompts/ is absent — not an error).
+        let prompts = read_prompts_dir(&source_path.with_extension("prompts"));
+
+        // 4. Compute a unique "(copy)" name against all library names (both scopes).
+        let parsed = crate::pipeline::parse_pipeline(&yaml)
+            .map_err(|e| format!("invalid source pipeline YAML: {e}"))?;
+        let base = strip_copy_tail(&parsed.pipeline.name);
+        let existing: Vec<String> = list(repo_root).into_iter().map(|e| e.name).collect();
+        let new_name = compute_copy_name(&base, &existing);
+
+        // 5. Textual rewrite of the single column-0 `name:` line + re-parse
+        //    assertion (parse alone won't catch a no-op rewrite).
+        let rewritten = rewrite_top_level_name(&yaml, &new_name)?;
+        let reparsed = crate::pipeline::parse_pipeline(&rewritten)
+            .map_err(|e| format!("rewritten pipeline YAML invalid: {e}"))?;
+        if reparsed.pipeline.name != new_name {
+            return Err(format!(
+                "name rewrite failed: expected {new_name:?}, got {:?}",
+                reparsed.pipeline.name
+            ));
+        }
+
+        // 6. Clean fork: id=None ⇒ fresh slug, writes YAML + prompts, no meta.json.
+        save(repo_root, None, &new_name, &rewritten, &prompts, scope)
+    }
+
     pub fn check_drift(library_id: &str) -> Option<bool> {
         let lib_dir = user_pipelines_dir()?;
         let lib_path = lib_dir.join(format!("{library_id}.yaml"));
@@ -588,6 +722,117 @@ pub mod pipelines {
             Some(read_meta(&lib_path))
         } else {
             None
+        }
+    }
+
+    /// Unit tests for the pure `(copy)`-naming and YAML-rewrite helpers. They are
+    /// private to this module, so this nested test mod (a descendant) is the only
+    /// place that can exercise them directly — the behavioral `duplicate` tests
+    /// live in the outer `library_store::tests` module against the public fn.
+    #[cfg(test)]
+    mod copy_helpers_tests {
+        use super::*;
+
+        /// A minimal pipeline that satisfies `parse_pipeline` (one start, one
+        /// end) with a column-0 `name:` and indented node `name:` lines.
+        const VALID_YAML: &str = "name: original\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n";
+
+        #[test]
+        fn strip_copy_tail_table() {
+            // (input, expected base) — mirrors the spec truth table.
+            let cases = [
+                ("foo (copy)", "foo"),
+                ("foo (copy 2)", "foo"),
+                ("foo (copy 10)", "foo"),
+                ("foo (copy)(copy)", "foo (copy)"), // strip only ONE tail
+                ("foo (copy) (copy)", "foo (copy)"), // single-strip (chosen)
+                ("(copy)", ""),                     // empty base -> Untitled later
+                (" (copy) ", ""),                   // trim -> strip -> trim
+                ("", ""),                           // empty
+                ("foo (copyright)", "foo (copyright)"), // ')' must follow copy/digits
+                ("foo (Copy)", "foo (Copy)"),       // case-sensitive
+                ("foo  (copy)", "foo"),             // eats one space, re-trim removes rest
+            ];
+            for (input, expected) in cases {
+                assert_eq!(strip_copy_tail(input), expected, "input: {input:?}");
+            }
+        }
+
+        #[test]
+        fn compute_copy_name_first_free() {
+            assert_eq!(compute_copy_name("foo", &[]), "foo (copy)");
+        }
+
+        #[test]
+        fn compute_copy_name_collision_bumps() {
+            let existing = vec!["foo (copy)".to_string()];
+            assert_eq!(compute_copy_name("foo", &existing), "foo (copy 2)");
+            let existing = vec!["foo (copy)".to_string(), "foo (copy 2)".to_string()];
+            assert_eq!(compute_copy_name("foo", &existing), "foo (copy 3)");
+        }
+
+        #[test]
+        fn compute_copy_name_empty_base_is_untitled() {
+            assert_eq!(compute_copy_name("", &[]), "Untitled (copy)");
+        }
+
+        #[test]
+        fn compute_copy_name_is_case_sensitive() {
+            // "Foo (copy)" must NOT satisfy a request for base "foo".
+            let existing = vec!["Foo (copy)".to_string()];
+            assert_eq!(compute_copy_name("foo", &existing), "foo (copy)");
+        }
+
+        #[test]
+        fn rewrite_top_level_name_replaces_only_first_column0_name() {
+            let out = rewrite_top_level_name(VALID_YAML, "new name").unwrap();
+            assert!(out.starts_with("name: \"new name\"\n"));
+            // Indented node `name:` lines are untouched.
+            assert!(out.contains("    name: Start\n"));
+            assert!(out.contains("    name: End\n"));
+            // Re-parsing yields exactly the requested name.
+            let parsed = crate::pipeline::parse_pipeline(&out).unwrap();
+            assert_eq!(parsed.pipeline.name, "new name");
+        }
+
+        #[test]
+        fn rewrite_top_level_name_preserves_unknown_keys_and_comments() {
+            let yaml = "# leading comment\nname: review-loop\nversion: \"1.0\"\nnodes:\n  - id: end\n    name: End\n    type: end\nauto_merge_resolver: true\n";
+            let out = rewrite_top_level_name(yaml, "review-loop (copy)").unwrap();
+            assert!(out.contains("# leading comment\n"));
+            assert!(out.contains("\nauto_merge_resolver: true\n"));
+            assert!(out.contains("name: \"review-loop (copy)\"\n"));
+            // Everything except the name: line is byte-identical.
+            let strip_name = |s: &str| {
+                s.lines()
+                    .filter(|l| !l.starts_with("name:"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert_eq!(strip_name(yaml), strip_name(&out));
+        }
+
+        #[test]
+        fn rewrite_top_level_name_escapes_special_chars() {
+            let tricky = "a\"b\\c\td";
+            let out = rewrite_top_level_name(VALID_YAML, tricky).unwrap();
+            let parsed = crate::pipeline::parse_pipeline(&out).unwrap();
+            assert_eq!(parsed.pipeline.name, tricky);
+        }
+
+        #[test]
+        fn rewrite_top_level_name_errors_without_name_line() {
+            let yaml = "version: \"1.0\"\nnodes: []\n";
+            assert!(rewrite_top_level_name(yaml, "x").is_err());
+        }
+
+        #[test]
+        fn rewrite_top_level_name_preserves_missing_final_newline() {
+            // No trailing newline on the last line must survive.
+            let yaml = "name: a\nversion: \"1.0\"";
+            let out = rewrite_top_level_name(yaml, "b").unwrap();
+            assert!(!out.ends_with('\n'));
+            assert!(out.ends_with("version: \"1.0\""));
         }
     }
 }
@@ -1667,6 +1912,196 @@ mod tests {
 
             pipelines::delete(repo, &slug).unwrap();
             assert!(!lib_dir.join(format!("{slug}.meta.json")).exists());
+        });
+    }
+
+    // --- #224: duplicate a library pipeline (unlinked clone) ---
+
+    /// A library YAML with a leading comment and a non-`PipelineDef` top-level
+    /// key (`auto_merge_resolver`) — the byte-fidelity bait, mirrors
+    /// `review-loop.yaml`.
+    fn fixture_with_extras(name: &str) -> String {
+        format!(
+            "# a comment that must survive\nname: {name}\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nauto_merge_resolver: true\n"
+        )
+    }
+
+    #[test]
+    fn duplicate_creates_unlinked_copy_with_copy_name() {
+        with_temp_repo(|repo| {
+            let id = pipelines::save(
+                repo,
+                None,
+                "My Pipeline",
+                &sample_pipeline_yaml("My Pipeline"),
+                &HashMap::new(),
+                pipelines::Scope::User,
+            )
+            .unwrap();
+
+            let copy_id = pipelines::duplicate(repo, &id).unwrap();
+            assert_ne!(copy_id, id, "copy must have a fresh id");
+
+            let all = pipelines::list(repo);
+            let copy = all.iter().find(|e| e.id == copy_id).unwrap();
+            assert_eq!(copy.name, "My Pipeline (copy)");
+            assert_eq!(copy.scope, pipelines::Scope::User);
+            // Source is untouched.
+            assert!(all.iter().any(|e| e.id == id && e.name == "My Pipeline"));
+        });
+    }
+
+    #[test]
+    fn duplicate_preserves_yaml_verbatim_except_name() {
+        with_temp_repo(|repo| {
+            let yaml = fixture_with_extras("Fixture");
+            let id = pipelines::save(
+                repo,
+                None,
+                "Fixture",
+                &yaml,
+                &HashMap::new(),
+                pipelines::Scope::User,
+            )
+            .unwrap();
+
+            let copy_id = pipelines::duplicate(repo, &id).unwrap();
+            let lib_dir = pipelines::user_pipelines_dir().unwrap();
+            let copy_yaml =
+                std::fs::read_to_string(lib_dir.join(format!("{copy_id}.yaml"))).unwrap();
+
+            // The unknown top-level key and the comment survive verbatim.
+            assert!(
+                copy_yaml.contains("\nauto_merge_resolver: true\n"),
+                "unknown top-level key must survive: {copy_yaml}"
+            );
+            assert!(copy_yaml.starts_with("# a comment that must survive\n"));
+            // Only the name: line changed.
+            assert!(copy_yaml.contains("name: \"Fixture (copy)\"\n"));
+            let strip_name = |s: &str| {
+                s.lines()
+                    .filter(|l| !l.starts_with("name:"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert_eq!(
+                strip_name(&yaml),
+                strip_name(&copy_yaml),
+                "every non-name line must be byte-identical"
+            );
+        });
+    }
+
+    #[test]
+    fn duplicate_copies_prompts() {
+        with_temp_repo(|repo| {
+            let mut prompts = HashMap::new();
+            prompts.insert("planner".to_string(), "You plan things.".to_string());
+            let id = pipelines::save(
+                repo,
+                None,
+                "Prompted",
+                &sample_pipeline_yaml("Prompted"),
+                &prompts,
+                pipelines::Scope::User,
+            )
+            .unwrap();
+
+            let copy_id = pipelines::duplicate(repo, &id).unwrap();
+            let lib_dir = pipelines::user_pipelines_dir().unwrap();
+            let copy_prompt = lib_dir.join(format!("{copy_id}.prompts")).join("planner.md");
+            assert_eq!(
+                std::fs::read_to_string(&copy_prompt).unwrap(),
+                "You plan things."
+            );
+        });
+    }
+
+    #[test]
+    fn duplicate_of_promoted_source_has_no_meta() {
+        with_temp_repo(|repo| {
+            // Promote a repo pipeline -> a user-scope library entry WITH meta.json.
+            let slug = create_repo_pipeline(repo, "Promoted");
+            pipelines::promote(repo, &slug).unwrap();
+            let lib_dir = pipelines::user_pipelines_dir().unwrap();
+            assert!(lib_dir.join(format!("{slug}.meta.json")).exists());
+
+            // Duplicating it yields a clean fork: no meta.json, no promoted_from.
+            let copy_id = pipelines::duplicate(repo, &slug).unwrap();
+            assert!(
+                !lib_dir.join(format!("{copy_id}.meta.json")).exists(),
+                "the copy must carry no promotion sidecar"
+            );
+            let meta = pipelines::get_meta(&copy_id).unwrap();
+            assert!(meta.promoted_from.is_none());
+        });
+    }
+
+    #[test]
+    fn duplicate_preserves_repo_scope() {
+        with_temp_repo(|repo| {
+            let id = pipelines::save(
+                repo,
+                None,
+                "Repo Source",
+                &sample_pipeline_yaml("Repo Source"),
+                &HashMap::new(),
+                pipelines::Scope::Repo,
+            )
+            .unwrap();
+
+            let copy_id = pipelines::duplicate(repo, &id).unwrap();
+            assert!(pipelines::repo_pipelines_dir(repo)
+                .join(format!("{copy_id}.yaml"))
+                .exists());
+            let all = pipelines::list(repo);
+            let copy = all.iter().find(|e| e.id == copy_id).unwrap();
+            assert_eq!(copy.scope, pipelines::Scope::Repo);
+        });
+    }
+
+    #[test]
+    fn duplicate_twice_yields_copy_then_copy_2() {
+        with_temp_repo(|repo| {
+            let id = pipelines::save(
+                repo,
+                None,
+                "Twice",
+                &sample_pipeline_yaml("Twice"),
+                &HashMap::new(),
+                pipelines::Scope::User,
+            )
+            .unwrap();
+
+            let copy1 = pipelines::duplicate(repo, &id).unwrap();
+            let copy2 = pipelines::duplicate(repo, &id).unwrap();
+            assert_ne!(copy1, copy2);
+
+            let all = pipelines::list(repo);
+            let n1 = &all.iter().find(|e| e.id == copy1).unwrap().name;
+            let n2 = &all.iter().find(|e| e.id == copy2).unwrap().name;
+            assert_eq!(n1, "Twice (copy)");
+            assert_eq!(n2, "Twice (copy 2)");
+        });
+    }
+
+    #[test]
+    fn duplicate_nonexistent_errors() {
+        with_temp_repo(|repo| {
+            assert!(pipelines::duplicate(repo, "nonexistent").is_err());
+        });
+    }
+
+    #[test]
+    fn duplicate_invalid_yaml_errors() {
+        with_temp_repo(|repo| {
+            // Write a name-less YAML straight to the library dir (bypassing
+            // `save`'s validation) so `duplicate` hits the parse failure.
+            let lib_dir = pipelines::user_pipelines_dir().unwrap();
+            std::fs::create_dir_all(&lib_dir).unwrap();
+            std::fs::write(lib_dir.join("broken.yaml"), "version: \"1.0\"\nnodes: []\n").unwrap();
+
+            assert!(pipelines::duplicate(repo, "broken").is_err());
         });
     }
 }

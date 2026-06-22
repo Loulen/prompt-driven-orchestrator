@@ -3,12 +3,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { deletePipeline, fetchPipelines, renameRun } from "../api";
+import { deletePipeline, duplicateLibraryPipeline, fetchPipelines, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockDeletePipeline = vi.mocked(deletePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
+const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -16,6 +17,9 @@ vi.mock("../api", () => ({
   renameRun: vi.fn().mockResolvedValue(undefined),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
+  duplicateLibraryPipeline: vi
+    .fn()
+    .mockResolvedValue({ id: "x-copy", scope: "user", entry: null }),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   deleteTrigger: vi.fn().mockResolvedValue(undefined),
   fetchPipelines: vi.fn().mockResolvedValue([]),
@@ -251,5 +255,98 @@ describe("UnifiedLeftPanel library-scoped delete (#216)", () => {
     await waitFor(() =>
       expect(mockDeletePipeline).toHaveBeenCalledWith("simple-bugfix", "library"),
     );
+  });
+});
+
+// #224 — a hover Copy icon on library-only rows duplicates the template into an
+// unlinked clone. It must NOT appear on starred block-1 rows (which carry a
+// working pipeline id, not a library id).
+describe("UnifiedLeftPanel library duplicate (#224)", () => {
+  const libOnly: LibraryPipelineEntry = {
+    id: "fixture",
+    name: "fixture",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  function renderWithLib(onChanged: () => void = noop) {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={onChanged}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+  }
+
+  it("renders the duplicate button on a library-only row", () => {
+    renderWithLib();
+    expect(screen.getByTestId("library-only-entry")).toBeInTheDocument();
+    expect(screen.getByTestId("library-duplicate-button")).toBeInTheDocument();
+  });
+
+  it("calls duplicateLibraryPipeline(id) and refreshes on click", async () => {
+    const onChanged = vi.fn();
+    renderWithLib(onChanged);
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("busy-guards a double-click so it fires once", async () => {
+    renderWithLib();
+    const btn = screen.getByTestId("library-duplicate-button");
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("does not render a duplicate button on a starred block-1 working row", async () => {
+    // A working pipeline whose name matches a library entry renders in block 1
+    // (starred) and filters the library-only row out. It exposes Delete, never
+    // a duplicate affordance.
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture",
+        scope: "repo",
+        path: "/repo/.pdo/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {},
+      },
+    ]);
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+
+    await screen.findByTestId("left-panel-star");
+    expect(screen.getByRole("button", { name: "Delete pipeline" })).toBeInTheDocument();
+    expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
   });
 });

@@ -766,6 +766,21 @@ export async function saveLibraryPipeline(
   return resp.json();
 }
 
+/// Duplicate a library pipeline template into an unlinked clone: fresh id, name
+/// suffixed `(copy)` / `(copy N)`, no promotion metadata (#224). Returns the new
+/// id, its scope, and the freshly-listed library entry (or null if the list
+/// race-loses the just-created file).
+export async function duplicateLibraryPipeline(
+  id: string,
+): Promise<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }> {
+  const resp = await fetch(
+    `${BASE}/library/pipelines/${encodeURIComponent(id)}/duplicate`,
+    { method: "POST" },
+  );
+  if (!resp.ok) throw new Error(`POST /library/pipelines/${id}/duplicate failed: ${resp.status}`);
+  return resp.json();
+}
+
 // --- Diff API ---
 
 export async function fetchRunDiff(runId: string): Promise<string> {

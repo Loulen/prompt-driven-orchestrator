@@ -5,7 +5,9 @@ import remarkGfm from "remark-gfm";
 import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
 import type { IterationInfo, PortType } from "../types";
+import type { Element } from "hast";
 import ImageLightbox from "./ImageLightbox";
+import MermaidDiagram from "./MermaidDiagram";
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -303,6 +305,32 @@ export default function MarkdownArtifactModal({
                             }}
                           />
                         );
+                      },
+                      // A ```mermaid fenced block parses to
+                      // <pre><code class="language-mermaid">src</code></pre>.
+                      // Detect it on the child <code> and unwrap to a rendered
+                      // SVG diagram; every other block falls through to a plain
+                      // <pre>. We override `pre` (not `code`) to avoid emitting a
+                      // <div> inside a <pre> (invalid nesting). Regular ```ts /
+                      // ```bash fences are untouched. (#240)
+                      pre: ({ node, children, ...rest }) => {
+                        const child = node?.children?.[0];
+                        const isMermaid =
+                          child?.type === "element" &&
+                          child.tagName === "code" &&
+                          (
+                            (child.properties?.className as string[]) ?? []
+                          ).includes("language-mermaid");
+                        if (isMermaid) {
+                          const codeEl = child as Element;
+                          const text = codeEl.children?.[0];
+                          const source =
+                            text && text.type === "text"
+                              ? text.value.replace(/\n$/, "")
+                              : "";
+                          return <MermaidDiagram source={source} />;
+                        }
+                        return <pre {...rest}>{children}</pre>;
                       },
                     }}
                   >

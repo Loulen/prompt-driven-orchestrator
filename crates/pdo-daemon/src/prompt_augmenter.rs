@@ -490,6 +490,8 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"cleanup_run"}}'
 ```
 
+**Never call `cleanup_run` on your own initiative.** It is destructive and irreversible: it kills every active node session and removes the run's worktrees, branches, and artifacts from disk. Always check with the user first and wait for explicit confirmation before issuing it — even if you believe the run is stuck or finished.
+
 ### 8. rename_run
 
 Set or update the display name of this run.
@@ -1203,6 +1205,22 @@ mod tests {
     fn manager_preamble_omits_auto_name_instruction_when_name_provided() {
         let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
         assert!(!preamble.contains("No display name was provided"));
+    }
+
+    #[test]
+    fn manager_preamble_cleanup_run_has_self_initiative_guardrail() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+        let section7 = preamble
+            .split("### 7. cleanup_run")
+            .nth(1)
+            .expect("preamble should contain the cleanup_run section")
+            .split("### 8.")
+            .next()
+            .expect("cleanup_run section should be delimited by section 8");
+        assert!(
+            section7.contains("Never call `cleanup_run` on your own initiative"),
+            "section 7 should carry the self-initiative guardrail, got: {section7}"
+        );
     }
 
     // --- image port type preamble tests ---

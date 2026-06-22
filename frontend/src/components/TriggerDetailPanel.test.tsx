@@ -38,6 +38,9 @@ function fire(overrides: Partial<TriggerFire> = {}): TriggerFire {
     outcome: "fired",
     reason: null,
     run_id: "20260606-090000-abc1234",
+    guard_stdout: null,
+    guard_stderr: null,
+    guard_exit_code: null,
     ...overrides,
   };
 }
@@ -135,5 +138,94 @@ describe("TriggerDetailPanel", () => {
       />,
     );
     expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent("skip (default)");
+  });
+
+  // --- #244: guard-output disclosure on guard-exit-nonzero rows ---
+
+  it("shows no guard-output toggle on a non-guard (fired) row", async () => {
+    fetchTriggerFires.mockResolvedValue([fire()]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+    await screen.findByTestId("fire-entry");
+    expect(screen.queryByTestId("fire-guard-output-toggle")).not.toBeInTheDocument();
+  });
+
+  it("shows no guard-output toggle on a guard-error row (D2)", async () => {
+    // guard-error already surfaces its detail via `reason`; no captured streams.
+    fetchTriggerFires.mockResolvedValue([
+      fire({ id: 5, outcome: "guard-error", reason: "guard timed out", run_id: null }),
+    ]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+    expect(await screen.findByText(/guard-error/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("fire-guard-output-toggle")).not.toBeInTheDocument();
+  });
+
+  it("reveals exit code + both streams behind the toggle on a guard-exit-nonzero row", async () => {
+    fetchTriggerFires.mockResolvedValue([
+      fire({
+        id: 6,
+        outcome: "guard-exit-nonzero",
+        reason: "guard exited non-zero",
+        run_id: null,
+        guard_stdout: "checked 0 issues",
+        guard_stderr: "gh: no work to do",
+        guard_exit_code: 7,
+      }),
+    ]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+
+    const toggle = await screen.findByTestId("fire-guard-output-toggle");
+    // Collapsed by default: the output container is absent.
+    expect(screen.queryByTestId("fire-guard-output")).not.toBeInTheDocument();
+
+    toggle.click();
+
+    const output = await screen.findByTestId("fire-guard-output");
+    expect(output).toHaveTextContent("7");
+    expect(output).toHaveTextContent("checked 0 issues");
+    expect(output).toHaveTextContent("gh: no work to do");
+  });
+
+  it("omits an empty stream block (stdout empty, stderr present)", async () => {
+    fetchTriggerFires.mockResolvedValue([
+      fire({
+        id: 7,
+        outcome: "guard-exit-nonzero",
+        reason: "guard exited non-zero",
+        run_id: null,
+        guard_stdout: "",
+        guard_stderr: "gh: no work to do",
+        guard_exit_code: 1,
+      }),
+    ]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+
+    (await screen.findByTestId("fire-guard-output-toggle")).click();
+    const output = await screen.findByTestId("fire-guard-output");
+    expect(output).toHaveTextContent("stderr");
+    expect(output).toHaveTextContent("gh: no work to do");
+    // The empty stdout stream renders no labelled block.
+    expect(output).not.toHaveTextContent("stdout");
+  });
+
+  it("shows the toggle when only the exit code is present (empty streams)", async () => {
+    // A bare `exit 3` guard prints nothing; the exit code alone is the diagnostic.
+    fetchTriggerFires.mockResolvedValue([
+      fire({
+        id: 8,
+        outcome: "guard-exit-nonzero",
+        reason: "guard exited non-zero",
+        run_id: null,
+        guard_stdout: "",
+        guard_stderr: "",
+        guard_exit_code: 3,
+      }),
+    ]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+
+    (await screen.findByTestId("fire-guard-output-toggle")).click();
+    const output = await screen.findByTestId("fire-guard-output");
+    expect(output).toHaveTextContent("3");
+    expect(output).not.toHaveTextContent("stdout");
+    expect(output).not.toHaveTextContent("stderr");
   });
 });

@@ -36,14 +36,20 @@ pub fn overlap_ceiling(overlap: OverlapPolicy, max_concurrent: Option<usize>) ->
     }
 }
 
-/// Outcome of running a guard command (slice #161 will populate this; the
-/// cron-only scheduler always passes `None`).
+/// Outcome of running a guard command. The guard is live (wired in `lib.rs`);
+/// cron-only triggers (no guard) pass `None` to the decision core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardResult {
     /// Guard exited 0; its (possibly empty) stdout becomes the input source.
     Pass { stdout: String },
-    /// Guard exited non-zero: no work to do, skip without error.
-    Skip,
+    /// Guard exited non-zero: no work to do, skip without error. Carries what the
+    /// guard printed (tail-capped diagnostics) so the fire history can explain
+    /// *why* it skipped (#244). `exit_code` is `None` when signal-killed.
+    Skip {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i32>,
+    },
     /// Guard could not be evaluated (spawn error or timeout).
     Error { detail: String },
 }
@@ -88,8 +94,13 @@ pub enum SkipReason {
     OverlapPreviousRunLive,
     /// The Trigger is at its bounded-`allow` ceiling: `live` >= `max` (#239).
     OverlapMaxConcurrentReached { live: usize, max: usize },
-    /// Guard exited non-zero (no work to do).
-    GuardExitNonZero,
+    /// Guard exited non-zero (no work to do). Carries the guard's captured
+    /// stdout/stderr/exit code so the fire history can explain the skip (#244).
+    GuardExitNonZero {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i32>,
+    },
     /// Guard could not be evaluated (spawn error or timeout).
     GuardError { detail: String },
 }
@@ -119,11 +130,19 @@ pub fn decide(inputs: &FireInputs) -> FireDecision {
         }
     }
 
-    // Guard branches (slice #161). Cron-only triggers pass `None`.
+    // Guard branches. Cron-only triggers pass `None`.
     let guard_stdout = match &inputs.guard {
-        Some(GuardResult::Skip) => {
+        Some(GuardResult::Skip {
+            stdout,
+            stderr,
+            exit_code,
+        }) => {
             return FireDecision::Skip {
-                reason: Some(SkipReason::GuardExitNonZero),
+                reason: Some(SkipReason::GuardExitNonZero {
+                    stdout: stdout.clone(),
+                    stderr: stderr.clone(),
+                    exit_code: *exit_code,
+                }),
             };
         }
         Some(GuardResult::Error { detail }) => {
@@ -338,13 +357,45 @@ mod tests {
     #[test]
     fn guard_exit_nonzero_skips_without_error() {
         let inputs = FireInputs {
-            guard: Some(GuardResult::Skip),
+            guard: Some(GuardResult::Skip {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(1),
+            }),
             ..base()
         };
         assert_eq!(
             decide(&inputs),
             FireDecision::Skip {
-                reason: Some(SkipReason::GuardExitNonZero)
+                reason: Some(SkipReason::GuardExitNonZero {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(1),
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn guard_exit_nonzero_carries_captured_output_into_skip_reason() {
+        // #244: a non-zero guard's stdout, stderr, and exit code flow through the
+        // decision into the audit reason so the fire history can explain the skip.
+        let inputs = FireInputs {
+            guard: Some(GuardResult::Skip {
+                stdout: "checked 0 issues".to_string(),
+                stderr: "gh: no work to do".to_string(),
+                exit_code: Some(7),
+            }),
+            ..base()
+        };
+        assert_eq!(
+            decide(&inputs),
+            FireDecision::Skip {
+                reason: Some(SkipReason::GuardExitNonZero {
+                    stdout: "checked 0 issues".to_string(),
+                    stderr: "gh: no work to do".to_string(),
+                    exit_code: Some(7),
+                })
             }
         );
     }

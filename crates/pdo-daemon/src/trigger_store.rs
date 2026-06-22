@@ -87,6 +87,15 @@ pub struct TriggerFire {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// Guard diagnostics on a `guard-exit-nonzero` row (#244): what the guard
+    /// printed and the exit status. NULL on every other outcome and on legacy
+    /// rows; tail-capped to 16 KB each (see `guard_runner`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_stderr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_exit_code: Option<i32>,
 }
 
 /// What happened on a tick, persisted to the audit table.
@@ -95,6 +104,10 @@ pub struct FireRecord {
     pub outcome: String,
     pub reason: Option<String>,
     pub run_id: Option<String>,
+    /// Guard diagnostics, set only on a `guard-exit-nonzero` record (#244).
+    pub guard_stdout: Option<String>,
+    pub guard_stderr: Option<String>,
+    pub guard_exit_code: Option<i32>,
 }
 
 /// Create the `triggers` and `trigger_fires` tables if they do not exist.
@@ -130,7 +143,10 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             ts TEXT NOT NULL,
             outcome TEXT NOT NULL,
             reason TEXT,
-            run_id TEXT
+            run_id TEXT,
+            guard_stdout TEXT,
+            guard_stderr TEXT,
+            guard_exit_code INTEGER
         )",
     )
     .execute(db)
@@ -151,6 +167,29 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("ALTER TABLE triggers ADD COLUMN max_concurrent INTEGER")
             .execute(db)
             .await?;
+    }
+
+    // Additive migration (#244): the guard-output columns on `trigger_fires`.
+    // Same PRAGMA-guarded `ALTER` precedent as `max_concurrent` above — a
+    // pre-#244 `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`,
+    // a no-op there, so the columns must be added out-of-band or runtime
+    // INSERT/SELECT would fail. Each guard keeps the ALTER idempotent.
+    for (col, ddl) in [
+        ("guard_stdout", "ALTER TABLE trigger_fires ADD COLUMN guard_stdout TEXT"),
+        ("guard_stderr", "ALTER TABLE trigger_fires ADD COLUMN guard_stderr TEXT"),
+        (
+            "guard_exit_code",
+            "ALTER TABLE trigger_fires ADD COLUMN guard_exit_code INTEGER",
+        ),
+    ] {
+        let exists = sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = ?")
+            .bind(col)
+            .fetch_optional(db)
+            .await?
+            .is_some();
+        if !exists {
+            sqlx::query(ddl).execute(db).await?;
+        }
     }
 
     Ok(())
@@ -278,14 +317,19 @@ pub async fn record_fire(
 ) -> Result<(), sqlx::Error> {
     let ts = crate::event_log::now_iso();
     sqlx::query(
-        "INSERT INTO trigger_fires (trigger_id, ts, outcome, reason, run_id)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO trigger_fires
+            (trigger_id, ts, outcome, reason, run_id,
+             guard_stdout, guard_stderr, guard_exit_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(trigger_id)
     .bind(&ts)
     .bind(&record.outcome)
     .bind(&record.reason)
     .bind(&record.run_id)
+    .bind(&record.guard_stdout)
+    .bind(&record.guard_stderr)
+    .bind(record.guard_exit_code)
     .execute(db)
     .await?;
 
@@ -311,9 +355,13 @@ pub async fn fire_history(
     db: &SqlitePool,
     trigger_id: &str,
 ) -> Result<Vec<TriggerFire>, sqlx::Error> {
+    // Cap the read (#244/D5): the new guard-output blobs make each row heavier
+    // and a minute-cron trigger accrues ~1440 rows/day; the panel only ever
+    // shows the recent tail. Newest-first, bounded to the latest 200.
     let rows = sqlx::query(
-        "SELECT id, trigger_id, ts, outcome, reason, run_id
-         FROM trigger_fires WHERE trigger_id = ? ORDER BY id DESC",
+        "SELECT id, trigger_id, ts, outcome, reason, run_id,
+                guard_stdout, guard_stderr, guard_exit_code
+         FROM trigger_fires WHERE trigger_id = ? ORDER BY id DESC LIMIT 200",
     )
     .bind(trigger_id)
     .fetch_all(db)
@@ -327,6 +375,9 @@ pub async fn fire_history(
             outcome: row.get("outcome"),
             reason: row.get("reason"),
             run_id: row.get("run_id"),
+            guard_stdout: row.get("guard_stdout"),
+            guard_stderr: row.get("guard_stderr"),
+            guard_exit_code: row.get("guard_exit_code"),
         })
         .collect())
 }
@@ -649,6 +700,9 @@ mod tests {
                 outcome: "skipped-overlap".to_string(),
                 reason: Some("previous run still active".to_string()),
                 run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
             },
         )
         .await
@@ -660,6 +714,9 @@ mod tests {
                 outcome: "fired".to_string(),
                 reason: None,
                 run_id: Some("20260606-100000-abc1234".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
             },
         )
         .await
@@ -691,6 +748,9 @@ mod tests {
                 outcome: "guard-exit-nonzero".to_string(),
                 reason: Some("no work".to_string()),
                 run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
             },
         )
         .await
@@ -1015,5 +1075,138 @@ mod tests {
             get(&db, "trg-legacy").await.unwrap().unwrap().max_concurrent,
             None
         );
+    }
+
+    // --- #244: guard-output capture on guard-exit-nonzero fire rows ---
+
+    #[tokio::test]
+    async fn guard_exit_nonzero_fire_persists_and_reads_back_guard_output() {
+        let db = test_db().await;
+        let t = create(&db, sample("guarded", "* * * * *")).await.unwrap();
+
+        record_fire(
+            &db,
+            &t.id,
+            &FireRecord {
+                outcome: "guard-exit-nonzero".to_string(),
+                reason: Some("guard exited non-zero".to_string()),
+                run_id: None,
+                guard_stdout: Some("checked 0 issues".to_string()),
+                guard_stderr: Some("gh: no work to do\n".to_string()),
+                guard_exit_code: Some(7),
+            },
+        )
+        .await
+        .unwrap();
+
+        let history = fire_history(&db, &t.id).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].outcome, "guard-exit-nonzero");
+        assert_eq!(history[0].guard_stdout.as_deref(), Some("checked 0 issues"));
+        assert_eq!(
+            history[0].guard_stderr.as_deref(),
+            Some("gh: no work to do\n")
+        );
+        assert_eq!(history[0].guard_exit_code, Some(7));
+    }
+
+    #[tokio::test]
+    async fn other_outcomes_leave_guard_output_null() {
+        // A non-guard fire keeps the three columns NULL (D2 scoping).
+        let db = test_db().await;
+        let t = create(&db, sample("plain", "* * * * *")).await.unwrap();
+        record_fire(
+            &db,
+            &t.id,
+            &FireRecord {
+                outcome: "fired".to_string(),
+                reason: None,
+                run_id: Some("20260606-100000-abc1234".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+            },
+        )
+        .await
+        .unwrap();
+        let history = fire_history(&db, &t.id).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].guard_stdout.is_none());
+        assert!(history[0].guard_stderr.is_none());
+        assert!(history[0].guard_exit_code.is_none());
+    }
+
+    /// #244 migration: a `~/.pdo/pdo.db` whose `trigger_fires` predates the
+    /// guard-output columns must pick them up on the next `init`, idempotently.
+    /// Mirrors the `max_concurrent` legacy test but on `trigger_fires`. The
+    /// silent-at-runtime trap is exactly here: miss the `ALTER` and prod
+    /// INSERT/SELECT fail at request time, not compile time.
+    #[tokio::test]
+    async fn init_adds_guard_output_columns_to_legacy_trigger_fires_table() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Pre-#244 schema: `trigger_fires` WITHOUT the guard-output columns.
+        sqlx::query(
+            "CREATE TABLE trigger_fires (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger_id TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                run_id TEXT
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // A legacy fire row predating the columns.
+        sqlx::query(
+            "INSERT INTO trigger_fires (trigger_id, ts, outcome, reason, run_id)
+             VALUES ('trg-legacy', '2026-01-01T00:00:00.000Z', 'guard-exit-nonzero', 'no work', NULL)",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // The columns do not exist yet.
+        for col in ["guard_stdout", "guard_stderr", "guard_exit_code"] {
+            let before =
+                sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = ?")
+                    .bind(col)
+                    .fetch_optional(&db)
+                    .await
+                    .unwrap();
+            assert!(before.is_none(), "precondition: legacy table lacks {col}");
+        }
+
+        // init migrates them additively.
+        init(&db).await.unwrap();
+
+        for col in ["guard_stdout", "guard_stderr", "guard_exit_code"] {
+            let after =
+                sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = ?")
+                    .bind(col)
+                    .fetch_optional(&db)
+                    .await
+                    .unwrap();
+            assert!(after.is_some(), "init must add the {col} column");
+        }
+
+        // The legacy row reads back with NULL guard output.
+        let history = fire_history(&db, "trg-legacy").await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].guard_stdout.is_none());
+        assert!(history[0].guard_stderr.is_none());
+        assert!(history[0].guard_exit_code.is_none());
+
+        // A second init is a no-op (the PRAGMA guards prevent duplicate-column ALTERs).
+        init(&db).await.unwrap();
+        let history = fire_history(&db, "trg-legacy").await.unwrap();
+        assert_eq!(history.len(), 1);
     }
 }

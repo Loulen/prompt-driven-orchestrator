@@ -450,8 +450,16 @@ async fn concurrent_ticks_fire_a_due_trigger_exactly_once() {
 async fn guard_exit_nonzero_skips_without_firing() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
-    // Guard exits non-zero: no work to do, so no Run is created.
-    let trigger = create_trigger_with_guard(&daemon, "no-work", "* * * * *", "exit 3").await;
+    // Guard exits non-zero and prints to BOTH streams (the grep-style "no work"
+    // diagnostic): no Run is created, and #244 now captures stdout/stderr/exit
+    // code onto the fire-history row so the user can see *why* it skipped.
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "no-work",
+        "* * * * *",
+        "echo 'why I skipped' >&2; printf 'detail'; exit 3",
+    )
+    .await;
     let trigger_id = trigger["id"].as_str().unwrap().to_string();
 
     daemon.force_trigger_due(&trigger_id).await;
@@ -463,6 +471,26 @@ async fn guard_exit_nonzero_skips_without_firing() {
     );
     let fires = list_fires(&daemon, &trigger_id).await;
     assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
+
+    // #244 acceptance gate: the three guard fields surface on `/fires`.
+    assert_eq!(
+        fires[0]["guard_stdout"].as_str(),
+        Some("detail"),
+        "guard stdout must be captured"
+    );
+    assert!(
+        fires[0]["guard_stderr"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("why I skipped"),
+        "guard stderr must be captured, got {:?}",
+        fires[0]["guard_stderr"]
+    );
+    assert_eq!(
+        fires[0]["guard_exit_code"].as_i64(),
+        Some(3),
+        "guard exit code must be captured"
+    );
 }
 
 #[tokio::test]
@@ -488,6 +516,20 @@ async fn guard_timeout_records_guard_error_and_skips() {
         fires[0]["outcome"].as_str(),
         Some("guard-error"),
         "a guard timeout must record a guard-error outcome"
+    );
+    // D2 negative scope (#244): a guard-error row carries no captured streams —
+    // its diagnostic lives in `reason`. The three guard fields stay absent/null.
+    assert!(
+        fires[0]["guard_stdout"].is_null(),
+        "guard-error must not capture stdout"
+    );
+    assert!(
+        fires[0]["guard_stderr"].is_null(),
+        "guard-error must not capture stderr"
+    );
+    assert!(
+        fires[0]["guard_exit_code"].is_null(),
+        "guard-error must not capture an exit code"
     );
 
     std::env::remove_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV);

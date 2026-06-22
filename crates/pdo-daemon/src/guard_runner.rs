@@ -31,6 +31,30 @@ pub const GUARD_TIMEOUT_MS_OVERRIDE_ENV: &str = "PDO_GUARD_TIMEOUT_MS";
 /// repo, so a guard can reference it without hardcoding a path.
 pub const TARGET_REPO_ENV: &str = "PDO_TARGET_REPO";
 
+/// Cap on the guard output we *capture* for the fire history (#244): each of
+/// stdout/stderr is tail-kept to at most this many bytes. This bounds the
+/// diagnostic blob stored per skip row; it is **never** applied to the `Pass`
+/// path, whose stdout is the actual Run input and must stay byte-for-byte.
+pub const GUARD_CAPTURE_LIMIT_BYTES: usize = 16 * 1024;
+
+/// Prefix prepended to a tail-capped stream so a reader knows the head was
+/// dropped (errors usually print last, so we keep the tail).
+const TRUNCATION_MARKER: &str = "…[truncated, showing last 16 KB]\n";
+
+/// Keep the last `limit` *bytes* of `s`, snapped forward to a UTF-8 char
+/// boundary so the result is always valid UTF-8; prefix [`TRUNCATION_MARKER`]
+/// when truncated. Counts bytes (it's a storage bound), not chars.
+fn cap_tail(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        return s.to_string();
+    }
+    let mut start = s.len() - limit;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{TRUNCATION_MARKER}{}", &s[start..])
+}
+
 /// Resolve the guard timeout, honoring the [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`]
 /// test seam and falling back to [`GUARD_TIMEOUT_SECS`].
 pub fn guard_timeout() -> Duration {
@@ -70,9 +94,20 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
         }
     };
 
-    // Read stdout concurrently with the wait via a separate task; reading only
-    // after exit would deadlock a guard that fills the OS pipe buffer (~64 KB).
+    // Read stdout AND stderr concurrently with the wait via separate tasks;
+    // reading only after exit would deadlock a guard that fills *either* OS pipe
+    // buffer (~64 KB). Draining stderr also fixes a latent deadlock (#244): it was
+    // piped but never read, so a guard flooding stderr blocked forever and was
+    // misclassified as a timeout `guard-error`.
     let stdout_task = child.stdout.take().map(|mut pipe| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf).await;
+            buf
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut pipe| {
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut buf = Vec::new();
@@ -83,11 +118,19 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
 
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => {
-            let stdout = collect_stdout(stdout_task).await;
+            let stdout = collect_stream(stdout_task).await;
             if status.success() {
+                // The input path: stdout is the Run input — keep it uncapped.
                 GuardResult::Pass { stdout }
             } else {
-                GuardResult::Skip
+                // The skip path: capture both streams + the exit code as
+                // diagnostics, tail-capped so a chatty guard can't bloat the DB.
+                let stderr = collect_stream(stderr_task).await;
+                GuardResult::Skip {
+                    stdout: cap_tail(&stdout, GUARD_CAPTURE_LIMIT_BYTES),
+                    stderr: cap_tail(&stderr, GUARD_CAPTURE_LIMIT_BYTES),
+                    exit_code: status.code(),
+                }
             }
         }
         Ok(Err(e)) => GuardResult::Error {
@@ -105,9 +148,10 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
     }
 }
 
-/// Await the stdout-draining task and decode it lossily. Returns empty on a join
-/// or read error so a guard with garbled output still yields a usable outcome.
-async fn collect_stdout(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> String {
+/// Await a stream-draining task (stdout or stderr) and decode it lossily.
+/// Returns empty on a join or read error so a guard with garbled output still
+/// yields a usable outcome.
+async fn collect_stream(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> String {
     match task {
         Some(handle) => match handle.await {
             Ok(buf) => String::from_utf8_lossy(&buf).to_string(),
@@ -137,7 +181,97 @@ mod tests {
     async fn nonzero_exit_skips() {
         let dir = std::env::temp_dir();
         let result = run_guard("exit 1", &dir, Duration::from_secs(5)).await;
-        assert_eq!(result, GuardResult::Skip);
+        assert_eq!(
+            result,
+            GuardResult::Skip {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(1),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn nonzero_exit_captures_stdout_stderr_and_exit_code() {
+        // #244: a non-zero guard's streams + exit code are captured so the fire
+        // history can explain the skip (grep-style guards print the "why" on
+        // stderr while stdout stays empty).
+        let dir = std::env::temp_dir();
+        let result = run_guard(
+            "printf 'checked 0 issues'; echo 'gh: no work to do' >&2; exit 7",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(
+            result,
+            GuardResult::Skip {
+                stdout: "checked 0 issues".to_string(),
+                stderr: "gh: no work to do\n".to_string(),
+                exit_code: Some(7),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn stderr_flood_returns_promptly_not_a_timeout() {
+        // Regression for the latent deadlock (#244): stderr was piped but never
+        // drained, so a guard flooding it past the ~64 KB pipe buffer blocked
+        // forever and was misclassified as a timeout `guard-error`. With the
+        // concurrent stderr drain it must return a Skip well under the timeout.
+        let dir = std::env::temp_dir();
+        let result = run_guard(
+            "yes flood | head -c 200000 >&2; exit 1",
+            &dir,
+            // A generous-but-finite timeout: pre-fix this deadlocks until the
+            // bound, post-fix it returns in milliseconds.
+            Duration::from_secs(10),
+        )
+        .await;
+        match result {
+            GuardResult::Skip {
+                stderr, exit_code, ..
+            } => {
+                assert_eq!(exit_code, Some(1));
+                // Tail-capped to the 16 KB bound (+ marker), never unbounded.
+                assert!(
+                    stderr.len() <= GUARD_CAPTURE_LIMIT_BYTES + TRUNCATION_MARKER.len(),
+                    "stderr must be tail-capped, got {} bytes",
+                    stderr.len()
+                );
+                assert!(
+                    stderr.starts_with(TRUNCATION_MARKER),
+                    "a truncated stream must carry the marker"
+                );
+            }
+            other => panic!("expected a prompt Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cap_tail_keeps_the_last_bytes_with_a_marker() {
+        // Short input passes through untouched.
+        assert_eq!(cap_tail("short", 1024), "short");
+
+        // Long input keeps the tail and prefixes the marker.
+        let s: String = (0..1000).map(|_| 'a').collect();
+        let capped = cap_tail(&s, 100);
+        assert!(capped.starts_with(TRUNCATION_MARKER));
+        assert_eq!(capped.len(), TRUNCATION_MARKER.len() + 100);
+        assert!(capped.ends_with("aaaa"));
+    }
+
+    #[test]
+    fn cap_tail_snaps_to_a_utf8_char_boundary() {
+        // A multi-byte char straddling the cut must not panic and must yield
+        // valid UTF-8; we snap forward, so the cap is the *upper* bound.
+        let s = "é".repeat(100); // each 'é' is 2 bytes → 200 bytes
+        let capped = cap_tail(&s, 51); // 51 lands mid-codepoint
+        // Snapping forward drops the straddling byte, so ≤ 51 bytes of payload.
+        assert!(capped.starts_with(TRUNCATION_MARKER));
+        let payload = &capped[TRUNCATION_MARKER.len()..];
+        assert!(payload.chars().all(|c| c == 'é'));
+        assert!(payload.len() <= 51);
     }
 
     #[tokio::test]

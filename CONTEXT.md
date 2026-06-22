@@ -753,7 +753,7 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 
 ### Persistance et hot-reload
 
-- **Auto-save debounced** (1-2 s d'inactivité) sur toutes les modifications du canvas. Pas de "Ctrl+S", pas de modal. Le canvas EST le fichier YAML + les fichiers prompts.
+- **Save explicite** (#35) : un bouton **Save** dans la barre d'onglets, le raccourci **Cmd/Ctrl+S**, et un **flush automatique au lancement d'un Run** (toutes les modifs non sauvegardées sont écrites avant de démarrer le Run). Pas d'auto-save debounced. Le canvas EST le fichier YAML + les fichiers prompts.
 - **Hot-reload bidirectionnel** : PDO watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
 - **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
 

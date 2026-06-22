@@ -94,6 +94,10 @@ interface EditState {
   // Node mutations
   addNode: (node: NodeDef) => void;
   updateNode: (nodeId: string, updates: Partial<NodeDef>) => void;
+  // Batched position write for a group drag (#232): xyflow's onNodeDragStop
+  // hands us every dragged node at once; persist all their `view` coords in one
+  // store mutation (one re-derivation, one dirty/save unit).
+  updateNodeViews: (updates: { id: string; x: number; y: number }[]) => void;
   deleteNode: (nodeId: string) => void;
   duplicateNode: (nodeId: string) => void;
 
@@ -498,6 +502,24 @@ export const useEditStore = create<EditState>((set, get) => ({
           propagatePortChangesToEdges(tab, nodeId, oldNode.outputs, updates.outputs, "outputs");
         }
       }
+    }));
+  },
+
+  updateNodeViews: (updates: { id: string; x: number; y: number }[]) => {
+    if (updates.length === 0) return; // no-op: don't dirty/re-render on an empty drag
+    set((s) => mutateActiveTab(s, (tab) => {
+      // Round x/y exactly as the single-node drag did, so a group drag writes
+      // the same integer coords. One `set` = one re-derivation = one dirty/save
+      // unit. Positions never touch edges, so this skips
+      // propagatePortChangesToEdges. Unknown ids match nothing and are ignored
+      // (same as updateNode).
+      const moved = new Map(
+        updates.map((u) => [u.id, { x: Math.round(u.x), y: Math.round(u.y) }]),
+      );
+      tab.pipeline.nodes = tab.pipeline.nodes.map((n) => {
+        const view = moved.get(n.id);
+        return view ? { ...n, view } : n;
+      });
     }));
   },
 

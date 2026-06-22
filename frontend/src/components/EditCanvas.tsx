@@ -77,9 +77,12 @@ interface EditNodeData {
 }
 
 // Exported for unit tests; co-located with the canvas it renders.
-export function EditNode({ data, id }: NodeProps<Node<EditNodeData>>) {
+export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
-  const isSelected = selection.kind === "node" && selection.id === id;
+  // OR-in xyflow's own `selected` (#232) so every node in a multi-select group
+  // lights the accent ring during a drag, not just the last-clicked one the
+  // Zustand single-selection tracks.
+  const isSelected = selected || (selection.kind === "node" && selection.id === id);
   const isDropTarget = useIsDropTarget(id);
   const reached = data.reached ?? false;
   // A reached start/end marker borrows the green "completed" cadre (border +
@@ -245,7 +248,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
-  const updateNode = useEditStore((s) => s.updateNode);
+  const updateNodeViews = useEditStore((s) => s.updateNodeViews);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
   const duplicateNode = useEditStore((s) => s.duplicateNode);
@@ -362,12 +365,19 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   );
 
   const onNodeDragStop = useCallback(
-    (_: unknown, node: Node) => {
-      updateNode(node.id, {
-        view: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
-      });
+    (_: unknown, _node: Node, nodes: Node[]) => {
+      // xyflow hands us EVERY dragged node (the selected set, or just [node] for
+      // a single drag) with final positions, in ONE call (#232). Persist them
+      // all in one batched store write — pre-fix we ignored this 3rd arg and
+      // wrote only the grabbed node, so every other selected node snapped back.
+      // Defensively skip the decorative loop-region boxes (already
+      // draggable:false, but belt-and-suspenders against config drift).
+      const moved = nodes
+        .filter((n) => n.type !== "loopRegion")
+        .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
+      if (moved.length > 0) updateNodeViews(moved);
     },
-    [updateNode],
+    [updateNodeViews],
   );
 
   const handleNodeContextMenu = useCallback(

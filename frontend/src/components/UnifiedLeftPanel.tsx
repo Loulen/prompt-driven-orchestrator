@@ -471,6 +471,7 @@ export default function UnifiedLeftPanel({
 
       {confirmCleanup && (
         <CleanupConfirmModal
+          runId={confirmCleanup.runId}
           isLive={
             isLiveRun(confirmCleanup.status)
           }

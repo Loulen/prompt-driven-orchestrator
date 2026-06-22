@@ -181,6 +181,7 @@ export default function RunsListPanel({
 
       {confirmCleanup && (
         <CleanupConfirmModal
+          runId={confirmCleanup.runId}
           isLive={
             isLiveRun(confirmCleanup.status)
           }

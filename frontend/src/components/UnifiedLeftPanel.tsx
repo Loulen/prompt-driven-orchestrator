@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
+import { Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
 import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, forgetRun, renameRun } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
@@ -78,6 +78,8 @@ export default function UnifiedLeftPanel({
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PipelineListEntry | null>(null);
+  // Busy guard so a double-click on a library row's Copy icon fires once (#224).
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadPipelines();
@@ -445,6 +447,27 @@ export default function UnifiedLeftPanel({
                   style={{ fontSize: "9px", fontWeight: 500 }}
                 >
                   {SCOPE_BADGE[lp.scope].label}
+                </span>
+                <span
+                  className="hidden shrink-0 group-hover:inline-flex"
+                  data-testid="library-duplicate-button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (duplicatingId === lp.id) return;
+                    setDuplicatingId(lp.id);
+                    try {
+                      await duplicateLibraryPipeline(lp.id);
+                      onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
+                    } catch { /* ignore */ }
+                    finally { setDuplicatingId(null); }
+                  }}
+                  role="button"
+                  title="Duplicate pipeline"
+                >
+                  <Copy
+                    size={14}
+                    className="text-fg-4 transition-colors hover:text-acc"
+                  />
                 </span>
                 <span
                   className="hidden shrink-0 group-hover:inline-flex"

@@ -16,9 +16,12 @@ interface MergeEditData {
   [key: string]: unknown;
 }
 
-export function MergeEditNode({ data, id }: NodeProps<Node<MergeEditData>>) {
+export function MergeEditNode({ data, id, selected }: NodeProps<Node<MergeEditData>>) {
   const selection = useEditStore((s) => s.selection);
-  const isSelected = selection.kind === "node" && selection.id === id;
+  // OR-in xyflow's `selected` (#232) so a merge node in a multi-select group
+  // lights the ring during a drag too — mirrors MergeRunNode, which already
+  // takes `selected` from props.
+  const isSelected = selected || (selection.kind === "node" && selection.id === id);
   const isDropTarget = useIsDropTarget(id);
 
   return (

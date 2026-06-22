@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
+import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
 import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
@@ -123,6 +124,90 @@ describe("addNode", () => {
     expect(tab.pipeline.nodes).toHaveLength(1);
     expect(tab.pipeline.nodes[0].id).toBe("abc12345");
     expect(tab.pipeline.nodes[0].name).toBe("worker");
+  });
+});
+
+describe("updateNodeViews — batched group-move position write (#232)", () => {
+  function seedThree() {
+    const a = makeNode({ id: "aaaa1111", name: "a", view: { x: 100, y: 100 } });
+    const b = makeNode({ id: "bbbb2222", name: "b", view: { x: 200, y: 200 } });
+    const c = makeNode({ id: "cccc3333", name: "c", view: { x: 300, y: 300 } });
+    seedTabWithPipeline(makePipeline([a, b, c]));
+  }
+
+  it("writes new views for every moved node and leaves un-moved nodes untouched", () => {
+    seedThree();
+
+    useEditStore.getState().updateNodeViews([
+      { id: "aaaa1111", x: 150, y: 160 },
+      { id: "bbbb2222", x: 250, y: 260 },
+    ]);
+
+    const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
+    expect(nodes.find((n) => n.id === "aaaa1111")!.view).toEqual({ x: 150, y: 160 });
+    expect(nodes.find((n) => n.id === "bbbb2222")!.view).toEqual({ x: 250, y: 260 });
+    // C was not in the update list — its original view must be preserved.
+    expect(nodes.find((n) => n.id === "cccc3333")!.view).toEqual({ x: 300, y: 300 });
+  });
+
+  it("sets dirty:true after a non-empty move", () => {
+    seedThree();
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+
+    useEditStore.getState().updateNodeViews([{ id: "aaaa1111", x: 5, y: 6 }]);
+
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(true);
+  });
+
+  it("is a no-op on an empty array (does not dirty the tab)", () => {
+    seedThree();
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+
+    useEditStore.getState().updateNodeViews([]);
+
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+  });
+
+  it("rounds fractional input coordinates (matching the single-node drag)", () => {
+    seedThree();
+
+    useEditStore.getState().updateNodeViews([
+      { id: "aaaa1111", x: 12.7, y: 34.2 },
+      { id: "bbbb2222", x: -5.4, y: 99.5 },
+    ]);
+
+    const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
+    expect(nodes.find((n) => n.id === "aaaa1111")!.view).toEqual({ x: 13, y: 34 });
+    expect(nodes.find((n) => n.id === "bbbb2222")!.view).toEqual({ x: -5, y: 100 });
+  });
+
+  it("silently ignores unknown ids", () => {
+    seedThree();
+
+    useEditStore.getState().updateNodeViews([
+      { id: "aaaa1111", x: 1, y: 2 },
+      { id: "does-not-exist", x: 9, y: 9 },
+    ]);
+
+    const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
+    expect(nodes).toHaveLength(3);
+    expect(nodes.find((n) => n.id === "aaaa1111")!.view).toEqual({ x: 1, y: 2 });
+  });
+
+  it("a group move is layout-only (semantically equivalent to the pre-move pipeline)", () => {
+    seedThree();
+    const before = structuredClone(useEditStore.getState().openTabs[0].pipeline);
+
+    useEditStore.getState().updateNodeViews([
+      { id: "aaaa1111", x: 999, y: 888 },
+      { id: "bbbb2222", x: 777, y: 666 },
+      { id: "cccc3333", x: 555, y: 444 },
+    ]);
+
+    const after = useEditStore.getState().openTabs[0].pipeline;
+    // Position is layout, not semantics: comparablePipelineObject strips `view`,
+    // so the moved pipeline must not register as a library divergence (#168).
+    expect(pipelinesEquivalent(before, after)).toBe(true);
   });
 });
 

@@ -68,6 +68,14 @@ export interface TriggerFire {
   outcome: string;
   reason?: string | null;
   run_id?: string | null;
+  /**
+   * Guard diagnostics on a `guard-exit-nonzero` row (#244): what the guard
+   * printed and its exit status. Absent/null on every other outcome and on
+   * legacy rows; each stream is tail-capped to 16 KB by the daemon.
+   */
+  guard_stdout?: string | null;
+  guard_stderr?: string | null;
+  guard_exit_code?: number | null;
 }
 
 export interface IterationInfo {

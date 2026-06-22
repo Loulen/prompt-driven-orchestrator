@@ -1762,6 +1762,9 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
                 outcome: "error".to_string(),
                 reason: Some(reason),
                 run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
             };
             record_and_broadcast_fire(state, &trigger.id, &record).await;
             continue;
@@ -1823,6 +1826,9 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
                             outcome: "fired".to_string(),
                             reason: None,
                             run_id: Some(run_id),
+                            guard_stdout: None,
+                            guard_stderr: None,
+                            guard_exit_code: None,
                         };
                         record_and_broadcast_fire(state, &trigger.id, &record).await;
                     }
@@ -1836,6 +1842,9 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
                             outcome: "error".to_string(),
                             reason: Some(reason),
                             run_id: None,
+                            guard_stdout: None,
+                            guard_stderr: None,
+                            guard_exit_code: None,
                         };
                         record_and_broadcast_fire(state, &trigger.id, &record).await;
                     }

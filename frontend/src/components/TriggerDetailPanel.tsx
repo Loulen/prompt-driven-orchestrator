@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
-import { Clock, FolderGit2, GitBranch, History, Layers, Shield, Zap } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  FolderGit2,
+  GitBranch,
+  History,
+  Layers,
+  Shield,
+  Zap,
+} from "lucide-react";
 import type { Trigger, TriggerFire } from "../types";
 import { fetchTriggerFires } from "../api";
 import { humanizeCron } from "../cronPresets";
@@ -218,6 +228,17 @@ function FireEntry({
   fire: TriggerFire;
   onSelectRun: (runId: string) => void;
 }) {
+  const [showOutput, setShowOutput] = useState(false);
+
+  // The disclosure is scoped strictly to `guard-exit-nonzero` rows (#244/D2):
+  // `guard-error` already surfaces its detail via `reason`, and legacy/other
+  // rows carry no captured streams. `!= null` on the code so a legit `0` counts.
+  const hasGuardOutput =
+    fire.outcome === "guard-exit-nonzero" &&
+    (fire.guard_exit_code != null ||
+      !!fire.guard_stdout?.trim() ||
+      !!fire.guard_stderr?.trim());
+
   return (
     <div
       className="flex flex-col gap-0.5 rounded border border-line bg-bg-3 px-2 py-1.5"
@@ -246,6 +267,57 @@ function FireEntry({
           {fire.run_id}
         </button>
       )}
+
+      {hasGuardOutput && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowOutput((v) => !v)}
+            className="flex cursor-pointer items-center gap-1 self-start text-fg-3 transition-colors hover:text-fg-2"
+            style={{ fontSize: "10.5px" }}
+            data-testid="fire-guard-output-toggle"
+          >
+            {showOutput ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            Guard output
+          </button>
+          {showOutput && (
+            <div
+              className="flex flex-col gap-1 pt-0.5"
+              data-testid="fire-guard-output"
+            >
+              {fire.guard_exit_code != null && (
+                <div className="text-fg-4" style={{ fontSize: "10px" }}>
+                  exit code{" "}
+                  <span className="font-mono text-fg-2">{fire.guard_exit_code}</span>
+                </div>
+              )}
+              {fire.guard_stdout?.trim() && (
+                <GuardStream label="stdout" text={fire.guard_stdout} />
+              )}
+              {fire.guard_stderr?.trim() && (
+                <GuardStream label="stderr" text={fire.guard_stderr} />
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** A labelled, scrollable block for one captured guard stream (#244). */
+function GuardStream({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="text-fg-4" style={{ fontSize: "10px" }}>
+        {label}
+      </div>
+      <pre
+        className="overflow-x-auto whitespace-pre-wrap rounded border border-line bg-bg-0 px-2 py-1.5 font-mono text-fg-3"
+        style={{ fontSize: "10px" }}
+      >
+        {text}
+      </pre>
     </div>
   );
 }

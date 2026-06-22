@@ -37,8 +37,8 @@ pub struct TickPlan {
 ///
 /// `live_run_count` is the number of the Trigger's *own* Runs still live (#239):
 /// compared against the overlap ceiling (`skip` ⇒ 1, bounded `allow` ⇒
-/// `max_concurrent`). `guard` is the guard result (always `None` in the cron-only
-/// slice).
+/// `max_concurrent`). `guard` is the guard result (`None` for a cron-only trigger
+/// with no guard command; the guard is run and wired in `lib.rs`).
 pub fn plan_tick(
     trigger: &Trigger,
     now: DateTime<Utc>,
@@ -86,6 +86,9 @@ pub fn plan_tick(
                 outcome: "error".to_string(),
                 reason: Some(format!("invalid cron expression: {}", trigger.cron)),
                 run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
             }),
             next_fire_at: None,
             cron_invalid: true,
@@ -125,6 +128,9 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             reason: None,
             // run_id is filled by the caller once the Run is created.
             run_id: None,
+            guard_stdout: None,
+            guard_stderr: None,
+            guard_exit_code: None,
         }),
         FireDecision::Skip { reason: None } => None,
         FireDecision::Skip {
@@ -133,6 +139,9 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             outcome: "skipped-overlap".to_string(),
             reason: Some("previous run still active".to_string()),
             run_id: None,
+            guard_stdout: None,
+            guard_stderr: None,
+            guard_exit_code: None,
         }),
         // A bounded-`allow` skip keeps the `skipped-overlap` outcome (#239) — no
         // new status-dot to teach the UI — but carries the cap in its reason so
@@ -143,13 +152,26 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             outcome: "skipped-overlap".to_string(),
             reason: Some(format!("max concurrent runs reached ({live}/{max})")),
             run_id: None,
+            guard_stdout: None,
+            guard_stderr: None,
+            guard_exit_code: None,
         }),
+        // #244: carry the guard's captured stdout/stderr/exit code onto the audit
+        // row so the fire history can explain *why* the guard skipped.
         FireDecision::Skip {
-            reason: Some(SkipReason::GuardExitNonZero),
+            reason:
+                Some(SkipReason::GuardExitNonZero {
+                    stdout,
+                    stderr,
+                    exit_code,
+                }),
         } => Some(FireRecord {
             outcome: "guard-exit-nonzero".to_string(),
             reason: Some("guard exited non-zero".to_string()),
             run_id: None,
+            guard_stdout: Some(stdout.clone()),
+            guard_stderr: Some(stderr.clone()),
+            guard_exit_code: *exit_code,
         }),
         FireDecision::Skip {
             reason: Some(SkipReason::GuardError { detail }),
@@ -157,11 +179,17 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             outcome: "guard-error".to_string(),
             reason: Some(detail.clone()),
             run_id: None,
+            guard_stdout: None,
+            guard_stderr: None,
+            guard_exit_code: None,
         }),
         FireDecision::Reject { reason } => Some(FireRecord {
             outcome: "error".to_string(),
             reason: Some(reason.clone()),
             run_id: None,
+            guard_stdout: None,
+            guard_stderr: None,
+            guard_exit_code: None,
         }),
     }
 }
@@ -316,5 +344,44 @@ mod tests {
         let plan = plan_tick(&t, now, 0, None, false);
         assert_eq!(plan.decision, FireDecision::Skip { reason: None });
         assert!(plan.record.is_none());
+    }
+
+    #[test]
+    fn guard_exit_nonzero_plan_carries_captured_output_onto_the_record() {
+        // #244: a guard that exits non-zero produces a `guard-exit-nonzero` audit
+        // row carrying the captured stdout/stderr/exit code so the history can
+        // explain the skip.
+        let mut t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
+        t.guard_command = Some("printf 'out'; echo 'err' >&2; exit 7".to_string());
+        let now = at("2026-06-06T10:00:30.000Z");
+        let guard = Some(GuardResult::Skip {
+            stdout: "checked 0 issues".to_string(),
+            stderr: "gh: no work to do".to_string(),
+            exit_code: Some(7),
+        });
+        let plan = plan_tick(&t, now, 0, guard, false);
+
+        assert!(matches!(
+            plan.decision,
+            FireDecision::Skip { reason: Some(_) }
+        ));
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "guard-exit-nonzero");
+        assert_eq!(record.guard_stdout.as_deref(), Some("checked 0 issues"));
+        assert_eq!(record.guard_stderr.as_deref(), Some("gh: no work to do"));
+        assert_eq!(record.guard_exit_code, Some(7));
+    }
+
+    #[test]
+    fn non_guard_records_leave_guard_output_none() {
+        // A plain `fired` record must keep the three guard fields NULL (D2).
+        let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 0, None, false);
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "fired");
+        assert!(record.guard_stdout.is_none());
+        assert!(record.guard_stderr.is_none());
+        assert!(record.guard_exit_code.is_none());
     }
 }

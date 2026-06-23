@@ -3,13 +3,14 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { deletePipeline, duplicateLibraryPipeline, fetchPipelines, renameRun } from "../api";
+import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockDeletePipeline = vi.mocked(deletePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
 const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
+const mockDeleteLibraryPipeline = vi.mocked(deleteLibraryPipeline);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -403,5 +404,176 @@ describe("UnifiedLeftPanel library duplicate (#224)", () => {
     expect(screen.getByRole("button", { name: "Delete pipeline" })).toBeInTheDocument();
     expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+});
+
+// #227 — Deleting a starred pipeline must be able to cascade-remove its durable
+// Library copy. The copy's id is an independently derived slug (it can diverge
+// from the working pipeline's id), so the twin is matched on NAME. The cascade
+// is opt-in (checkbox default OFF) and only offered on a unique same-name twin.
+describe("UnifiedLeftPanel delete cascades to library copy (#227)", () => {
+  // A library twin whose id deliberately differs from the working pipeline's id
+  // — proves the cascade deletes by the twin's id, found via the name match.
+  const twin: LibraryPipelineEntry = {
+    id: "fixture-lib-slug",
+    name: "fixture",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  const workingRow: PipelineListEntry = {
+    id: "fixture-repo-id",
+    name: "fixture",
+    scope: "repo",
+    path: "/repo/.pdo/pipelines/fixture.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {},
+  };
+
+  function renderStarredRow(libraryPipelines: LibraryPipelineEntry[]) {
+    // Make the working-pipeline list deterministic regardless of any leftover
+    // `mockResolvedValueOnce` from earlier tests (vitest's clearAllMocks does
+    // not drain the once-queue): set the base resolved value here.
+    mockFetchPipelines.mockResolvedValue([workingRow]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={libraryPipelines}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    // Wait on the row NAME (always rendered) — the star only shows when a twin
+    // exists, so the no-twin case must not block on it.
+    return screen.findByText(workingRow.name);
+  }
+
+  it("shows the cascade checkbox when the row has exactly one same-name copy", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    const box = screen.getByTestId("delete-cascade-checkbox");
+    expect(box).toBeInTheDocument();
+    expect(screen.getByText("Also remove the Library copy")).toBeInTheDocument();
+  });
+
+  it("hides the cascade checkbox when no same-name copy exists", async () => {
+    await renderStarredRow([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
+  });
+
+  it("defaults the cascade checkbox to OFF", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    const box = screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+  });
+
+  it("resets the checkbox to OFF when reopened on a different target", async () => {
+    // Two starred working rows, each with a unique same-name twin.
+    const alpha: PipelineListEntry = { ...workingRow, id: "alpha-id", name: "alpha", path: "/repo/.pdo/pipelines/alpha.yaml" };
+    const beta: PipelineListEntry = { ...workingRow, id: "beta-id", name: "beta", path: "/repo/.pdo/pipelines/beta.yaml" };
+    mockFetchPipelines.mockResolvedValue([alpha, beta]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[
+          { ...twin, id: "alpha-twin", name: "alpha" },
+          { ...twin, id: "beta-twin", name: "beta" },
+        ]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    await screen.findByText("alpha");
+
+    const trashButtons = screen.getAllByRole("button", { name: "Delete pipeline" });
+    // Open on alpha (index 0), tick the box, then cancel.
+    fireEvent.click(trashButtons[0]);
+    fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+    expect((screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Reopen on beta (index 1) — the checkbox must be back to OFF.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete pipeline" })[1]);
+    expect((screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("cascades deleteLibraryPipeline(twin.id) when the box is ticked", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("fixture-repo-id", "repo"),
+    );
+    await waitFor(() =>
+      // Deletes the twin by its (divergent) library id, found via the name match.
+      expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
+    );
+  });
+
+  it("does NOT cascade when the box is left unticked", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("fixture-repo-id", "repo"),
+    );
+    expect(mockDeleteLibraryPipeline).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the checkbox on an ambiguous double-star (2+ same-name copies)", async () => {
+    await renderStarredRow([
+      { ...twin, id: "fixture-repo-copy", scope: "repo" },
+      { ...twin, id: "fixture-user-copy", scope: "user" },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
+  });
+
+  it("leaves the block-2 library-only delete unaffected (direct, no modal)", async () => {
+    // No matching /pipelines entry ⇒ the twin renders as a library-only row,
+    // whose own trash deletes the copy directly with no confirm modal (#227 d).
+    mockFetchPipelines.mockResolvedValue([]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[twin]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    await screen.findByTestId("library-only-entry");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from library" }));
+
+    await waitFor(() =>
+      expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
+    );
+    expect(screen.queryByTestId("confirm-delete-backdrop")).not.toBeInTheDocument();
+    expect(mockDeletePipeline).not.toHaveBeenCalled();
   });
 });

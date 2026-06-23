@@ -552,7 +552,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       />
       {pipeline && tab && (
         <div
-          className="absolute right-3 top-2 z-10"
+          // #225: z-20 (not z-10) so the star's popover outranks the lint-banner
+          // overlay below (also z-10, painted later in DOM). The popover's own
+          // z-50 is trapped inside this container's stacking context, so the bump
+          // must be on the container itself, not the popover. See Part 2 of #225.
+          className="absolute right-3 top-2 z-20"
           data-testid="canvas-pipeline-star-container"
         >
           <PipelineStar
@@ -564,7 +568,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           />
         </div>
       )}
-      {diagnostics.length > 0 && (
+      {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
+          NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
+          deliberate trade-off ratified at PR time. `tab` is non-null here (early
+          return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
+      {diagnostics.length > 0 && tab.runId == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
           <LintBanner diagnostics={diagnostics} />
         </div>

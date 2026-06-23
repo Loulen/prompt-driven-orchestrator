@@ -223,6 +223,22 @@ struct RunListEntry {
     /// Provenance: the Trigger that created this Run, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     triggered_by: Option<String>,
+    /// Resolved target repo for "group by project" (#258): the run's `target_repo`,
+    /// or the daemon's `repo_root` when unset (`effective_repo_root`). Always
+    /// concrete and always emitted; the client groups the Runs list by this key.
+    effective_repo: String,
+}
+
+/// A Trigger as returned by `GET /triggers`, wrapping the raw stored Trigger with
+/// a resolved `effective_repo` for the "group by project" view (#258). The raw
+/// `trigger.target_repo` stays untouched (it drives the row badge, the detail
+/// panel, and the Run-now pre-fill); `effective_repo` resolves a null target to
+/// the daemon's `repo_root` purely so the client can group by a concrete path.
+#[derive(Serialize)]
+struct TriggerListEntry {
+    #[serde(flatten)]
+    trigger: trigger_store::Trigger,
+    effective_repo: String,
 }
 
 #[derive(Serialize)]
@@ -953,7 +969,25 @@ async fn create_trigger(
 
 async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
     match trigger_store::list(&state.db).await {
-        Ok(triggers) => Json(triggers).into_response(),
+        Ok(triggers) => {
+            // Resolve each Trigger's repo for the "group by project" view (#258):
+            // a null `target_repo` resolves to the daemon's own repo_root. The raw
+            // `target_repo` is left untouched so the badge / detail / Run-now
+            // pre-fill keep showing only what the user actually set.
+            let repo_root = state.repo_root.to_string_lossy().into_owned();
+            let entries: Vec<TriggerListEntry> = triggers
+                .into_iter()
+                .map(|t| {
+                    let effective_repo =
+                        t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
+                    TriggerListEntry {
+                        trigger: t,
+                        effective_repo,
+                    }
+                })
+                .collect();
+            Json(entries).into_response()
+        }
         Err(e) => {
             error!("failed to list triggers: {e}");
             (
@@ -4104,6 +4138,11 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
         };
         if let Some(run_state) = event_log::project(&events) {
             let stalled = event_log::is_stalled(&run_state);
+            // Compute the resolved repo before moving `run_state`'s fields into
+            // the struct literal — `effective_repo_root` borrows `&run_state`.
+            let effective_repo = effective_repo_root(&state, &run_state)
+                .to_string_lossy()
+                .into_owned();
             runs.push(RunListEntry {
                 run_id: run_state.run_id,
                 pipeline_name: run_state.pipeline_name,
@@ -4112,6 +4151,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 started_at: run_state.started_at,
                 name: run_state.name,
                 triggered_by: run_state.triggered_by,
+                effective_repo,
             });
         }
     }

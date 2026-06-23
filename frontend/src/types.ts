@@ -34,6 +34,12 @@ export interface RunListEntry {
   name?: string | null;
   /** Provenance: the id of the Trigger that created this Run, if any (#160). */
   triggered_by?: string | null;
+  /**
+   * Resolved target repo for "group by project" (#258): the run's `target_repo`,
+   * or the daemon's `repo_root` when unset. Always sent by the daemon; declared
+   * optional so existing test fixtures that omit it still typecheck.
+   */
+  effective_repo?: string;
 }
 
 /**
@@ -46,6 +52,12 @@ export interface Trigger {
   pipeline_id: string;
   pipeline_name: string;
   target_repo?: string | null;
+  /**
+   * Resolved target repo for "group by project" (#258): the raw `target_repo`,
+   * or the daemon's `repo_root` when unset. Sent only by the list endpoint
+   * (`GET /triggers`); the row badge / detail still read raw `target_repo`.
+   */
+  effective_repo?: string | null;
   source_branch?: string | null;
   input_template: string;
   variables: Record<string, unknown>;

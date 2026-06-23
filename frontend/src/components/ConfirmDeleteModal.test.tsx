@@ -72,4 +72,50 @@ describe("ConfirmDeleteModal", () => {
     fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // #227 — the opt-in cascade checkbox renders only when `cascadeLabel` is set
+  // and its state flows through onConfirm(cascade).
+  describe("cascade checkbox (#227)", () => {
+    it("renders no checkbox by default", () => {
+      render(<ConfirmDeleteModal {...baseProps} />);
+      expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
+    });
+
+    it("renders the checkbox (unchecked) with its label when cascadeLabel is set", () => {
+      render(<ConfirmDeleteModal {...baseProps} cascadeLabel="Also remove the Library copy" />);
+      const box = screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement;
+      expect(box).toBeInTheDocument();
+      expect(box.checked).toBe(false);
+      expect(screen.getByText("Also remove the Library copy")).toBeInTheDocument();
+    });
+
+    it("calls onConfirm(false) when Delete is clicked without ticking", () => {
+      const onConfirm = vi.fn();
+      render(
+        <ConfirmDeleteModal {...baseProps} onConfirm={onConfirm} cascadeLabel="Also remove the Library copy" />,
+      );
+      fireEvent.click(screen.getByText("Delete"));
+      expect(onConfirm).toHaveBeenCalledWith(false);
+    });
+
+    it("calls onConfirm(true) when Delete is clicked after ticking", () => {
+      const onConfirm = vi.fn();
+      render(
+        <ConfirmDeleteModal {...baseProps} onConfirm={onConfirm} cascadeLabel="Also remove the Library copy" />,
+      );
+      fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+      fireEvent.click(screen.getByText("Delete"));
+      expect(onConfirm).toHaveBeenCalledWith(true);
+    });
+
+    it("passes the latest checkbox state through the Enter key", () => {
+      const onConfirm = vi.fn();
+      render(
+        <ConfirmDeleteModal {...baseProps} onConfirm={onConfirm} cascadeLabel="Also remove the Library copy" />,
+      );
+      fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+      fireEvent.keyDown(document, { key: "Enter" });
+      expect(onConfirm).toHaveBeenCalledWith(true);
+    });
+  });
 });

@@ -1,12 +1,23 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  /**
+   * Widened from `() => void` so the modal can report whether the opt-in
+   * cascade checkbox was ticked (#227). Existing zero-arg handlers stay
+   * assignable; callers that don't pass `cascadeLabel` always receive `false`.
+   */
+  onConfirm: (cascade: boolean) => void;
   name: string;
   kind?: string;
   detail?: string;
+  /**
+   * When set, render an opt-in checkbox (default unchecked) with this label
+   * between the detail text and the buttons. Its state flows through
+   * `onConfirm(cascade)`. Absent ⇒ no checkbox, `onConfirm(false)` (#227).
+   */
+  cascadeLabel?: string;
 }
 
 export default function ConfirmDeleteModal({
@@ -16,16 +27,24 @@ export default function ConfirmDeleteModal({
   name,
   kind = "pipeline",
   detail,
+  cascadeLabel,
 }: Props) {
+  // Default-OFF guarantee: the call site remounts this modal via a `key` keyed
+  // on the delete target (which returns to a sentinel between opens), so the
+  // instance is fresh on every open and `cascade` resets to `false` (#227).
+  const [cascade, setCascade] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
-      if (e.key === "Enter") onConfirm();
+      // Capture the latest checkbox state — `cascade` is in the dep array so
+      // the Enter path doesn't confirm with a stale `false`.
+      if (e.key === "Enter") onConfirm(cascade);
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onClose, onConfirm]);
+  }, [open, onClose, onConfirm, cascade]);
 
   if (!open) return null;
 
@@ -52,6 +71,21 @@ export default function ConfirmDeleteModal({
           {detail ??
             "This will permanently remove the YAML file and its prompt files from disk. This action cannot be undone."}
         </p>
+        {cascadeLabel && (
+          <label
+            className="mt-3 flex cursor-pointer items-center gap-2 text-fg-2"
+            style={{ fontSize: "11.5px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              data-testid="delete-cascade-checkbox"
+              checked={cascade}
+              onChange={(e) => setCascade(e.target.checked)}
+            />
+            {cascadeLabel}
+          </label>
+        )}
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -61,7 +95,7 @@ export default function ConfirmDeleteModal({
             Cancel
           </button>
           <button
-            onClick={onConfirm}
+            onClick={() => onConfirm(cascade)}
             className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
             style={{ fontSize: "11.5px" }}
           >

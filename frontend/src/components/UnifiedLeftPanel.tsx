@@ -126,17 +126,36 @@ export default function UnifiedLeftPanel({
     setRenameValue("");
   }
 
-  async function handleConfirmDelete() {
+  async function handleConfirmDelete(cascade: boolean) {
     if (!deleteTarget) return;
+    // Match on `name`, never id: the Library copy's id is an independently
+    // derived slug that can diverge from the repo pipeline's file-stem id, and
+    // the whole star/twin model is name-keyed (#227).
+    const twins = libraryPipelines.filter((lp) => lp.name === deleteTarget.name);
+    const cascadable = deleteTarget.scope !== "library" && twins.length === 1;
     try {
       // Forward scope so a `library` entry deletes from the library store, not
       // the same-named repo pipeline file (#216).
       await removePipeline(deleteTarget.id, deleteTarget.scope);
-      if (deleteTarget.scope === "library") onLibraryPipelinesChanged();
+      if (cascade && cascadable) {
+        // #227: also remove the durable Library copy the star created.
+        try {
+          await deleteLibraryPipeline(twins[0].id);
+        } catch {
+          /* non-fatal: the working pipeline is already gone */
+        }
+      }
+      // Re-fetch the authoritative block-1 list (covers the #216 dual-scope row).
+      await loadPipelines();
     } catch {
-      // ignore
+      // ignore (e.g. 409 active runs)
+    } finally {
+      // #227 core: refresh the library list on EVERY delete, not only
+      // scope === "library" — otherwise a deleted repo star's copy lingers
+      // and re-surfaces as a phantom library-only row.
+      onLibraryPipelinesChanged();
+      setDeleteTarget(null);
     }
-    setDeleteTarget(null);
   }
 
   // One run row, rendered identically whether the list is flat or grouped by
@@ -534,12 +553,28 @@ export default function UnifiedLeftPanel({
         />
       )}
 
-      <ConfirmDeleteModal
-        open={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
-        name={deleteTarget?.name ?? ""}
-      />
+      {(() => {
+        // Show the cascade checkbox only when the target has exactly one
+        // same-name Library copy and isn't itself the library row (#227).
+        const twins = deleteTarget
+          ? libraryPipelines.filter((lp) => lp.name === deleteTarget.name)
+          : [];
+        const cascadable =
+          deleteTarget != null &&
+          deleteTarget.scope !== "library" &&
+          twins.length === 1;
+        return (
+          <ConfirmDeleteModal
+            // Remount per target so the checkbox resets to OFF each open (#227).
+            key={deleteTarget?.id ?? "none"}
+            open={deleteTarget !== null}
+            onClose={() => setDeleteTarget(null)}
+            onConfirm={handleConfirmDelete}
+            name={deleteTarget?.name ?? ""}
+            cascadeLabel={cascadable ? "Also remove the Library copy" : undefined}
+          />
+        );
+      })()}
 
       {showNewModal && (
         <NewPipelineModal onClose={() => setShowNewModal(false)} />

@@ -4,6 +4,7 @@ import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, t
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
@@ -138,6 +139,130 @@ export default function UnifiedLeftPanel({
     setDeleteTarget(null);
   }
 
+  // One run row, rendered identically whether the list is flat or grouped by
+  // repo (#258). Extracted so both code paths share the exact same markup.
+  function renderRunRow(run: RunListEntry) {
+    const isSelected = run.run_id === selectedRunId;
+    const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
+    const isArchived = run.status === "archived";
+    const canCleanup = !isArchived;
+    const isRenaming = renamingRunId === run.run_id;
+
+    return (
+      <button
+        key={run.run_id}
+        onClick={() => onSelectRun(run.run_id)}
+        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
+          isSelected
+            ? "bg-bg-3 text-fg"
+            : "text-fg-2 hover:bg-bg-3/50"
+        } ${isArchived ? "opacity-60" : ""}`}
+        style={{ fontSize: "11.5px" }}
+      >
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
+            run.status === "running" ? "animate-pulse" : ""
+          }`}
+        />
+        <div className="min-w-0 flex-1">
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
+              style={{ fontSize: "11.5px" }}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => commitRename()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") cancelRename();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              data-testid="rename-input"
+            />
+          ) : (
+            <div className="truncate font-medium" data-testid="run-display-label">
+              {run.name || run.run_id.slice(0, 20)}
+            </div>
+          )}
+          <div
+            className="flex items-center gap-1.5 truncate font-mono text-fg-4"
+            style={{ fontSize: "10px" }}
+          >
+            <span className="truncate" data-testid="run-pipeline-name">
+              {run.pipeline_name}
+            </span>
+            {run.triggered_by && (
+              <span
+                role="button"
+                title="Created by a trigger — open the Triggers tab"
+                className="flex shrink-0 cursor-pointer items-center gap-0.5 rounded border border-acc px-1 text-acc"
+                style={{ fontSize: "9px" }}
+                data-testid="run-trigger-badge"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
+                  setActiveTab("triggers");
+                }}
+              >
+                <Zap size={8} />
+                trigger
+              </span>
+            )}
+          </div>
+        </div>
+        {!isRenaming && (
+          <span
+            role="button"
+            title="Rename run"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              startRename(run);
+            }}
+            data-testid="rename-button"
+          >
+            <Pencil size={12} />
+          </span>
+        )}
+        {canCleanup && (
+          <span
+            role="button"
+            title={
+              isLiveRun(run.status)
+                ? "Stop and archive run"
+                : "Cleanup run"
+            }
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmCleanup({ runId: run.run_id, status: run.status });
+            }}
+          >
+            <Trash2 size={12} />
+          </span>
+        )}
+        {isArchived && (
+          <span
+            role="button"
+            title="Forget this run permanently (event log + metadata)"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmForget(run.run_id);
+            }}
+          >
+            <Trash2 size={12} />
+          </span>
+        )}
+      </button>
+    );
+  }
+
+  // Group the Runs list by project (#258) only when ≥ 2 distinct repos are
+  // present; otherwise `null` ⇒ the flat list, byte-identical to before.
+  const runGroups = groupByRepo(runs, (r) => r.effective_repo);
+
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
     { id: "triggers", label: "Triggers" },
@@ -192,123 +317,22 @@ export default function UnifiedLeftPanel({
               No runs yet
             </div>
           )}
-          {runs.map((run) => {
-            const isSelected = run.run_id === selectedRunId;
-            const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
-            const isArchived = run.status === "archived";
-            const canCleanup = !isArchived;
-            const isRenaming = renamingRunId === run.run_id;
-
-            return (
-              <button
-                key={run.run_id}
-                onClick={() => onSelectRun(run.run_id)}
-                className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-                  isSelected
-                    ? "bg-bg-3 text-fg"
-                    : "text-fg-2 hover:bg-bg-3/50"
-                } ${isArchived ? "opacity-60" : ""}`}
-                style={{ fontSize: "11.5px" }}
-              >
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
-                    run.status === "running" ? "animate-pulse" : ""
-                  }`}
-                />
-                <div className="min-w-0 flex-1">
-                  {isRenaming ? (
-                    <input
-                      ref={renameInputRef}
-                      className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
-                      style={{ fontSize: "11.5px" }}
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onBlur={() => commitRename()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitRename();
-                        if (e.key === "Escape") cancelRename();
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      data-testid="rename-input"
-                    />
-                  ) : (
-                    <div className="truncate font-medium" data-testid="run-display-label">
-                      {run.name || run.run_id.slice(0, 20)}
-                    </div>
-                  )}
+          {runGroups === null
+            ? runs.map(renderRunRow)
+            : runGroups.map((group) => (
+                <div key={group.repoPath} data-testid="run-repo-group">
                   <div
-                    className="flex items-center gap-1.5 truncate font-mono text-fg-4"
+                    className="flex h-[22px] shrink-0 items-center border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
+                    title={group.repoPath}
                   >
-                    <span className="truncate" data-testid="run-pipeline-name">
-                      {run.pipeline_name}
+                    <span className="truncate" data-testid="run-repo-label">
+                      {group.label}
                     </span>
-                    {run.triggered_by && (
-                      <span
-                        role="button"
-                        title="Created by a trigger — open the Triggers tab"
-                        className="flex shrink-0 cursor-pointer items-center gap-0.5 rounded border border-acc px-1 text-acc"
-                        style={{ fontSize: "9px" }}
-                        data-testid="run-trigger-badge"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
-                          setActiveTab("triggers");
-                        }}
-                      >
-                        <Zap size={8} />
-                        trigger
-                      </span>
-                    )}
                   </div>
+                  {group.items.map(renderRunRow)}
                 </div>
-                {!isRenaming && (
-                  <span
-                    role="button"
-                    title="Rename run"
-                    className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startRename(run);
-                    }}
-                    data-testid="rename-button"
-                  >
-                    <Pencil size={12} />
-                  </span>
-                )}
-                {canCleanup && (
-                  <span
-                    role="button"
-                    title={
-                      isLiveRun(run.status)
-                        ? "Stop and archive run"
-                        : "Cleanup run"
-                    }
-                    className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmCleanup({ runId: run.run_id, status: run.status });
-                    }}
-                  >
-                    <Trash2 size={12} />
-                  </span>
-                )}
-                {isArchived && (
-                  <span
-                    role="button"
-                    title="Forget this run permanently (event log + metadata)"
-                    className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed group-hover:inline-flex"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmForget(run.run_id);
-                    }}
-                  >
-                    <Trash2 size={12} />
-                  </span>
-                )}
-              </button>
-            );
-          })}
+              ))}
         </div>
         </div>
       )}

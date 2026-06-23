@@ -2,6 +2,7 @@ import { Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
 import type { Trigger } from "../types";
 import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
+import { groupByRepo, repoGroupLabel } from "../lib/groupByRepo";
 
 interface Props {
   triggers: Trigger[];
@@ -68,6 +69,126 @@ export default function TriggersListPanel({
     }
   }
 
+  // Raw target repos actually set on rows — drives the per-row badge label so a
+  // colliding basename is disambiguated identically in the badge and the group
+  // header (#258 G7). Computed once per render.
+  const allRepos = triggers
+    .map((t) => t.target_repo)
+    .filter((r): r is string => !!r);
+
+  // One trigger row, rendered identically flat or grouped by repo (#258).
+  function renderTriggerRow(t: Trigger) {
+    const isSelected = t.id === selectedTriggerId;
+    const dot = outcomeDot(t.last_outcome);
+    return (
+      <button
+        key={t.id}
+        onClick={() => onSelectTrigger(t.id)}
+        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
+          isSelected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
+        } ${t.enabled ? "" : "opacity-60"}`}
+        style={{ fontSize: "11.5px" }}
+        data-testid="trigger-row"
+      >
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${dot}`}
+          title={lastOutcomeTooltip(t)}
+          data-testid="trigger-status-dot"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{t.name}</div>
+          <div
+            className="mt-0.5 flex items-center gap-1.5 truncate text-fg-4"
+            style={{ fontSize: "10px" }}
+          >
+            <span className="truncate font-mono">{t.pipeline_name}</span>
+            {t.target_repo && (
+              <span
+                className="shrink-0 rounded border border-line-strong px-1 py-px"
+                style={{ fontSize: "9px" }}
+                title={t.target_repo}
+              >
+                {repoGroupLabel(t.target_repo, allRepos)}
+              </span>
+            )}
+            <span className="shrink-0" aria-hidden="true">·</span>
+            <span className="shrink-0" data-testid="trigger-schedule">
+              {humanizeCron(t.cron)}
+            </span>
+          </div>
+        </div>
+        {!t.enabled && (
+          <span
+            className="shrink-0 rounded border border-line-strong px-1 py-px text-fg-4"
+            style={{ fontSize: "9px" }}
+          >
+            disabled
+          </span>
+        )}
+        {/* Hover actions: run-now, edit, delete. */}
+        <span className="hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
+          <span
+            role="button"
+            title="Run now (test this trigger)"
+            className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-acc"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRunNow?.(t);
+            }}
+            data-testid="trigger-run-now"
+          >
+            <Play size={12} />
+          </span>
+          <span
+            role="button"
+            title="Edit trigger"
+            className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditTrigger?.(t);
+            }}
+            data-testid="trigger-edit"
+          >
+            <Pencil size={12} />
+          </span>
+          <span
+            role="button"
+            title="Delete trigger"
+            className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDelete(t.id);
+            }}
+            data-testid="trigger-delete"
+          >
+            <Trash2 size={12} />
+          </span>
+        </span>
+        {/* Enable/disable toggle — always visible so paused state is reversible. */}
+        <span
+          role="switch"
+          aria-checked={t.enabled}
+          aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
+          title={t.enabled ? "Disable trigger" : "Enable trigger"}
+          className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-bg-4 ${
+            t.enabled ? "text-acc" : "text-fg-4"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleToggle(t);
+          }}
+          data-testid="trigger-toggle"
+        >
+          <Power size={12} />
+        </span>
+      </button>
+    );
+  }
+
+  // Group the Triggers list by project (#258) only when ≥ 2 distinct repos are
+  // present; otherwise `null` ⇒ the flat list, byte-identical to before.
+  const triggerGroups = groupByRepo(triggers, (t) => t.effective_repo);
+
   return (
     <div className="flex h-full flex-col" data-testid="triggers-list-panel">
       <div
@@ -106,113 +227,22 @@ export default function TriggersListPanel({
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          {triggers.map((t) => {
-            const isSelected = t.id === selectedTriggerId;
-            const dot = outcomeDot(t.last_outcome);
-            return (
-              <button
-                key={t.id}
-                onClick={() => onSelectTrigger(t.id)}
-                className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-                  isSelected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
-                } ${t.enabled ? "" : "opacity-60"}`}
-                style={{ fontSize: "11.5px" }}
-                data-testid="trigger-row"
-              >
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${dot}`}
-                  title={lastOutcomeTooltip(t)}
-                  data-testid="trigger-status-dot"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">{t.name}</div>
+          {triggerGroups === null
+            ? triggers.map(renderTriggerRow)
+            : triggerGroups.map((group) => (
+                <div key={group.repoPath} data-testid="trigger-repo-group">
                   <div
-                    className="mt-0.5 flex items-center gap-1.5 truncate text-fg-4"
+                    className="flex h-[22px] shrink-0 items-center border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
+                    title={group.repoPath}
                   >
-                    <span className="truncate font-mono">{t.pipeline_name}</span>
-                    {t.target_repo && (
-                      <span
-                        className="shrink-0 rounded border border-line-strong px-1 py-px"
-                        style={{ fontSize: "9px" }}
-                        title={t.target_repo}
-                      >
-                        {t.target_repo.split("/").pop()}
-                      </span>
-                    )}
-                    <span className="shrink-0" aria-hidden="true">·</span>
-                    <span className="shrink-0" data-testid="trigger-schedule">
-                      {humanizeCron(t.cron)}
+                    <span className="truncate" data-testid="trigger-repo-label">
+                      {group.label}
                     </span>
                   </div>
+                  {group.items.map(renderTriggerRow)}
                 </div>
-                {!t.enabled && (
-                  <span
-                    className="shrink-0 rounded border border-line-strong px-1 py-px text-fg-4"
-                    style={{ fontSize: "9px" }}
-                  >
-                    disabled
-                  </span>
-                )}
-                {/* Hover actions: run-now, edit, delete. */}
-                <span className="hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
-                  <span
-                    role="button"
-                    title="Run now (test this trigger)"
-                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-acc"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRunNow?.(t);
-                    }}
-                    data-testid="trigger-run-now"
-                  >
-                    <Play size={12} />
-                  </span>
-                  <span
-                    role="button"
-                    title="Edit trigger"
-                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditTrigger?.(t);
-                    }}
-                    data-testid="trigger-edit"
-                  >
-                    <Pencil size={12} />
-                  </span>
-                  <span
-                    role="button"
-                    title="Delete trigger"
-                    className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleDelete(t.id);
-                    }}
-                    data-testid="trigger-delete"
-                  >
-                    <Trash2 size={12} />
-                  </span>
-                </span>
-                {/* Enable/disable toggle — always visible so paused state is reversible. */}
-                <span
-                  role="switch"
-                  aria-checked={t.enabled}
-                  aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
-                  title={t.enabled ? "Disable trigger" : "Enable trigger"}
-                  className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-bg-4 ${
-                    t.enabled ? "text-acc" : "text-fg-4"
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleToggle(t);
-                  }}
-                  data-testid="trigger-toggle"
-                >
-                  <Power size={12} />
-                </span>
-              </button>
-            );
-          })}
+              ))}
         </div>
       )}
     </div>

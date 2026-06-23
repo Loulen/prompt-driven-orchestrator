@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
@@ -222,6 +222,61 @@ describe("UnifiedLeftPanel three-tab strip", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
     expect(screen.getByText("Nightly audit")).toBeInTheDocument();
+  });
+});
+
+// #258 — the Runs list groups by project (target repo), conditionally: only when
+// the on-screen runs span ≥ 2 distinct repos. Single-repo stays flat (no header,
+// no per-row repo badge). The Runs tab is the default tab, so runs render at once.
+describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
+  it("stays flat (no repo-group header) when all runs share one repo", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/foo" },
+    ];
+    renderPanel({ runs });
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+
+  it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+      { run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/alpha" },
+      { run_id: "r3", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+    ];
+    renderPanel({ runs });
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+    const labels = screen.getAllByTestId("run-repo-label").map((el) => el.textContent);
+    expect(labels).toEqual(["alpha", "zebra"]);
+    // The full path is available on the header for hover.
+    const alphaGroup = screen.getAllByTestId("run-repo-group")[0];
+    expect(within(alphaGroup).getByText("alpha").closest("div")).toHaveAttribute(
+      "title",
+      "/repos/alpha",
+    );
+  });
+
+  it("counts archived rows toward the threshold (a 2nd-repo archived run flips to grouped)", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { run_id: "r2", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/bar" },
+    ];
+    renderPanel({ runs });
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+  });
+
+  it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/root" },
+    ];
+    renderPanel({ runs });
+    const labels = screen.getAllByTestId("run-repo-label").map((el) => el.textContent);
+    // Exactly two groups, both resolved paths — a phantom catch-all bucket would
+    // add a third label.
+    expect(labels).toEqual(["alpha", "root"]);
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
   });
 });
 

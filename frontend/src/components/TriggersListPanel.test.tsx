@@ -130,3 +130,59 @@ describe("TriggersListPanel", () => {
     expect(dot).toHaveAttribute("title", expect.stringContaining("fired"));
   });
 });
+
+// #258 — the Triggers list groups by project (target repo), conditionally: only
+// when ≥ 2 distinct repos are present. The single-repo case stays flat.
+describe("TriggersListPanel grouping by repo (#258)", () => {
+  it("stays flat (no repo-group header) when all triggers share one repo", () => {
+    renderPanel([
+      trigger({ id: "t1", name: "A", target_repo: "/repos/foo", effective_repo: "/repos/foo" }),
+      trigger({ id: "t2", name: "B", target_repo: "/repos/foo", effective_repo: "/repos/foo" }),
+    ]);
+    expect(screen.queryByTestId("trigger-repo-group")).not.toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
+  });
+
+  it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {
+    renderPanel([
+      trigger({ id: "t1", name: "A", target_repo: "/repos/zebra", effective_repo: "/repos/zebra" }),
+      trigger({ id: "t2", name: "B", target_repo: "/repos/alpha", effective_repo: "/repos/alpha" }),
+      trigger({ id: "t3", name: "C", target_repo: "/repos/zebra", effective_repo: "/repos/zebra" }),
+    ]);
+    expect(screen.getAllByTestId("trigger-repo-group")).toHaveLength(2);
+    const labels = screen
+      .getAllByTestId("trigger-repo-label")
+      .map((el) => el.textContent);
+    expect(labels).toEqual(["alpha", "zebra"]);
+  });
+
+  it("groups a null-target trigger under its resolved repo, with no per-row badge", () => {
+    renderPanel([
+      trigger({ id: "t1", name: "A", target_repo: "/repos/alpha", effective_repo: "/repos/alpha" }),
+      trigger({ id: "tn", name: "N", target_repo: null, effective_repo: "/repos/root" }),
+    ]);
+    const labels = screen
+      .getAllByTestId("trigger-repo-label")
+      .map((el) => el.textContent);
+    expect(labels).toEqual(["alpha", "root"]); // resolved repo, not a catch-all bucket
+
+    // The null-target row carries no repo badge (raw target_repo untouched);
+    // the badged row shows the full path on its badge's title.
+    const nRow = screen.getByText("N").closest('[data-testid="trigger-row"]') as HTMLElement;
+    expect(within(nRow).queryByTitle("/repos/root")).not.toBeInTheDocument();
+    const aRow = screen.getByText("A").closest('[data-testid="trigger-row"]') as HTMLElement;
+    expect(within(aRow).getByTitle("/repos/alpha")).toBeInTheDocument();
+  });
+
+  it("disambiguates the per-row badge label on a basename collision", () => {
+    renderPanel([
+      trigger({ id: "c1", name: "C1", target_repo: "/x/svc", effective_repo: "/x/svc" }),
+      trigger({ id: "c2", name: "C2", target_repo: "/y/svc", effective_repo: "/y/svc" }),
+    ]);
+    const c1Row = screen.getByText("C1").closest('[data-testid="trigger-row"]') as HTMLElement;
+    // Badge shows the minimal disambiguating suffix, not bare "svc".
+    expect(within(c1Row).getByText("x/svc")).toBeInTheDocument();
+    expect(within(c1Row).queryByText("svc")).not.toBeInTheDocument();
+  });
+});

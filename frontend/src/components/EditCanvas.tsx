@@ -455,7 +455,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       // Left is the legacy default; only persist when the drop chose another side
       // so an ordinary left-side drop stays clean in the file.
       if (side === "left") return;
-      updateEdge(edgeIndex, { target_side: side });
+      // Untracked (ADR-0014 / #226): the preceding `addEdge` already pushed the
+      // pre-edge snapshot, and this arrival-side stamp is causally linked to it
+      // via `pendingEdgeIndexRef`. Folding it into that one history entry makes a
+      // single edge-draw gesture undo in one step (edge + side together).
+      updateEdge(edgeIndex, { target_side: side }, { track: false });
     },
     [pipeline, reactFlow, updateEdge],
   );

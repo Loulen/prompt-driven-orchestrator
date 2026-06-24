@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
 import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
@@ -109,6 +109,7 @@ beforeEach(() => {
     activeTabId: null,
     selection: { kind: "none", id: null },
     lastSavedAt: {},
+    history: {},
   });
   vi.clearAllMocks();
 });
@@ -1640,5 +1641,390 @@ describe("scope-qualified pipeline ops", () => {
       {},
       "library",
     );
+  });
+});
+
+describe("undo/redo history (ADR-0014 / #226)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+  const hist = (tabId = "test-tab") => useEditStore.getState().history[tabId];
+  const activePipeline = () => useEditStore.getState().openTabs[0].pipeline;
+
+  describe("push / pop round-trips", () => {
+    it("addNode → undo removes it → redo re-adds it", () => {
+      seedTabWithPipeline(makePipeline());
+      useEditStore.getState().addNode(makeNode({ id: "n1", name: "worker" }));
+      expect(activePipeline().nodes).toHaveLength(1);
+      expect(hist().past).toHaveLength(1);
+      expect(hist().future).toHaveLength(0);
+
+      useEditStore.getState().undo();
+      expect(activePipeline().nodes).toHaveLength(0);
+      expect(hist().past).toHaveLength(0);
+      expect(hist().future).toHaveLength(1);
+
+      useEditStore.getState().redo();
+      expect(activePipeline().nodes).toHaveLength(1);
+      expect(activePipeline().nodes[0].id).toBe("n1");
+      expect(hist().past).toHaveLength(1);
+      expect(hist().future).toHaveLength(0);
+    });
+
+    it("deleteEdge → undo restores the edge → redo deletes again", () => {
+      const a = makeNode({ id: "aaaa1111" });
+      const b = makeNode({ id: "bbbb2222" });
+      seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+
+      useEditStore.getState().deleteEdge(0);
+      expect(activePipeline().edges).toHaveLength(0);
+
+      useEditStore.getState().undo();
+      expect(activePipeline().edges).toHaveLength(1);
+      expect(activePipeline().edges[0].source.node).toBe("aaaa1111");
+
+      useEditStore.getState().redo();
+      expect(activePipeline().edges).toHaveLength(0);
+    });
+
+    it("updateNodeViews → undo restores the original positions", () => {
+      const a = makeNode({ id: "aaaa1111", view: { x: 10, y: 20 } });
+      seedTabWithPipeline(makePipeline([a]));
+
+      useEditStore.getState().updateNodeViews([{ id: "aaaa1111", x: 300, y: 400 }]);
+      expect(activePipeline().nodes[0].view).toEqual({ x: 300, y: 400 });
+
+      useEditStore.getState().undo();
+      expect(activePipeline().nodes[0].view).toEqual({ x: 10, y: 20 });
+
+      useEditStore.getState().redo();
+      expect(activePipeline().nodes[0].view).toEqual({ x: 300, y: 400 });
+    });
+
+    it("duplicateNode → undo removes the copy", () => {
+      const a = makeNode({ id: "aaaa1111", name: "src" });
+      seedTabWithPipeline(makePipeline([a]));
+
+      useEditStore.getState().duplicateNode("aaaa1111");
+      expect(activePipeline().nodes).toHaveLength(2);
+
+      useEditStore.getState().undo();
+      expect(activePipeline().nodes).toHaveLength(1);
+      expect(activePipeline().nodes[0].id).toBe("aaaa1111");
+    });
+  });
+
+  describe("destroy-loop round-trip", () => {
+    it("undo restores both the deleted last-cycle edge AND the loops: entry", () => {
+      const a = makeNode({ id: "aaaa1111", name: "impl" });
+      const b = makeNode({ id: "bbbb2222", name: "rev" });
+      const pipeline = makePipeline(
+        [a, b],
+        [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+      );
+      pipeline.loops = [
+        { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+      ];
+      seedTabWithPipeline(pipeline);
+
+      // Deleting the back-edge (index 1) destroys the bounded region.
+      useEditStore.getState().deleteEdge(1);
+      expect(activePipeline().edges).toHaveLength(1);
+      expect(activePipeline().loops ?? []).toHaveLength(0);
+
+      // The snapshot is the whole pipeline, so undo silently replays the
+      // destroy in reverse — no DestroyLoopModal re-prompt — restoring both.
+      useEditStore.getState().undo();
+      expect(activePipeline().edges).toHaveLength(2);
+      expect(activePipeline().loops).toHaveLength(1);
+      expect(activePipeline().loops![0].id).toBe("review_loop");
+      expect(activePipeline().loops![0].max_iter).toBe(3);
+    });
+  });
+
+  describe("coalescing (time + key window)", () => {
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      nowSpy = vi.spyOn(Date, "now");
+    });
+    afterEach(() => {
+      nowSpy.mockRestore();
+    });
+
+    it("two same-key updates within the window collapse to ONE undo step", () => {
+      seedTabWithPipeline(makePipeline());
+      nowSpy.mockReturnValue(1000);
+      useEditStore.getState().updatePipelineMeta({ name: "ab" });
+      nowSpy.mockReturnValue(1200); // +200ms, < 500ms window
+      useEditStore.getState().updatePipelineMeta({ name: "abc" });
+
+      expect(hist().past).toHaveLength(1);
+      useEditStore.getState().undo();
+      // Reverts the WHOLE typed run, back to the pre-edit original name.
+      expect(activePipeline().name).toBe("test");
+      expect(hist().past).toHaveLength(0);
+    });
+
+    it("same-key updates beyond the window stay TWO undo steps", () => {
+      seedTabWithPipeline(makePipeline());
+      nowSpy.mockReturnValue(1000);
+      useEditStore.getState().updatePipelineMeta({ name: "ab" });
+      nowSpy.mockReturnValue(2000); // +1000ms, > 500ms window
+      useEditStore.getState().updatePipelineMeta({ name: "abc" });
+
+      expect(hist().past).toHaveLength(2);
+      useEditStore.getState().undo();
+      expect(activePipeline().name).toBe("ab");
+      useEditStore.getState().undo();
+      expect(activePipeline().name).toBe("test");
+    });
+
+    it("different keys within the window never coalesce", () => {
+      seedTabWithPipeline(makePipeline());
+      nowSpy.mockReturnValue(1000);
+      useEditStore.getState().updatePipelineMeta({ name: "renamed" });
+      nowSpy.mockReturnValue(1100); // within window, but a different field-set key
+      useEditStore.getState().updatePipelineMeta({ version: "9.9" });
+
+      expect(hist().past).toHaveLength(2);
+    });
+
+    it("a tracked edit never coalesces across an undo boundary", () => {
+      seedTabWithPipeline(makePipeline());
+      nowSpy.mockReturnValue(1000);
+      useEditStore.getState().updatePipelineMeta({ name: "first" });
+      useEditStore.getState().undo(); // resets lastKey/lastAt
+      nowSpy.mockReturnValue(1100); // same key, within window, but post-undo
+      useEditStore.getState().updatePipelineMeta({ name: "second" });
+      // Must be a fresh entry, not coalesced onto the undone one.
+      expect(hist().past).toHaveLength(1);
+      expect(hist().future).toHaveLength(0); // the new edit cleared redo
+    });
+  });
+
+  describe("draw-edge fold (untracked target_side stamp)", () => {
+    it("addEdge + untracked updateEdge = one undo step that removes the whole edge", () => {
+      const a = makeNode({ id: "aaaa1111" });
+      const b = makeNode({ id: "bbbb2222" });
+      seedTabWithPipeline(makePipeline([a, b]));
+
+      useEditStore.getState().addEdge(edge("aaaa1111", "bbbb2222"));
+      // The arrival-side stamp the canvas fires for #168 — untracked.
+      useEditStore.getState().updateEdge(0, { target_side: "top" }, { track: false });
+
+      expect(activePipeline().edges).toHaveLength(1);
+      expect(activePipeline().edges[0].target_side).toBe("top");
+      expect(hist().past).toHaveLength(1); // only the addEdge push
+
+      useEditStore.getState().undo();
+      expect(activePipeline().edges).toHaveLength(0);
+    });
+
+    it("a tracked updateEdge (default) DOES push a history entry", () => {
+      const a = makeNode({ id: "aaaa1111" });
+      const b = makeNode({ id: "bbbb2222" });
+      seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+
+      useEditStore.getState().updateEdge(0, { target_side: "right" });
+      expect(hist().past).toHaveLength(1);
+
+      useEditStore.getState().undo();
+      expect(activePipeline().edges[0].target_side).toBeUndefined();
+    });
+  });
+
+  describe("history cap", () => {
+    it("caps past at 50 entries, dropping the oldest first", () => {
+      seedTabWithPipeline(makePipeline());
+      for (let i = 0; i < 51; i++) {
+        useEditStore.getState().addNode(makeNode({ id: `n${i}` }));
+      }
+      expect(activePipeline().nodes).toHaveLength(51);
+      expect(hist().past).toHaveLength(50);
+    });
+  });
+
+  describe("selection + no-op + isolation", () => {
+    it("undo and redo reset the selection to none", () => {
+      const a = makeNode({ id: "aaaa1111" });
+      const b = makeNode({ id: "bbbb2222" });
+      seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+      useEditStore.getState().addNode(makeNode({ id: "n1" }));
+      useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 0 });
+
+      useEditStore.getState().undo();
+      expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+
+      useEditStore.getState().setSelection({ kind: "node", id: "aaaa1111" });
+      useEditStore.getState().redo();
+      expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+    });
+
+    it("undo / redo are no-ops when their stack is empty", () => {
+      seedTabWithPipeline(makePipeline([makeNode({ id: "aaaa1111" })]));
+      const before = activePipeline();
+
+      useEditStore.getState().undo();
+      expect(activePipeline()).toBe(before); // unchanged reference
+
+      useEditStore.getState().redo();
+      expect(activePipeline()).toBe(before);
+    });
+
+    it("history is isolated per tab", () => {
+      useEditStore.setState({
+        openTabs: [
+          { id: "A", scope: "repo", pipeline: makePipeline(), prompts: {}, diagnostics: [], dirty: false, externalDirty: false },
+          { id: "B", scope: "repo", pipeline: makePipeline(), prompts: {}, diagnostics: [], dirty: false, externalDirty: false },
+        ],
+        activeTabId: "A",
+        selection: { kind: "none", id: null },
+        history: {},
+      });
+
+      useEditStore.getState().addNode(makeNode({ id: "a1" }));
+      useEditStore.getState().setActiveTab("B");
+      useEditStore.getState().addNode(makeNode({ id: "b1" }));
+
+      expect(hist("A").past).toHaveLength(1);
+      expect(hist("B").past).toHaveLength(1);
+
+      // Undo on B must not touch A.
+      useEditStore.getState().undo();
+      const tabs = useEditStore.getState().openTabs;
+      expect(tabs.find((t) => t.id === "A")!.pipeline.nodes).toHaveLength(1);
+      expect(tabs.find((t) => t.id === "B")!.pipeline.nodes).toHaveLength(0);
+    });
+  });
+
+  describe("copy-on-write guard (regression)", () => {
+    it("undo restores the exact original pipeline reference (no in-place mutation leaked)", () => {
+      seedTabWithPipeline(makePipeline([makeNode({ id: "aaaa1111" })]));
+      const orig = activePipeline();
+      const origNodes = orig.nodes;
+
+      useEditStore.getState().addNode(makeNode({ id: "n2" }));
+      // The mutation built a NEW pipeline object; the captured snapshot is frozen.
+      expect(activePipeline()).not.toBe(orig);
+
+      useEditStore.getState().undo();
+      expect(activePipeline()).toBe(orig);
+      expect(activePipeline().nodes).toBe(origNodes);
+      expect(activePipeline().nodes).toHaveLength(1);
+    });
+  });
+
+  describe("invalidation matrix", () => {
+    function seedWithHistory(id = "test-tab", dirty = false) {
+      seedTabWithPipeline(makePipeline());
+      useEditStore.setState({ activeTabId: id, openTabs: useEditStore.getState().openTabs.map((t) => ({ ...t, id })) });
+      // Push one real history entry, then force the desired dirty flag.
+      useEditStore.getState().addNode(makeNode({ id: "seed" }));
+      useEditStore.setState((s) => ({
+        openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, dirty } : t)),
+      }));
+      expect(useEditStore.getState().history[id].past.length).toBeGreaterThan(0);
+    }
+
+    it("CLEAR: a clean (non-dirty) external reload clears the stack", async () => {
+      seedWithHistory("my-pipe", false);
+      mockFetchPipeline.mockResolvedValueOnce({
+        id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
+        pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
+      });
+      await useEditStore.getState().reloadPipeline("my-pipe");
+      expect(useEditStore.getState().history["my-pipe"].past).toHaveLength(0);
+      expect(useEditStore.getState().history["my-pipe"].future).toHaveLength(0);
+    });
+
+    it("KEEP: a dirty external reload (conflict) keeps the stack", async () => {
+      seedWithHistory("my-pipe", true);
+      mockFetchPipeline.mockResolvedValueOnce({
+        id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
+        pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
+      });
+      await useEditStore.getState().reloadPipeline("my-pipe");
+      // The conflict branch was taken (pipeline not overwritten); history kept.
+      expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
+    });
+
+    it("CLEAR: resolveConflict('take') clears; KEEP: ('keep') keeps", () => {
+      seedWithHistory("my-pipe", true);
+      useEditStore.setState((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === "my-pipe"
+            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
+            : t,
+        ),
+      }));
+      useEditStore.getState().resolveConflict("my-pipe", "keep");
+      expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
+
+      // Re-arm a conflict and take theirs.
+      useEditStore.setState((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === "my-pipe"
+            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
+            : t,
+        ),
+      }));
+      useEditStore.getState().resolveConflict("my-pipe", "take");
+      expect(useEditStore.getState().history["my-pipe"].past).toHaveLength(0);
+    });
+
+    it("CLEAR: reloadFromLibrary clears the stack", async () => {
+      seedWithHistory("my-pipe", true);
+      mockSavePipeline.mockResolvedValueOnce(undefined);
+      mockFetchPipeline.mockResolvedValueOnce({
+        id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
+        pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
+      });
+      await useEditStore.getState().reloadFromLibrary("my-pipe", "name: lib\n");
+      expect(useEditStore.getState().history["my-pipe"].past).toHaveLength(0);
+    });
+
+    it("KEEP: a successful save keeps the stack", async () => {
+      seedWithHistory("my-pipe", true);
+      mockSavePipeline.mockResolvedValueOnce(undefined);
+      await useEditStore.getState().save("my-pipe");
+      expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+      expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
+    });
+
+    it("DROP: closeTab removes the history slot", () => {
+      seedWithHistory("my-pipe", true);
+      useEditStore.getState().closeTab("my-pipe");
+      expect(useEditStore.getState().history["my-pipe"]).toBeUndefined();
+    });
+
+    it("DROP: removePipeline removes the history slot", async () => {
+      seedWithHistory("my-pipe", true);
+      await useEditStore.getState().removePipeline("my-pipe");
+      expect(useEditStore.getState().history["my-pipe"]).toBeUndefined();
+    });
+
+    it("DROP: a 404 self-close on a run tab removes the history slot", async () => {
+      const tabId = "__run__archived";
+      useEditStore.setState({
+        openTabs: [
+          {
+            id: tabId, scope: "run",
+            pipeline: makePipeline(), prompts: {}, diagnostics: [],
+            dirty: true, externalDirty: false, runId: "archived",
+          },
+        ],
+        activeTabId: tabId,
+        selection: { kind: "none", id: null },
+        history: {},
+      });
+      useEditStore.getState().addNode(makeNode({ id: "x" }));
+      expect(useEditStore.getState().history[tabId].past.length).toBeGreaterThan(0);
+
+      mockSaveRunPipeline.mockImplementationOnce(() =>
+        Promise.reject({ message: "404", status: 404 }),
+      );
+      await useEditStore.getState().save(tabId);
+      expect(useEditStore.getState().history[tabId]).toBeUndefined();
+    });
   });
 });

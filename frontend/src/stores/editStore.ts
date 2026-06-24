@@ -74,6 +74,26 @@ export interface OpenPipeline {
   libraryScope?: LibraryPipelineScope | null;
 }
 
+/**
+ * Per-tab undo/redo history (ADR-0014 / #226). Entries are whole `PipelineDef`
+ * object references captured *before* a structural mutation — NOT deep clones.
+ * This is safe only because every store mutation is copy-on-write (it rebuilds
+ * whole arrays, never mutating a node/edge/port in place), so a captured
+ * reference stays frozen as long as nobody writes through it. The history is
+ * in-memory only (no cross-reload persistence) and excludes run state (it lives
+ * in a separate overlay) and prompt text (intentionally not tracked).
+ */
+export interface TabHistory {
+  /** Pre-mutation snapshots, oldest→newest. The top is the most recent restore point. */
+  past: PipelineDef[];
+  /** States undone, available for redo (newest at the end). */
+  future: PipelineDef[];
+  /** Coalescing key of the most recent push (null = never coalesce). */
+  lastKey: string | null;
+  /** `Date.now()` of the most recent push, for the time-window coalescer. */
+  lastAt: number;
+}
+
 interface EditState {
   pipelines: PipelineListEntry[];
   openTabs: OpenPipeline[];
@@ -81,6 +101,10 @@ interface EditState {
   selection: Selection;
   scrollToPort: string | null;
   lastSavedAt: Record<string, number>;
+  // Undo/redo history keyed by tabId (ADR-0014 / #226). Lazily initialized on
+  // the first tracked mutation; `canUndo`/`canRedo` are derived by components
+  // with a selector, never stored.
+  history: Record<string, TabHistory>;
 
   loadPipelines: () => Promise<void>;
   openPipeline: (id: string, scope?: PipelineScope) => Promise<void>;
@@ -103,7 +127,10 @@ interface EditState {
 
   // Edge mutations
   addEdge: (edge: EdgeDef) => void;
-  updateEdge: (index: number, updates: Partial<EdgeDef>) => void;
+  // `opts.track === false` mutates without pushing a history entry — used by the
+  // draw-edge arrival-side stamp (#168) so a single edge-draw gesture folds into
+  // ONE undo step instead of two (the `addEdge` push + a separate stamp push).
+  updateEdge: (index: number, updates: Partial<EdgeDef>, opts?: { track?: boolean }) => void;
   deleteEdge: (index: number) => void;
 
   // Region mutations (ADR-0011 / #150) — edit a bounded region's bound live.
@@ -114,6 +141,10 @@ interface EditState {
 
   // Prompt mutations
   updatePrompt: (nodeId: string, content: string) => void;
+
+  // Undo/redo (ADR-0014 / #226) — operate on the active tab's history.
+  undo: () => void;
+  redo: () => void;
 
   // Pipeline deletion
   removePipeline: (id: string, scope?: PipelineScope) => Promise<void>;
@@ -334,6 +365,78 @@ function mutateActiveTab(
   return { openTabs: tabs };
 }
 
+// Undo/redo history tuning (ADR-0014 / #226).
+const HISTORY_CAP = 50; // FIFO-capped per tab — bounds memory; oldest dropped first.
+const COALESCE_WINDOW_MS = 500; // same-key edits within this window = one undo step.
+
+function emptyHistory(): TabHistory {
+  return { past: [], future: [], lastKey: null, lastAt: 0 };
+}
+
+// Returns the new `history` map after recording `before` for `tabId`. Coalescing:
+// a non-null key that matches the previous push within COALESCE_WINDOW_MS keeps
+// the existing top `before` (the correct restore point for the whole run) and
+// only clears redo — so a typed run / waypoint drag collapses to one undo step.
+function recordHistory(
+  history: Record<string, TabHistory>,
+  tabId: string,
+  before: PipelineDef,
+  coalesceKey: string | null,
+): Record<string, TabHistory> {
+  const h = history[tabId] ?? emptyHistory();
+  const now = Date.now();
+  if (
+    coalesceKey != null &&
+    coalesceKey === h.lastKey &&
+    now - h.lastAt < COALESCE_WINDOW_MS &&
+    h.past.length > 0
+  ) {
+    return { ...history, [tabId]: { ...h, future: [], lastAt: now } };
+  }
+  const past = [...h.past, before];
+  if (past.length > HISTORY_CAP) past.shift(); // drop oldest (FIFO)
+  return { ...history, [tabId]: { past, future: [], lastKey: coalesceKey, lastAt: now } };
+}
+
+// History-aware sibling to `mutateActiveTab`. `opts.track === false` mutates
+// without recording (the draw-edge stamp folds into the preceding `addEdge`).
+function mutateActiveTabWithHistory(
+  state: EditState,
+  fn: (tab: OpenPipeline) => void,
+  opts: { coalesceKey?: string | null; track?: boolean } = {},
+): Partial<EditState> {
+  const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
+  if (idx < 0) return {};
+  const before = state.openTabs[idx].pipeline; // immutable per the COW invariant
+  const tabId = state.openTabs[idx].id;
+  const mutated = mutateActiveTab(state, fn);
+  if (opts.track === false) return mutated;
+  const history = recordHistory(state.history, tabId, before, opts.coalesceKey ?? null);
+  return { ...mutated, history };
+}
+
+// CLEAR: the tab survives but its `pipeline` was replaced by foreign content
+// (hot-reload, "Take theirs", "Reload changes") — past/future are stale, drop
+// them but keep the (now-empty) slot.
+function clearedHistory(
+  history: Record<string, TabHistory>,
+  tabId: string,
+): Record<string, TabHistory> {
+  return { ...history, [tabId]: emptyHistory() };
+}
+
+// DROP: the tab is gone (close/remove/self-close) — remove its slot entirely so
+// a stale entry can't leak memory or be silently reattached if the id is reused.
+function droppedHistory(
+  history: Record<string, TabHistory>,
+  tabId: string,
+): Record<string, TabHistory> {
+  if (!(tabId in history)) return history;
+  const next = { ...history };
+  delete next[tabId];
+  return next;
+}
+
 function edgeReferencesNode(edge: EdgeDef, nodeId: string): boolean {
   if (edge.source.node === nodeId) return true;
   return "node" in edge.target && (edge.target as { node: string }).node === nodeId;
@@ -383,6 +486,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   selection: { kind: "none", id: null },
   scrollToPort: null,
   lastSavedAt: {},
+  history: {},
 
   loadPipelines: async () => {
     try {
@@ -466,7 +570,15 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (s.activeTabId === id) {
         activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
       }
-      return { openTabs: tabs, activeTabId, selection: { kind: "none", id: null } };
+      // DROP this tab's undo history (ADR-0014): the slot would otherwise leak,
+      // and a reused tab id (e.g. reopening `__run__<runId>`) would inherit a
+      // stale stack. `closeRunPipeline` routes through here, so it inherits this.
+      return {
+        openTabs: tabs,
+        activeTabId,
+        selection: { kind: "none", id: null },
+        history: droppedHistory(s.history, id),
+      };
     });
   },
 
@@ -483,13 +595,13 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   addNode: (node: NodeDef) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       tab.pipeline.nodes = [...tab.pipeline.nodes, node];
     }));
   },
 
   updateNode: (nodeId: string, updates: Partial<NodeDef>) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       const oldNode = tab.pipeline.nodes.find((n) => n.id === nodeId);
       tab.pipeline.nodes = tab.pipeline.nodes.map((n) =>
         n.id === nodeId ? { ...n, ...updates } : n,
@@ -502,12 +614,12 @@ export const useEditStore = create<EditState>((set, get) => ({
           propagatePortChangesToEdges(tab, nodeId, oldNode.outputs, updates.outputs, "outputs");
         }
       }
-    }));
+    }, { coalesceKey: `updateNode:${nodeId}:${Object.keys(updates).sort().join(",")}` }));
   },
 
   updateNodeViews: (updates: { id: string; x: number; y: number }[]) => {
     if (updates.length === 0) return; // no-op: don't dirty/re-render on an empty drag
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       // Round x/y exactly as the single-node drag did, so a group drag writes
       // the same integer coords. One `set` = one re-derivation = one dirty/save
       // unit. Positions never touch edges, so this skips
@@ -525,7 +637,7 @@ export const useEditStore = create<EditState>((set, get) => ({
 
   deleteNode: (nodeId: string) => {
     set((s) => ({
-      ...mutateActiveTab(s, (tab) => {
+      ...mutateActiveTabWithHistory(s, (tab) => {
         tab.pipeline.nodes = tab.pipeline.nodes.filter((n) => n.id !== nodeId);
         tab.pipeline.edges = tab.pipeline.edges.filter((e) => !edgeReferencesNode(e, nodeId));
         // Reconcile loop regions against the removed node (ADR-0011 / #173).
@@ -545,7 +657,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   duplicateNode: (nodeId: string) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       const src = tab.pipeline.nodes.find((n) => n.id === nodeId);
       if (!src) return;
       const newId = generateNodeId();
@@ -563,7 +675,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   addEdge: (edge: EdgeDef) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       tab.pipeline.edges = [...tab.pipeline.edges, edge];
       // Auto-materialize a bounded loop region when this edge closes a cycle
       // (ADR-0011 / #166): a drawn cycle is never accidentally unbounded. Only
@@ -580,17 +692,20 @@ export const useEditStore = create<EditState>((set, get) => ({
     }));
   },
 
-  updateEdge: (index: number, updates: Partial<EdgeDef>) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+  updateEdge: (index: number, updates: Partial<EdgeDef>, opts?: { track?: boolean }) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       tab.pipeline.edges = tab.pipeline.edges.map((e, i) =>
         i === index ? { ...e, ...updates } : e,
       );
+    }, {
+      track: opts?.track ?? true,
+      coalesceKey: `updateEdge:${index}:${Object.keys(updates).sort().join(",")}`,
     }));
   },
 
   deleteEdge: (index: number) => {
     set((s) => ({
-      ...mutateActiveTab(s, (tab) => {
+      ...mutateActiveTabWithHistory(s, (tab) => {
         // Destroy-loop on last-cycle removal (ADR-0011 / #150): if this edge was
         // the last cycle of one or more bounded regions, those regions are
         // destroyed — their `loops:` entry (bound + iteration state) goes with
@@ -609,7 +724,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   updateRegion: (regionId: string, updates: Partial<LoopRegion>) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       // Editing a bounded region's `max_iter` round-trips into the `loops:`
       // entry and, on a live run, applies to the running region — the
       // `extend_cycle` of the Pipeline Manager (ADR-0007 / ADR-0011 / #150). The
@@ -617,23 +732,82 @@ export const useEditStore = create<EditState>((set, get) => ({
       tab.pipeline.loops = (tab.pipeline.loops ?? []).map((r) =>
         r.id === regionId ? { ...r, ...updates } : r,
       );
-    }));
+    }, { coalesceKey: `updateRegion:${regionId}:${Object.keys(updates).sort().join(",")}` }));
   },
 
   updatePipelineMeta: (updates) => {
-    set((s) => mutateActiveTab(s, (tab) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
       if (updates.name !== undefined) tab.pipeline.name = updates.name;
       if (updates.version !== undefined) tab.pipeline.version = updates.version;
       if (updates.variables !== undefined) tab.pipeline.variables = updates.variables;
       if (updates.prompt_required !== undefined) tab.pipeline.prompt_required = updates.prompt_required;
-    }));
+    }, { coalesceKey: `updatePipelineMeta:${Object.keys(updates).sort().join(",")}` }));
   },
 
   updatePrompt: (nodeId: string, content: string) => {
+    // Intentionally NOT tracked (ADR-0014): run snapshots exclude prompts, and
+    // snapshotting them would *lose* later prompt edits on undo. Prompts are
+    // serialized wholesale on save independent of structural history.
     set((s) => mutateActiveTab(s, (tab) => {
       tab.prompts = { ...tab.prompts, [nodeId]: content };
     }));
   },
+
+  undo: () => set((s) => {
+    const tabId = s.activeTabId;
+    if (!tabId) return {};
+    const h = s.history[tabId];
+    if (!h || h.past.length === 0) return {};
+    const idx = s.openTabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) return {};
+    const current = s.openTabs[idx].pipeline;
+    const prev = h.past[h.past.length - 1];
+    const tabs = [...s.openTabs];
+    // dirty:true always — undo is an edit; no content-hash dirty-clearing (#226).
+    tabs[idx] = { ...tabs[idx], pipeline: prev, dirty: true };
+    return {
+      openTabs: tabs,
+      history: {
+        ...s.history,
+        [tabId]: {
+          past: h.past.slice(0, -1),
+          future: [...h.future, current],
+          // Reset so the next edit never coalesces across an undo boundary.
+          lastKey: null,
+          lastAt: 0,
+        },
+      },
+      // The edge selection key is positional and goes stale after an undo that
+      // changes the edge list (subagent #5) — same reason delete clears it.
+      selection: { kind: "none", id: null },
+    };
+  }),
+
+  redo: () => set((s) => {
+    const tabId = s.activeTabId;
+    if (!tabId) return {};
+    const h = s.history[tabId];
+    if (!h || h.future.length === 0) return {};
+    const idx = s.openTabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) return {};
+    const current = s.openTabs[idx].pipeline;
+    const next = h.future[h.future.length - 1];
+    const tabs = [...s.openTabs];
+    tabs[idx] = { ...tabs[idx], pipeline: next, dirty: true };
+    return {
+      openTabs: tabs,
+      history: {
+        ...s.history,
+        [tabId]: {
+          past: [...h.past, current],
+          future: h.future.slice(0, -1),
+          lastKey: null,
+          lastAt: 0,
+        },
+      },
+      selection: { kind: "none", id: null },
+    };
+  }),
 
   removePipeline: async (id: string, scope?: PipelineScope) => {
     // Pass the entry's scope so a `library` delete hits the library store, not
@@ -657,6 +831,8 @@ export const useEditStore = create<EditState>((set, get) => ({
         openTabs,
         activeTabId,
         selection: s.activeTabId === id ? { kind: "none" as const, id: null } : s.selection,
+        // DROP undo history — this path closes the tab inline, bypassing closeTab.
+        history: droppedHistory(s.history, id),
       };
     });
   },
@@ -718,7 +894,9 @@ export const useEditStore = create<EditState>((set, get) => ({
             activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
             selection = { kind: "none" as const, id: null };
           }
-          return { openTabs: tabs, activeTabId, selection, lastSavedAt };
+          // DROP undo history — this run tab is self-closing (its on-disk
+          // pipeline was archived away), so its stack must go with it.
+          return { openTabs: tabs, activeTabId, selection, lastSavedAt, history: droppedHistory(s.history, id) };
         });
         return;
       }
@@ -781,6 +959,9 @@ export const useEditStore = create<EditState>((set, get) => ({
               }
             : t,
         ),
+        // CLEAR undo history — a clean external hot-reload replaced this tab's
+        // pipeline with foreign content; the old stack can't cross that boundary.
+        history: clearedHistory(s.history, id),
       }));
       setTimeout(() => {
         set((s) => ({
@@ -795,22 +976,32 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   resolveConflict: (id: string, resolution: "keep" | "take") => {
-    set((s) => ({
-      openTabs: s.openTabs.map((t) => {
-        if (t.id !== id || !t.conflict) return t;
-        if (resolution === "keep") {
-          return { ...t, conflict: undefined };
-        }
-        return {
-          ...t,
-          pipeline: t.conflict.pipeline,
-          prompts: t.conflict.prompts,
-          diagnostics: t.conflict.diagnostics,
-          dirty: false,
-          conflict: undefined,
-        };
-      }),
-    }));
+    set((s) => {
+      const tab = s.openTabs.find((t) => t.id === id);
+      const hadConflict = tab?.conflict != null;
+      return {
+        openTabs: s.openTabs.map((t) => {
+          if (t.id !== id || !t.conflict) return t;
+          if (resolution === "keep") {
+            return { ...t, conflict: undefined };
+          }
+          return {
+            ...t,
+            pipeline: t.conflict.pipeline,
+            prompts: t.conflict.prompts,
+            diagnostics: t.conflict.diagnostics,
+            dirty: false,
+            conflict: undefined,
+          };
+        }),
+        // "Take theirs" replaces the pipeline → CLEAR. "Keep mine" leaves the
+        // local edits (and thus the undo stack) intact → KEEP (no change).
+        history:
+          resolution === "take" && hadConflict
+            ? clearedHistory(s.history, id)
+            : s.history,
+      };
+    });
   },
 
   setLibraryBinding: (tabId, libraryId, libraryScope) => {
@@ -842,6 +1033,8 @@ export const useEditStore = create<EditState>((set, get) => ({
               : t,
           ),
           lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
+          // CLEAR — "Reload changes" overwrote this run tab with the library YAML.
+          history: clearedHistory(s.history, tabId),
         }));
       } else {
         await savePipeline(tabId, libraryYaml, tab.prompts, tab.scope);
@@ -860,6 +1053,8 @@ export const useEditStore = create<EditState>((set, get) => ({
               : t,
           ),
           lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
+          // CLEAR — "Reload changes" overwrote this tab with the library YAML.
+          history: clearedHistory(s.history, tabId),
         }));
       }
     } catch (err: unknown) {

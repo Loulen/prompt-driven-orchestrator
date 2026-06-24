@@ -31,6 +31,7 @@ import RegionInspector from "./components/RegionInspector";
 import TriggerDetailPanel from "./components/TriggerDetailPanel";
 import type { TriggerPrefill } from "./components/NewRunModal";
 import { deriveEdgeTrigger } from "./lib/edgeTrigger";
+import { handleUndoRedoKeydown } from "./lib/undoRedoHotkeys";
 import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -152,6 +153,8 @@ export default function App() {
   const setSelection = useEditStore((s) => s.setSelection);
   const openTabs = useEditStore((s) => s.openTabs);
   const editSave = useEditStore((s) => s.save);
+  const editUndo = useEditStore((s) => s.undo);
+  const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
@@ -382,6 +385,18 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [hasEditTab, editActiveTabId, editSave]);
+
+  // Canvas undo/redo (ADR-0014 / #226): Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or
+  // Ctrl/Cmd+Y redo. Sibling to the Ctrl+S effect above, but — unlike Save — it
+  // MUST yield to native field undo while a text field is focused. The branch
+  // logic (and that input-focus guard) lives in `handleUndoRedoKeydown` so it's
+  // unit-testable without rendering the canvas; this effect just wires it up.
+  useEffect(() => {
+    if (!hasEditTab) return;
+    const handler = (e: KeyboardEvent) => handleUndoRedoKeydown(e, editUndo, editRedo);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [hasEditTab, editUndo, editRedo]);
 
   useEffect(() => {
     return subscribe((msg) => {

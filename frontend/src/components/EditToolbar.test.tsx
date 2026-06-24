@@ -3,6 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import EditToolbar from "./EditToolbar";
 import { TooltipProvider } from "./ui/tooltip";
+import { useEditStore } from "../stores/editStore";
+import type { PipelineDef } from "../types";
+import type { TabHistory } from "../stores/editStore";
 
 describe("EditToolbar", () => {
   const onAddNode = vi.fn();
@@ -78,5 +81,95 @@ describe("EditToolbar", () => {
     await waitFor(() => {
       expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Merge node");
     });
+  });
+});
+
+describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
+  const onAddNode = vi.fn();
+  const onLibraryDelete = vi.fn();
+
+  function pipe(): PipelineDef {
+    return { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
+  }
+
+  function seed(history: TabHistory) {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "t",
+          scope: "repo",
+          pipeline: pipe(),
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "t",
+      selection: { kind: "none", id: null },
+      history: { t: history },
+    });
+  }
+
+  beforeEach(() => {
+    onAddNode.mockClear();
+    onLibraryDelete.mockClear();
+    useEditStore.setState({ openTabs: [], activeTabId: null, history: {} });
+  });
+
+  function renderToolbar() {
+    return render(
+      <TooltipProvider>
+        <EditToolbar onAddNode={onAddNode} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
+      </TooltipProvider>,
+    );
+  }
+
+  it("renders both buttons with their testids", () => {
+    seed({ past: [], future: [], lastKey: null, lastAt: 0 });
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-undo")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-redo")).toBeInTheDocument();
+  });
+
+  it("both disabled when the history stacks are empty", () => {
+    seed({ past: [], future: [], lastKey: null, lastAt: 0 });
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-undo")).toBeDisabled();
+    expect(screen.getByTestId("toolbar-redo")).toBeDisabled();
+  });
+
+  it("undo enabled when past is non-empty; redo enabled when future is non-empty", () => {
+    seed({ past: [pipe()], future: [pipe()], lastKey: null, lastAt: 0 });
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-undo")).toBeEnabled();
+    expect(screen.getByTestId("toolbar-redo")).toBeEnabled();
+  });
+
+  it("clicking undo invokes the store's undo action", () => {
+    const undoSpy = vi.fn();
+    seed({ past: [pipe()], future: [], lastKey: null, lastAt: 0 });
+    useEditStore.setState({ undo: undoSpy });
+    renderToolbar();
+    fireEvent.click(screen.getByTestId("toolbar-undo"));
+    expect(undoSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking redo invokes the store's redo action", () => {
+    const redoSpy = vi.fn();
+    seed({ past: [], future: [pipe()], lastKey: null, lastAt: 0 });
+    useEditStore.setState({ redo: redoSpy });
+    renderToolbar();
+    fireEvent.click(screen.getByTestId("toolbar-redo"));
+    expect(redoSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a disabled undo button does not invoke the action", () => {
+    const undoSpy = vi.fn();
+    seed({ past: [], future: [], lastKey: null, lastAt: 0 });
+    useEditStore.setState({ undo: undoSpy });
+    renderToolbar();
+    fireEvent.click(screen.getByTestId("toolbar-undo"));
+    expect(undoSpy).not.toHaveBeenCalled();
   });
 });

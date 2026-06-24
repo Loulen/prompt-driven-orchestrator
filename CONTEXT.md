@@ -773,6 +773,7 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 
 - **Save explicite** (#35) : un bouton **Save** dans la barre d'onglets, le raccourci **Cmd/Ctrl+S**, et un **flush automatique au lancement d'un Run** (toutes les modifs non sauvegardées sont écrites avant de démarrer le Run). Pas d'auto-save debounced. Le canvas EST le fichier YAML + les fichiers prompts.
 - **Hot-reload bidirectionnel** : PDO watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
+- **Historique d'édition (undo/redo)** (#226) : pile **par onglet** des états d'édition successifs du canvas (Ctrl/Cmd+Z annuler, Ctrl/Cmd+Shift+Z ou Ctrl+Y rétablir, plus deux boutons toolbar), scopée à l'**édition** (positions, nœuds, edges, loops, métadonnées) — **exclut l'état de Run** (statuts/overlay) et les prompts. In-memory (vidée au reload, pas de persistance cross-session), plafonnée. Vidée sur reload-propre / "Take theirs" / "Reload changes" ; conservée à travers un Save. À distinguer de l'**historique** d'un Run (events SQLite) et des fires d'un Trigger. Cf. ADR-0014.
 - **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
 
 ### Création d'un nouveau nœud

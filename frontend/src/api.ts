@@ -350,6 +350,41 @@ export async function fetchRecentRepos(): Promise<string[]> {
   return resp.json();
 }
 
+// --- Filesystem explorer (#131) ---
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  is_git_repo: boolean;
+  is_symlink: boolean;
+}
+
+export interface BrowseResponse {
+  /** The directory actually listed (canonicalized). */
+  path: string;
+  /** Parent directory, or null only at the filesystem root. */
+  parent: string | null;
+  entries: BrowseEntry[];
+  /** True iff the post-filter directory count exceeded the listing cap. */
+  truncated: boolean;
+  /** Non-null when the dir was navigable but unlistable (e.g. permission denied). */
+  error: string | null;
+}
+
+/**
+ * List the directories inside `path` (or the daemon's default root when omitted).
+ * 200 always carries the {@link BrowseResponse} shape — including the in-body
+ * `error` for navigable-but-unlistable dirs — so callers branch on `data.error`.
+ * Only genuine caller/system bugs (relative path → 400, collapsed default → 500)
+ * throw here.
+ */
+export async function browseRepos(path?: string): Promise<BrowseResponse> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  const resp = await fetch(`${BASE}/repos/browse${qs}`);
+  if (!resp.ok) throw new Error(`GET /repos/browse failed: ${resp.status}`);
+  return resp.json();
+}
+
 export async function killNode(
   runId: string,
   nodeId: string,

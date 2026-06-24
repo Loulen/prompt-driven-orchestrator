@@ -765,6 +765,212 @@ async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+// --- GET /repos/browse (issue #131): filesystem explorer ---
+//
+// Lists directories one level at a time so the webapp can browse and pick a target
+// repo visually (the recents combobox covers the common case; this covers first-time
+// / visual selection). Read-only, single-level, no recursion. Deliberately NOT
+// hardened against path traversal — fs-exposure scoping is carved out to #260; this
+// endpoint only browses what the local 127.0.0.1 single-user daemon can already reach
+// via `/repos/validate`. The contract here mirrors its `/repos/*` siblings.
+
+#[derive(Deserialize)]
+struct BrowseQuery {
+    /// Absolute directory to list. Omitted → the default chain (`$HOME → repo_root →
+    /// /`). The frontend only ever sends absolute paths; a relative one is a caller
+    /// bug (→ 400).
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BrowseEntry {
+    name: String,
+    /// `canonical_dir.join(name)` — NOT re-canonicalized, so a symlinked child keeps
+    /// the path the user clicked rather than collapsing to its target.
+    path: String,
+    /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
+    /// gate: every folder stays pickable and the authoritative validation runs at
+    /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
+    is_git_repo: bool,
+    is_symlink: bool,
+}
+
+/// Why the requested browse root could not be resolved into a listable directory.
+#[derive(Debug, PartialEq, Eq)]
+enum BrowseRootError {
+    /// `path` was provided but is not absolute (caller bug → 400).
+    Relative,
+    /// No directory in the default chain (`$HOME → repo_root → /`) exists as a
+    /// directory (pathological → 500). `/` virtually always exists, so this is rare.
+    NoDefault,
+}
+
+/// First existing directory in `[home, repo_root, "/"]`. `None` only when none of the
+/// three is an existing directory.
+fn default_chain(home: Option<&Path>, repo_root: &Path) -> Option<PathBuf> {
+    if let Some(h) = home {
+        if h.is_dir() {
+            return Some(h.to_path_buf());
+        }
+    }
+    if repo_root.is_dir() {
+        return Some(repo_root.to_path_buf());
+    }
+    let root = Path::new("/");
+    if root.is_dir() {
+        return Some(root.to_path_buf());
+    }
+    None
+}
+
+/// Resolve the directory to list. Pure w.r.t. the environment: `home`/`repo_root` are
+/// injected (never reads the real `$HOME`) so it stays deterministic under cargo's
+/// parallel test threads (ADR-0004).
+fn resolve_browse_root(
+    path: Option<&str>,
+    home: Option<&Path>,
+    repo_root: &Path,
+) -> Result<PathBuf, BrowseRootError> {
+    match path {
+        Some(p) => {
+            let pb = PathBuf::from(p);
+            if !pb.is_absolute() {
+                return Err(BrowseRootError::Relative);
+            }
+            if pb.is_dir() {
+                Ok(pb)
+            } else if pb.is_file() {
+                // A file path → list its parent (the user pointed inside a folder).
+                Ok(pb.parent().map(Path::to_path_buf).unwrap_or(pb))
+            } else {
+                // Non-existent (e.g. a stale/half-typed combobox value) → clamp to the
+                // default so the explorer opens gracefully instead of erroring.
+                default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault)
+            }
+        }
+        None => default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault),
+    }
+}
+
+/// Human label for the in-body `error` when a navigable directory can't be listed.
+fn browse_io_label(e: &std::io::Error) -> &'static str {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => "permission denied",
+        std::io::ErrorKind::NotFound => "not found",
+        _ => "could not read directory",
+    }
+}
+
+async fn repos_browse(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<BrowseQuery>,
+) -> Response {
+    // The repo's idiom for the home dir — there is no `dirs` crate (cf.
+    // stale_detector.rs). Injected into the pure resolver so the handler stays a thin
+    // shell over testable logic.
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let resolved = match resolve_browse_root(q.path.as_deref(), home.as_deref(), &state.repo_root) {
+        Ok(p) => p,
+        Err(BrowseRootError::Relative) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "path must be an absolute path" })),
+            )
+                .into_response();
+        }
+        Err(BrowseRootError::NoDefault) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "could not resolve a default browse directory"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Canonicalize the requested dir ONLY (resolves `..`, cleans the path, surfaces
+    // ELOOP/NotFound). Children are NOT re-canonicalized — that would collapse
+    // symlinks and show a path the user didn't click. On failure (the dir vanished
+    // since the is_dir check, or a symlink loop) fall back to the un-canonicalized
+    // path so the read_dir below produces a clean in-body error, never a 500/panic.
+    let canonical_dir = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+    let parent = canonical_dir
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned());
+
+    let read = match std::fs::read_dir(&canonical_dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            // Navigable-but-unlistable (EACCES, etc.): 200 with an in-body error and
+            // the breadcrumb preserved, so the user is never stranded on a blank pane.
+            return Json(serde_json::json!({
+                "path": canonical_dir.to_string_lossy(),
+                "parent": parent,
+                "entries": Vec::<BrowseEntry>::new(),
+                "truncated": false,
+                "error": format!("{}: {}", browse_io_label(&e), canonical_dir.display()),
+            }))
+            .into_response();
+        }
+    };
+
+    const CAP: usize = 1000;
+    let mut entries: Vec<BrowseEntry> = Vec::new();
+    let mut truncated = false;
+    for child in read {
+        let child = match child {
+            Ok(c) => c,
+            Err(_) => continue, // skip an entry that can't be stat'd mid-listing
+        };
+        let name = child.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue; // dotfiles hidden (MVP, no toggle); `.`/`..` never yielded here
+        }
+        // `file_type()` does NOT follow the link (cheap lstat) → correct for the flag.
+        let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+        // TRAP: `DirEntry::metadata()` lstat's (no follow) and would report every
+        // symlinked dir as non-dir. The FREE `std::fs::metadata` FOLLOWS the link —
+        // use it for the is-dir decision. Broken link / loop → Err → false → skipped.
+        let is_dir = std::fs::metadata(child.path())
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
+            continue; // dirs only; files and symlink-to-file dropped
+        }
+        let entry_path = canonical_dir.join(&name);
+        let is_git_repo = entry_path.join(".git").exists();
+        entries.push(BrowseEntry {
+            name,
+            path: entry_path.to_string_lossy().into_owned(),
+            is_git_repo,
+            is_symlink,
+        });
+        if entries.len() > CAP {
+            // Early-stop: a (CAP+1)th surviving dir proves there are > CAP, which is
+            // all `truncated` needs — stop stat-ing the rest.
+            truncated = true;
+            break;
+        }
+    }
+
+    // Case-insensitive, stable sort (ties keep read_dir order).
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    if entries.len() > CAP {
+        entries.truncate(CAP); // keep the alphabetically-first CAP
+    }
+
+    Json(serde_json::json!({
+        "path": canonical_dir.to_string_lossy(),
+        "parent": parent,
+        "entries": entries,
+        "truncated": truncated,
+        "error": serde_json::Value::Null,
+    }))
+    .into_response()
+}
+
 // --- Trigger endpoints ---
 
 #[derive(Deserialize)]
@@ -1387,6 +1593,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
+        // Filesystem explorer (#131). `/repos` is already whitelisted in the vite
+        // proxy and matches by prefix — no `vite.config.ts` edit needed.
+        .route("/repos/browse", get(repos_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
         // Static segment beside the `{trigger_id}` param: axum 0.8 allows this
         // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
@@ -16491,6 +16700,85 @@ edges:
             .unwrap();
         let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
         assert_eq!(repos, vec!["/repo/real"]);
+    }
+
+    // --- GET /repos/browse default-root resolution (issue #131) ---
+    //
+    // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
+    // so these never touch the real `$HOME` and are safe under cargo's parallel test
+    // threads. Each test seeds real temp dirs so the `is_dir`/`is_file` probes are
+    // deterministic.
+
+    #[test]
+    fn resolve_browse_root_explicit_existing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tempfile::tempdir().unwrap();
+        let got = resolve_browse_root(
+            Some(tmp.path().to_str().unwrap()),
+            None,
+            repo_root.path(),
+        )
+        .unwrap();
+        assert_eq!(got, tmp.path());
+    }
+
+    #[test]
+    fn resolve_browse_root_file_resolves_to_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("notes.txt");
+        std::fs::write(&file, "x").unwrap();
+        let repo_root = tempfile::tempdir().unwrap();
+        let got =
+            resolve_browse_root(Some(file.to_str().unwrap()), None, repo_root.path()).unwrap();
+        assert_eq!(got, tmp.path());
+    }
+
+    #[test]
+    fn resolve_browse_root_nonexistent_clamps_to_home() {
+        let home = tempfile::tempdir().unwrap();
+        let repo_root = tempfile::tempdir().unwrap();
+        let got = resolve_browse_root(
+            Some("/this/path/definitely/does/not/exist/131"),
+            Some(home.path()),
+            repo_root.path(),
+        )
+        .unwrap();
+        assert_eq!(got, home.path(), "non-existent path clamps to the default (home)");
+    }
+
+    #[test]
+    fn resolve_browse_root_relative_path_errors() {
+        let repo_root = tempfile::tempdir().unwrap();
+        let err = resolve_browse_root(Some("relative/path"), None, repo_root.path()).unwrap_err();
+        assert_eq!(err, BrowseRootError::Relative);
+    }
+
+    #[test]
+    fn resolve_browse_root_none_uses_home() {
+        let home = tempfile::tempdir().unwrap();
+        let repo_root = tempfile::tempdir().unwrap();
+        let got = resolve_browse_root(None, Some(home.path()), repo_root.path()).unwrap();
+        assert_eq!(got, home.path());
+    }
+
+    #[test]
+    fn resolve_browse_root_none_without_home_uses_repo_root() {
+        let repo_root = tempfile::tempdir().unwrap();
+        let got = resolve_browse_root(None, None, repo_root.path()).unwrap();
+        assert_eq!(got, repo_root.path());
+    }
+
+    #[test]
+    fn resolve_browse_root_falls_through_to_filesystem_root() {
+        // No home, and a repo_root that does not exist → falls through to `/`
+        // (which always exists), so the chain never collapses in practice.
+        let got = resolve_browse_root(
+            None,
+            None,
+            Path::new("/this/repo/root/does/not/exist/131"),
+        )
+        .unwrap();
+        assert_eq!(got, Path::new("/"));
     }
 
     // --- prompt-optional run creation (#158) ---

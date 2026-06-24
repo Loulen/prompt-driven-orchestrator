@@ -5,9 +5,32 @@ import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
 import type { RunState, PipelineDef } from "../types";
+import { isLiveRun } from "../types";
+import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { serializePipeline } from "../stores/editStore";
 
 export type TabId = "info" | "manager" | "yaml";
+
+function StatRow({
+  label,
+  children,
+  testid,
+}: {
+  label: string;
+  children: React.ReactNode;
+  testid?: string;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
+      style={{ fontSize: "10.5px" }}
+      data-testid={testid}
+    >
+      <span className="text-fg-3">{label}</span>
+      <span className="font-mono text-fg-4">{children}</span>
+    </div>
+  );
+}
 
 interface Props {
   run: RunState | null;
@@ -147,6 +170,10 @@ function InfoTab({
   pipelineName: string;
   variables: [string, { default: unknown }][];
 }) {
+  const durationMs = useRunDuration(run?.started_at, run?.completed_at, run?.status);
+  const durationLabel = formatDuration(durationMs);
+  const durationTicking = run != null && run.completed_at == null && isLiveRun(run.status);
+
   return (
     <>
       <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }}>
@@ -186,6 +213,51 @@ function InfoTab({
           </div>
         )}
       </div>
+
+      {run && (
+        <div
+          className="border-b border-line px-3 py-3"
+          style={{ fontSize: "11.5px" }}
+          data-testid="run-stats"
+        >
+          <SectionHead title="Stats" />
+          <div className="mt-2 flex flex-col gap-1">
+            <StatRow label="Duration" testid="stat-duration">
+              <span className="flex items-center gap-1.5">
+                {durationLabel ?? "—"}
+                {durationTicking && (
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-st-running animate-pulse"
+                    title="live"
+                    data-testid="stat-duration-live"
+                  />
+                )}
+              </span>
+            </StatRow>
+            <StatRow label="Node sessions started" testid="stat-sessions">
+              {(run.sessions_spawned ?? 0).toLocaleString()}
+            </StatRow>
+            <StatRow label="Lines changed" testid="stat-loc">
+              {run.loc ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="text-st-done">
+                    +{run.loc.insertions.toLocaleString()}
+                  </span>
+                  <span className="text-st-failed">
+                    −{run.loc.deletions.toLocaleString()}
+                  </span>
+                  <span className="text-fg-4">
+                    {run.loc.files_changed.toLocaleString()}{" "}
+                    {run.loc.files_changed === 1 ? "file" : "files"}
+                  </span>
+                </span>
+              ) : (
+                "—"
+              )}
+            </StatRow>
+          </div>
+        </div>
+      )}
 
       <DiffSection run={run} />
 

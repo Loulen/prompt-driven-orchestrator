@@ -424,7 +424,13 @@ Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner s
 
 `<run-id>` = slug `<timestamp>-<short-uuid>` pour rester lisible humainement et garanti unique.
 
----
+### Statistiques de Run
+
+Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100). Trois métriques retenues ; le **coût** (tokens/$) est **hors-scope** — aucune télémétrie de coût fiable n'existe côté machine utilisateur (la télémétrie Claude Code y est redirigée).
+
+- **Durée** : temps écoulé entre `started_at` et `completed_at`. **Dérivée à l'affichage** (frontend) à partir des deux timestamps déjà projetés depuis l'event log — pas de `duration_ms` backend (qui figerait un Run vivant). Horloge **live** (tick) tant que le Run est vivant (`Running`/`AwaitingUser`/`Paused`) ; figée à `completed_at` à l'entrée terminale. La durée est du **wall-clock** : un Run `Paused` continue de compter (le temps de pause est inclus).
+- **Sessions de nœud lancées** (*node sessions started*) : **compte cumulatif** des événements `NodeStarted` sur tout le Run. Mesure les sessions tmux NodeRun réellement spawnées — **y compris** les re-spawns au **même** `(node, iter)` (restart/recovery), donc ≥ le nombre de `(node, iter)` distincts (une projection dédupliquée par `(node, iter)` *sous-compterait*). Le **Pipeline Manager** n'émet pas `NodeStarted` → exclu par construction (« exclure le manager » est un no-op). Distinct de la gauge « sessions vivantes » du cap (cf. *Cap de sessions concurrentes*).
+- **LOC** (lignes changées par le Run) : `git diff --numstat` en **trois-points** (`HEAD...pdo/run-<run-id>`) — la base est le **point de fork** (merge-base), donc stable même si `main` avance (un diff deux-points dériverait). **Exclut `.pdo/`** (artefacts/prompts générés ne sont pas du code produit ; protégé par `.gitignore` mais un pathspec `:(exclude).pdo/` défensif couvre les repos cibles externes). **Dérivé du git, live-only** : la branche `pdo/run-<run-id>` est supprimée au cleanup → la stat affiche **« — »** pour un Run archivé/nettoyé (branche absente = `None`), à distinguer de **« 0 »** (diff réellement vide). Même schéma que le snapshot de pane qui survit au reap.
 
 ## Repo cible (`target_repo`)
 
@@ -617,7 +623,7 @@ Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** 
 - **Admission par spawn de nœud**, pas par Run : quand le scheduler veut spawner un NodeRun et que `live_sessions + 1 > cap`, le nœud passe en état **`waiting`** jusqu'à libération d'un slot, puis spawn. Le Run est admis immédiatement ; ce sont les *nœuds* qui s'étranglent.
 - **Les sessions Pipeline Manager ne comptent pas** dans le cap (légères, 1/Run ; les compter risquerait un soft-deadlock où N managers saturent le budget sans laisser de slot au travail réel).
 - **Valeur configurable** sur la page de réglages instance-wide (#129, n'existe pas encore).
-- **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde.
+- **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde. C'est une **gauge instantanée** (sessions *vivantes* à l'instant T, au plus une par nœud) — **à ne pas confondre** avec la stat **« Sessions de nœud lancées »** d'un Run (total *cumulatif* des `NodeStarted`, cf. *Statistiques de Run* dans le cycle de vie).
 - **Admission atomique (check-and-reserve, #213)** : la décision d'admission (compter les sessions vivantes → décider → réserver le slot en appendant `NodeStarted`/`NodeWaiting`) est sérialisée par un verrou (`admission_lock`). Sans lui, des spawns concurrents (retries des nœuds `waiting` sur plusieurs Runs) observent tous le même slot libre et dépassent le cap.
 
 ### Cycle de vie process — résilience (fail-fast, #213)

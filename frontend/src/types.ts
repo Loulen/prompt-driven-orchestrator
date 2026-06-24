@@ -211,6 +211,18 @@ export interface RunState {
   foreach_states?: Record<string, ForEachStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
+  /**
+   * Cumulative count of NodeRun sessions this run spawned — raw `NodeStarted`
+   * count, not distinct `(node, iter)`; manager excluded (#100). Defaults to 0
+   * on older payloads.
+   */
+  sessions_spawned?: number;
+  /**
+   * Lines changed for the run (`git diff --numstat` of the run branch, `.pdo/`
+   * excluded), or null/absent once the branch is gone (archived/cleaned) — the
+   * UI renders "—" in that case, never "0" (#100).
+   */
+  loc?: { insertions: number; deletions: number; files_changed: number } | null;
 }
 
 export interface DaemonEvent {

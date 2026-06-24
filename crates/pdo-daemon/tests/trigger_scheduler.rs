@@ -726,7 +726,12 @@ async fn patch_disable_then_enable_pauses_and_resumes_firing() {
 #[tokio::test]
 async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let trigger = create_trigger(&daemon, "editable", "0 9 * * *").await;
+    // Daily at minute 07: a minute `*/15` (fires at :00/:15/:30/:45) can never
+    // land on, so the post-edit `next_fire_at` is guaranteed to differ from the
+    // original regardless of the wall-clock at test time. (A `0 9 * * *` seed
+    // would collide with `*/15` whenever "now" falls in (08:45, 09:00], making
+    // the recompute assertion below flaky around that minute each day.)
+    let trigger = create_trigger(&daemon, "editable", "7 9 * * *").await;
     let trigger_id = trigger["id"].as_str().unwrap().to_string();
     let original_next = trigger["next_fire_at"].as_str().unwrap().to_string();
 

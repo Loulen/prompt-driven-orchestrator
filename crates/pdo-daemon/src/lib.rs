@@ -8017,7 +8017,83 @@ fn copy_pipeline_to_run(
     Ok(())
 }
 
+/// Parse `git diff --numstat` output into a [`LocStat`] (issue #100).
+///
+/// numstat rows are `added\tdeleted\tpath`. For **binary** files git emits `-`
+/// in the count columns: we skip their +/- contribution but still count the
+/// file. A blank/short line (no path) is not a numstat row and is ignored. An
+/// empty input yields `{0, 0, 0}` — the caller distinguishes that (clean diff,
+/// `Some`) from an uncomputable diff (`None`).
+fn parse_numstat(stdout: &str) -> event_log::LocStat {
+    let mut insertions = 0u64;
+    let mut deletions = 0u64;
+    let mut files_changed = 0u64;
+    for line in stdout.lines() {
+        let mut cols = line.splitn(3, '\t');
+        let added = cols.next().unwrap_or("");
+        let deleted = cols.next().unwrap_or("");
+        // A valid numstat row has a third (path) column; otherwise it is not a
+        // numstat line (e.g. a blank trailing line).
+        if cols.next().is_none() {
+            continue;
+        }
+        files_changed += 1;
+        // Binary files report `-`; `parse` fails and contributes nothing.
+        if let Ok(a) = added.parse::<u64>() {
+            insertions += a;
+        }
+        if let Ok(d) = deleted.parse::<u64>() {
+            deletions += d;
+        }
+    }
+    event_log::LocStat {
+        insertions,
+        deletions,
+        files_changed,
+    }
+}
+
+/// Lines changed for a Run, from `git diff --numstat HEAD...pdo/run-<id>` with
+/// `.pdo/` excluded (issue #100). Returns `None` when the diff is uncomputable
+/// (git missing, not a repo, run branch gone after cleanup) so the UI renders
+/// "—"; a successful but empty diff returns `Some({0, 0, 0})` → UI "0".
+///
+/// Uses a **three-dot** range so the base is the merge-base (the run's fork
+/// point): the count stays correct even as `main` advances past the fork
+/// (two-dot would drift and report later main commits as deletions).
+fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_log::LocStat> {
+    let range = format!("HEAD...pdo/run-{run_id}");
+    let output = std::process::Command::new("git")
+        // `:(exclude).pdo/` is a literal pathspec argv element (no shell). `.pdo/`
+        // is gitignored here, but the exclusion is defensive for external target
+        // repos that may commit it.
+        .args([
+            "diff",
+            "--numstat",
+            &range,
+            "--",
+            ".",
+            ":(exclude).pdo/",
+        ])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        // Missing run branch (`unknown revision`), not a repo, etc. → "—".
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Some(parse_numstat(&stdout))
+}
+
 fn augment_run_state_from_disk(run_state: &mut event_log::RunState, repo_root: &std::path::Path) {
+    // LOC is independent of the run YAML: the run branch lives in `repo_root`,
+    // not the run dir, so a missing/unparseable YAML must not suppress an
+    // otherwise-valid LOC. Compute it before the YAML early-return below.
+    run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
+
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
         return;
@@ -9117,6 +9193,46 @@ mod tests {
         ];
         for ev in &events {
             append_event(state, ev).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn get_run_payload_carries_sessions_spawned_and_omits_cost() {
+        // #100 AC#1/#5: GET /runs/:id exposes `sessions_spawned` (a number) and
+        // never a cost/token/price field (cost is out of scope). `loc` is
+        // omitted here because the seeded run has no `pdo/run-<id>` branch.
+        let state = test_state().await;
+        let run_id = "stats-payload";
+        seed_completed_run(&state, run_id).await; // exactly one NodeStarted
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(body["sessions_spawned"], 1);
+        // No run branch for this seeded run → `loc` is omitted (None), not Some(0).
+        assert!(body.get("loc").is_none() || body["loc"].is_null());
+        // Cost is out of scope: assert no cost/token/price key leaked onto the payload.
+        for key in body.as_object().unwrap().keys() {
+            let lk = key.to_lowercase();
+            assert!(
+                !lk.contains("cost") && !lk.contains("token") && !lk.contains("price"),
+                "unexpected cost-like field on /runs payload: {key}"
+            );
         }
     }
 
@@ -10322,6 +10438,129 @@ mod tests {
         std::fs::write(dir.join("README.md"), "# test\n").unwrap();
         run(&["add", "README.md"]);
         run(&["commit", "-m", "initial"]);
+    }
+
+    #[test]
+    fn parse_numstat_sums_text_and_counts_binary_without_lines() {
+        // #100: text rows sum +/- ; binary rows show `-` so contribute 0 lines
+        // but still count as a changed file. A trailing blank line is ignored.
+        let out = "3\t1\tsrc/a.rs\n2\t1\tsrc/b.rs\n-\t-\tassets/logo.png\n\n";
+        let loc = parse_numstat(out);
+        assert_eq!(
+            loc,
+            event_log::LocStat {
+                insertions: 5,
+                deletions: 2,
+                files_changed: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_numstat_empty_is_zero() {
+        assert_eq!(
+            parse_numstat(""),
+            event_log::LocStat {
+                insertions: 0,
+                deletions: 0,
+                files_changed: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn compute_run_loc_three_dot_excludes_pdo_and_drops_when_branch_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+
+        // Base file on HEAD so the run branch can delete a line from it.
+        std::fs::write(repo.join("code.txt"), "keep1\nremove\nkeep2\n").unwrap();
+        git(&["add", "code.txt"]);
+        git(&["commit", "-m", "add code"]);
+
+        let default_branch =
+            String::from_utf8_lossy(&git(&["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+        let run_id = "loc-test";
+        let branch = format!("pdo/run-{run_id}");
+
+        // Run branch: a +3/-1 source diff PLUS a tracked `.pdo/` change that must
+        // be excluded (so files_changed stays 1, not 2).
+        git(&["checkout", "-b", &branch]);
+        std::fs::write(repo.join("code.txt"), "keep1\nadd1\nadd2\nadd3\nkeep2\n").unwrap();
+        std::fs::create_dir_all(repo.join(".pdo")).unwrap();
+        std::fs::write(repo.join(".pdo/noise.txt"), "a\nb\nc\nd\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "run changes"]);
+        git(&["checkout", &default_branch]);
+
+        let loc = compute_run_loc(repo, run_id).expect("branch present -> Some");
+        assert_eq!(
+            loc,
+            event_log::LocStat {
+                insertions: 3,
+                deletions: 1,
+                files_changed: 1,
+            },
+            ".pdo/ excluded so only code.txt counts"
+        );
+
+        // Three-dot base = fork point: advancing HEAD after the fork must NOT
+        // change the run's LOC (two-dot would report the new commit as deletions).
+        std::fs::write(repo.join("other.txt"), "x\ny\n").unwrap();
+        git(&["add", "other.txt"]);
+        git(&["commit", "-m", "advance main"]);
+        let loc_after = compute_run_loc(repo, run_id).expect("still Some");
+        assert_eq!(
+            loc_after, loc,
+            "three-dot base stays at the fork point as HEAD advances"
+        );
+
+        // Branch gone (cleanup) -> None -> UI renders "—" (not "0").
+        git(&["branch", "-D", &branch]);
+        assert!(
+            compute_run_loc(repo, run_id).is_none(),
+            "missing run branch -> None"
+        );
+    }
+
+    #[test]
+    fn compute_run_loc_clean_diff_is_some_zero_not_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let run_id = "loc-clean";
+        // Branch at HEAD with no divergence: a successful but EMPTY diff must be
+        // Some({0,0,0}) (UI "0"), distinct from None (UI "—").
+        let out = std::process::Command::new("git")
+            .args(["branch", &format!("pdo/run-{run_id}")])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            compute_run_loc(repo, run_id).expect("branch present -> Some"),
+            event_log::LocStat {
+                insertions: 0,
+                deletions: 0,
+                files_changed: 0,
+            }
+        );
     }
 
     #[test]

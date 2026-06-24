@@ -225,6 +225,17 @@ pub struct SwitchState {
     pub evaluated_at: String,
 }
 
+/// Lines-of-code delta for a Run, derived live from `git diff --numstat` of the
+/// run branch against its fork point (issue #100). Live-only: it is **not**
+/// snapshotted into the event log (J2), so once the run branch is cleaned up it
+/// becomes uncomputable and the field is dropped (`None` → UI shows "—").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocStat {
+    pub insertions: u64,
+    pub deletions: u64,
+    pub files_changed: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
@@ -259,6 +270,19 @@ pub struct RunState {
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
+    /// Cumulative count of `NodeStarted` events for this Run — i.e. how many
+    /// Claude Code NodeRun sessions it spawned (issue #100). A **raw** count,
+    /// not deduplicated by `(node, iter)`: a legal re-spawn at the same
+    /// `(node, iter)` (restart/recovery) counts again, so this is always ≥ the
+    /// number of distinct iterations shown. The Pipeline Manager emits no
+    /// `NodeStarted`, so it is excluded by construction.
+    #[serde(default)]
+    pub sessions_spawned: u64,
+    /// Lines changed for the Run (issue #100). `None` (not `Some(0)`) when the
+    /// run branch is gone (archived/cleaned) — the UI renders "—" vs "0".
+    /// Derived on read, never persisted; see [`LocStat`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loc: Option<LocStat>,
 }
 
 impl RunState {
@@ -283,6 +307,8 @@ impl RunState {
             target_repo: None,
             source_branch: None,
             triggered_by: None,
+            sessions_spawned: 0,
+            loc: None,
         }
     }
 }
@@ -436,6 +462,11 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             }
             EventKind::NodeStarted => {
                 if let Some(ref node_id) = event.node_id {
+                    // Raw count of node sessions spawned (#100). Incremented per
+                    // `NodeStarted` (not per distinct `(node, iter)`), inside the
+                    // node-id guard so only real node spawns count — the manager
+                    // emits no `NodeStarted`.
+                    state.sessions_spawned += 1;
                     let iter = event.iter.unwrap_or(1);
                     let iteration = IterationInfo {
                         iter,
@@ -1221,6 +1252,46 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Running);
         assert_eq!(state.nodes["planner"].status, NodeStatus::Running);
+    }
+
+    #[test]
+    fn sessions_spawned_counts_raw_node_started_not_distinct_iters() {
+        // #100: `sessions_spawned` is the RAW count of `NodeStarted` events, so
+        // a legal re-spawn at the SAME (node, iter) — restart/recovery — counts
+        // again. A distinct-(node,iter) count would undercount real sessions.
+        let mut second_a = make_event(EventKind::NodeStarted, Some("a"), Some(1));
+        second_a.ts = "2026-01-01T00:05:00.000Z".into();
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("b"), Some(1)),
+            second_a, // same (a, 1) again — restart/recovery
+        ];
+
+        let state = project(&events).unwrap();
+        // 3 raw NodeStarted events, even though only 2 distinct (node, iter).
+        assert_eq!(state.sessions_spawned, 3);
+
+        // Sanity: the projection still dedups iterations by (node, iter), so the
+        // raw counter must be >= the distinct-iteration total it would yield.
+        let distinct_iters: usize = state.nodes.values().map(|n| n.iterations.len()).sum();
+        assert_eq!(distinct_iters, 2);
+        assert!(state.sessions_spawned as usize >= distinct_iters);
+    }
+
+    #[test]
+    fn sessions_spawned_ignores_manager_and_non_started_events() {
+        // The manager emits no `NodeStarted` (it spawns outside the event-log
+        // node path), and a `NodeWaiting` (throttled, no session) must not count.
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeWaiting, Some("a"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("a"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sessions_spawned, 1);
     }
 
     #[test]

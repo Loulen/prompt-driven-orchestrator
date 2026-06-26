@@ -3174,4 +3174,496 @@ mod tests {
         assert_eq!(state.status, RunStatus::Completed);
         assert!(!is_stalled(&state));
     }
+
+    // --- Golden / characterization projection (issue #238) ---
+
+    /// One representative event log that exercises every projection concern in a
+    /// single run: run lifecycle (start/pause/resume/rename/complete), node
+    /// transitions (waiting/started/completed/failed/auto-completed/stopped/
+    /// stale/invalidated/awaiting-user/frontmatter-retry), switch routing, a
+    /// bounded loop region, two foreach barriers, the merge resolver, the
+    /// passive pipeline events, and the command dispatcher (end_region,
+    /// resume_run, unknown). Used by `projection_golden` to pin the full
+    /// projected `RunState` across the per-concern decomposition (#238).
+    fn golden_event_log() -> Vec<Event> {
+        fn ev(
+            kind: EventKind,
+            node_id: Option<&str>,
+            iter: Option<i64>,
+            ts: &str,
+            payload: Option<serde_json::Value>,
+        ) -> Event {
+            Event {
+                id: None,
+                run_id: "run-golden".into(),
+                ts: ts.into(),
+                kind,
+                node_id: node_id.map(String::from),
+                iter,
+                payload,
+            }
+        }
+
+        vec![
+            ev(
+                EventKind::RunStarted,
+                None,
+                None,
+                "2026-02-01T00:00:00.000Z",
+                Some(serde_json::json!({
+                    "pipeline_name": "golden-pipe",
+                    "name": "Golden Run",
+                    "input": "exercise every concern",
+                    "image_filenames": ["screenshot.png"],
+                    "target_repo": "Loulen/prompt-driven-orchestrator",
+                    "source_branch": "main",
+                    "triggered_by": "trigger-7",
+                    "node_defs": [
+                        start_node_def(),
+                        end_node_def(),
+                        node_def("planner"),
+                        node_def("worker"),
+                        node_def("auto"),
+                        node_def("stopped"),
+                        node_def("stale"),
+                        node_def("temp"),
+                        node_def("interactive"),
+                        node_def("sw"),
+                    ],
+                    "edges": [
+                        edge_info("start", "planner"),
+                        edge_info("planner", "worker"),
+                        edge_info("worker", "end"),
+                    ],
+                })),
+            ),
+            // Loop region region1: iter started, break received, max reached
+            // (informational), then done.
+            ev(
+                EventKind::LoopIterStarted,
+                None,
+                None,
+                "2026-02-01T00:00:01.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1", "iter": 2, "max_iter": 3 })),
+            ),
+            ev(
+                EventKind::LoopBreakReceived,
+                None,
+                None,
+                "2026-02-01T00:00:02.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            ev(
+                EventKind::LoopMaxReached,
+                None,
+                None,
+                "2026-02-01T00:00:03.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            ev(
+                EventKind::LoopDone,
+                None,
+                None,
+                "2026-02-01T00:00:04.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            // ForEach fe1: started -> break received -> done.
+            ev(
+                EventKind::ForEachStarted,
+                None,
+                None,
+                "2026-02-01T00:00:05.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1", "total_items": 2 })),
+            ),
+            ev(
+                EventKind::ForEachBreakReceived,
+                None,
+                None,
+                "2026-02-01T00:00:06.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1" })),
+            ),
+            ev(
+                EventKind::ForEachDone,
+                None,
+                None,
+                "2026-02-01T00:00:07.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1" })),
+            ),
+            // ForEach fe2: empty list short-circuits to done.
+            ev(
+                EventKind::ForEachEmpty,
+                None,
+                None,
+                "2026-02-01T00:00:08.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe2" })),
+            ),
+            // planner: waiting -> started -> completed, plus a frontmatter retry.
+            ev(
+                EventKind::NodeWaiting,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::FrontmatterRetryPending,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:03.000Z",
+                None,
+            ),
+            // worker: iter1 fails (with violations), iter2 completes -> the
+            // node-level status follows the latest iter.
+            ev(
+                EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                "2026-02-01T00:02:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeFailed,
+                Some("worker"),
+                Some(1),
+                "2026-02-01T00:02:01.000Z",
+                Some(serde_json::json!({
+                    "reason": "output validation failed",
+                    "violations": [
+                        { "port": "out", "field": "verdict", "reason": "not allowed" }
+                    ]
+                })),
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:02:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:02:03.000Z",
+                None,
+            ),
+            // auto: auto-completed. stopped: stopped. stale: stale.
+            ev(
+                EventKind::NodeStarted,
+                Some("auto"),
+                Some(1),
+                "2026-02-01T00:03:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeAutoCompleted,
+                Some("auto"),
+                Some(1),
+                "2026-02-01T00:03:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("stopped"),
+                Some(1),
+                "2026-02-01T00:03:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStopped,
+                Some("stopped"),
+                Some(1),
+                "2026-02-01T00:03:03.000Z",
+                Some(serde_json::json!({ "reason": "user killed it" })),
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("stale"),
+                Some(1),
+                "2026-02-01T00:03:04.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStale,
+                Some("stale"),
+                Some(1),
+                "2026-02-01T00:03:05.000Z",
+                None,
+            ),
+            // temp: started then invalidated -> removed from state entirely.
+            ev(
+                EventKind::NodeStarted,
+                Some("temp"),
+                Some(1),
+                "2026-02-01T00:03:06.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeInvalidated,
+                Some("temp"),
+                None,
+                "2026-02-01T00:03:07.000Z",
+                None,
+            ),
+            // interactive: started -> awaiting user -> completed.
+            ev(
+                EventKind::NodeStarted,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeAwaitingUser,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:02.000Z",
+                None,
+            ),
+            // switch routing -> synthetic completed node + switch_state.
+            ev(
+                EventKind::SwitchRouted,
+                Some("sw"),
+                Some(1),
+                "2026-02-01T00:05:00.000Z",
+                Some(serde_json::json!({ "node_id": "sw", "chosen_branch": "pass" })),
+            ),
+            // merge resolver: conflict -> started -> completed.
+            ev(
+                EventKind::MergeConflictDetected,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:06:00.000Z",
+                Some(serde_json::json!({ "reason": "conflict merging worker" })),
+            ),
+            ev(
+                EventKind::MergeResolverStarted,
+                None,
+                None,
+                "2026-02-01T00:06:01.000Z",
+                Some(serde_json::json!({
+                    "conflicting_node_id": "worker",
+                    "iter": 2,
+                    "session_name": "pdo-run-golden-__merge_resolver__-iter-2"
+                })),
+            ),
+            ev(
+                EventKind::MergeResolverCompleted,
+                None,
+                None,
+                "2026-02-01T00:06:02.000Z",
+                None,
+            ),
+            // passive pipeline events (informational / terminal-safe).
+            ev(
+                EventKind::PipelineLint,
+                None,
+                None,
+                "2026-02-01T00:07:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::PipelineModified,
+                None,
+                None,
+                "2026-02-01T00:07:01.000Z",
+                None,
+            ),
+            // pause/resume round-trip mid-run.
+            ev(
+                EventKind::RunPaused,
+                None,
+                None,
+                "2026-02-01T00:08:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::RunResumed,
+                None,
+                None,
+                "2026-02-01T00:08:01.000Z",
+                None,
+            ),
+            // command dispatcher: end_region (creates a closed region2 loop
+            // state), resume_run (no-op on a Running run), unknown (no-op).
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:00.000Z",
+                Some(serde_json::json!({ "command": "end_region", "region_id": "region2" })),
+            ),
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:01.000Z",
+                Some(serde_json::json!({ "command": "resume_run" })),
+            ),
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:02.000Z",
+                Some(serde_json::json!({ "command": "totally_unknown" })),
+            ),
+            // rename then terminal completion.
+            ev(
+                EventKind::RunRenamed,
+                None,
+                None,
+                "2026-02-01T00:10:00.000Z",
+                Some(serde_json::json!({ "name": "Golden Run (final)" })),
+            ),
+            ev(
+                EventKind::RunCompleted,
+                None,
+                None,
+                "2026-02-01T00:11:00.000Z",
+                None,
+            ),
+        ]
+    }
+
+    /// Golden characterization (#238, AC#3): the full projected `RunState` for a
+    /// representative event log, pinned byte-for-byte across the per-concern
+    /// decomposition. We compare `serde_json::to_value(&state)` (a `BTreeMap`-
+    /// backed, sorted-key `Value` — `serde_json` has no `preserve_order` here, so
+    /// `HashMap` iteration order cannot flake the comparison) against an inline
+    /// expected literal captured against the pre-refactor monolith. If this
+    /// snapshot ever changes, the projection's behavior changed — investigate
+    /// rather than re-baseline. The expected literal is intentionally exhaustive
+    /// (every concern's contribution to the state is present) so that any
+    /// per-applier regression surfaces here.
+    #[test]
+    fn projection_golden() {
+        let state = project(&golden_event_log()).unwrap();
+        let actual = serde_json::to_value(&state).unwrap();
+        let expected = serde_json::json!({
+            "completed_at": "2026-02-01T00:11:00.000Z",
+            "edges": [
+                { "source_node": "start", "source_port": "out", "target_node": "planner", "target_port": "task" },
+                { "source_node": "planner", "source_port": "out", "target_node": "worker", "target_port": "task" },
+                { "source_node": "worker", "source_port": "out", "target_node": "end", "target_port": "task" }
+            ],
+            "end_node": {
+                "id": "end",
+                "ports": [
+                    { "fired_at": "2026-02-01T00:11:00.000Z", "port_name": "result", "reason": null, "status": "received" }
+                ]
+            },
+            "foreach_states": {
+                "fe1": { "break_received": true, "done": true, "foreach_node_id": "fe1", "total_items": 2 },
+                "fe2": { "break_received": false, "done": true, "foreach_node_id": "fe2", "total_items": 0 }
+            },
+            "input": "exercise every concern",
+            "loop_states": {
+                "region1": { "break_received": true, "current_iter": 2, "done": true, "loop_node_id": "region1", "max_iter": 3 },
+                "region2": { "break_received": false, "current_iter": 1, "done": true, "loop_node_id": "region2", "max_iter": 0 }
+            },
+            "merge_resolver": {
+                "completed_at": "2026-02-01T00:06:02.000Z",
+                "conflicting_node_id": "worker",
+                "failure_reason": null,
+                "iter": 2,
+                "session_name": "pdo-run-golden-__merge_resolver__-iter-2",
+                "started_at": "2026-02-01T00:06:01.000Z",
+                "status": "completed"
+            },
+            "name": "Golden Run (final)",
+            "node_defs": [
+                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
+                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+            ],
+            "nodes": {
+                "auto": {
+                    "completed_at": "2026-02-01T00:03:01.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:03:01.000Z", "iter": 1, "started_at": "2026-02-01T00:03:00.000Z", "status": "completed" } ],
+                    "node_id": "auto", "started_at": "2026-02-01T00:03:00.000Z", "status": "completed"
+                },
+                "interactive": {
+                    "completed_at": "2026-02-01T00:04:02.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:04:02.000Z", "iter": 1, "started_at": "2026-02-01T00:04:00.000Z", "status": "completed" } ],
+                    "node_id": "interactive", "started_at": "2026-02-01T00:04:00.000Z", "status": "completed"
+                },
+                "planner": {
+                    "completed_at": "2026-02-01T00:01:03.000Z", "failure_reason": null, "frontmatter_retries": 1, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:01:03.000Z", "iter": 1, "started_at": "2026-02-01T00:01:01.000Z", "status": "completed" } ],
+                    "node_id": "planner", "started_at": "2026-02-01T00:01:01.000Z", "status": "completed"
+                },
+                "stale": {
+                    "completed_at": null, "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": null, "iter": 1, "started_at": "2026-02-01T00:03:04.000Z", "status": "stale" } ],
+                    "node_id": "stale", "started_at": "2026-02-01T00:03:04.000Z", "status": "stale"
+                },
+                "stopped": {
+                    "completed_at": "2026-02-01T00:03:03.000Z", "failure_reason": "user killed it", "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:03:03.000Z", "iter": 1, "started_at": "2026-02-01T00:03:02.000Z", "status": "stopped" } ],
+                    "node_id": "stopped", "started_at": "2026-02-01T00:03:02.000Z", "status": "stopped"
+                },
+                "sw": {
+                    "completed_at": "2026-02-01T00:05:00.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:05:00.000Z", "iter": 1, "started_at": "2026-02-01T00:05:00.000Z", "status": "completed" } ],
+                    "node_id": "sw", "started_at": "2026-02-01T00:05:00.000Z", "status": "completed"
+                },
+                "worker": {
+                    "completed_at": "2026-02-01T00:02:03.000Z", "failure_reason": null, "frontmatter_retries": 0,
+                    "frontmatter_violations": [ { "field": "verdict", "port": "out", "reason": "not allowed" } ],
+                    "iter": 2,
+                    "iterations": [
+                        { "completed_at": "2026-02-01T00:02:01.000Z", "iter": 1, "started_at": "2026-02-01T00:02:00.000Z", "status": "failed" },
+                        { "completed_at": "2026-02-01T00:02:03.000Z", "iter": 2, "started_at": "2026-02-01T00:02:02.000Z", "status": "completed" }
+                    ],
+                    "node_id": "worker", "started_at": "2026-02-01T00:02:02.000Z", "status": "completed"
+                }
+            },
+            "pipeline_name": "golden-pipe",
+            "run_id": "run-golden",
+            "sessions_spawned": 8,
+            "source_branch": "main",
+            "start_node": {
+                "input_images": [ "screenshot.png" ],
+                "input_path": "_input/output.md",
+                "started_at": "2026-02-01T00:00:00.000Z",
+                "target_node_ids": [ "planner" ]
+            },
+            "started_at": "2026-02-01T00:00:00.000Z",
+            "status": "completed",
+            "switch_states": {
+                "sw": { "chosen_branch": "pass", "evaluated_at": "2026-02-01T00:05:00.000Z", "switch_node_id": "sw" }
+            },
+            "target_repo": "Loulen/prompt-driven-orchestrator",
+            "triggered_by": "trigger-7"
+        });
+        assert_eq!(actual, expected);
+    }
 }

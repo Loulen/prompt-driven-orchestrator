@@ -1,3 +1,19 @@
+//! Run state as an event-sourced projection.
+//!
+//! A Run's canonical state lives in its append-only event log; [`project`] folds
+//! that log into a [`RunState`]. The fold is a thin dispatch loop that routes
+//! each event, by concern, to exactly one per-concern sub-applier (`apply_run_event`,
+//! `apply_node_event`, `apply_switch_event`, `apply_loop_event`,
+//! `apply_foreach_event`, `apply_merge_event`, `apply_pipeline_event`,
+//! `apply_command_event`), then runs a single [`finalize`] reconciliation pass.
+//! The dispatch `match` is exhaustive over every [`EventKind`] with no wildcard,
+//! so adding a variant fails to compile until it is routed (#238).
+//!
+//! `project` is pure and MUST NOT panic: besides every read, it also runs inside
+//! `append_event` (before the transition guard) to compute the current state fed
+//! to that guard, so a panic here would break event appends — hence each
+//! applier's inner match ends in a silent `_ => {}` rather than `unreachable!()`.
+
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -364,564 +380,693 @@ pub fn project(events: &[Event]) -> Option<RunState> {
 
     for event in events {
         match event.kind {
-            EventKind::RunStarted => {
-                state.started_at = Some(event.ts.clone());
-                state.status = RunStatus::Running;
-                if let Some(ref payload) = event.payload {
-                    if let Some(name) = payload.get("pipeline_name").and_then(|v| v.as_str()) {
-                        state.pipeline_name = name.to_string();
-                    }
-                    if let Some(run_name) = payload.get("name").and_then(|v| v.as_str()) {
-                        if !run_name.is_empty() {
-                            state.name = Some(run_name.to_string());
-                        }
-                    }
-                    if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
-                        state.input = Some(input.to_string());
-                    }
-                    if let Some(edges) = payload.get("edges") {
-                        if let Ok(parsed) = serde_json::from_value::<Vec<EdgeInfo>>(edges.clone()) {
-                            state.edges = parsed;
-                        }
-                    }
-                    if let Some(node_defs) = payload.get("node_defs") {
-                        if let Ok(parsed) =
-                            serde_json::from_value::<Vec<NodeDefInfo>>(node_defs.clone())
-                        {
-                            state.node_defs = parsed;
-                        }
-                    }
-                    if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {
-                        state.target_repo = Some(tr.to_string());
-                    }
-                    if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
-                        state.source_branch = Some(sb.to_string());
-                    }
-                    if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
-                        state.triggered_by = Some(tb.to_string());
-                    }
+            EventKind::RunStarted
+            | EventKind::RunCompleted
+            | EventKind::RunFailed
+            | EventKind::RunSkipped
+            | EventKind::RunHalted
+            | EventKind::RunPaused
+            | EventKind::RunResumed
+            | EventKind::RunRenamed
+            | EventKind::RunArchived => apply_run_event(&mut state, event),
 
-                    let input_images = payload
-                        .get("image_filenames")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(str::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+            EventKind::NodeWaiting
+            | EventKind::NodeStarted
+            | EventKind::NodeCompleted
+            | EventKind::NodeAutoCompleted
+            | EventKind::NodeAwaitingUser
+            | EventKind::NodeFailed
+            | EventKind::NodeStopped
+            | EventKind::NodeStale
+            | EventKind::NodeInvalidated
+            | EventKind::FrontmatterRetryPending => apply_node_event(&mut state, event),
 
-                    state.start_node = Some(StartNodeInfo {
-                        input_path: "_input/output.md".to_string(),
-                        started_at: event.ts.clone(),
-                        target_node_ids: entry_node_ids(&state.edges, &state.node_defs),
-                        input_images,
+            EventKind::MergeConflictDetected
+            | EventKind::MergeResolverStarted
+            | EventKind::MergeResolverCompleted
+            | EventKind::MergeResolverFailed => apply_merge_event(&mut state, event),
+
+            EventKind::SwitchRouted => apply_switch_event(&mut state, event),
+
+            EventKind::LoopIterStarted
+            | EventKind::LoopBreakReceived
+            | EventKind::LoopMaxReached
+            | EventKind::LoopDone => apply_loop_event(&mut state, event),
+
+            EventKind::ForEachStarted
+            | EventKind::ForEachEmpty
+            | EventKind::ForEachBreakReceived
+            | EventKind::ForEachDone => apply_foreach_event(&mut state, event),
+
+            EventKind::PipelineLint | EventKind::PipelineModified => {
+                apply_pipeline_event(&mut state, event)
+            }
+
+            EventKind::CommandIssued => apply_command_event(&mut state, event),
+        }
+    }
+
+    finalize(&mut state);
+
+    Some(state)
+}
+
+// ── Per-concern sub-appliers (#238) ──────────────────────────────────────────
+//
+// `project()` routes each event to exactly one applier by concern; every applier
+// takes `(&mut RunState, &Event)` and folds that one event into the state. Each
+// multi-variant applier runs a focused inner `match event.kind` over only its
+// own subset and ends in a silent `_ => {}` — the appliers MUST NOT panic, since
+// `project()` also runs inside `append_event` (before the transition guard), so
+// a panic here would break event appends, not just reads. Arm bodies are moved
+// verbatim from the former monolithic match; the incident comments they carry
+// (#221, #196/#212, #199, #245, #159, #100) are load-bearing — do not reword.
+
+/// Run-lifecycle events: start (bootstrap pipeline/edges/node-defs/start+end
+/// nodes), the terminal transitions (completed/failed/skipped/halted), the
+/// resumable pause/resume pair, rename, and archive.
+fn apply_run_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::RunStarted => {
+            state.started_at = Some(event.ts.clone());
+            state.status = RunStatus::Running;
+            if let Some(ref payload) = event.payload {
+                if let Some(name) = payload.get("pipeline_name").and_then(|v| v.as_str()) {
+                    state.pipeline_name = name.to_string();
+                }
+                if let Some(run_name) = payload.get("name").and_then(|v| v.as_str()) {
+                    if !run_name.is_empty() {
+                        state.name = Some(run_name.to_string());
+                    }
+                }
+                if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
+                    state.input = Some(input.to_string());
+                }
+                if let Some(edges) = payload.get("edges") {
+                    if let Ok(parsed) = serde_json::from_value::<Vec<EdgeInfo>>(edges.clone()) {
+                        state.edges = parsed;
+                    }
+                }
+                if let Some(node_defs) = payload.get("node_defs") {
+                    if let Ok(parsed) =
+                        serde_json::from_value::<Vec<NodeDefInfo>>(node_defs.clone())
+                    {
+                        state.node_defs = parsed;
+                    }
+                }
+                if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {
+                    state.target_repo = Some(tr.to_string());
+                }
+                if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
+                    state.source_branch = Some(sb.to_string());
+                }
+                if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
+                    state.triggered_by = Some(tb.to_string());
+                }
+
+                let input_images = payload
+                    .get("image_filenames")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                state.start_node = Some(StartNodeInfo {
+                    input_path: "_input/output.md".to_string(),
+                    started_at: event.ts.clone(),
+                    target_node_ids: entry_node_ids(&state.edges, &state.node_defs),
+                    input_images,
+                });
+
+                if let Some(end_def) = state.node_defs.iter().find(|n| n.node_type == "end") {
+                    state.end_node = Some(EndNodeInfo {
+                        id: end_def.id.clone(),
+                        ports: end_def
+                            .inputs
+                            .iter()
+                            .map(|port| EndPortStatus {
+                                port_name: port.name.clone(),
+                                status: "pending".to_string(),
+                                reason: None,
+                                fired_at: None,
+                            })
+                            .collect(),
                     });
-
-                    if let Some(end_def) = state.node_defs.iter().find(|n| n.node_type == "end") {
-                        state.end_node = Some(EndNodeInfo {
-                            id: end_def.id.clone(),
-                            ports: end_def
-                                .inputs
-                                .iter()
-                                .map(|port| EndPortStatus {
-                                    port_name: port.name.clone(),
-                                    status: "pending".to_string(),
-                                    reason: None,
-                                    fired_at: None,
-                                })
-                                .collect(),
-                        });
+                }
+            }
+        }
+        EventKind::RunCompleted => {
+            state.status = RunStatus::Completed;
+            state.completed_at = Some(event.ts.clone());
+            if let Some(ref mut end_node) = state.end_node {
+                for port in &mut end_node.ports {
+                    if port.status == "pending" {
+                        port.status = "received".to_string();
+                        port.fired_at = Some(event.ts.clone());
                     }
                 }
             }
-            EventKind::NodeWaiting => {
-                // Throttled by the session cap: the node is ready but holds no
-                // session yet. Mark it `Waiting`; a later `NodeStarted` promotes
-                // it to `Running`. No iteration row is opened — the node has not
-                // started executing.
-                if let Some(ref node_id) = event.node_id {
-                    let iter = event.iter.unwrap_or(1);
-                    let node = state
-                        .nodes
-                        .entry(node_id.clone())
-                        .or_insert_with(|| NodeState {
-                            node_id: node_id.clone(),
-                            status: NodeStatus::Waiting,
-                            iter,
-                            started_at: None,
-                            completed_at: None,
-                            failure_reason: None,
-                            iterations: Vec::new(),
-                            frontmatter_retries: 0,
-                            frontmatter_violations: Vec::new(),
-                        });
-                    node.status = NodeStatus::Waiting;
-                    node.iter = iter;
+        }
+        EventKind::RunFailed => {
+            state.status = RunStatus::Failed;
+            state.completed_at = Some(event.ts.clone());
+        }
+        EventKind::RunSkipped => {
+            // Graceful no-op (#245): terminal, like RunFailed/RunCompleted.
+            // The run reached no `end` node (the selector short-circuited),
+            // so end-node ports stay pending — only the run status reflects
+            // "fired but nothing to do".
+            state.status = RunStatus::Skipped;
+            state.completed_at = Some(event.ts.clone());
+        }
+        EventKind::RunHalted => {
+            state.status = RunStatus::Halted;
+            state.completed_at = Some(event.ts.clone());
+            if let Some(ref mut end_node) = state.end_node {
+                let reason = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("message"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                for port in &mut end_node.ports {
+                    port.status = "received".to_string();
+                    port.reason = reason.clone();
+                    port.fired_at = Some(event.ts.clone());
                 }
             }
-            EventKind::NodeStarted => {
-                if let Some(ref node_id) = event.node_id {
-                    // Raw count of node sessions spawned (#100). Incremented per
-                    // `NodeStarted` (not per distinct `(node, iter)`), inside the
-                    // node-id guard so only real node spawns count — the manager
-                    // emits no `NodeStarted`.
-                    state.sessions_spawned += 1;
-                    let iter = event.iter.unwrap_or(1);
-                    let iteration = IterationInfo {
+        }
+        EventKind::RunPaused => {
+            if state.status == RunStatus::Running || state.status == RunStatus::AwaitingUser {
+                state.status = RunStatus::Paused;
+            }
+        }
+        EventKind::RunResumed => {
+            if state.status == RunStatus::Paused {
+                state.status = RunStatus::Running;
+            }
+        }
+        EventKind::RunRenamed => {
+            if let Some(ref payload) = event.payload {
+                if let Some(new_name) = payload.get("name").and_then(|v| v.as_str()) {
+                    if new_name.is_empty() {
+                        state.name = None;
+                    } else {
+                        state.name = Some(new_name.to_string());
+                    }
+                }
+            }
+        }
+        EventKind::RunArchived => {
+            state.status = RunStatus::Archived;
+            state.start_node = None;
+            state.end_node = None;
+        }
+        _ => {}
+    }
+}
+
+/// Node-transition events: the per-iteration lifecycle (waiting -> started ->
+/// completed/failed/...), plus stop/stale/invalidate and the frontmatter-retry
+/// counter. Node-level status derives from the LATEST iteration (see the
+/// `NodeFailed` #196/#212 guard).
+fn apply_node_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::NodeWaiting => {
+            // Throttled by the session cap: the node is ready but holds no
+            // session yet. Mark it `Waiting`; a later `NodeStarted` promotes
+            // it to `Running`. No iteration row is opened — the node has not
+            // started executing.
+            if let Some(ref node_id) = event.node_id {
+                let iter = event.iter.unwrap_or(1);
+                let node = state
+                    .nodes
+                    .entry(node_id.clone())
+                    .or_insert_with(|| NodeState {
+                        node_id: node_id.clone(),
+                        status: NodeStatus::Waiting,
                         iter,
+                        started_at: None,
+                        completed_at: None,
+                        failure_reason: None,
+                        iterations: Vec::new(),
+                        frontmatter_retries: 0,
+                        frontmatter_violations: Vec::new(),
+                    });
+                node.status = NodeStatus::Waiting;
+                node.iter = iter;
+            }
+        }
+        EventKind::NodeStarted => {
+            if let Some(ref node_id) = event.node_id {
+                // Raw count of node sessions spawned (#100). Incremented per
+                // `NodeStarted` (not per distinct `(node, iter)`), inside the
+                // node-id guard so only real node spawns count — the manager
+                // emits no `NodeStarted`.
+                state.sessions_spawned += 1;
+                let iter = event.iter.unwrap_or(1);
+                let iteration = IterationInfo {
+                    iter,
+                    status: NodeStatus::Running,
+                    started_at: Some(event.ts.clone()),
+                    completed_at: None,
+                };
+                let node = state
+                    .nodes
+                    .entry(node_id.clone())
+                    .or_insert_with(|| NodeState {
+                        node_id: node_id.clone(),
                         status: NodeStatus::Running,
+                        iter,
                         started_at: Some(event.ts.clone()),
                         completed_at: None,
-                    };
-                    let node = state
-                        .nodes
-                        .entry(node_id.clone())
-                        .or_insert_with(|| NodeState {
-                            node_id: node_id.clone(),
-                            status: NodeStatus::Running,
-                            iter,
-                            started_at: Some(event.ts.clone()),
-                            completed_at: None,
-                            failure_reason: None,
-                            iterations: Vec::new(),
-                            frontmatter_retries: 0,
-                            frontmatter_violations: Vec::new(),
-                        });
-                    node.status = NodeStatus::Running;
-                    node.iter = iter;
-                    node.started_at = Some(event.ts.clone());
-                    node.completed_at = None;
-                    node.failure_reason = None;
-                    upsert_iteration(&mut node.iterations, iteration);
-                }
+                        failure_reason: None,
+                        iterations: Vec::new(),
+                        frontmatter_retries: 0,
+                        frontmatter_violations: Vec::new(),
+                    });
+                node.status = NodeStatus::Running;
+                node.iter = iter;
+                node.started_at = Some(event.ts.clone());
+                node.completed_at = None;
+                node.failure_reason = None;
+                upsert_iteration(&mut node.iterations, iteration);
             }
-            EventKind::NodeCompleted | EventKind::NodeAutoCompleted => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.status = NodeStatus::Completed;
-                        node.completed_at = Some(event.ts.clone());
-                        let iter = event.iter.unwrap_or(node.iter);
-                        if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                            it.status = NodeStatus::Completed;
-                            it.completed_at = Some(event.ts.clone());
-                        }
+        }
+        EventKind::NodeCompleted | EventKind::NodeAutoCompleted => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    node.status = NodeStatus::Completed;
+                    node.completed_at = Some(event.ts.clone());
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::Completed;
+                        it.completed_at = Some(event.ts.clone());
                     }
                 }
             }
-            EventKind::NodeAwaitingUser => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.status = NodeStatus::AwaitingUser;
-                        let iter = event.iter.unwrap_or(node.iter);
-                        if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                            it.status = NodeStatus::AwaitingUser;
-                        }
+        }
+        EventKind::NodeAwaitingUser => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    node.status = NodeStatus::AwaitingUser;
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::AwaitingUser;
                     }
                 }
             }
-            EventKind::NodeFailed => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        let iter = event.iter.unwrap_or(node.iter);
-                        // Node-level status derives from the LATEST iteration:
-                        // failing an older iter (e.g. kill_node on a stale
-                        // iter, #196 via #212) must not mislabel a node whose
-                        // newer iteration is still live.
-                        if iter >= node.iter {
-                            node.status = NodeStatus::Failed;
-                            node.completed_at = Some(event.ts.clone());
-                            if let Some(ref payload) = event.payload {
-                                node.failure_reason = payload
-                                    .get("reason")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from);
-                                if let Some(arr) =
-                                    payload.get("violations").and_then(|v| v.as_array())
-                                {
-                                    node.frontmatter_violations = arr.clone();
-                                }
-                            }
-                        }
-                        if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                            it.status = NodeStatus::Failed;
-                            it.completed_at = Some(event.ts.clone());
-                        }
-                    }
-                }
-            }
-            EventKind::NodeStopped => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.status = NodeStatus::Stopped;
+        }
+        EventKind::NodeFailed => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    let iter = event.iter.unwrap_or(node.iter);
+                    // Node-level status derives from the LATEST iteration:
+                    // failing an older iter (e.g. kill_node on a stale
+                    // iter, #196 via #212) must not mislabel a node whose
+                    // newer iteration is still live.
+                    if iter >= node.iter {
+                        node.status = NodeStatus::Failed;
                         node.completed_at = Some(event.ts.clone());
                         if let Some(ref payload) = event.payload {
                             node.failure_reason = payload
                                 .get("reason")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                        }
-                        let iter = event.iter.unwrap_or(node.iter);
-                        if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                            it.status = NodeStatus::Stopped;
-                            it.completed_at = Some(event.ts.clone());
-                        }
-                    }
-                }
-            }
-            EventKind::NodeStale => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.status = NodeStatus::Stale;
-                        let iter = event.iter.unwrap_or(node.iter);
-                        if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                            it.status = NodeStatus::Stale;
+                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array())
+                            {
+                                node.frontmatter_violations = arr.clone();
+                            }
                         }
                     }
-                }
-            }
-            EventKind::NodeInvalidated => {
-                if let Some(ref node_id) = event.node_id {
-                    state.nodes.remove(node_id);
-                }
-            }
-            EventKind::FrontmatterRetryPending => {
-                if let Some(ref node_id) = event.node_id {
-                    if let Some(node) = state.nodes.get_mut(node_id) {
-                        node.frontmatter_retries += 1;
-                    }
-                }
-            }
-            EventKind::MergeConflictDetected => {
-                // Informational — the run either spawns a resolver or fails
-            }
-            EventKind::SwitchRouted => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(node_id) = payload.get("node_id").and_then(|v| v.as_str()) {
-                        let chosen_branch = payload
-                            .get("chosen_branch")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default")
-                            .to_string();
-
-                        state.switch_states.insert(
-                            node_id.to_string(),
-                            SwitchState {
-                                switch_node_id: node_id.to_string(),
-                                chosen_branch: chosen_branch.clone(),
-                                evaluated_at: event.ts.clone(),
-                            },
-                        );
-
-                        let iter = event.iter.unwrap_or(1);
-                        let node =
-                            state
-                                .nodes
-                                .entry(node_id.to_string())
-                                .or_insert_with(|| NodeState {
-                                    node_id: node_id.to_string(),
-                                    status: NodeStatus::Completed,
-                                    iter,
-                                    started_at: Some(event.ts.clone()),
-                                    completed_at: Some(event.ts.clone()),
-                                    failure_reason: None,
-                                    iterations: Vec::new(),
-                                    frontmatter_retries: 0,
-                                    frontmatter_violations: Vec::new(),
-                                });
-                        node.status = NodeStatus::Completed;
-                        node.completed_at = Some(event.ts.clone());
-                        node.iter = iter;
-                        upsert_iteration(
-                            &mut node.iterations,
-                            IterationInfo {
-                                iter,
-                                status: NodeStatus::Completed,
-                                started_at: Some(event.ts.clone()),
-                                completed_at: Some(event.ts.clone()),
-                            },
-                        );
-                    }
-                }
-            }
-            EventKind::LoopIterStarted => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
-                    {
-                        let iter = payload.get("iter").and_then(|v| v.as_i64()).unwrap_or(1);
-                        let max_iter = payload
-                            .get("max_iter")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(5);
-                        let ls = state
-                            .loop_states
-                            .entry(loop_node_id.to_string())
-                            .or_insert_with(|| LoopState {
-                                loop_node_id: loop_node_id.to_string(),
-                                current_iter: 1,
-                                max_iter,
-                                break_received: false,
-                                done: false,
-                            });
-                        ls.current_iter = iter;
-                        ls.max_iter = max_iter;
-                    }
-                }
-            }
-            EventKind::LoopBreakReceived => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
-                    {
-                        if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
-                            ls.break_received = true;
-                        }
-                    }
-                }
-            }
-            EventKind::LoopMaxReached => {
-                // Informational
-            }
-            EventKind::LoopDone => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str())
-                    {
-                        if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
-                            ls.done = true;
-                        }
-                    }
-                }
-            }
-            EventKind::ForEachStarted => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(foreach_node_id) =
-                        payload.get("foreach_node_id").and_then(|v| v.as_str())
-                    {
-                        let total_items = payload
-                            .get("total_items")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                        state
-                            .foreach_states
-                            .entry(foreach_node_id.to_string())
-                            .or_insert_with(|| ForEachState {
-                                foreach_node_id: foreach_node_id.to_string(),
-                                total_items,
-                                break_received: false,
-                                done: false,
-                            });
-                    }
-                }
-            }
-            EventKind::ForEachEmpty => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(foreach_node_id) =
-                        payload.get("foreach_node_id").and_then(|v| v.as_str())
-                    {
-                        let fs = state
-                            .foreach_states
-                            .entry(foreach_node_id.to_string())
-                            .or_insert_with(|| ForEachState {
-                                foreach_node_id: foreach_node_id.to_string(),
-                                total_items: 0,
-                                break_received: false,
-                                done: false,
-                            });
-                        fs.done = true;
-                    }
-                }
-            }
-            EventKind::ForEachBreakReceived => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(foreach_node_id) =
-                        payload.get("foreach_node_id").and_then(|v| v.as_str())
-                    {
-                        if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
-                            fs.break_received = true;
-                        }
-                    }
-                }
-            }
-            EventKind::ForEachDone => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(foreach_node_id) =
-                        payload.get("foreach_node_id").and_then(|v| v.as_str())
-                    {
-                        if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
-                            fs.done = true;
-                        }
-                    }
-                }
-            }
-            EventKind::MergeResolverStarted => {
-                if let Some(ref payload) = event.payload {
-                    let conflicting_node_id = payload
-                        .get("conflicting_node_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let iter = payload.get("iter").and_then(|v| v.as_i64()).unwrap_or(1);
-                    let session_name = payload
-                        .get("session_name")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    state.merge_resolver = Some(MergeResolverInfo {
-                        status: NodeStatus::Running,
-                        conflicting_node_id,
-                        iter,
-                        session_name,
-                        started_at: Some(event.ts.clone()),
-                        completed_at: None,
-                        failure_reason: None,
-                    });
-                }
-            }
-            EventKind::MergeResolverCompleted => {
-                if let Some(ref mut mr) = state.merge_resolver {
-                    mr.status = NodeStatus::Completed;
-                    mr.completed_at = Some(event.ts.clone());
-                }
-            }
-            EventKind::MergeResolverFailed => {
-                if let Some(ref mut mr) = state.merge_resolver {
-                    mr.status = NodeStatus::Failed;
-                    mr.completed_at = Some(event.ts.clone());
-                    if let Some(ref payload) = event.payload {
-                        mr.failure_reason = payload
-                            .get("reason")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                    }
-                }
-            }
-            EventKind::PipelineLint => {
-                // Informational — records lint diagnostics for the pipeline
-            }
-            EventKind::PipelineModified => {
-                // The run-scoped pipeline changed on disk. Node_defs/edges are
-                // re-parsed from the file at scheduling time
-                // (`spawn_ready_after_event`), which picks up newly-added nodes
-                // for a *live* (Running/AwaitingUser) run on the next tick — no
-                // status change is needed for that, and none happens here.
-                //
-                // Terminal-state integrity (#221): a `PipelineModified` is a
-                // passive signal. It can be emitted by a stray or foreign file
-                // write — even for a node that is not in this run's DAG at all —
-                // so it must NEVER un-terminalize a run. A run that reached
-                // `RunCompleted` (like one that reached `RunFailed`/`RunHalted`,
-                // handled below) stays terminal. Reopening a Completed run here
-                // left genuinely-finished runs phantom-`running` forever (there
-                // was no reliable re-completion path), held their manager
-                // session and worktree, made overlap-`skip` triggers skip every
-                // subsequent fire, and let a later `resume_run` re-spawn already
-                // satisfied loops (the transition guard sees `Running` instead
-                // of the true terminal state). Resuming a finished run to pick
-                // up newly-added work is an explicit operation (`resume_run`),
-                // not a side effect of the file watcher. No status change.
-            }
-            EventKind::RunCompleted => {
-                state.status = RunStatus::Completed;
-                state.completed_at = Some(event.ts.clone());
-                if let Some(ref mut end_node) = state.end_node {
-                    for port in &mut end_node.ports {
-                        if port.status == "pending" {
-                            port.status = "received".to_string();
-                            port.fired_at = Some(event.ts.clone());
-                        }
-                    }
-                }
-            }
-            EventKind::RunFailed => {
-                state.status = RunStatus::Failed;
-                state.completed_at = Some(event.ts.clone());
-            }
-            EventKind::RunSkipped => {
-                // Graceful no-op (#245): terminal, like RunFailed/RunCompleted.
-                // The run reached no `end` node (the selector short-circuited),
-                // so end-node ports stay pending — only the run status reflects
-                // "fired but nothing to do".
-                state.status = RunStatus::Skipped;
-                state.completed_at = Some(event.ts.clone());
-            }
-            EventKind::RunHalted => {
-                state.status = RunStatus::Halted;
-                state.completed_at = Some(event.ts.clone());
-                if let Some(ref mut end_node) = state.end_node {
-                    let reason = event
-                        .payload
-                        .as_ref()
-                        .and_then(|p| p.get("message"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    for port in &mut end_node.ports {
-                        port.status = "received".to_string();
-                        port.reason = reason.clone();
-                        port.fired_at = Some(event.ts.clone());
-                    }
-                }
-            }
-            EventKind::RunPaused => {
-                if state.status == RunStatus::Running || state.status == RunStatus::AwaitingUser {
-                    state.status = RunStatus::Paused;
-                }
-            }
-            EventKind::RunResumed => {
-                if state.status == RunStatus::Paused {
-                    state.status = RunStatus::Running;
-                }
-            }
-            EventKind::RunRenamed => {
-                if let Some(ref payload) = event.payload {
-                    if let Some(new_name) = payload.get("name").and_then(|v| v.as_str()) {
-                        if new_name.is_empty() {
-                            state.name = None;
-                        } else {
-                            state.name = Some(new_name.to_string());
-                        }
-                    }
-                }
-            }
-            EventKind::RunArchived => {
-                state.status = RunStatus::Archived;
-                state.start_node = None;
-                state.end_node = None;
-            }
-            EventKind::CommandIssued => {
-                if let Some(ref payload) = event.payload {
-                    let cmd = payload.get("command").and_then(|v| v.as_str());
-                    if cmd == Some("resume_run")
-                        && (state.status == RunStatus::Halted || state.status == RunStatus::Failed)
-                    {
-                        state.status = RunStatus::Running;
-                        state.completed_at = None;
-                    }
-                    // #199: `end_region` CLOSES the region — the projection
-                    // marks its loop state done so the scheduler's region
-                    // engine routes the exit instead of starting a phantom lap.
-                    // A region still on lap 1 has no loop state yet (the entry
-                    // appears when the first re-entry fires): create it closed,
-                    // so an early `end_region` is never lost. `max_iter` is
-                    // unknown to the projection (it lives in the pipeline) and
-                    // unused once the region is done.
-                    if cmd == Some("end_region") {
-                        if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
-                            state
-                                .loop_states
-                                .entry(region_id.to_string())
-                                .or_insert_with(|| LoopState {
-                                    loop_node_id: region_id.to_string(),
-                                    current_iter: 1,
-                                    max_iter: 0,
-                                    break_received: false,
-                                    done: false,
-                                })
-                                .done = true;
-                        }
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::Failed;
+                        it.completed_at = Some(event.ts.clone());
                     }
                 }
             }
         }
+        EventKind::NodeStopped => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    node.status = NodeStatus::Stopped;
+                    node.completed_at = Some(event.ts.clone());
+                    if let Some(ref payload) = event.payload {
+                        node.failure_reason = payload
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                    }
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::Stopped;
+                        it.completed_at = Some(event.ts.clone());
+                    }
+                }
+            }
+        }
+        EventKind::NodeStale => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    node.status = NodeStatus::Stale;
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::Stale;
+                    }
+                }
+            }
+        }
+        EventKind::NodeInvalidated => {
+            if let Some(ref node_id) = event.node_id {
+                state.nodes.remove(node_id);
+            }
+        }
+        EventKind::FrontmatterRetryPending => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    node.frontmatter_retries += 1;
+                }
+            }
+        }
+        _ => {}
     }
+}
 
+/// `SwitchRouted`: a switch node both records its chosen branch in
+/// `switch_states` AND writes a synthetic `Completed` node entry (the switch has
+/// no NodeRun session of its own), so it is kept as its own concern rather than
+/// folded into the node applier. The outer dispatch guarantees the kind, so no
+/// inner match is needed.
+fn apply_switch_event(state: &mut RunState, event: &Event) {
+    if let Some(ref payload) = event.payload {
+        if let Some(node_id) = payload.get("node_id").and_then(|v| v.as_str()) {
+            let chosen_branch = payload
+                .get("chosen_branch")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+
+            state.switch_states.insert(
+                node_id.to_string(),
+                SwitchState {
+                    switch_node_id: node_id.to_string(),
+                    chosen_branch: chosen_branch.clone(),
+                    evaluated_at: event.ts.clone(),
+                },
+            );
+
+            let iter = event.iter.unwrap_or(1);
+            let node = state
+                .nodes
+                .entry(node_id.to_string())
+                .or_insert_with(|| NodeState {
+                    node_id: node_id.to_string(),
+                    status: NodeStatus::Completed,
+                    iter,
+                    started_at: Some(event.ts.clone()),
+                    completed_at: Some(event.ts.clone()),
+                    failure_reason: None,
+                    iterations: Vec::new(),
+                    frontmatter_retries: 0,
+                    frontmatter_violations: Vec::new(),
+                });
+            node.status = NodeStatus::Completed;
+            node.completed_at = Some(event.ts.clone());
+            node.iter = iter;
+            upsert_iteration(
+                &mut node.iterations,
+                IterationInfo {
+                    iter,
+                    status: NodeStatus::Completed,
+                    started_at: Some(event.ts.clone()),
+                    completed_at: Some(event.ts.clone()),
+                },
+            );
+        }
+    }
+}
+
+/// Bounded loop-region lap accounting: track the current/max iteration, the
+/// break flag, and the done flag, keyed by `loop_node_id`. `LoopMaxReached` is
+/// purely informational.
+fn apply_loop_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::LoopIterStarted => {
+            if let Some(ref payload) = event.payload {
+                if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str()) {
+                    let iter = payload.get("iter").and_then(|v| v.as_i64()).unwrap_or(1);
+                    let max_iter = payload
+                        .get("max_iter")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(5);
+                    let ls = state
+                        .loop_states
+                        .entry(loop_node_id.to_string())
+                        .or_insert_with(|| LoopState {
+                            loop_node_id: loop_node_id.to_string(),
+                            current_iter: 1,
+                            max_iter,
+                            break_received: false,
+                            done: false,
+                        });
+                    ls.current_iter = iter;
+                    ls.max_iter = max_iter;
+                }
+            }
+        }
+        EventKind::LoopBreakReceived => {
+            if let Some(ref payload) = event.payload {
+                if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str()) {
+                    if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                        ls.break_received = true;
+                    }
+                }
+            }
+        }
+        EventKind::LoopMaxReached => {
+            // Informational
+        }
+        EventKind::LoopDone => {
+            if let Some(ref payload) = event.payload {
+                if let Some(loop_node_id) = payload.get("loop_node_id").and_then(|v| v.as_str()) {
+                    if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                        ls.done = true;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// ForEach barrier accounting: track total items, the break flag, and the done
+/// flag, keyed by `foreach_node_id`. An empty list short-circuits straight to
+/// done.
+fn apply_foreach_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::ForEachStarted => {
+            if let Some(ref payload) = event.payload {
+                if let Some(foreach_node_id) =
+                    payload.get("foreach_node_id").and_then(|v| v.as_str())
+                {
+                    let total_items = payload
+                        .get("total_items")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    state
+                        .foreach_states
+                        .entry(foreach_node_id.to_string())
+                        .or_insert_with(|| ForEachState {
+                            foreach_node_id: foreach_node_id.to_string(),
+                            total_items,
+                            break_received: false,
+                            done: false,
+                        });
+                }
+            }
+        }
+        EventKind::ForEachEmpty => {
+            if let Some(ref payload) = event.payload {
+                if let Some(foreach_node_id) =
+                    payload.get("foreach_node_id").and_then(|v| v.as_str())
+                {
+                    let fs = state
+                        .foreach_states
+                        .entry(foreach_node_id.to_string())
+                        .or_insert_with(|| ForEachState {
+                            foreach_node_id: foreach_node_id.to_string(),
+                            total_items: 0,
+                            break_received: false,
+                            done: false,
+                        });
+                    fs.done = true;
+                }
+            }
+        }
+        EventKind::ForEachBreakReceived => {
+            if let Some(ref payload) = event.payload {
+                if let Some(foreach_node_id) =
+                    payload.get("foreach_node_id").and_then(|v| v.as_str())
+                {
+                    if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
+                        fs.break_received = true;
+                    }
+                }
+            }
+        }
+        EventKind::ForEachDone => {
+            if let Some(ref payload) = event.payload {
+                if let Some(foreach_node_id) =
+                    payload.get("foreach_node_id").and_then(|v| v.as_str())
+                {
+                    if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
+                        fs.done = true;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Merge-resolver lifecycle: the conflict signal is informational; the resolver
+/// then runs and either completes or fails, tracked in `merge_resolver`.
+fn apply_merge_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::MergeConflictDetected => {
+            // Informational — the run either spawns a resolver or fails
+        }
+        EventKind::MergeResolverStarted => {
+            if let Some(ref payload) = event.payload {
+                let conflicting_node_id = payload
+                    .get("conflicting_node_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let iter = payload.get("iter").and_then(|v| v.as_i64()).unwrap_or(1);
+                let session_name = payload
+                    .get("session_name")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                state.merge_resolver = Some(MergeResolverInfo {
+                    status: NodeStatus::Running,
+                    conflicting_node_id,
+                    iter,
+                    session_name,
+                    started_at: Some(event.ts.clone()),
+                    completed_at: None,
+                    failure_reason: None,
+                });
+            }
+        }
+        EventKind::MergeResolverCompleted => {
+            if let Some(ref mut mr) = state.merge_resolver {
+                mr.status = NodeStatus::Completed;
+                mr.completed_at = Some(event.ts.clone());
+            }
+        }
+        EventKind::MergeResolverFailed => {
+            if let Some(ref mut mr) = state.merge_resolver {
+                mr.status = NodeStatus::Failed;
+                mr.completed_at = Some(event.ts.clone());
+                if let Some(ref payload) = event.payload {
+                    mr.failure_reason = payload
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Pipeline-file events. Both are passive signals that intentionally make NO
+/// change to the projected state — `PipelineLint` is informational, and
+/// `PipelineModified` must NEVER un-terminalize a run (#221, see below). Kept as
+/// its own applier so the load-bearing #221 rationale lives next to the no-op.
+fn apply_pipeline_event(_state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::PipelineLint => {
+            // Informational — records lint diagnostics for the pipeline
+        }
+        EventKind::PipelineModified => {
+            // The run-scoped pipeline changed on disk. Node_defs/edges are
+            // re-parsed from the file at scheduling time
+            // (`spawn_ready_after_event`), which picks up newly-added nodes
+            // for a *live* (Running/AwaitingUser) run on the next tick — no
+            // status change is needed for that, and none happens here.
+            //
+            // Terminal-state integrity (#221): a `PipelineModified` is a
+            // passive signal. It can be emitted by a stray or foreign file
+            // write — even for a node that is not in this run's DAG at all —
+            // so it must NEVER un-terminalize a run. A run that reached
+            // `RunCompleted` (like one that reached `RunFailed`/`RunHalted`,
+            // handled below) stays terminal. Reopening a Completed run here
+            // left genuinely-finished runs phantom-`running` forever (there
+            // was no reliable re-completion path), held their manager
+            // session and worktree, made overlap-`skip` triggers skip every
+            // subsequent fire, and let a later `resume_run` re-spawn already
+            // satisfied loops (the transition guard sees `Running` instead
+            // of the true terminal state). Resuming a finished run to pick
+            // up newly-added work is an explicit operation (`resume_run`),
+            // not a side effect of the file watcher. No status change.
+        }
+        _ => {}
+    }
+}
+
+/// `CommandIssued`: the projection-relevant manager/operator commands. A command
+/// dispatcher by nature — `resume_run` re-opens a terminal run and `end_region`
+/// closes a loop region — so the whole event is kept in one applier even though
+/// it touches both run status and `loop_states`. The outer dispatch guarantees
+/// the kind, so no inner match is needed.
+fn apply_command_event(state: &mut RunState, event: &Event) {
+    if let Some(ref payload) = event.payload {
+        let cmd = payload.get("command").and_then(|v| v.as_str());
+        if cmd == Some("resume_run")
+            && (state.status == RunStatus::Halted || state.status == RunStatus::Failed)
+        {
+            state.status = RunStatus::Running;
+            state.completed_at = None;
+        }
+        // #199: `end_region` CLOSES the region — the projection
+        // marks its loop state done so the scheduler's region
+        // engine routes the exit instead of starting a phantom lap.
+        // A region still on lap 1 has no loop state yet (the entry
+        // appears when the first re-entry fires): create it closed,
+        // so an early `end_region` is never lost. `max_iter` is
+        // unknown to the projection (it lives in the pipeline) and
+        // unused once the region is done.
+        if cmd == Some("end_region") {
+            if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                state
+                    .loop_states
+                    .entry(region_id.to_string())
+                    .or_insert_with(|| LoopState {
+                        loop_node_id: region_id.to_string(),
+                        current_iter: 1,
+                        max_iter: 0,
+                        break_received: false,
+                        done: false,
+                    })
+                    .done = true;
+            }
+        }
+    }
+}
+
+/// Post-fold reconciliation, run once after every event has been applied.
+///
+/// Two passes that cannot be done per-event because they depend on the whole
+/// fold being complete: (1) sort each node's iterations by `iter` and reconcile
+/// the node's top-level `iter` to the latest (handles out-of-order events), and
+/// (2) derive run-level `AwaitingUser` from node states — a `Running` run with
+/// any awaiting node is itself awaiting the user.
+fn finalize(state: &mut RunState) {
     // Sort iterations by iter number and reconcile top-level iter
     // (handles out-of-order events)
     for node in state.nodes.values_mut() {
@@ -940,8 +1085,6 @@ pub fn project(events: &[Event]) -> Option<RunState> {
     {
         state.status = RunStatus::AwaitingUser;
     }
-
-    Some(state)
 }
 
 /// Is this Run *stalled* (#180)? A run with no node currently `running` or
@@ -3173,5 +3316,614 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Completed);
         assert!(!is_stalled(&state));
+    }
+
+    // --- Golden / characterization projection (issue #238) ---
+
+    /// One representative event log that exercises every projection concern in a
+    /// single run: run lifecycle (start/pause/resume/rename/complete), node
+    /// transitions (waiting/started/completed/failed/auto-completed/stopped/
+    /// stale/invalidated/awaiting-user/frontmatter-retry), switch routing, a
+    /// bounded loop region, two foreach barriers, the merge resolver, the
+    /// passive pipeline events, and the command dispatcher (end_region,
+    /// resume_run, unknown). Used by `projection_golden` to pin the full
+    /// projected `RunState` across the per-concern decomposition (#238).
+    fn golden_event_log() -> Vec<Event> {
+        fn ev(
+            kind: EventKind,
+            node_id: Option<&str>,
+            iter: Option<i64>,
+            ts: &str,
+            payload: Option<serde_json::Value>,
+        ) -> Event {
+            Event {
+                id: None,
+                run_id: "run-golden".into(),
+                ts: ts.into(),
+                kind,
+                node_id: node_id.map(String::from),
+                iter,
+                payload,
+            }
+        }
+
+        vec![
+            ev(
+                EventKind::RunStarted,
+                None,
+                None,
+                "2026-02-01T00:00:00.000Z",
+                Some(serde_json::json!({
+                    "pipeline_name": "golden-pipe",
+                    "name": "Golden Run",
+                    "input": "exercise every concern",
+                    "image_filenames": ["screenshot.png"],
+                    "target_repo": "Loulen/prompt-driven-orchestrator",
+                    "source_branch": "main",
+                    "triggered_by": "trigger-7",
+                    "node_defs": [
+                        start_node_def(),
+                        end_node_def(),
+                        node_def("planner"),
+                        node_def("worker"),
+                        node_def("auto"),
+                        node_def("stopped"),
+                        node_def("stale"),
+                        node_def("temp"),
+                        node_def("interactive"),
+                        node_def("sw"),
+                    ],
+                    "edges": [
+                        edge_info("start", "planner"),
+                        edge_info("planner", "worker"),
+                        edge_info("worker", "end"),
+                    ],
+                })),
+            ),
+            // Loop region region1: iter started, break received, max reached
+            // (informational), then done.
+            ev(
+                EventKind::LoopIterStarted,
+                None,
+                None,
+                "2026-02-01T00:00:01.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1", "iter": 2, "max_iter": 3 })),
+            ),
+            ev(
+                EventKind::LoopBreakReceived,
+                None,
+                None,
+                "2026-02-01T00:00:02.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            ev(
+                EventKind::LoopMaxReached,
+                None,
+                None,
+                "2026-02-01T00:00:03.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            ev(
+                EventKind::LoopDone,
+                None,
+                None,
+                "2026-02-01T00:00:04.000Z",
+                Some(serde_json::json!({ "loop_node_id": "region1" })),
+            ),
+            // ForEach fe1: started -> break received -> done.
+            ev(
+                EventKind::ForEachStarted,
+                None,
+                None,
+                "2026-02-01T00:00:05.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1", "total_items": 2 })),
+            ),
+            ev(
+                EventKind::ForEachBreakReceived,
+                None,
+                None,
+                "2026-02-01T00:00:06.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1" })),
+            ),
+            ev(
+                EventKind::ForEachDone,
+                None,
+                None,
+                "2026-02-01T00:00:07.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe1" })),
+            ),
+            // ForEach fe2: empty list short-circuits to done.
+            ev(
+                EventKind::ForEachEmpty,
+                None,
+                None,
+                "2026-02-01T00:00:08.000Z",
+                Some(serde_json::json!({ "foreach_node_id": "fe2" })),
+            ),
+            // planner: waiting -> started -> completed, plus a frontmatter retry.
+            ev(
+                EventKind::NodeWaiting,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::FrontmatterRetryPending,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("planner"),
+                Some(1),
+                "2026-02-01T00:01:03.000Z",
+                None,
+            ),
+            // worker: iter1 fails (with violations), iter2 completes -> the
+            // node-level status follows the latest iter.
+            ev(
+                EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                "2026-02-01T00:02:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeFailed,
+                Some("worker"),
+                Some(1),
+                "2026-02-01T00:02:01.000Z",
+                Some(serde_json::json!({
+                    "reason": "output validation failed",
+                    "violations": [
+                        { "port": "out", "field": "verdict", "reason": "not allowed" }
+                    ]
+                })),
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:02:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:02:03.000Z",
+                None,
+            ),
+            // auto: auto-completed. stopped: stopped. stale: stale.
+            ev(
+                EventKind::NodeStarted,
+                Some("auto"),
+                Some(1),
+                "2026-02-01T00:03:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeAutoCompleted,
+                Some("auto"),
+                Some(1),
+                "2026-02-01T00:03:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("stopped"),
+                Some(1),
+                "2026-02-01T00:03:02.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStopped,
+                Some("stopped"),
+                Some(1),
+                "2026-02-01T00:03:03.000Z",
+                Some(serde_json::json!({ "reason": "user killed it" })),
+            ),
+            ev(
+                EventKind::NodeStarted,
+                Some("stale"),
+                Some(1),
+                "2026-02-01T00:03:04.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeStale,
+                Some("stale"),
+                Some(1),
+                "2026-02-01T00:03:05.000Z",
+                None,
+            ),
+            // temp: started then invalidated -> removed from state entirely.
+            ev(
+                EventKind::NodeStarted,
+                Some("temp"),
+                Some(1),
+                "2026-02-01T00:03:06.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeInvalidated,
+                Some("temp"),
+                None,
+                "2026-02-01T00:03:07.000Z",
+                None,
+            ),
+            // interactive: started -> awaiting user -> completed.
+            ev(
+                EventKind::NodeStarted,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeAwaitingUser,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:01.000Z",
+                None,
+            ),
+            ev(
+                EventKind::NodeCompleted,
+                Some("interactive"),
+                Some(1),
+                "2026-02-01T00:04:02.000Z",
+                None,
+            ),
+            // switch routing -> synthetic completed node + switch_state.
+            ev(
+                EventKind::SwitchRouted,
+                Some("sw"),
+                Some(1),
+                "2026-02-01T00:05:00.000Z",
+                Some(serde_json::json!({ "node_id": "sw", "chosen_branch": "pass" })),
+            ),
+            // merge resolver: conflict -> started -> completed.
+            ev(
+                EventKind::MergeConflictDetected,
+                Some("worker"),
+                Some(2),
+                "2026-02-01T00:06:00.000Z",
+                Some(serde_json::json!({ "reason": "conflict merging worker" })),
+            ),
+            ev(
+                EventKind::MergeResolverStarted,
+                None,
+                None,
+                "2026-02-01T00:06:01.000Z",
+                Some(serde_json::json!({
+                    "conflicting_node_id": "worker",
+                    "iter": 2,
+                    "session_name": "pdo-run-golden-__merge_resolver__-iter-2"
+                })),
+            ),
+            ev(
+                EventKind::MergeResolverCompleted,
+                None,
+                None,
+                "2026-02-01T00:06:02.000Z",
+                None,
+            ),
+            // passive pipeline events (informational / terminal-safe).
+            ev(
+                EventKind::PipelineLint,
+                None,
+                None,
+                "2026-02-01T00:07:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::PipelineModified,
+                None,
+                None,
+                "2026-02-01T00:07:01.000Z",
+                None,
+            ),
+            // pause/resume round-trip mid-run.
+            ev(
+                EventKind::RunPaused,
+                None,
+                None,
+                "2026-02-01T00:08:00.000Z",
+                None,
+            ),
+            ev(
+                EventKind::RunResumed,
+                None,
+                None,
+                "2026-02-01T00:08:01.000Z",
+                None,
+            ),
+            // command dispatcher: end_region (creates a closed region2 loop
+            // state), resume_run (no-op on a Running run), unknown (no-op).
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:00.000Z",
+                Some(serde_json::json!({ "command": "end_region", "region_id": "region2" })),
+            ),
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:01.000Z",
+                Some(serde_json::json!({ "command": "resume_run" })),
+            ),
+            ev(
+                EventKind::CommandIssued,
+                None,
+                None,
+                "2026-02-01T00:09:02.000Z",
+                Some(serde_json::json!({ "command": "totally_unknown" })),
+            ),
+            // rename then terminal completion.
+            ev(
+                EventKind::RunRenamed,
+                None,
+                None,
+                "2026-02-01T00:10:00.000Z",
+                Some(serde_json::json!({ "name": "Golden Run (final)" })),
+            ),
+            ev(
+                EventKind::RunCompleted,
+                None,
+                None,
+                "2026-02-01T00:11:00.000Z",
+                None,
+            ),
+        ]
+    }
+
+    /// Golden characterization (#238, AC#3): the full projected `RunState` for a
+    /// representative event log, pinned byte-for-byte across the per-concern
+    /// decomposition. We compare `serde_json::to_value(&state)` (a `BTreeMap`-
+    /// backed, sorted-key `Value` — `serde_json` has no `preserve_order` here, so
+    /// `HashMap` iteration order cannot flake the comparison) against an inline
+    /// expected literal captured against the pre-refactor monolith. If this
+    /// snapshot ever changes, the projection's behavior changed — investigate
+    /// rather than re-baseline. The expected literal is intentionally exhaustive
+    /// (every concern's contribution to the state is present) so that any
+    /// per-applier regression surfaces here.
+    #[test]
+    fn projection_golden() {
+        let state = project(&golden_event_log()).unwrap();
+        let actual = serde_json::to_value(&state).unwrap();
+        let expected = serde_json::json!({
+            "completed_at": "2026-02-01T00:11:00.000Z",
+            "edges": [
+                { "source_node": "start", "source_port": "out", "target_node": "planner", "target_port": "task" },
+                { "source_node": "planner", "source_port": "out", "target_node": "worker", "target_port": "task" },
+                { "source_node": "worker", "source_port": "out", "target_node": "end", "target_port": "task" }
+            ],
+            "end_node": {
+                "id": "end",
+                "ports": [
+                    { "fired_at": "2026-02-01T00:11:00.000Z", "port_name": "result", "reason": null, "status": "received" }
+                ]
+            },
+            "foreach_states": {
+                "fe1": { "break_received": true, "done": true, "foreach_node_id": "fe1", "total_items": 2 },
+                "fe2": { "break_received": false, "done": true, "foreach_node_id": "fe2", "total_items": 0 }
+            },
+            "input": "exercise every concern",
+            "loop_states": {
+                "region1": { "break_received": true, "current_iter": 2, "done": true, "loop_node_id": "region1", "max_iter": 3 },
+                "region2": { "break_received": false, "current_iter": 1, "done": true, "loop_node_id": "region2", "max_iter": 0 }
+            },
+            "merge_resolver": {
+                "completed_at": "2026-02-01T00:06:02.000Z",
+                "conflicting_node_id": "worker",
+                "failure_reason": null,
+                "iter": 2,
+                "session_name": "pdo-run-golden-__merge_resolver__-iter-2",
+                "started_at": "2026-02-01T00:06:01.000Z",
+                "status": "completed"
+            },
+            "name": "Golden Run (final)",
+            "node_defs": [
+                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
+                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+            ],
+            "nodes": {
+                "auto": {
+                    "completed_at": "2026-02-01T00:03:01.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:03:01.000Z", "iter": 1, "started_at": "2026-02-01T00:03:00.000Z", "status": "completed" } ],
+                    "node_id": "auto", "started_at": "2026-02-01T00:03:00.000Z", "status": "completed"
+                },
+                "interactive": {
+                    "completed_at": "2026-02-01T00:04:02.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:04:02.000Z", "iter": 1, "started_at": "2026-02-01T00:04:00.000Z", "status": "completed" } ],
+                    "node_id": "interactive", "started_at": "2026-02-01T00:04:00.000Z", "status": "completed"
+                },
+                "planner": {
+                    "completed_at": "2026-02-01T00:01:03.000Z", "failure_reason": null, "frontmatter_retries": 1, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:01:03.000Z", "iter": 1, "started_at": "2026-02-01T00:01:01.000Z", "status": "completed" } ],
+                    "node_id": "planner", "started_at": "2026-02-01T00:01:01.000Z", "status": "completed"
+                },
+                "stale": {
+                    "completed_at": null, "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": null, "iter": 1, "started_at": "2026-02-01T00:03:04.000Z", "status": "stale" } ],
+                    "node_id": "stale", "started_at": "2026-02-01T00:03:04.000Z", "status": "stale"
+                },
+                "stopped": {
+                    "completed_at": "2026-02-01T00:03:03.000Z", "failure_reason": "user killed it", "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:03:03.000Z", "iter": 1, "started_at": "2026-02-01T00:03:02.000Z", "status": "stopped" } ],
+                    "node_id": "stopped", "started_at": "2026-02-01T00:03:02.000Z", "status": "stopped"
+                },
+                "sw": {
+                    "completed_at": "2026-02-01T00:05:00.000Z", "failure_reason": null, "frontmatter_retries": 0, "iter": 1,
+                    "iterations": [ { "completed_at": "2026-02-01T00:05:00.000Z", "iter": 1, "started_at": "2026-02-01T00:05:00.000Z", "status": "completed" } ],
+                    "node_id": "sw", "started_at": "2026-02-01T00:05:00.000Z", "status": "completed"
+                },
+                "worker": {
+                    "completed_at": "2026-02-01T00:02:03.000Z", "failure_reason": null, "frontmatter_retries": 0,
+                    "frontmatter_violations": [ { "field": "verdict", "port": "out", "reason": "not allowed" } ],
+                    "iter": 2,
+                    "iterations": [
+                        { "completed_at": "2026-02-01T00:02:01.000Z", "iter": 1, "started_at": "2026-02-01T00:02:00.000Z", "status": "failed" },
+                        { "completed_at": "2026-02-01T00:02:03.000Z", "iter": 2, "started_at": "2026-02-01T00:02:02.000Z", "status": "completed" }
+                    ],
+                    "node_id": "worker", "started_at": "2026-02-01T00:02:02.000Z", "status": "completed"
+                }
+            },
+            "pipeline_name": "golden-pipe",
+            "run_id": "run-golden",
+            "sessions_spawned": 8,
+            "source_branch": "main",
+            "start_node": {
+                "input_images": [ "screenshot.png" ],
+                "input_path": "_input/output.md",
+                "started_at": "2026-02-01T00:00:00.000Z",
+                "target_node_ids": [ "planner" ]
+            },
+            "started_at": "2026-02-01T00:00:00.000Z",
+            "status": "completed",
+            "switch_states": {
+                "sw": { "chosen_branch": "pass", "evaluated_at": "2026-02-01T00:05:00.000Z", "switch_node_id": "sw" }
+            },
+            "target_repo": "Loulen/prompt-driven-orchestrator",
+            "triggered_by": "trigger-7"
+        });
+        assert_eq!(actual, expected);
+    }
+
+    // --- Focused per-applier unit tests (#238, AC#2) ---
+    // Each sub-applier folds one event into a bare `RunState` in isolation — no
+    // full run, no `RunStarted` bootstrap — proving the decomposition is
+    // independently unit-testable as the issue requires.
+
+    #[test]
+    fn apply_loop_event_accounts_a_lap_without_a_full_run() {
+        // AC#2's named example: loop-lap accounting without a full run. Fold a
+        // single `LoopIterStarted` into a bare state and assert the loop_state,
+        // then close it with `LoopDone` — all with no surrounding run.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_loop_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::LoopIterStarted,
+                None,
+                serde_json::json!({ "loop_node_id": "L", "iter": 3, "max_iter": 5 }),
+            ),
+        );
+        let ls = &state.loop_states["L"];
+        assert_eq!(ls.current_iter, 3);
+        assert_eq!(ls.max_iter, 5);
+        assert!(!ls.done);
+
+        apply_loop_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::LoopDone,
+                None,
+                serde_json::json!({ "loop_node_id": "L" }),
+            ),
+        );
+        assert!(state.loop_states["L"].done);
+    }
+
+    #[test]
+    fn apply_node_event_opens_an_iteration_in_isolation() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event(EventKind::NodeStarted, Some("n"), Some(1)),
+        );
+        assert_eq!(state.nodes["n"].status, NodeStatus::Running);
+        assert_eq!(state.sessions_spawned, 1);
+        assert_eq!(state.nodes["n"].iterations.len(), 1);
+    }
+
+    #[test]
+    fn apply_foreach_event_tracks_total_items_in_isolation() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_foreach_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::ForEachStarted,
+                None,
+                serde_json::json!({ "foreach_node_id": "fe", "total_items": 4 }),
+            ),
+        );
+        assert_eq!(state.foreach_states["fe"].total_items, 4);
+        assert!(!state.foreach_states["fe"].done);
+    }
+
+    #[test]
+    fn apply_command_event_end_region_closes_region_in_isolation() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "end_region", "region_id": "R" }),
+            ),
+        );
+        assert!(state.loop_states["R"].done);
+    }
+
+    #[test]
+    fn apply_merge_event_runs_resolver_lifecycle_in_isolation() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_merge_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::MergeResolverStarted,
+                None,
+                serde_json::json!({ "conflicting_node_id": "x", "iter": 1 }),
+            ),
+        );
+        assert_eq!(
+            state.merge_resolver.as_ref().unwrap().status,
+            NodeStatus::Running
+        );
+        apply_merge_event(
+            &mut state,
+            &make_event(EventKind::MergeResolverCompleted, None, None),
+        );
+        assert_eq!(
+            state.merge_resolver.as_ref().unwrap().status,
+            NodeStatus::Completed
+        );
+    }
+
+    #[test]
+    fn appliers_never_panic_on_a_misrouted_kind() {
+        // D5 hard rule: an applier must never panic, even if handed a kind it
+        // does not own — its inner match's `_ => {}` swallows it. `project()`
+        // relies on this never crashing, because it also runs inside
+        // `append_event` before the transition guard. Here `apply_run_event` is
+        // handed a `NodeStarted` (owned by `apply_node_event`): it must no-op.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_run_event(
+            &mut state,
+            &make_event(EventKind::NodeStarted, Some("n"), Some(1)),
+        );
+        assert!(state.nodes.is_empty(), "misrouted kind must be a no-op");
+        assert_eq!(state.status, RunStatus::Running);
     }
 }

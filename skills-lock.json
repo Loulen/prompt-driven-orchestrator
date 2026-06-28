@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "skills": {
+    "agentic-tests": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/agentic-tests/SKILL.md",
+      "computedHash": "e90d73e55e3276fc8dc527604d61852ae3c6e1bcf77a48f4257e0ca3332d8b41"
+    },
+    "build-factory": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/build-factory/SKILL.md",
+      "computedHash": "cbe588a58080e5820ca642643e4ef1864f225f99cf799d199979ea0ffc0442d0"
+    },
+    "git-flow": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/git-flow/SKILL.md",
+      "computedHash": "d0a18e8843261fcc24dd6ff01eb5072c8a544bac4bed85bcf88371fbf51a5753"
+    },
+    "grill-with-docs": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/grill-with-docs/SKILL.md",
+      "computedHash": "9c30ec4a40088ef5ad88308da904d89a9c530ab720e1338269983c86a0264358"
+    },
+    "tdd": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/tdd/SKILL.md",
+      "computedHash": "8986a01d04bd04bd2277514a0f45832c5731227dda96a4c471f6d9bc549afd5b"
+    },
+    "to-issues": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/to-issues/SKILL.md",
+      "computedHash": "2ea76c5e5fded6f7f28c345f0f089868654bbd0495015ff594d24ba297a4883c"
+    },
+    "to-prd": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/to-prd/SKILL.md",
+      "computedHash": "e29e198e420013218ac26bba90c651b2fa2f8000df1629bd4a7c587946b01a59"
+    },
+    "triage": {
+      "source": "Loulen/prompt-driven-factory",
+      "sourceType": "github",
+      "skillPath": "skills/triage/SKILL.md",
+      "computedHash": "8b41474b3a7735c7594c281aa67f3bd2959b4a4fc8b3ea18ed1124cd16369406"
+    }
+  }
+}

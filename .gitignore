@@ -46,10 +46,7 @@ frontend/src/prototype/
 /*.png
 
 # Personal agent context — not shared with the team
-CLAUDE.md
 CLAUDE.local.md
-docs/agents/
-.claude/
 
 # Env files at any path
 .env

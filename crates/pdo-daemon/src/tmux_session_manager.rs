@@ -291,6 +291,16 @@ pub fn kill(socket: &str, session_name: &str) {
         .output();
 }
 
+/// Check whether the tmux server for a given socket is alive (#234).
+/// Runs `tmux -L <socket> ls` and returns true if the server responds.
+pub fn server_alive(socket: &str) -> bool {
+    tmux(socket)
+        .arg("ls")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Check whether a tmux session exists.
 pub fn session_exists(socket: &str, session_name: &str) -> bool {
     tmux(socket)

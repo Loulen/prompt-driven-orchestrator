@@ -167,6 +167,36 @@ pub fn running_nodes(run_state: &event_log::RunState) -> Vec<(String, i64)> {
         .collect()
 }
 
+/// Diagnostics captured at session-died detection time (#234).
+/// Pure data — all I/O is gathered by the caller in lib.rs before calling
+/// [`attach_diagnostics`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Diagnostics {
+    /// Whether the tmux server/socket is alive (`tmux -L <socket> ls` rc).
+    pub tmux_server_alive: Option<bool>,
+    /// Available memory in KB from /proc/meminfo (MemAvailable).
+    pub mem_available_kb: Option<u64>,
+    /// Free swap in KB from /proc/meminfo (SwapFree).
+    pub swap_free_kb: Option<u64>,
+    /// How many of this run's running nodes also died in the same sweep.
+    pub correlated_deaths: Option<usize>,
+}
+
+/// Attach [`Diagnostics`] to `NodeFailed` events in-place.
+///
+/// Pure function: the caller has already gathered all I/O and passes the
+/// completed [`Diagnostics`] value. Only `NodeFailed` events are enriched;
+/// other event kinds are left untouched.
+pub fn attach_diagnostics(events: &mut [event_log::Event], diag: &Diagnostics) {
+    for event in events.iter_mut() {
+        if event.kind != event_log::EventKind::NodeFailed {
+            continue;
+        }
+        let payload = event.payload.get_or_insert_with(|| serde_json::json!({}));
+        payload["diagnostics"] = serde_json::json!(diag);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +559,109 @@ mod tests {
             1,
             &artifacts_dir
         ));
+    }
+
+    // --- attach_diagnostics ---
+
+    #[test]
+    fn attach_diagnostics_enriches_node_failed_event() {
+        use crate::event_log::{Event, EventKind};
+
+        let mut events = vec![Event {
+            id: None,
+            run_id: "r1".into(),
+            ts: "2026-06-29T00:00:00Z".into(),
+            kind: EventKind::NodeFailed,
+            node_id: Some("n1".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "reason": "session_died: ..." })),
+        }];
+
+        let diag = Diagnostics {
+            tmux_server_alive: Some(false),
+            mem_available_kb: Some(8_388_608),
+            swap_free_kb: Some(2_097_152),
+            correlated_deaths: Some(2),
+        };
+
+        attach_diagnostics(&mut events, &diag);
+
+        let payload = events[0].payload.as_ref().unwrap();
+        assert_eq!(payload["reason"], "session_died: ...");
+        let d = &payload["diagnostics"];
+        assert_eq!(d["tmux_server_alive"], serde_json::json!(false));
+        assert_eq!(d["mem_available_kb"], serde_json::json!(8_388_608));
+        assert_eq!(d["swap_free_kb"], serde_json::json!(2_097_152));
+        assert_eq!(d["correlated_deaths"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn attach_diagnostics_skips_non_node_failed_events() {
+        use crate::event_log::{Event, EventKind};
+
+        let mut events = vec![Event {
+            id: None,
+            run_id: "r1".into(),
+            ts: "2026-06-29T00:00:00Z".into(),
+            kind: EventKind::NodeStale,
+            node_id: Some("n1".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "reason": "idle" })),
+        }];
+
+        let diag = Diagnostics {
+            tmux_server_alive: Some(true),
+            mem_available_kb: None,
+            swap_free_kb: None,
+            correlated_deaths: None,
+        };
+
+        attach_diagnostics(&mut events, &diag);
+
+        let payload = events[0].payload.as_ref().unwrap();
+        // Non-NodeFailed events should NOT get diagnostics attached
+        assert!(payload.get("diagnostics").is_none());
+        assert_eq!(payload["reason"], "idle");
+    }
+
+    #[test]
+    fn attach_diagnostics_creates_payload_if_missing() {
+        use crate::event_log::{Event, EventKind};
+
+        let mut events = vec![Event {
+            id: None,
+            run_id: "r1".into(),
+            ts: "2026-06-29T00:00:00Z".into(),
+            kind: EventKind::NodeFailed,
+            node_id: Some("n1".into()),
+            iter: Some(1),
+            payload: None,
+        }];
+
+        let diag = Diagnostics {
+            tmux_server_alive: Some(true),
+            mem_available_kb: None,
+            swap_free_kb: None,
+            correlated_deaths: None,
+        };
+
+        attach_diagnostics(&mut events, &diag);
+
+        let payload = events[0].payload.as_ref().unwrap();
+        let d = &payload["diagnostics"];
+        assert_eq!(d["tmux_server_alive"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn attach_diagnostics_empty_events_no_panic() {
+        let mut events: Vec<event_log::Event> = vec![];
+        let diag = Diagnostics {
+            tmux_server_alive: None,
+            mem_available_kb: None,
+            swap_free_kb: None,
+            correlated_deaths: None,
+        };
+        attach_diagnostics(&mut events, &diag);
+        assert!(events.is_empty());
     }
 }

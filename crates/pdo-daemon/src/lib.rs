@@ -5103,6 +5103,33 @@ fn branch_is_merged_into(repo_root: &std::path::Path, branch: &str, into: &str) 
 
 // --- Stale detection ---
 
+/// Read MemAvailable and SwapFree (KB) from /proc/meminfo (#234).
+/// Returns (None, None) if /proc/meminfo is unavailable.
+fn read_meminfo() -> (Option<u64>, Option<u64>) {
+    let body = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(s) => s,
+        Err(_) => return (None, None),
+    };
+    let mut avail = None;
+    let mut swap = None;
+    for line in body.lines() {
+        if avail.is_none() && line.starts_with("MemAvailable:") {
+            if let Some(val) = line.split_whitespace().nth(1) {
+                avail = val.parse::<u64>().ok();
+            }
+        }
+        if swap.is_none() && line.starts_with("SwapFree:") {
+            if let Some(val) = line.split_whitespace().nth(1) {
+                swap = val.parse::<u64>().ok();
+            }
+        }
+        if avail.is_some() && swap.is_some() {
+            break;
+        }
+    }
+    (avail, swap)
+}
+
 async fn run_stale_detection(state: &AppState) {
     // Record liveness at sweep start (#251): a wedged sweep freezes this value
     // while an isolated panic still advances it, so `GET /stale/health` answers
@@ -5157,6 +5184,12 @@ async fn run_stale_detection(state: &AppState) {
         let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
 
         let running = stale_detector::running_nodes(&run_state);
+        // Per-sweep trackers for diagnostics (#234).
+        let mut session_died_per_run: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        // Read /proc/meminfo once per sweep, not once per node.
+        let (mem_available_kb, swap_free_kb) = read_meminfo();
+
         for (node_id, iter) in &running {
             let node_type = find_node_type(&run_state, node_id);
             let is_cm = matches!(node_type, Some("code-mutating") | Some("merge"));
@@ -5200,7 +5233,20 @@ async fn run_stale_detection(state: &AppState) {
                 continue;
             }
 
-            let events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
+            let mut events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
+            // Enrich NodeFailed (SessionDied) payloads with diagnostics (#234).
+            if detection == stale_detector::Detection::SessionDied {
+                *session_died_per_run.entry(run_id.to_string()).or_insert(0) += 1;
+                let correlated = session_died_per_run.get(run_id).copied();
+                let diag = stale_detector::Diagnostics {
+                    tmux_server_alive: Some(tmux_session_manager::server_alive(&socket)),
+                    mem_available_kb,
+                    swap_free_kb,
+                    correlated_deaths: correlated,
+                };
+                stale_detector::attach_diagnostics(&mut events, &diag);
+            }
+
             for event in &events {
                 // Transition guard (#212): append_event re-validates against
                 // the freshly projected state, so a node that terminated

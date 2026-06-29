@@ -101,6 +101,27 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     let canonical_path = pipeline::canonical_prompt_path(params.pipeline_path, params.node_id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
 
+    // Precompute the Start-prompt-present bool here too: the manual start/retry
+    // endpoints produce the entry-node preamble, so they must read it as well
+    // (#274). Same gating and error posture as the live spawn site.
+    let start_prompt_present = if params.pipeline.prompt_required {
+        false
+    } else {
+        match crate::prompt_augmenter::read_start_prompt_present(params.artifacts_dir) {
+            Ok(present) => present,
+            Err(e) => {
+                tracing::warn!(
+                    "entry-node input read failed (run {} node {} iter {}): {e}; \
+                     assuming a prompt is present",
+                    params.run_id,
+                    params.node_id,
+                    params.iter
+                );
+                true
+            }
+        }
+    };
+
     let aug_ctx = crate::prompt_augmenter::AugmentContext {
         pipeline: params.pipeline,
         node,
@@ -112,6 +133,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         input_images: Vec::new(),
+        start_prompt_present,
         source_iters: crate::input_resolution::resolved_source_iters(
             params.pipeline,
             params.run_state,

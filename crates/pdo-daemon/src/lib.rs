@@ -3076,6 +3076,28 @@ async fn spawn_node(
         None => HashMap::new(),
     };
 
+    // Precompute whether the Start prompt carries content so `build_preamble`
+    // stays pure (#274). Gate on `!prompt_required` (the only branch that
+    // consults it), NOT on the edge-based `is_entry_node` — that would regress
+    // the `task`-port fallback (a node with no incoming edge still reads from
+    // `_input`). On a genuine I/O error, fail toward "prompt present" and log:
+    // a false negative would silently discard the run's actual brief.
+    let start_prompt_present = if spawn_ctx.pipeline.prompt_required {
+        false // value is never consulted for prompt-required pipelines — skip the read
+    } else {
+        match prompt_augmenter::read_start_prompt_present(spawn_ctx.artifacts_dir) {
+            Ok(present) => present,
+            Err(e) => {
+                warn!(
+                    "entry-node input read failed (run {run_id} node {} iter {iter}): {e}; \
+                     assuming a prompt is present",
+                    node.id
+                );
+                true // fail toward "prompt present" — never tell the agent "no prompt" on an I/O error
+            }
+        }
+    };
+
     let aug_ctx = prompt_augmenter::AugmentContext {
         pipeline: spawn_ctx.pipeline,
         node,
@@ -3087,6 +3109,7 @@ async fn spawn_node(
         foreach_context,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         input_images,
+        start_prompt_present,
         source_iters,
     };
 

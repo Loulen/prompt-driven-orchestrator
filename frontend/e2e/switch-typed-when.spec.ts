@@ -1,76 +1,66 @@
 import { test, expect } from "@playwright/test";
+import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 3b — Switch typed `when:` clauses E2E (refs #64).
-// Seeds a pipeline with a Reviewer (typed verdict enum output) + Switch,
-// opens the Switch inspector → verifies field and value dropdowns populated
-// from the upstream schema. Disconnects the edge → verifies when clauses cleared.
+// Layer 3b — Typed `when:` clauses E2E (refs #64).
+//
+// Post-canvas-refonte (ADR-0011) there is no "Switch Inspector" panel: a switch
+// is just an output port with one conditional edge per branch, and the `when:`
+// predicate is authored per-edge in the EdgeDetailPanel. So this seeds a typed
+// `review` output (verdict enum + score int) with a conditional edge to End,
+// opens the pipeline, selects that edge, and verifies the when-editor's field
+// dropdown is populated from the upstream output schema and the value dropdown
+// from the selected enum field's allowed values.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-switch-typed-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
-const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
+// Nodes share one x so the conditional reviewer→end edge is a straight vertical
+// segment — its (transparent, wide) hit path is then reliably centred for the
+// click that selects it. The `when:` lives on the edge (edges[1]) → its
+// EditCanvas id is `e-1`, exposed as `orthogonal-edge-hit-e-1`.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
   - id: start
     name: Start
     type: start
-    inputs: []
     outputs:
-      - name: user_prompt
-    view: { x: 0, y: 200 }
+      - { name: user_prompt, side: bottom }
+    view: { x: 200, y: 0 }
   - id: reviewer
     name: reviewer
     type: doc-only
     inputs:
-      - name: task
-        side: left
+      - { name: task, side: top }
     outputs:
       - name: review
-        side: right
+        side: bottom
         frontmatter:
           verdict:
             type: enum
             allowed: [PASS, FAIL]
           score:
             type: int
-    view: { x: 250, y: 200 }
-  - id: gate
-    name: gate
-    type: switch
-    inputs:
-      - name: in
-        side: left
-    outputs:
-      - name: pass
-        side: right
-        when:
-          verdict:
-            eq: PASS
-      - name: default
-        side: right
-    view: { x: 550, y: 200 }
+    view: { x: 200, y: 160 }
   - id: end
     name: End
     type: end
     inputs:
-      - name: result
-        side: left
-    outputs: []
-    view: { x: 800, y: 200 }
+      - { name: result, side: top }
+    view: { x: 200, y: 320 }
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: reviewer, port: task }
   - source: { node: reviewer, port: review }
-    target: { node: gate, port: in }
-  - source: { node: gate, port: pass }
     target: { node: end, port: result }
+    when:
+      verdict: { eq: PASS }
 `;
 
 test.beforeAll(async () => {
@@ -80,44 +70,47 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("switch inspector shows typed field and value dropdowns from upstream schema", async ({
+test("when-editor shows typed field and value dropdowns from upstream schema", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Enter edit mode and open the pipeline
-  await page.locator('[title="Toggle edit mode"]').click();
-  await page.getByRole("button", { name: new RegExp(PIPELINE_NAME) }).click();
+  // Open the pipeline into the edit canvas via the Library tab (post-refonte:
+  // no edit toggle).
+  await openPipelineForEdit(page, PIPELINE_NAME);
 
-  // Click the switch node to select it
-  const switchNode = page.locator('[data-id="gate"]');
-  await expect(switchNode).toBeVisible({ timeout: 5_000 });
-  await switchNode.click();
+  // Wait for the canvas to render the nodes/edges.
+  await expect(page.getByText("reviewer", { exact: true }).first()).toBeVisible({
+    timeout: 5_000,
+  });
 
-  // Verify the Switch Inspector panel appears
-  await expect(page.getByText("Switch Inspector")).toBeVisible({ timeout: 5_000 });
+  // Select the conditional reviewer→end edge (edges[1]). Its hit path is a
+  // transparent SVG stroke (no fill), which Playwright treats as not "visible",
+  // so force the click — react-flow's onEdgeClick fires on the bubbled event.
+  await page.getByTestId("orthogonal-edge-hit-e-1").click({ force: true, timeout: 5_000 });
 
-  // Verify the field dropdown contains upstream schema fields
+  // The edge detail panel opens with the when-editor (the edge already carries
+  // a `verdict: PASS` predicate, so one condition row is present).
+  await expect(page.getByTestId("edge-detail-panel")).toBeVisible({ timeout: 5_000 });
+
+  // Field dropdown lists the upstream output schema fields (+ the region `iter`).
   const fieldDropdown = page.getByTestId("field-dropdown").first();
   await expect(fieldDropdown).toBeVisible();
-  const fieldOptions = fieldDropdown.locator("option");
-  const fieldValues = await fieldOptions.evaluateAll((opts) =>
-    (opts as HTMLOptionElement[]).map((o) => o.value),
-  );
+  const fieldValues = await fieldDropdown
+    .locator("option")
+    .evaluateAll((opts) => (opts as HTMLOptionElement[]).map((o) => o.value));
   expect(fieldValues).toContain("verdict");
   expect(fieldValues).toContain("score");
 
-  // Verify the value dropdown shows enum allowed values for the verdict field
+  // The verdict field is an enum, so the value dropdown shows its allowed values.
   const valueDropdown = page.getByTestId("value-dropdown").first();
   await expect(valueDropdown).toBeVisible();
-  const valueOptions = valueDropdown.locator("option");
-  const valueValues = await valueOptions.evaluateAll((opts) =>
-    (opts as HTMLOptionElement[]).map((o) => o.value),
-  );
+  const valueValues = await valueDropdown
+    .locator("option")
+    .evaluateAll((opts) => (opts as HTMLOptionElement[]).map((o) => o.value));
   expect(valueValues).toContain("PASS");
   expect(valueValues).toContain("FAIL");
 });

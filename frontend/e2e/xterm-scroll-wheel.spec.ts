@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupRuns } from "./helpers";
 
 // Layer 3b — xterm.js wheel-scroll regression (refs #73, ADR 0005).
 //
@@ -23,9 +24,24 @@ const PIPELINE_NAME = `e2e-scroll-wheel-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
+// Post-refonte the parser requires exactly one start node (zero inputs, one
+// `user_prompt` output) and one end node (zero outputs, one `result` input).
+// The node id is `scroller` so the daemon-wide stub dispatcher
+// (playwright.config.ts) switches its PTY into alt-screen (`ESC[?1049h`) +
+// Application Cursor Mode (`ESC[?1h`), prints 80 `MARKER_LINE_*` rows then
+// `OUTPUT_DONE`, and blocks on `cat`. That is the exact mode configuration
+// where xterm.js's wheel→arrow-key path activates; without these escapes a
+// plain `sleep` stub just scrolls normal-screen scrollback and the regression
+// hides.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+    view: { x: 100, y: 0 }
   - id: scroller
     name: scroller
     type: doc-only
@@ -33,31 +49,30 @@ nodes:
       - name: in
     outputs:
       - name: out
-    view: { x: 100, y: 100 }
-edges: []
+    view: { x: 100, y: 150 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+    view: { x: 100, y: 300 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: scroller, port: in }
+  - source: { node: scroller, port: out }
+    target: { node: end, port: result }
 `;
 
-// Shell script that switches the PTY into alt-screen (`ESC[?1049h`) and
-// Application Cursor Mode (`ESC[?1h`), then idles. This is the exact mode
-// configuration where the xterm.js wheel→arrow-key path activates; without
-// these escapes (the previous fixture used a plain `sh` loop) xterm.js just
-// scrolls its own normal-screen scrollback and the regression hides.
-const ALT_SCREEN_SCRIPT = `exec sh -c '
-  printf "\\033[?1049h\\033[?1h"
-  i=1; while [ $i -le 80 ]; do printf "MARKER_LINE_%d\\r\\n" "$i"; i=$((i+1)); done
-  printf "OUTPUT_DONE\\r\\n"
-  sleep 30
-'`;
+const createdRunIds: string[] = [];
 
 test.beforeAll(async () => {
-  process.env.PDO_TMUX_CMD_OVERRIDE = ALT_SCREEN_SCRIPT;
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  delete process.env.PDO_TMUX_CMD_OVERRIDE;
+  await cleanupRuns(...createdRunIds);
 });
 
 test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", async ({
@@ -99,8 +114,9 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
+  createdRunIds.push(run_id);
 
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000 });
   await page.waitForTimeout(500);
   const workerNode = page.getByText("scroller", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });
@@ -109,8 +125,10 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   const terminal = page.getByTestId("tmux-terminal");
   await expect(terminal).toBeVisible({ timeout: 5_000 });
 
+  // xterm.js (v6, no canvas/webgl addon) uses the DOM renderer, so the rendered
+  // screen is `.xterm-screen`/`.xterm-rows`, not a <canvas>.
   const xtermContainer = page.getByTestId("xterm-container");
-  await expect(xtermContainer.locator("canvas").first()).toBeVisible({
+  await expect(xtermContainer.locator(".xterm-screen").first()).toBeVisible({
     timeout: 5_000,
   });
 

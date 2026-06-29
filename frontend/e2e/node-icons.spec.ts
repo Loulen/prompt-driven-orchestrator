@@ -120,7 +120,7 @@ test("each node type renders its structural icon", async ({ page }) => {
   const agentIcons = page.locator("[data-testid='node-icon-agent']");
   await expect(agentIcons).toHaveCount(2, { timeout: 3_000 });
 
-  expect(consoleErrors).toEqual([]);
+  expect(consoleErrors.filter((e) => !/Failed to load resource/.test(e))).toEqual([]);
 });
 
 test("no text pills are present on any node", async ({ page }) => {

@@ -1,99 +1,111 @@
 import { test, expect } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectNonZeroBBox } from "./assertions";
+import { openRunNodeDetails, cleanupRuns } from "./helpers";
 
 // Layer 3b — Inputs/Outputs sections + MarkdownArtifactModal (#27).
-// Verifies: selecting a node shows IO sections, clicking "open ↗" opens the
-// modal with rendered markdown + frontmatter card. For a repeated port, the
-// prev/next chevrons change content. Close via X / Escape / backdrop.
+//
+// Post-refonte: the IO sections live in the Run inspector's details pane. An
+// output port that has artifacts on disk renders as a clickable `button.port-row`
+// that opens the MarkdownArtifactModal; a port with no files renders as a
+// non-interactive `div.port-row`. The reviewer runs (so the daemon tracks a
+// NodeRun and the run pane shows its IO); we seed its `review` output and leave
+// `notes` empty, exercising both the interactive and non-interactive cases.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-io-modal-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
-const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+    view: { x: 0, y: 0 }
   - id: reviewer
+    name: reviewer
     type: doc-only
-    prompt_file: ${PIPELINE_NAME}.prompts/reviewer.md
     inputs:
-      - name: reviews
-        repeated: true
+      - name: task
     outputs:
       - name: review
         frontmatter:
           verdict:
             type: enum
             allowed: [PASS, FAIL]
-    view: { x: 100, y: 100 }
-edges: []
+      - name: notes
+    view: { x: 100, y: 120 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+    view: { x: 0, y: 260 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer, port: task }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
 `;
-
-const ROLE_PROMPT = "You are a reviewer. Review the code.\n";
 
 let runId: string;
 
 test.beforeAll(async () => {
-  process.env.PDO_TMUX_CMD_OVERRIDE = "exec sleep 300";
-  await fs.mkdir(PROMPTS_DIR, { recursive: true });
+  await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
-  await fs.writeFile(path.join(PROMPTS_DIR, "reviewer.md"), ROLE_PROMPT);
 });
 
 test.afterAll(async () => {
   await fs.rm(PIPELINE_PATH, { force: true });
-  await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
-  delete process.env.PDO_TMUX_CMD_OVERRIDE;
-  if (runId) {
-    const { execSync } = await import("node:child_process");
-    try {
-      execSync(`tmux kill-session -t pdo-${runId}-reviewer-iter-1`, {
-        stdio: "ignore",
-      });
-    } catch {
-      // session may already be dead
-    }
-  }
+  await cleanupRuns(runId);
 });
 
-async function createRunAndSeedArtifacts(baseURL: string) {
-  const resp = await fetch(`${baseURL}/runs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      pipeline: PIPELINE_NAME,
-      input: "e2e IO modal test",
-    }),
+async function waitForReviewerRunning(page: Page, baseURL: string, rid: string) {
+  await expect(async () => {
+    const resp = await page.request.get(`${baseURL}/runs/${rid}`);
+    expect(resp.status()).toBe(200);
+    const json = await resp.json();
+    expect(json.nodes?.reviewer?.status).toBe("running");
+  }).toPass({ timeout: 10_000 });
+}
+
+async function createRunAndSeedArtifacts(page: Page, baseURL: string) {
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    multipart: { pipeline: PIPELINE_NAME, input: "e2e IO modal test" },
   });
-  expect(resp.status).toBe(201);
+  expect(resp.status()).toBe(201);
   const json = await resp.json();
   runId = json.run_id;
 
-  // Seed output artifacts for the reviewer node
-  const artifactsDir = path.join(
-    WORKSPACE_ROOT,
-    ".pdo",
-    "runs",
-    runId,
-    "worktree",
-    ".pdo",
-    "artifacts",
+  // Seed the `review` output (the `notes` output stays empty on purpose).
+  // Output artifacts live at <artifacts>/<node>/iter-<N>/<port>/output.md.
+  const reviewDir = path.join(
+    WORKSPACE_ROOT, ".pdo", "runs", runId, "worktree", ".pdo", "artifacts",
+    "reviewer", "iter-1", "review",
   );
-
-  const reviewerDir = path.join(artifactsDir, "reviewer", "iter-1");
-  await fs.mkdir(reviewerDir, { recursive: true });
+  await fs.mkdir(reviewDir, { recursive: true });
   await fs.writeFile(
-    path.join(reviewerDir, "review.md"),
+    path.join(reviewDir, "output.md"),
     "---\nverdict: PASS\n---\n\n## Review\n\nAll looks good. **No issues** found.",
   );
 
+  await waitForReviewerRunning(page, baseURL, runId);
   return runId;
+}
+
+/** The seeded `review` output card (the one port-row that is a button). */
+function reviewCard(page: Page) {
+  return page
+    .getByTestId("inspector-pane-run")
+    .locator("button.port-row")
+    .first();
 }
 
 test("clicking anywhere on port card opens modal with markdown + frontmatter", async ({
@@ -101,105 +113,69 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  const rid = await createRunAndSeedArtifacts(baseURL!);
+  await createRunAndSeedArtifacts(page, baseURL!);
+  await openRunNodeDetails(page, runId, "reviewer");
 
-  // Wait for the run to appear in the list and click it
-  await page.getByText(rid.slice(0, 8)).first().click({ timeout: 5_000 });
-
-  const reactFlow = page.locator(".react-flow");
-  await expect(reactFlow).toBeVisible({ timeout: 5_000 });
-  await expectNonZeroBBox(reactFlow);
-
-  // Click the reviewer node
-  await page.waitForTimeout(500);
-  const reviewerNode = page.getByText("reviewer", { exact: true }).first();
-  await expect(reviewerNode).toBeVisible({ timeout: 3_000 });
-  await expectNonZeroBBox(reviewerNode);
-  await reviewerNode.click();
-
-  // Wait for Outputs section to appear with the port row
-  await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  await expect(page.getByText("review").first()).toBeVisible({
-    timeout: 3_000,
-  });
-
-  // Click anywhere on the port card (not a specific sub-element)
-  const portCard = page.locator("button.port-row").first();
+  const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
   await portCard.click();
 
-  // The modal should appear
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
-
-  // Should show the markdown content
   await expect(modal).toContainText("Review");
   await expect(modal).toContainText("No issues");
 
-  // Should show the frontmatter card with verdict
-  await expect(page.getByText("verdict")).toBeVisible();
-  await expect(page.getByText("PASS")).toBeVisible();
+  // Frontmatter card with the typed verdict. It is a sibling of the markdown
+  // body inside the modal overlay (not inside `.artifact-markdown`); scope to
+  // the overlay so the output port card's own `verdict` chip doesn't collide.
+  const overlay = page
+    .locator(".fixed.inset-0.z-50")
+    .filter({ has: page.locator(".artifact-markdown") });
+  await expect(overlay.getByText("verdict")).toBeVisible();
+  await expect(overlay.getByText("PASS")).toBeVisible();
 
-  // Close via X button
-  const closeBtn = page.locator("button").filter({ has: page.locator("svg") }).last();
+  // Close via the X button (scope to the modal overlay so we don't grab an
+  // inspector icon-button instead).
+  const closeBtn = overlay.locator("button").filter({ has: page.locator("svg") }).last();
   await closeBtn.click();
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });
 
 test("modal closes on Escape key", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  if (!runId) {
-    await createRunAndSeedArtifacts(baseURL!);
-  }
+  if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
+  await openRunNodeDetails(page, runId, "reviewer");
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("reviewer", { exact: true }).first().click();
-
-  await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  const portCard = page.locator("button.port-row").first();
+  const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
   await portCard.click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
 
-  // Press Escape
   await page.keyboard.press("Escape");
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });
 
 test("modal closes on backdrop click", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  if (!runId) {
-    await createRunAndSeedArtifacts(baseURL!);
-  }
+  if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
+  await openRunNodeDetails(page, runId, "reviewer");
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("reviewer", { exact: true }).first().click();
-
-  await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  const portCard = page.locator("button.port-row").first();
+  const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
   await portCard.click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
 
-  // Click the backdrop (the fixed overlay behind the modal)
+  // Click the backdrop (the fixed overlay behind the modal).
   await page.mouse.click(10, 10);
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });
@@ -209,25 +185,18 @@ test("port card with no files renders as non-interactive div", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  if (!runId) {
-    await createRunAndSeedArtifacts(baseURL!);
-  }
+  if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
+  await openRunNodeDetails(page, runId, "reviewer");
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("reviewer", { exact: true }).first().click();
-
-  // The input port "reviews" has no seeded files, so it should be a div, not a button
-  await expect(page.getByText("Inputs")).toBeVisible({ timeout: 5_000 });
-  const inputPortRow = page.locator(".port-row").filter({ hasText: "reviews" });
-  await expect(inputPortRow).toBeVisible({ timeout: 3_000 });
-
-  // Non-interactive port rows render as <div>, not <button>
-  const tag = await inputPortRow.evaluate((el) => el.tagName.toLowerCase());
+  // The `notes` output has no seeded files, so its port row is a div, not a button.
+  const notesRow = page
+    .getByTestId("inspector-pane-run")
+    .locator(".port-row")
+    .filter({ hasText: "notes" });
+  await expect(notesRow).toBeVisible({ timeout: 5_000 });
+  const tag = await notesRow.evaluate((el) => el.tagName.toLowerCase());
   expect(tag).toBe("div");
 });
 
@@ -236,23 +205,14 @@ test("port card opens modal via keyboard (Enter key)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  if (!runId) {
-    await createRunAndSeedArtifacts(baseURL!);
-  }
+  if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
+  await openRunNodeDetails(page, runId, "reviewer");
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
-  await page.waitForTimeout(500);
-  await page.getByText("reviewer", { exact: true }).first().click();
-
-  await expect(page.getByText("Outputs")).toBeVisible({ timeout: 5_000 });
-  const portCard = page.locator("button.port-row").first();
+  const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
 
-  // Focus the card and press Enter
   await portCard.focus();
   await page.keyboard.press("Enter");
 

@@ -469,3 +469,126 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
         "serving a snapshot must not resurrect the reaped session"
     );
 }
+
+// --- #251: stale sweep panic isolation + liveness health ---
+
+async fn get_stale_health(daemon: &TestDaemon) -> serde_json::Value {
+    reqwest::Client::new()
+        .get(format!("{}/stale/health", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// #251 root-cause regression: a panic inside one stale-detection sweep must NOT
+/// silently disable detection for the daemon's life. The sweep runs under panic
+/// isolation (`run_isolated`), so a panicking tick is contained — the driving
+/// call returns NORMALLY — and the *next* sweep recovers and does real detection.
+/// Pre-fix, the bare `loop { run_stale_detection().await }` let a single panic
+/// kill the task, leaving every later stall (idle, dead-session, run-level)
+/// undetected — exactly the silent idle-stall in the field.
+#[tokio::test]
+async fn a_panicking_stale_sweep_is_isolated_and_the_next_sweep_recovers() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon.url()).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+
+    // Kill the session out-of-band so a *working* sweep would mark the node Failed.
+    tmux_session_manager::kill(&socket, &session);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !tmux_has_session(&socket, &session),
+        "session should be dead after manual kill"
+    );
+
+    // Arm the one-shot poison AFTER boot so the immediate startup sweep doesn't
+    // consume it. The next sweep will panic.
+    daemon.arm_stale_panic();
+
+    // Sweep 1 panics internally. The supervised seam contains it, so this call
+    // returns NORMALLY — pre-fix the panic would have unwound this test task and
+    // failed the test right here.
+    daemon.run_stale_detection_tick().await;
+
+    // The panic blinded detection on this tick: the dead-session node is still
+    // Running (it was NOT marked Failed)...
+    let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("running"),
+        "the panicking sweep must not have detected the dead session"
+    );
+    // ...yet the heartbeat advanced *through* the panic (written before it), so
+    // `/stale/health` can prove the loop reached the sweep.
+    let h1 = get_stale_health(&daemon).await;
+    assert!(
+        h1["last_tick_at"].as_str().is_some(),
+        "the heartbeat must advance even through a panicking sweep: {h1}"
+    );
+
+    // Sweep 2 recovers (poison disarmed itself) and does real detection: the
+    // dead-session node is now Failed with a cause naming the dead session.
+    daemon.run_stale_detection_tick().await;
+    let (status, reason) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("failed"),
+        "the sweep must recover after a contained panic and detect the dead session"
+    );
+    let reason = reason.expect("failed node must carry a cause");
+    assert!(
+        reason.contains(&session),
+        "failure cause {reason:?} must name the dead session {session:?}"
+    );
+}
+
+/// #251 observability: `GET /stale/health` exposes the sweep's last tick and the
+/// configured interval, and the timestamp advances as sweeps run — the missing
+/// instrument (mirroring `/triggers/health`, #222) that distinguishes a dead
+/// sweep from a per-node probe miss on the next idle-stall.
+#[tokio::test]
+async fn stale_health_reports_last_tick_and_advances() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let h = get_stale_health(&daemon).await;
+    assert_eq!(
+        h["tick_interval_secs"].as_u64(),
+        Some(30),
+        "health must report the configured sweep interval"
+    );
+
+    // Drive a sweep; last_tick_at becomes non-null.
+    daemon.run_stale_detection_tick().await;
+    let t1 = get_stale_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at set after a sweep")
+        .to_string();
+
+    // A later sweep advances it (canonical-UTC strings compare chronologically;
+    // tolerate extra background-loop ticks — the value only moves forward).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    daemon.run_stale_detection_tick().await;
+    let t2 = get_stale_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at still set")
+        .to_string();
+
+    assert!(
+        t2 > t1,
+        "last_tick_at must advance across sweeps: {t1} then {t2}"
+    );
+}

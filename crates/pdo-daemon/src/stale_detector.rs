@@ -7,6 +7,12 @@ use crate::pipeline;
 
 pub const STALE_THRESHOLD: Duration = Duration::from_secs(120);
 
+/// How often the background sweep wakes up. Independent of [`STALE_THRESHOLD`]
+/// (the idle age that *counts* as stale): the sweep must tick often enough to
+/// notice a threshold crossing promptly. Surfaced by `GET /stale/health` (#251)
+/// and mirrors `trigger_scheduler::TICK_INTERVAL_SECS`.
+pub const STALE_TICK_INTERVAL_SECS: u64 = 30;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detection {
     SessionDied,

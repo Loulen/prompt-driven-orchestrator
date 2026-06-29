@@ -157,6 +157,93 @@ pub fn detection_events(
     }]
 }
 
+/// Best-effort diagnostic context captured the moment a node's session is found
+/// dead (#234). Without this the daemon records only the *symptom*
+/// (`session_died: tmux session … no longer exists`) and every occurrence
+/// becomes a from-scratch forensic investigation; with it the operator can tell
+/// "one session died" from "the whole tmux server collapsed" on first sight.
+///
+/// Every field is best-effort: a `None` (or `0` for [`Self::correlated_deaths`])
+/// means the probe could not run or found nothing, never a confirmed negative
+/// — the impure sweep layer ([`crate::lib`]) does the tmux/proc I/O, this struct
+/// only carries the result and shapes it into the payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionDeathDiagnostics {
+    /// `tmux -L <socket> ls` result: `Some(false)` means the whole server is
+    /// gone (every session under the socket died at once — the #234 root cause),
+    /// `Some(true)` means only this one session vanished, `None` = probe failed.
+    pub tmux_server_alive: Option<bool>,
+    /// `MemAvailable` from `/proc/meminfo` at detection time, in KiB.
+    pub mem_available_kb: Option<u64>,
+    /// `SwapFree` from `/proc/meminfo` at detection time, in KiB.
+    pub swap_free_kb: Option<u64>,
+    /// How many *other* running nodes in the same run were also found
+    /// session-dead in this sweep. A non-zero count points at a server-wide
+    /// collapse (multiple runs dying ~ms apart) rather than an isolated death.
+    pub correlated_deaths: usize,
+}
+
+impl SessionDeathDiagnostics {
+    /// Shape the diagnostics into the JSON object attached to the `NodeFailed`
+    /// payload alongside `reason`. Pure — no I/O. `None` fields serialise to
+    /// `null` so a missing probe is distinguishable from a real value.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "tmux_server_alive": self.tmux_server_alive,
+            "mem_available_kb": self.mem_available_kb,
+            "swap_free_kb": self.swap_free_kb,
+            "correlated_deaths": self.correlated_deaths,
+        })
+    }
+}
+
+/// Fold session-death diagnostics into the `NodeFailed` event(s) built by
+/// [`detection_events`], adding a `diagnostics` object alongside `reason`.
+///
+/// Pure: the impure sweep gathers the diagnostics (tmux/proc reads) then calls
+/// this. A no-op for any event whose payload is missing or not a JSON object,
+/// so the non-`SessionDied` detections (which carry no diagnostics) are never
+/// touched even if this is mistakenly called on them.
+pub fn attach_diagnostics(events: &mut [event_log::Event], diag: &SessionDeathDiagnostics) {
+    for event in events.iter_mut() {
+        if let Some(obj) = event.payload.as_mut().and_then(|p| p.as_object_mut()) {
+            obj.insert("diagnostics".to_string(), diag.to_json());
+        }
+    }
+}
+
+/// Parse the contents of `/proc/meminfo`, returning `(MemAvailable, SwapFree)`
+/// in KiB. Either is `None` when its line is absent or unparseable. Pure, so
+/// the impure sweep layer only performs the file read.
+pub fn parse_meminfo(contents: &str) -> (Option<u64>, Option<u64>) {
+    // Lines look like `MemAvailable:    1234 kB`; take the first numeric token
+    // after the `<key>:` prefix. The trailing `:` keeps `MemAvailable` from
+    // matching `MemFree`/`MemTotal` and `SwapFree` from matching `SwapTotal`.
+    let field = |key: &str| -> Option<u64> {
+        contents.lines().find_map(|line| {
+            let rest = line.strip_prefix(key)?;
+            rest.split_whitespace().next()?.parse().ok()
+        })
+    };
+    (field("MemAvailable:"), field("SwapFree:"))
+}
+
+/// Count how many of `running` (other than `self_node`) are session-dead,
+/// according to `is_dead`. Pure given the predicate so the counting logic is
+/// testable without tmux; the impure sweep passes a closure backed by
+/// `tmux_session_manager::session_exists`.
+pub fn count_correlated_deaths(
+    running: &[(String, i64)],
+    self_node: (&str, i64),
+    is_dead: impl Fn(&str, i64) -> bool,
+) -> usize {
+    running
+        .iter()
+        .filter(|(id, it)| (id.as_str(), *it) != self_node)
+        .filter(|(id, it)| is_dead(id, *it))
+        .count()
+}
+
 /// Collect all running nodes from a RunState.
 pub fn running_nodes(run_state: &event_log::RunState) -> Vec<(String, i64)> {
     run_state
@@ -360,6 +447,132 @@ mod tests {
         let events = detection_events(&Detection::Stale, "run1", "node1", 1);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::NodeStale);
+    }
+
+    // --- #234 session-death diagnostics ---
+
+    #[test]
+    fn diagnostics_to_json_carries_all_fields() {
+        let diag = SessionDeathDiagnostics {
+            tmux_server_alive: Some(false),
+            mem_available_kb: Some(123),
+            swap_free_kb: Some(456),
+            correlated_deaths: 2,
+        };
+        let json = diag.to_json();
+        assert_eq!(json["tmux_server_alive"], serde_json::json!(false));
+        assert_eq!(json["mem_available_kb"], serde_json::json!(123));
+        assert_eq!(json["swap_free_kb"], serde_json::json!(456));
+        assert_eq!(json["correlated_deaths"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn diagnostics_to_json_none_probes_serialize_to_null() {
+        // A failed probe must be distinguishable from a real value, so `None`
+        // fields serialise to JSON `null` rather than being dropped.
+        let json = SessionDeathDiagnostics::default().to_json();
+        assert!(json["tmux_server_alive"].is_null());
+        assert!(json["mem_available_kb"].is_null());
+        assert!(json["swap_free_kb"].is_null());
+        assert_eq!(json["correlated_deaths"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn attach_diagnostics_enriches_session_died_payload_alongside_reason() {
+        let mut events = detection_events(&Detection::SessionDied, "run1", "node1", 1);
+        let diag = SessionDeathDiagnostics {
+            tmux_server_alive: Some(false),
+            mem_available_kb: Some(2048),
+            swap_free_kb: Some(0),
+            correlated_deaths: 1,
+        };
+        attach_diagnostics(&mut events, &diag);
+
+        let payload = events[0].payload.as_ref().unwrap();
+        // The original symptom is preserved …
+        assert!(payload["reason"]
+            .as_str()
+            .unwrap()
+            .contains("session_died"));
+        // … and the diagnostics sit alongside it.
+        assert_eq!(
+            payload["diagnostics"]["tmux_server_alive"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            payload["diagnostics"]["correlated_deaths"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            payload["diagnostics"]["mem_available_kb"],
+            serde_json::json!(2048)
+        );
+    }
+
+    #[test]
+    fn attach_diagnostics_is_noop_on_empty_events() {
+        // Detection::Ok yields no events — attaching must not panic.
+        let mut events = detection_events(&Detection::Ok, "run1", "node1", 1);
+        attach_diagnostics(&mut events, &SessionDeathDiagnostics::default());
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parse_meminfo_extracts_available_and_swap() {
+        let contents = "\
+MemTotal:       16384000 kB
+MemFree:          512000 kB
+MemAvailable:    8192000 kB
+SwapTotal:       2048000 kB
+SwapFree:         204800 kB
+";
+        let (mem, swap) = parse_meminfo(contents);
+        assert_eq!(mem, Some(8192000));
+        assert_eq!(swap, Some(204800));
+    }
+
+    #[test]
+    fn parse_meminfo_missing_fields_return_none() {
+        // No MemAvailable / SwapFree lines (e.g. an ancient kernel) → None,
+        // not a wrong value picked up from a similarly-named line.
+        let contents = "MemTotal:  16384000 kB\nMemFree:  512000 kB\nSwapTotal:  2048000 kB\n";
+        assert_eq!(parse_meminfo(contents), (None, None));
+    }
+
+    #[test]
+    fn parse_meminfo_ignores_malformed_values() {
+        let contents = "MemAvailable:  notanumber kB\nSwapFree:\n";
+        assert_eq!(parse_meminfo(contents), (None, None));
+    }
+
+    #[test]
+    fn count_correlated_deaths_excludes_self_and_counts_dead_peers() {
+        let running = vec![
+            ("a".to_string(), 1),
+            ("b".to_string(), 1),
+            ("c".to_string(), 2),
+        ];
+        // Self ("a", 1) is excluded even though the predicate would call it
+        // dead; "b" is dead, "c" is alive → exactly one correlated death.
+        let dead = |id: &str, _it: i64| id != "c";
+        assert_eq!(count_correlated_deaths(&running, ("a", 1), dead), 1);
+    }
+
+    #[test]
+    fn count_correlated_deaths_zero_when_peers_alive() {
+        let running = vec![("a".to_string(), 1), ("b".to_string(), 1)];
+        assert_eq!(
+            count_correlated_deaths(&running, ("a", 1), |_, _| false),
+            0
+        );
+    }
+
+    #[test]
+    fn count_correlated_deaths_distinguishes_iter() {
+        // Same node id, different iter, must be treated as a distinct peer and
+        // counted — not collapsed onto self.
+        let running = vec![("a".to_string(), 1), ("a".to_string(), 2)];
+        assert_eq!(count_correlated_deaths(&running, ("a", 1), |_, _| true), 1);
     }
 
     // --- running_nodes ---

@@ -300,6 +300,26 @@ pub fn session_exists(socket: &str, session_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Check whether the tmux *server* for this socket is alive at all (#234).
+///
+/// `tmux -L <socket> ls` exits non-zero ("no server running on …") once the
+/// socket's server is gone. This is the single most discriminating fact when a
+/// node's session is found dead: a dead server means the whole socket collapsed
+/// and *every* session under it died at once (e.g. an external `kill <pid>` of
+/// the server process), not just this one node — see the session-death
+/// diagnostics in [`crate::stale_detector::SessionDeathDiagnostics`].
+///
+/// `Some(true)` = server alive, `Some(false)` = server gone, `None` = the
+/// `tmux` probe itself could not be run (so absence is never read as a real
+/// "server gone").
+pub fn server_alive(socket: &str) -> Option<bool> {
+    tmux(socket)
+        .args(["ls"])
+        .output()
+        .map(|o| o.status.success())
+        .ok()
+}
+
 /// List all tmux sessions whose name starts with `pdo-`, on the given socket.
 /// Returns a set of session names.
 pub fn list_pdo_sessions(socket: &str) -> HashSet<String> {

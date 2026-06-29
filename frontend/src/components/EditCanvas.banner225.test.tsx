@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore, type OpenPipeline } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
@@ -126,6 +126,7 @@ function renderCanvas() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -146,6 +147,138 @@ describe("#225 Part 1 — lint banner is gated to non-run tabs", () => {
     seedTab(runTab());
     renderCanvas();
 
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
+  });
+});
+
+// A pipeline whose `triage` node emits a list-typed output into `fixer`, which
+// is not a collection member — exactly the shape that produces a fan-out nudge
+// (`collectionFanoutNudges` → id `fanout:fixer`).
+const NUDGE_PIPELINE = {
+  name: "Nudge Pipeline",
+  version: "1.0",
+  variables: {},
+  nodes: [
+    {
+      id: "triage",
+      name: "Triage",
+      type: "doc-only" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [
+        {
+          name: "issues",
+          repeated: false,
+          side: "right" as const,
+          frontmatter: { issues: { type: "list" as const } },
+        },
+      ],
+    },
+    {
+      id: "fixer",
+      name: "Fixer",
+      type: "code-mutating" as const,
+      interactive: false,
+      inputs: [{ name: "in", repeated: false, side: "left" as const }],
+      outputs: [],
+    },
+  ],
+  edges: [
+    {
+      source: { node: "triage", port: "issues" },
+      target: { node: "fixer", port: "in" },
+    },
+  ],
+};
+
+// An edit tab carrying a nudge AND a correctness lint row.
+function nudgeAndLintTab(): OpenPipeline {
+  return {
+    id: "p1",
+    scope: "repo",
+    pipeline: NUDGE_PIPELINE,
+    prompts: {},
+    diagnostics: [DIAGNOSTIC],
+    dirty: false,
+    externalDirty: false,
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+// An edit tab carrying ONLY a nudge (no lint) — used to prove the whole overlay
+// collapses when the last visible row is dismissed.
+function nudgeOnlyTab(): OpenPipeline {
+  return {
+    id: "p1",
+    scope: "repo",
+    pipeline: NUDGE_PIPELINE,
+    prompts: {},
+    diagnostics: [],
+    dirty: false,
+    externalDirty: false,
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+describe("#268 — dismissible fan-out nudges", () => {
+  it("renders a fan-out nudge with a dismiss × on an edit tab", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    expect(screen.getByTestId("lint-banner")).toBeInTheDocument();
+    expect(screen.getByTestId("lint-banner-dismiss-fanout:fixer")).toBeInTheDocument();
+  });
+
+  it("correctness lint rows have no dismiss × (only the nudge does)", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    // The lint message is present…
+    expect(screen.getByText(DIAGNOSTIC)).toBeInTheDocument();
+    // …but the only dismiss affordance in the banner is the nudge's.
+    expect(screen.getAllByLabelText("Dismiss suggestion")).toHaveLength(1);
+  });
+
+  it("clicking × hides the nudge row and persists the dismissal per pipeline", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    const nudgeText = screen.getByText(/emits a list into/);
+    expect(nudgeText).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("lint-banner-dismiss-fanout:fixer"));
+
+    // Row gone; the lint row (always-visible) keeps the banner alive.
+    expect(screen.queryByText(/emits a list into/)).not.toBeInTheDocument();
+    expect(screen.getByText(DIAGNOSTIC)).toBeInTheDocument();
+
+    // Persisted under the per-pipeline key.
+    const stored = JSON.parse(
+      localStorage.getItem("pdo.banner.dismissed.p1") ?? "null",
+    );
+    expect(stored).toContain("fanout:fixer");
+  });
+
+  it("dismissing the only nudge on a nudge-only tab collapses the whole banner", () => {
+    seedTab(nudgeOnlyTab());
+    renderCanvas();
+
+    expect(screen.getByTestId("lint-banner")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("lint-banner-dismiss-fanout:fixer"));
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
+  });
+
+  it("a persisted dismissal keeps the nudge hidden on a fresh mount", () => {
+    localStorage.setItem(
+      "pdo.banner.dismissed.p1",
+      JSON.stringify(["fanout:fixer"]),
+    );
+    seedTab(nudgeOnlyTab());
+    renderCanvas();
+
+    // Already dismissed → no nudge → overlay never renders.
     expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
   });
 });

@@ -218,14 +218,30 @@ export function reconcileLoopRegions(pipeline: PipelineDef): LoopRegion[] {
 }
 
 /**
+ * One advisory fan-out nudge. The `id` is a stable, rename-proof dismiss
+ * identity (#268): `fanout:<targetNodeId>`, keyed on the immutable target node
+ * **id** rather than the display-name `message` (which changes on rename). It is
+ * 1:1 with the rendered row (deduped by target below), so a dismiss never
+ * collides with another nudge.
+ */
+export interface FanoutNudge {
+  id: string;
+  message: string;
+}
+
+/**
  * Info-only nudges (ADR-0001 sharp tool, never auto-wraps) suggesting a
  * collection fan-out (#151): when a `list`-typed output port feeds a downstream
  * node that is NOT already a member of a collection region, offer the explicit
  * "fan out over a collection" gesture. The nudge never blocks and never wraps
  * automatically — a `collection` region is born only by the user's explicit
  * gesture (unlike a `bounded` region, which auto-materializes on a drawn cycle).
+ *
+ * Each nudge carries a stable `id` (`fanout:<targetNodeId>`) so a user can
+ * dismiss it persistently (#268). The advice is target-scoped ("this target
+ * should fan out"), so the target id is the correct dismiss granularity.
  */
-export function collectionFanoutNudges(pipeline: PipelineDef): string[] {
+export function collectionFanoutNudges(pipeline: PipelineDef): FanoutNudge[] {
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
   const collectionMembers = new Set<string>();
   for (const region of pipeline.loops ?? []) {
@@ -234,7 +250,7 @@ export function collectionFanoutNudges(pipeline: PipelineDef): string[] {
     }
   }
 
-  const nudges: string[] = [];
+  const nudges: FanoutNudge[] = [];
   const seenTargets = new Set<string>();
   for (const edge of pipeline.edges) {
     const src = byId.get(edge.source.node);
@@ -249,10 +265,12 @@ export function collectionFanoutNudges(pipeline: PipelineDef): string[] {
     if (seenTargets.has(target)) continue;
     seenTargets.add(target);
     const targetNode = byId.get(target);
-    nudges.push(
-      `"${src.name ?? src.id}" emits a list into "${targetNode?.name ?? target}". ` +
+    nudges.push({
+      id: `fanout:${target}`,
+      message:
+        `"${src.name ?? src.id}" emits a list into "${targetNode?.name ?? target}". ` +
         `Select the member(s) and choose "fan out over a collection" to run one lap per item.`,
-    );
+    });
   }
   return nudges;
 }

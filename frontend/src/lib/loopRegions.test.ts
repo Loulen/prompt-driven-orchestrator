@@ -208,7 +208,8 @@ describe("collectionFanoutNudges (#151)", () => {
     };
     const nudges = collectionFanoutNudges(p);
     expect(nudges).toHaveLength(1);
-    expect(nudges[0]).toContain("fan out over a collection");
+    expect(nudges[0].message).toContain("fan out over a collection");
+    expect(nudges[0].id).toBe("fanout:fixer");
   });
 
   it("does not nudge once the target is a member of a collection region (never auto-wraps, but respects an existing one)", () => {

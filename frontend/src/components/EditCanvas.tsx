@@ -29,11 +29,12 @@ import { LoopRegionNode } from "./LoopRegionNode";
 import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
-import LintBanner from "./LintBanner";
+import LintBanner, { type LintBannerItem } from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import PipelineStar from "./PipelineStar";
 import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
+import { useDismissedNudges } from "../hooks/useDismissedNudges";
 import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
 
 // The four emergent body anchor handles (#168), each pinned to its side-centre
@@ -466,11 +467,29 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const onNodeMouseEnter = useCallback((_: ReactMouseEvent, node: Node) => setHoveredNodeId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredNodeId(null), []);
 
-  const diagnostics = useMemo(() => {
+  // #268: advisory fan-out nudges are dismissible (persisted per pipeline);
+  // correctness lint is not. `tab?.id ?? ""` keeps the hook call unconditional
+  // (rules of hooks) ahead of the early return below; "" is never rendered.
+  const { dismissed, dismiss } = useDismissedNudges(tab?.id ?? "");
+  const allItems = useMemo<LintBannerItem[]>(() => {
     if (!tab) return [];
-    const base = tab.diagnostics ?? [];
-    return [...base, ...collectionFanoutNudges(tab.pipeline)];
+    const lint = (tab.diagnostics ?? []).map((m, i) => ({
+      id: `lint:${i}`,
+      kind: "lint" as const,
+      message: m,
+    }));
+    const nudges = collectionFanoutNudges(tab.pipeline).map((n) => ({
+      ...n,
+      kind: "nudge" as const,
+    }));
+    return [...lint, ...nudges];
   }, [tab]);
+  // Filter BEFORE the render gate so dismissing the last nudge (with no lint)
+  // collapses the whole overlay. MUST depend on `dismissed` or it won't update.
+  const visibleItems = useMemo(
+    () => allItems.filter((it) => it.kind === "lint" || !dismissed.has(it.id)),
+    [allItems, dismissed],
+  );
 
   if (!tab || !pipeline) {
     return (
@@ -576,9 +595,9 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
           deliberate trade-off ratified at PR time. `tab` is non-null here (early
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
-      {diagnostics.length > 0 && tab.runId == null && (
+      {visibleItems.length > 0 && tab.runId == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
-          <LintBanner diagnostics={diagnostics} />
+          <LintBanner items={visibleItems} onDismiss={dismiss} />
         </div>
       )}
 

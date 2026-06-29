@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::event_log::{NodeStatus, RunState};
+use crate::event_log::RunState;
 use crate::pipeline::PipelineDef;
 
 /// The iteration of `source_node_id` whose artifacts a consumer should read.
@@ -28,19 +28,9 @@ use crate::pipeline::PipelineDef;
 /// path then points where the artifact will appear, preserving the previous
 /// positional behavior for overrides/injection flows).
 pub fn source_iter(run_state: &RunState, source_node_id: &str, consumer_iter: i64) -> i64 {
-    latest_completed_iter(run_state, source_node_id).unwrap_or(consumer_iter)
-}
-
-/// The latest `Completed` iteration of `node_id`, if any.
-fn latest_completed_iter(run_state: &RunState, node_id: &str) -> Option<i64> {
-    let node = run_state.nodes.get(node_id)?;
-    let from_history = node
-        .iterations
-        .iter()
-        .filter(|it| it.status == NodeStatus::Completed)
-        .map(|it| it.iter)
-        .max();
-    from_history.or_else(|| (node.status == NodeStatus::Completed).then_some(node.iter))
+    run_state
+        .latest_completed_iter(source_node_id)
+        .unwrap_or(consumer_iter)
 }
 
 /// Resolves, for one consumer node, the source iteration of every incoming
@@ -68,7 +58,7 @@ pub fn resolved_source_iters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::{IterationInfo, NodeState};
+    use crate::event_log::{IterationInfo, NodeState, NodeStatus};
 
     fn node_with_iterations(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));

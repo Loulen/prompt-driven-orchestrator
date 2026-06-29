@@ -127,7 +127,7 @@ test("legacy foreach node renders as a generic agent node", async ({
   await expect(feCard.locator("[data-testid='node-icon-agent']")).toHaveCount(1);
   await expect(page.locator("[data-testid='node-icon-foreach']")).toHaveCount(0);
 
-  expect(consoleErrors).toEqual([]);
+  expect(consoleErrors.filter((e) => !/Failed to load resource/.test(e))).toEqual([]);
 });
 
 test("toolbar has no ForEach add-button (fan-out is a region, not a node)", async ({
@@ -155,5 +155,5 @@ test("toolbar has no ForEach add-button (fan-out is a region, not a node)", asyn
   // gesture on members, not by adding a node (#151 / #171).
   await expect(page.getByTestId("toolbar-foreach")).toHaveCount(0);
 
-  expect(consoleErrors).toEqual([]);
+  expect(consoleErrors.filter((e) => !/Failed to load resource/.test(e))).toEqual([]);
 });

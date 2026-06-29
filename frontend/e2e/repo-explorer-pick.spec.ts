@@ -24,7 +24,11 @@ test.beforeAll(() => {
   );
   fs.mkdirSync(BETA); // plain dir, no .git → validates RED
   fs.mkdirSync(path.join(ROOT, ".hidden-dir")); // dotfile → hidden
-  fs.symlinkSync(ALPHA, path.join(ROOT, "zeta-link")); // symlink → listed + flagged
+  // symlink → listed + symlink-flagged. Point it at the *non-git* BETA so it
+  // carries only the symlink flag, not a git dot: the explorer follows symlinks
+  // when detecting `.git`, so a symlink to ALPHA (a repo) would also light a git
+  // dot and the "exactly one git dot" assertion below would see two.
+  fs.symlinkSync(BETA, path.join(ROOT, "zeta-link"));
   fs.writeFileSync(path.join(ROOT, "notes.txt"), "notes"); // file → filtered out
 });
 

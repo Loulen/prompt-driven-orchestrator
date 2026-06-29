@@ -16,3 +16,14 @@ PDO a livré 186 unit tests verts pour des modules à couture forte (file watche
 **Pourquoi.** Pas de mocking au-dessus de couche 1 — sinon les tests mentent (le file watcher mocké aurait reproduit le bug E parfaitement, sauf que le bug n'aurait pas existé). Couche 5 agentique plutôt que bash-only parce qu'un bash teste des invariants techniques mais pas l'expérience utilisateur (le DAG s'anime ? le footer dit "connected" ? le terminal attaché reste vivant ? le contenu de la session tmux montre claude qui tourne ?) — un agent qui pilote l'UI peut juger ça. Couche 5 reste manuelle au MVP : coût API Anthropic non-négligeable, flakiness à arbitrer cas par cas, on n'industrialise pas avant d'en avoir besoin.
 
 **Alternatives écartées.** Cypress (3b) — moins flexible que Playwright, monobrowser, opinionated d'une façon qu'on évite. Couche 5 tout-bash — décrit ci-dessus, ne juge pas l'UX. Pyramide classique avec dominante unit — vient d'échouer, on n'y retourne pas.
+
+## Évolution — Happy Paths & Feature Paths
+
+La couche 5 a évolué du modèle « un scénario par issue » (`docs/testing/scenarios/*.md`, verdict JSON PASS/FAIL, déclenché à la main « run the X scenario ») vers un modèle **curé**. Le corps ci-dessus reste l'historique de la décision ; le format courant est :
+
+- **Happy Paths (HP)** — suite **permanente, ≤ 3**, dans `docs/test-scenarios/` : les parcours pris par 80 %+ des utilisateurs (HP-01 *author & save*, HP-02 *run to completion*). Vaut autant comme documentation du chemin critique que comme non-régression. Gate `integration → develop` (décision humaine).
+- **Feature Paths (FP)** — dans la section « Acceptance criteria → Feature Path » de la sous-issue, **jetable** (meurt avec l'issue). Gate sous-issue → `integration` (auto-merge).
+
+Runner = skill `/agentic-tests` ; format = `.claude/skills/agentic-tests/SCENARIO-FORMAT.md` ; pilotage PDO = `docs/agents/run-scenario.md`. Le verdict JSON par scénario est remplacé par des **findings** (bloquant / non-bloquant). Gates détaillées dans `git-flow`.
+
+**La résilience n'est pas un Happy Path.** Les invariants d'adversité (mort de session, kill du daemon, fuite de slot d'admission, rejet d'édition mid-run, « jamais de stall silencieux ») sont des cas limites, coûteux à jouer, et **couverts en permanence par les tests automatisés de couche 3** (`crates/pdo-daemon/tests/`, p. ex. `tests/process_lifecycle.rs`, et `frontend/e2e/`) — pas par un HP.

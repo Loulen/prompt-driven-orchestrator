@@ -153,6 +153,21 @@ struct AppState {
     /// production unless `PDO_DEBUG_PANIC_TRIGGER` is set; tests seed it
     /// per-daemon via [`DaemonConfig`] (never process-global env — #181).
     panic_on_trigger_name: Option<String>,
+    /// Epoch-millis of the **start** of the most recent stale-detection sweep, or
+    /// `0` if it has never swept. Process-lifetime only (a restart resets it *and*
+    /// revives the sweep). Surfaced by `GET /stale/health` so a dead/stalled stale
+    /// detector is observable instead of silent (#251) — the sibling of
+    /// `last_trigger_tick_ms` (#222). Written at sweep start so a wedged sweep
+    /// freezes the value; an isolated panic still advances it (the loop is alive).
+    last_stale_tick_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Debug-only fault-injection knob (#251): a one-shot poison pill. When armed
+    /// (`true`), the next stale sweep `panic!`s, then disarms itself (`swap`) —
+    /// exercising the sweep's panic isolation and proving the *next* sweep
+    /// recovers. `false` in production unless `PDO_DEBUG_PANIC_STALE` arms it at
+    /// boot; tests arm it *post-boot* via [`DaemonHandle::arm_stale_panic`] so the
+    /// immediate startup sweep doesn't consume it first. An `Arc<AtomicBool>` (not
+    /// process-global env) so parallel test daemons never race (#181).
+    panic_on_stale_sweep: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -423,7 +438,7 @@ impl DaemonHandle {
     /// integration tests drive liveness detection (dead session -> node Failed)
     /// deterministically instead of waiting for the ~30 s background interval.
     pub async fn run_stale_detection_tick(&self) {
-        run_stale_detection(&self.state).await;
+        run_stale_detection_supervised(&self.state).await;
     }
 
     /// Run the boot-recovery reconciliation pass synchronously (#213). The
@@ -431,6 +446,18 @@ impl DaemonHandle {
     /// it deterministically (orphaned Running node -> Failed at boot).
     pub async fn run_boot_recovery_tick(&self) {
         run_boot_recovery(&self.state).await;
+    }
+
+    /// Arm the one-shot stale-sweep poison (#251): the next [`run_stale_detection`]
+    /// — driven by [`Self::run_stale_detection_tick`] or the background loop —
+    /// panics, then disarms itself. Test seam only; lets a test arm the poison
+    /// *after* boot (so the immediate startup sweep doesn't consume it) and prove
+    /// the panic is isolated and the next sweep recovers. Production arms this
+    /// once at boot via `PDO_DEBUG_PANIC_STALE`.
+    pub fn arm_stale_panic(&self) {
+        self.state
+            .panic_on_stale_sweep
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Force a Trigger's next fire into the past so the next
@@ -464,6 +491,11 @@ pub struct DaemonConfig {
     /// panic is isolated and the next tick recovers. `None` in production unless
     /// `PDO_DEBUG_PANIC_TRIGGER` is set.
     pub panic_on_trigger_name: Option<String>,
+    /// Debug-only chaos knob (#251): when `true`, the next stale-detection sweep
+    /// panics (one-shot, then disarms), so a test can prove the sweep's panic is
+    /// isolated and the next sweep recovers. `false` in production unless
+    /// `PDO_DEBUG_PANIC_STALE` is set.
+    pub panic_on_stale_sweep: bool,
 }
 
 impl DaemonConfig {
@@ -478,6 +510,11 @@ impl DaemonConfig {
             // Debug-only chaos knob (#222); mirrors the PDO_TMUX_CMD_OVERRIDE
             // precedent — read once at boot, off unless explicitly set.
             panic_on_trigger_name: std::env::var("PDO_DEBUG_PANIC_TRIGGER").ok(),
+            // Debug-only chaos knob (#251), sibling of PDO_DEBUG_PANIC_TRIGGER.
+            // Truthy (set and not "" / "0") arms the one-shot stale poison.
+            panic_on_stale_sweep: std::env::var("PDO_DEBUG_PANIC_STALE")
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false),
         }
     }
 }
@@ -563,6 +600,10 @@ pub async fn serve_with_config(
         tmux_cmd_override: config.tmux_cmd_override,
         last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_trigger_name: config.panic_on_trigger_name,
+        last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
+            config.panic_on_stale_sweep,
+        )),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -623,9 +664,17 @@ pub async fn serve_with_config(
             let mut tick = time::interval(interval);
             loop {
                 tick.tick().await;
-                if let Err(e) = run_orphan_sweep(&reaper_state.db, &socket, ttl).await {
-                    warn!("Reaper sweep failed: {e}");
-                }
+                // Panic-isolated like the trigger/stale sweeps (#251 "rule of
+                // three"): a panic in one sweep tick must not silently kill the
+                // reaper loop and leave sessions un-reaped for the daemon's life.
+                let st = reaper_state.clone();
+                let socket = socket.clone();
+                run_isolated("reaper", async move {
+                    if let Err(e) = run_orphan_sweep(&st.db, &socket, ttl).await {
+                        warn!("Reaper sweep failed: {e}");
+                    }
+                })
+                .await;
             }
         }))
     };
@@ -642,10 +691,11 @@ pub async fn serve_with_config(
     } else {
         let stale_state = state.clone();
         Some(tokio::spawn(async move {
-            let mut tick = time::interval(Duration::from_secs(30));
+            let mut tick =
+                time::interval(Duration::from_secs(stale_detector::STALE_TICK_INTERVAL_SECS));
             loop {
                 tick.tick().await;
-                run_stale_detection(&stale_state).await;
+                run_stale_detection_supervised(&stale_state).await;
             }
         }))
     };
@@ -1601,6 +1651,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
         // `/triggers` proxy prefix already covers it — no vite proxy edit (#222).
         .route("/triggers/health", get(triggers_health))
+        // Stale-detector liveness (#251), sibling of `/triggers/health`. New
+        // top-level `/stale` prefix → added to the vite dev proxy whitelist so a
+        // dev-mode GET hits the daemon instead of the SPA fallback.
+        .route("/stale/health", get(stale_health))
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -1947,24 +2001,57 @@ fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> Path
         .unwrap_or_else(|| state.repo_root.clone())
 }
 
-/// Run one scheduler tick under panic isolation (#222). A panic in the tick is
-/// contained at this `tokio::spawn` boundary; the caller — the ~30 s background
-/// loop *or* the [`DaemonHandle::run_trigger_tick`] test seam — survives, and the
-/// next tick recomputes `due_triggers` and recovers any unfired Triggers
-/// (forward-only, ADR-0012). Both paths go through here, so production and the
-/// synchronous test seam behave identically: a panicking tick returns normally
-/// instead of unwinding the caller, which is exactly what lets the background
-/// loop keep ticking and a regression test drive a panicking tick and assert
-/// recovery on the next one. (`tokio::sync::Mutex` does not poison, so the
-/// `trigger_tick_lock` is released cleanly on unwind.)
-async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
-    let tick_state = state.clone();
-    let join = tokio::spawn(async move { run_trigger_scheduler_tick(&tick_state).await });
-    if let Err(e) = join.await {
+/// Run one tick of a background sweep under panic isolation. The future is driven
+/// on its own `tokio::spawn` task, so a panic inside it is contained at that
+/// boundary: the caller — a periodic background loop *or* a synchronous test seam
+/// — returns normally instead of unwinding, and the next tick recovers. This is
+/// the shared spine of the daemon's three otherwise-unsupervised sweeps (the
+/// "rule of three"): the Trigger scheduler (#222), the stale detector and the
+/// reaper (#251). Run bare in a `loop { tick().await }`, any one of them would
+/// have a single panic silently and permanently kill the task — and for the stale
+/// detector that means *all* stall / idle / session-death detection goes dark for
+/// the daemon's remaining life, with nothing logged (the root cause of the silent
+/// idle-stall, #251). Routing every tick through here turns a panic into a
+/// one-tick blip the loop survives. (`tokio::sync::Mutex` does not poison, so any
+/// per-tick lock is released cleanly on unwind.)
+async fn run_isolated<F>(label: &str, fut: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    if let Err(e) = tokio::spawn(fut).await {
         if e.is_panic() {
-            warn!("trigger scheduler: tick panicked, isolated — next tick recovers (#222): {e}");
+            warn!("{label}: tick panicked, isolated — next tick recovers: {e}");
         }
     }
+}
+
+/// Run one Trigger scheduler tick under panic isolation (#222). The ~30 s
+/// background loop *and* the [`DaemonHandle::run_trigger_tick`] test seam both go
+/// through here, so production and the synchronous test path behave identically:
+/// a panicking tick returns normally, the loop keeps ticking, and the next tick
+/// recomputes `due_triggers` and recovers any unfired Triggers (forward-only,
+/// ADR-0012).
+async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
+    let tick_state = state.clone();
+    run_isolated("trigger scheduler", async move {
+        run_trigger_scheduler_tick(&tick_state).await
+    })
+    .await;
+}
+
+/// Run one stale-detection sweep under panic isolation (#251). The ~30 s
+/// background loop *and* the [`DaemonHandle::run_stale_detection_tick`] test seam
+/// both go through here, mirroring the Trigger scheduler: a panicking sweep is
+/// contained, the loop survives, and the next sweep recovers. Without this a
+/// single panic in `run_stale_detection` (a stray `unwrap`, a `project` edge, a
+/// path mishap) silently disables stall / idle / session-death detection
+/// daemon-wide — the root-cause-agnostic fix for the silent idle-stall (#251).
+async fn run_stale_detection_supervised(state: &Arc<AppState>) {
+    let sweep_state = state.clone();
+    run_isolated("stale detector", async move {
+        run_stale_detection(&sweep_state).await
+    })
+    .await;
 }
 
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
@@ -4342,6 +4429,28 @@ async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
+/// `GET /stale/health` — stale-detector liveness (#251). Reports `last_tick_at`
+/// (ISO-8601 millis of the most recent sweep start, or `null` if it has never
+/// swept) and the configured sweep interval, so a dead/stalled stale detector is
+/// observable instead of silent. This is the diagnostic that, on the next
+/// idle-stall recurrence, distinguishes a *dead sweep* (heartbeat frozen) from a
+/// per-node probe miss (heartbeat advancing). Sibling of `GET /triggers/health`
+/// (#222); new `/stale` prefix is whitelisted in the vite dev proxy.
+async fn stale_health(State(state): State<Arc<AppState>>) -> Response {
+    let ms = state
+        .last_stale_tick_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let last_tick_at = (ms != 0)
+        .then(|| chrono::DateTime::from_timestamp_millis(ms))
+        .flatten()
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    Json(serde_json::json!({
+        "last_tick_at": last_tick_at,
+        "tick_interval_secs": stale_detector::STALE_TICK_INTERVAL_SECS,
+    }))
+    .into_response()
+}
+
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
@@ -4995,6 +5104,26 @@ fn branch_is_merged_into(repo_root: &std::path::Path, branch: &str, into: &str) 
 // --- Stale detection ---
 
 async fn run_stale_detection(state: &AppState) {
+    // Record liveness at sweep start (#251): a wedged sweep freezes this value
+    // while an isolated panic still advances it, so `GET /stale/health` answers
+    // "is the sweep loop alive?". Mirrors the Trigger scheduler heartbeat (#222).
+    state.last_stale_tick_ms.store(
+        chrono::Utc::now().timestamp_millis(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
+    // Debug-only fault injection (#251): a one-shot poison pill. Armed via
+    // `PDO_DEBUG_PANIC_STALE` (or per-daemon test config), it panics the first
+    // sweep after arming and disarms itself, so a regression test can prove the
+    // panic is isolated and the next sweep recovers. Checked *after* the heartbeat
+    // so the test can also assert liveness advanced through a panicking sweep.
+    if state
+        .panic_on_stale_sweep
+        .swap(false, std::sync::atomic::Ordering::Relaxed)
+    {
+        panic!("PDO_DEBUG_PANIC_STALE fault injection (#251)");
+    }
+
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
         Err(e) => {
@@ -8897,7 +9026,31 @@ mod tests {
             tmux_cmd_override: Some("exec true".to_string()),
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    /// The shared spine of the panic-isolated sweeps (#222/#251): a panic inside
+    /// the driven future is contained at the `tokio::spawn` boundary, so the
+    /// `.await` returns normally instead of unwinding the caller — and a normal
+    /// future still runs to completion through the same path. Reaching the
+    /// assertions below at all proves containment (an un-isolated panic would
+    /// unwind this test task).
+    #[tokio::test]
+    async fn run_isolated_contains_a_panic_and_still_runs_normal_work() {
+        run_isolated("test", async { panic!("boom — must be contained") }).await;
+
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        run_isolated("test", async move {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+        .await;
+        assert!(
+            ran.load(std::sync::atomic::Ordering::Relaxed),
+            "a non-panicking future must run to completion through run_isolated"
+        );
     }
 
     fn legacy_app() -> Router {
@@ -11053,6 +11206,8 @@ mod tests {
             tmux_cmd_override: Some("exec true".to_string()),
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -14929,6 +15084,8 @@ edges: []
             tmux_cmd_override: Some("exec true".to_string()),
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         let app = build_router(state);
 
@@ -15104,6 +15261,8 @@ edges: []
             tmux_cmd_override: Some("exec true".to_string()),
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         let app = build_router(state);
 

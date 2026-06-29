@@ -5103,6 +5103,40 @@ fn branch_is_merged_into(repo_root: &std::path::Path, branch: &str, into: &str) 
 
 // --- Stale detection ---
 
+/// Gather best-effort diagnostic context the moment a node session is found
+/// dead (#234). All I/O lives here (the impure sweep layer); the pure shaping
+/// into the event payload is [`stale_detector::SessionDeathDiagnostics`]. The
+/// most discriminating fact is `tmux_server_alive`: a dead server means the
+/// whole socket collapsed and every session under it died at once, rather than
+/// this one node dying in isolation.
+fn gather_session_death_diagnostics(
+    socket: &str,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    running: &[(String, i64)],
+) -> stale_detector::SessionDeathDiagnostics {
+    let tmux_server_alive = tmux_session_manager::server_alive(socket);
+
+    let (mem_available_kb, swap_free_kb) = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .map(|c| stale_detector::parse_meminfo(&c))
+        .unwrap_or((None, None));
+
+    let correlated_deaths =
+        stale_detector::count_correlated_deaths(running, (node_id, iter), |id, it| {
+            let s = tmux_session_manager::node_session_name(run_id, id, it);
+            !tmux_session_manager::session_exists(socket, &s)
+        });
+
+    stale_detector::SessionDeathDiagnostics {
+        tmux_server_alive,
+        mem_available_kb,
+        swap_free_kb,
+        correlated_deaths,
+    }
+}
+
 async fn run_stale_detection(state: &AppState) {
     // Record liveness at sweep start (#251): a wedged sweep freezes this value
     // while an isolated panic still advances it, so `GET /stale/health` answers
@@ -5200,7 +5234,20 @@ async fn run_stale_detection(state: &AppState) {
                 continue;
             }
 
-            let events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
+            let mut events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
+
+            // #234: when a node's session is found dead, capture the diagnostic
+            // context *now* (cheaply available, gone moments later) and fold it
+            // into the NodeFailed payload. Otherwise the daemon records only the
+            // symptom and every occurrence forces from-scratch RCA.
+            let session_death_diag = (detection == stale_detector::Detection::SessionDied)
+                .then(|| {
+                    let diag =
+                        gather_session_death_diagnostics(&socket, run_id, node_id, *iter, &running);
+                    stale_detector::attach_diagnostics(&mut events, &diag);
+                    diag
+                });
+
             for event in &events {
                 // Transition guard (#212): append_event re-validates against
                 // the freshly projected state, so a node that terminated
@@ -5213,7 +5260,16 @@ async fn run_stale_detection(state: &AppState) {
 
             match detection {
                 stale_detector::Detection::SessionDied => {
-                    info!("Stale detector: node {node_id} in run {run_id} — session died");
+                    let diag = session_death_diag.unwrap_or_default();
+                    info!(
+                        "Stale detector: node {node_id} in run {run_id} — session died \
+                         (tmux_server_alive={:?}, correlated_deaths={}, \
+                         mem_available_kb={:?}, swap_free_kb={:?})",
+                        diag.tmux_server_alive,
+                        diag.correlated_deaths,
+                        diag.mem_available_kb,
+                        diag.swap_free_kb,
+                    );
                     // The session is already gone; reaping captures whatever
                     // remains (usually nothing) and is a no-op otherwise. Its
                     // slot freed. Re-drive throttled `waiting` nodes (#159).

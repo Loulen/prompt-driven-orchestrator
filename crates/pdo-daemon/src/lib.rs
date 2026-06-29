@@ -26,6 +26,7 @@ pub mod pipeline_migrator;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod pty_bridge;
+mod run_advance;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
@@ -3482,84 +3483,12 @@ async fn reload_run_state(
     Some((events, run_state))
 }
 
+/// Thin shim over the single-pass advancement tick now owned by
+/// [`run_advance::advance_run`] (#235). Kept under its original name so the many
+/// call sites (node-done, mark-node-done, pipeline-modification, run start) need
+/// no churn; the sequence itself lives in exactly one place.
 async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
-    let events = match load_events(&state.db, run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            error!("spawn_ready_after_event: failed to load events for {run_id}: {e}");
-            return;
-        }
-    };
-    let Some(run_state) = event_log::project(&events) else {
-        return;
-    };
-
-    if run_state.status != event_log::RunStatus::Running
-        && run_state.status != event_log::RunStatus::AwaitingUser
-    {
-        return;
-    }
-
-    let repo_root = effective_repo_root(state, &run_state);
-    let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
-    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-        return;
-    };
-    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-        return;
-    };
-    let pipeline = parse_result.pipeline;
-
-    let resolved_vars = resolve_run_variables(&pipeline, &events);
-    let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
-    let loop_seed_actions = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
-
-    if ready.is_empty() && loop_seed_actions.is_empty() {
-        // Pipeline was modified but no new nodes need spawning. If all current
-        // pipeline nodes are completed, re-complete the run so it doesn't stay
-        // dangling in Running state after a trivial YAML edit.
-        maybe_complete_run(state, run_id, &pipeline, &run_state).await;
-        return;
-    }
-
-    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
-    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-
-    let spawn_ctx = SpawnContext {
-        pipeline: &pipeline,
-        run_id,
-        pipeline_path: &pipeline_path,
-        worktree_dir: &worktree_dir,
-        artifacts_dir: &artifacts_dir,
-        resolved_vars: &resolved_vars,
-        repo_root: &repo_root,
-    };
-
-    for rs in &ready {
-        if let Some(node) = pipeline.nodes.iter().find(|n| n.id == rs.node_id) {
-            spawn_node(state, &spawn_ctx, node, rs.iter).await;
-        }
-    }
-
-    for action in &loop_seed_actions {
-        match action {
-            scheduler::SchedulerAction::LoopIterStarted { .. } => {
-                emit_loop_action(state, run_id, action).await;
-            }
-            scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                    spawn_node(state, &spawn_ctx, node, *iter).await;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    info!(
-        "spawn_ready_after_event: spawned {} node(s) and seeded {} loop action(s) for run {run_id}",
-        ready.len(),
-        loop_seed_actions.len()
-    );
+    run_advance::advance_run(state, run_id).await;
 }
 
 /// Re-drive nodes throttled into `waiting` by the session cap, across *all*
@@ -3614,37 +3543,11 @@ async fn retry_waiting_nodes(state: &AppState) {
             resolved_vars: &resolved_vars,
             repo_root: &repo_root,
         };
-        for rs in &waiting {
-            if let Some(node) = pipeline.nodes.iter().find(|n| n.id == rs.node_id) {
-                spawn_node(state, &spawn_ctx, node, rs.iter).await;
-            }
-        }
-    }
-}
-
-async fn maybe_complete_run(
-    state: &AppState,
-    run_id: &str,
-    pipeline: &pipeline::PipelineDef,
-    run_state: &event_log::RunState,
-) {
-    if run_state.status != event_log::RunStatus::Running {
-        return;
-    }
-    let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
-    if run_state.all_nodes_completed(&pipeline_node_ids) {
-        let run_completed = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunCompleted,
-            node_id: None,
-            iter: None,
-            payload: None,
-        };
-        if let Err(e) = append_event(state, &run_completed).await {
-            error!("failed to append run_completed: {e}");
-        }
+        // Shares the spawn loop with `advance_run`, but keeps `waiting_nodes`
+        // as the ready set and stays out of `maybe_complete_run`: this is an
+        // all-runs admission sweep, and `RunCompleted` is not de-duped — only
+        // the per-run single-pass path may emit it (#235).
+        run_advance::spawn_each(state, &spawn_ctx, &waiting).await;
     }
 }
 
@@ -5899,26 +5802,9 @@ async fn handle_merge_resolver_done(
             }
         };
         if let Some(run_state) = event_log::project(&events) {
-            if run_state.status == event_log::RunStatus::Running {
-                let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
-                    run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
-                } else {
-                    run_state.nodes.keys().cloned().collect()
-                };
-                let all_done = run_state.all_nodes_completed(&expected_node_ids);
-                if all_done {
-                    let run_completed = event_log::Event {
-                        id: None,
-                        run_id: run_id.to_string(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::RunCompleted,
-                        node_id: None,
-                        iter: None,
-                        payload: None,
-                    };
-                    let _ = append_event(state, &run_completed).await;
-                }
-            }
+            let expected_node_ids = run_advance::expected_completion_node_ids(&run_state);
+            run_advance::maybe_complete_run(state, run_id, &expected_node_ids, &run_state, false)
+                .await;
         }
     }
 
@@ -6177,28 +6063,9 @@ async fn node_done(
             return (StatusCode::OK, "ok").into_response();
         }
 
-        let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
-            run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
-        } else {
-            run_state.nodes.keys().cloned().collect()
-        };
-
-        let all_done = run_state.all_nodes_completed(&expected_node_ids);
-
-        if all_done && run_state.status == event_log::RunStatus::Running {
-            let run_completed = event_log::Event {
-                id: None,
-                run_id: run_id.clone(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::RunCompleted,
-                node_id: None,
-                iter: None,
-                payload: None,
-            };
-            if let Err(e) = append_event(&state, &run_completed).await {
-                error!("failed to append run_completed: {e}");
-            }
-        }
+        let expected_node_ids = run_advance::expected_completion_node_ids(&run_state);
+        run_advance::maybe_complete_run(&state, &run_id, &expected_node_ids, &run_state, false)
+            .await;
     }
 
     info!("Node {node_id} completed in run {run_id}");
@@ -6894,33 +6761,20 @@ async fn run_command(
                     }
                 };
                 if let Some(run_state) = event_log::project(&events) {
-                    if run_state.status != event_log::RunStatus::Halted {
-                        let expected_node_ids: Vec<String> = if !run_state.node_defs.is_empty() {
-                            run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
-                        } else {
-                            run_state.nodes.keys().cloned().collect()
-                        };
-
-                        let all_done = run_state.all_nodes_completed(&expected_node_ids);
-
-                        if all_done
-                            && (run_state.status == event_log::RunStatus::Running
-                                || run_state.status == event_log::RunStatus::AwaitingUser)
-                        {
-                            let run_completed = event_log::Event {
-                                id: None,
-                                run_id: run_id.clone(),
-                                ts: event_log::now_iso(),
-                                kind: event_log::EventKind::RunCompleted,
-                                node_id: None,
-                                iter: None,
-                                payload: None,
-                            };
-                            if let Err(e) = append_event(&state, &run_completed).await {
-                                error!("failed to append run_completed: {e}");
-                            }
-                        }
-                    }
+                    // The just-finished node was interactive, so the run can
+                    // still project as `AwaitingUser` here — this path completes
+                    // on `Running` OR `AwaitingUser` (flag = true), unlike the
+                    // other single-pass sites (#235).
+                    let expected_node_ids =
+                        run_advance::expected_completion_node_ids(&run_state);
+                    run_advance::maybe_complete_run(
+                        &state,
+                        &run_id,
+                        &expected_node_ids,
+                        &run_state,
+                        true,
+                    )
+                    .await;
                 }
             }
 

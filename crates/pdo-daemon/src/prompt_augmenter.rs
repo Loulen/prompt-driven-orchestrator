@@ -41,6 +41,11 @@ pub struct AugmentContext<'a> {
     /// pipeline worktree (doc-only, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
+    /// Whether the Start node's user prompt (`_input/output.md`) carries any
+    /// non-whitespace content. Precomputed by the daemon (it owns the artifacts
+    /// dir and handles the read error); `build_preamble` stays pure. Only consulted
+    /// for the prompt-optional entry-node preamble (#158, #274).
+    pub start_prompt_present: bool,
     /// Canonical input resolution (#194 / #210): for each upstream source node,
     /// the iteration whose artifacts this NodeRun reads (the source's latest
     /// COMPLETED iteration, per `input_resolution`). A source absent from the
@@ -76,13 +81,15 @@ pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     images
 }
 
-/// Whether the Start-sourced user prompt (`_input/output.md`) carries any
-/// non-whitespace content. Used to adapt the entry-node preamble for
-/// prompt-optional pipelines (#158).
-fn start_input_has_content(artifacts_dir: &Path) -> bool {
+/// Read whether the Start-sourced user prompt (`_input/output.md`) carries any
+/// non-whitespace content. `Ok(false)` when the file is absent — the expected
+/// prompt-optional case, not an error. `Err` only on a genuine I/O failure, so the
+/// caller can surface it instead of silently reporting "no prompt" (#274).
+pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
     match std::fs::read_to_string(crate::blackboard::input_path(artifacts_dir)) {
-        Ok(text) => !text.trim().is_empty(),
-        Err(_) => false,
+        Ok(text) => Ok(!text.trim().is_empty()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
@@ -202,7 +209,7 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
             // must source its own work; when a prompt is supplied it is merely
             // additional info layered on the node's own brief.
             if input.from_start && !ctx.pipeline.prompt_required {
-                if start_input_has_content(ctx.artifacts_dir) {
+                if ctx.start_prompt_present {
                     preamble.push_str(&format!(
                         "- `{}` (additional info): read `{}`. \
                          This is supplementary context — your role prompt below is the primary brief.\n",
@@ -577,6 +584,7 @@ mod tests {
             foreach_context: None,
             source_worktree_dir: None,
             input_images: Vec::new(),
+            start_prompt_present: false,
             source_iters: HashMap::new(),
         }
     }
@@ -1426,19 +1434,12 @@ mod tests {
         );
     }
 
-    // --- entry-node preamble adapts to prompt_required (#158) ---
-
-    /// Build a `_input/output.md` artifact with the given content under a fresh
-    /// temp artifacts dir, returning the dir (kept alive by the TempDir guard).
-    fn artifacts_with_input(content: Option<&str>) -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        let input_dir = tmp.path().join("_input");
-        std::fs::create_dir_all(&input_dir).unwrap();
-        if let Some(text) = content {
-            std::fs::write(input_dir.join("output.md"), text).unwrap();
-        }
-        tmp
-    }
+    // --- entry-node preamble adapts to prompt_required (#158, #274) ---
+    //
+    // These are now pure string-in -> string-out: each mutates the precomputed
+    // `ctx.start_prompt_present` bool, no temp dir or FS access (#274). The matrix
+    // {prompt_required} x {start_prompt_present} collapses to 3 distinct phrasings
+    // because the bool is dead when a prompt is required.
 
     #[test]
     fn entry_preamble_tells_node_to_source_own_work_when_prompt_optional_and_empty() {
@@ -1446,9 +1447,8 @@ mod tests {
         pipeline.prompt_required = false;
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
-        let tmp = artifacts_with_input(None);
         let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.artifacts_dir = tmp.path();
+        ctx.start_prompt_present = false;
 
         let preamble = build_preamble(&ctx);
         assert!(
@@ -1463,9 +1463,8 @@ mod tests {
         pipeline.prompt_required = false;
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
-        let tmp = artifacts_with_input(Some("some extra context"));
         let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.artifacts_dir = tmp.path();
+        ctx.start_prompt_present = true;
 
         let preamble = build_preamble(&ctx);
         assert!(
@@ -1481,18 +1480,59 @@ mod tests {
     #[test]
     fn entry_preamble_unchanged_for_prompt_required_pipeline() {
         // The default (prompt-required) keeps the plain input label — neither the
-        // "additional info" nor the "source your own work" wording leaks in.
+        // "additional info" nor the "source your own work" wording leaks in, and
+        // the precomputed bool must not change that (it is dead for this branch).
         let pipeline = sample_pipeline();
         assert!(pipeline.prompt_required);
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
-        let tmp = artifacts_with_input(Some("do the task"));
-        let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.artifacts_dir = tmp.path();
 
-        let preamble = build_preamble(&ctx);
-        assert!(!preamble.contains("No prompt was provided"));
-        assert!(!preamble.contains("additional info"));
-        assert!(preamble.contains("## Inputs"));
+        for present in [false, true] {
+            let mut ctx = sample_ctx(&pipeline, node, &vars);
+            ctx.start_prompt_present = present;
+
+            let preamble = build_preamble(&ctx);
+            assert!(
+                !preamble.contains("No prompt was provided"),
+                "start_prompt_present={present} must not leak into a prompt-required pipeline"
+            );
+            assert!(
+                !preamble.contains("additional info"),
+                "start_prompt_present={present} must not leak into a prompt-required pipeline"
+            );
+            assert!(preamble.contains("## Inputs"));
+        }
+    }
+
+    // --- read_start_prompt_present reader (#274) ---
+
+    #[test]
+    fn read_start_prompt_present_true_when_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input_dir = tmp.path().join("_input");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        std::fs::write(input_dir.join("output.md"), "do the task").unwrap();
+
+        assert!(read_start_prompt_present(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn read_start_prompt_present_false_when_whitespace_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input_dir = tmp.path().join("_input");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        std::fs::write(input_dir.join("output.md"), "   \n").unwrap();
+
+        assert!(!read_start_prompt_present(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn read_start_prompt_present_false_when_file_absent() {
+        // A missing `_input/output.md` is the expected prompt-optional case, not
+        // an I/O error: NotFound maps to Ok(false), never Err.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path()).unwrap();
+
+        assert!(!read_start_prompt_present(tmp.path()).unwrap());
     }
 }

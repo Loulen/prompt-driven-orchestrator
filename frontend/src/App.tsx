@@ -255,7 +255,7 @@ export default function App() {
   }, []);
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
-    useInspectorTab(editActiveTabId, selectedRun?.status ?? null, isEditingRun);
+    useInspectorTab(editActiveTabId, isEditingRun);
 
   const runNode =
     selection.kind === "node" && selection.id && selectedRun

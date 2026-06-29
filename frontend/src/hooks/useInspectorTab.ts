@@ -2,11 +2,8 @@ import { useState, useCallback } from "react";
 
 export type InspectorTab = "run" | "edit";
 
-const ACTIVE_RUN_STATUSES = new Set(["running", "awaiting_user", "halted"]);
-
 export function useInspectorTab(
   pipelineKey: string | null,
-  runStatus: string | null,
   isEditingRun: boolean,
 ) {
   const [state, setState] = useState<{
@@ -23,9 +20,10 @@ export function useInspectorTab(
     [pipelineKey],
   );
 
-  const isActiveRun =
-    isEditingRun && runStatus != null && ACTIVE_RUN_STATUSES.has(runStatus);
-  const contextDefault: InspectorTab = isActiveRun ? "run" : "edit";
+  // #271: any run tab — live OR terminal — defaults to the Run view so a
+  // finished node lands on its Outputs. Non-run tabs (library drafts) → edit.
+  // The user's manual choice (tabOverride) still wins and is sticky per tab.
+  const contextDefault: InspectorTab = isEditingRun ? "run" : "edit";
   const activeTab = tabOverride ?? contextDefault;
 
   return { activeTab, setActiveTab };

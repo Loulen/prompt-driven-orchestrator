@@ -4,12 +4,13 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openPipelineForEdit } from "./helpers";
 
-// Layer 3b — Inspector Run/Edit tabs (refs #68, refs #1).
+// Layer 3b — Inspector Run/Edit tabs (refs #68, refs #1, refs #271).
 // Verifies:
 // 1. Run and Edit tabs render when a node is selected.
 // 2. Default tab: active Run → Run; idle pipeline → Edit.
 // 3. Tab selection is sticky across node selections, resets on reload.
 // 4. Pending node shows placeholder and resolved inputs.
+// 5. Terminal run (failed) → Run tab default, not Edit (#271).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -181,6 +182,69 @@ test("idle pipeline: Edit tab default", async ({ page }) => {
     "data-active",
     "true",
   );
+});
+
+test("terminal run: clicking a node defaults to Run tab (#271)", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    multipart: { pipeline: PIPELINE_NAME, input: "terminal tab test" },
+  });
+  expect(resp.status()).toBe(201);
+  const { run_id } = await resp.json();
+
+  // Drive the run to a TERMINAL status by failing the running node.
+  await page.waitForTimeout(1_000);
+  const failResp = await page.request.post(
+    `${baseURL}/runs/${run_id}/nodes/worker-a/fail`,
+    { data: { reason: "e2e #271 terminal tab", iter: 1 } },
+  );
+  expect(failResp.ok()).toBeTruthy();
+
+  // Guard the trap: wait until the RUN status is genuinely terminal and is
+  // NOT one of the statuses that already defaulted to Run pre-fix
+  // ({running, awaiting_user, halted}). node_fail appends RunFailed, so the
+  // run resolves to `failed`.
+  await expect
+    .poll(
+      async () => {
+        const r = await page.request.get(`${baseURL}/runs/${run_id}`);
+        return (await r.json()).status as string;
+      },
+      { timeout: 10_000 },
+    )
+    .toMatch(/^(failed|completed|skipped|archived)$/);
+
+  // Open the terminal run and select a regular node.
+  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await page
+    .locator('.react-flow__node[data-id="worker-a"]')
+    .click({ timeout: 5_000 });
+
+  // #271: terminal run now defaults to the Run tab (pre-fix this was Edit).
+  await expect(page.getByTestId("inspector-tab-run")).toHaveAttribute(
+    "data-active",
+    "true",
+    { timeout: 5_000 },
+  );
+  // And it shows the Outputs surface, not the edit form.
+  await expect(page.getByTestId("inspector-pane-run")).toBeVisible();
+
+  const { execSync } = await import("node:child_process");
+  for (const s of [`pdo-${run_id}-worker-a-iter-1`, `pdo-mgr-${run_id}`]) {
+    try {
+      execSync(`tmux kill-session -t ${s}`, { stdio: "ignore" });
+    } catch {
+      // ok — session may already be gone
+    }
+  }
 });
 
 test("pending node: Run tab shows placeholder and resolved inputs", async ({

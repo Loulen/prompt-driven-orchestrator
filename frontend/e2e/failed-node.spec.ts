@@ -92,10 +92,11 @@ async function createRunAndFailNode(baseURL: string, page: import("@playwright/t
   expect(failResp.status()).toBe(200);
 }
 
-// Open the run, select the worker node, and switch the right pane to the Run
-// inspector tab. A failed run is not "active", so the inspector defaults to the
-// Edit tab; the failure banner / Mark-complete button live in the Run pane
-// (NodeDetailPanel), so the test must click the Run tab to reveal them.
+// Open the run, select the worker node, and ensure the right pane shows the Run
+// inspector tab. Post-#271 a run tab (live OR terminal) defaults to the Run
+// pane, so clicking the Run tab here is a no-op on the already-active tab; we
+// keep the explicit click to stay robust to a stale per-tab override. The
+// failure banner / Mark-complete button live in the Run pane (NodeDetailPanel).
 async function selectFailedWorker(page: import("@playwright/test").Page) {
   await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
   await page.waitForTimeout(500);

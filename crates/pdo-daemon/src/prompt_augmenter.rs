@@ -404,11 +404,25 @@ pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String 
     format!("{preamble}---\n\n{role_prompt}")
 }
 
-pub fn build_manager_preamble(run_id: &str, daemon_url: &str, needs_name: bool) -> String {
-    let auto_name_instruction = if needs_name {
-        "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n".to_string()
-    } else {
-        String::new()
+/// How the manager should treat run naming, decided by the daemon at spawn (#184).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RunNameHint {
+    /// The user supplied a display name — do not rename.
+    UserProvided,
+    /// No name, but there is input to summarise — name it now from `_input`.
+    DeriveFromInput,
+    /// No name and no input; a deterministic placeholder was set. Rename best-effort,
+    /// only once enough is known, never by polling.
+    Placeholder,
+}
+
+pub fn build_manager_preamble(run_id: &str, daemon_url: &str, name_hint: RunNameHint) -> String {
+    let auto_name_instruction = match name_hint {
+        RunNameHint::UserProvided => String::new(),
+        RunNameHint::DeriveFromInput =>
+            "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n".to_string(),
+        RunNameHint::Placeholder =>
+            "\n**This run has a placeholder display name** (`Untitled run …`) because it started without a prompt — its real purpose only becomes clear once its nodes do work. Do **not** rename it as your first action, and do **not** poll or block waiting for nodes. Instead, *when you have enough context to know what this run is actually doing* (typically once nodes have produced output, e.g. when the user later engages you), give it a short, descriptive name (2–5 words) via the `rename_run` command. This is best-effort: if you never gain enough context, leave the placeholder in place.\n".to_string(),
     };
 
     format!(
@@ -519,9 +533,9 @@ pub fn build_manager_prompt(
     run_id: &str,
     daemon_url: &str,
     role_prompt: &str,
-    needs_name: bool,
+    name_hint: RunNameHint,
 ) -> String {
-    let preamble = build_manager_preamble(run_id, daemon_url, needs_name);
+    let preamble = build_manager_preamble(run_id, daemon_url, name_hint);
     format!("{preamble}{role_prompt}")
 }
 
@@ -1157,15 +1171,19 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_run_id_and_daemon_url() {
-        let preamble =
-            build_manager_preamble("20260507-120000-abc1234", "http://localhost:5172", false);
+        let preamble = build_manager_preamble(
+            "20260507-120000-abc1234",
+            "http://localhost:5172",
+            RunNameHint::UserProvided,
+        );
         assert!(preamble.contains("20260507-120000-abc1234"));
         assert!(preamble.contains("http://localhost:5172"));
     }
 
     #[test]
     fn manager_preamble_contains_all_eight_commands() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         for cmd in [
             "extend_cycle",
             "resume_run",
@@ -1185,7 +1203,8 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_curl_examples() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         assert!(preamble.contains("curl -X POST"));
         assert!(preamble.contains("Content-Type: application/json"));
     }
@@ -1196,28 +1215,44 @@ mod tests {
             "run-1",
             "http://localhost:5172",
             "You are the Pipeline Manager.",
-            false,
+            RunNameHint::UserProvided,
         );
         assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
         assert!(prompt.contains("You are the Pipeline Manager."));
     }
 
     #[test]
-    fn manager_preamble_includes_auto_name_instruction_when_needs_name() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172", true);
+    fn manager_preamble_derive_from_input_keeps_existing_instruction() {
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::DeriveFromInput);
         assert!(preamble.contains("No display name was provided"));
         assert!(preamble.contains("rename_run"));
     }
 
     #[test]
-    fn manager_preamble_omits_auto_name_instruction_when_name_provided() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+    fn manager_preamble_placeholder_is_best_effort_no_poll() {
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::Placeholder);
+        assert!(preamble.contains("placeholder display name"));
+        assert!(preamble.contains("rename_run"));
+        assert!(preamble.contains("best-effort"));
+        assert!(preamble.contains("do **not** poll"));
+        // The placeholder rename must NOT be front-loaded as the manager's first action.
+        assert!(!preamble.contains("As your first action"));
+    }
+
+    #[test]
+    fn manager_preamble_user_provided_has_no_naming_instruction() {
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         assert!(!preamble.contains("No display name was provided"));
+        assert!(!preamble.contains("placeholder display name"));
     }
 
     #[test]
     fn manager_preamble_cleanup_run_has_self_initiative_guardrail() {
-        let preamble = build_manager_preamble("run-1", "http://localhost:5172", false);
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         let section7 = preamble
             .split("### 7. cleanup_run")
             .nth(1)

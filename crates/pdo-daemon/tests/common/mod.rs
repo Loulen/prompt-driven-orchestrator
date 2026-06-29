@@ -66,6 +66,7 @@ impl TestDaemon {
             DaemonConfig {
                 tmux_cmd_override,
                 panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
             },
         )
         .await?;
@@ -97,6 +98,7 @@ impl TestDaemon {
             DaemonConfig {
                 tmux_cmd_override: Some("exec sleep 600".to_string()),
                 panic_on_trigger_name: Some(panic_name.to_string()),
+                panic_on_stale_sweep: false,
             },
         )
         .await?;
@@ -141,6 +143,15 @@ impl TestDaemon {
     pub async fn run_boot_recovery_tick(&self) {
         if let Some(handle) = self.handle.as_ref() {
             handle.run_boot_recovery_tick().await;
+        }
+    }
+
+    /// Arm the one-shot stale-sweep poison so the next stale-detection sweep
+    /// panics, then disarms itself (#251 fault injection, test seam). Arm *after*
+    /// boot so the immediate startup sweep doesn't consume it.
+    pub fn arm_stale_panic(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.arm_stale_panic();
         }
     }
 

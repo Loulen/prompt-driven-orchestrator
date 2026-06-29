@@ -405,6 +405,57 @@ describe("UnifiedLeftPanel library duplicate (#224)", () => {
     expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
   });
+
+  // #273 — regression: once /pipelines began merging library-scope entries
+  // (#216), a user-scoped library pipeline appears in BOTH lists with the same
+  // name. The block-2 name-absence filter then drops it (its name matches a
+  // /pipelines row), so the only Copy button used to vanish. Block 1 must now
+  // carry its own Copy on scope:"library" rows.
+  it("keeps the Copy button reachable when a scope:'library' row also sits in /pipelines (#273)", async () => {
+    // The regression's exact condition: same NAME in BOTH lists.
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture", // == libOnly.name
+        scope: "library", // the regression's scope
+        path: "/home/u/.pdo/library/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {},
+      } satisfies PipelineListEntry,
+    ]);
+    renderWithLib(); // libraryPipelines={[libOnly]}, opens Library tab
+    await screen.findByText("fixture"); // block-1 scope:library row mounts
+    // DOM-PRESENCE, not hover-visual: jsdom does not apply Tailwind group-hover.
+    // libOnly is filtered out of block 2 (name match) ⇒ exactly one button.
+    expect(screen.getByTestId("library-duplicate-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+
+  it("the #273 block-1 Copy calls duplicateLibraryPipeline(id) and refreshes", async () => {
+    const onChanged = vi.fn();
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture",
+        scope: "library",
+        path: "/home/u/.pdo/library/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {},
+      } satisfies PipelineListEntry,
+    ]);
+    renderWithLib(onChanged);
+    await screen.findByText("fixture");
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // p.id is the HOME library file-stem — the same id the endpoint resolves.
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
 });
 
 // #227 — Deleting a starred pipeline must be able to cascade-remove its durable

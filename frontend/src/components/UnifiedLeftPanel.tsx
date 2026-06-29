@@ -438,6 +438,35 @@ export default function UnifiedLeftPanel({
                 >
                   {badge.label}
                 </span>
+                {/* #273: scope:"library" rows now appear here in block 1 (the
+                    /pipelines scope-merge from #216 means they no longer fall
+                    through to the library-only block below). Surface the same
+                    Copy affordance #224 shipped, gated on identity (scope), not
+                    the name-absence filter that block 2 uses. `p.id` is the HOME
+                    library file-stem — duplicateLibraryPipeline resolves it. */}
+                {p.scope === "library" && (
+                  <span
+                    className="hidden shrink-0 group-hover:inline-flex"
+                    data-testid="library-duplicate-button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (duplicatingId === p.id) return;
+                      setDuplicatingId(p.id);
+                      try {
+                        await duplicateLibraryPipeline(p.id);
+                        onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
+                      } catch { /* ignore */ }
+                      finally { setDuplicatingId(null); }
+                    }}
+                    role="button"
+                    title="Duplicate pipeline"
+                  >
+                    <Copy
+                      size={14}
+                      className="text-fg-4 transition-colors hover:text-acc"
+                    />
+                  </span>
+                )}
                 <span
                   className="hidden shrink-0 group-hover:inline-flex"
                   onClick={(e) => {

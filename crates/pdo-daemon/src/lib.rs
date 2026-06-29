@@ -4095,6 +4095,33 @@ fn validate_run_input(prompt_required: bool, input: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Deterministic placeholder display name for a run created with neither a
+/// user-supplied name nor any input to summarise (the prompt-less / unattended
+/// case, #184). Derived from the run-id's own `YYYYMMDD-HHMMSS` timestamp prefix
+/// — no extra clock read, so it is deterministic and matches the run-id. run-ids
+/// are always `YYYYMMDD-HHMMSS-xxxxxxx` (≥ 23 ASCII chars), so `[..15]` is the
+/// timestamp and cannot panic on a char boundary.
+fn placeholder_run_name(run_id: &str) -> String {
+    format!("Untitled run {}", &run_id[..15])
+}
+
+/// Decide how the daemon should treat naming for a run at spawn (#184).
+///
+/// Three mutually-exclusive cases, gated on `req.input` (NOT on the pipeline's
+/// `prompt_required` flag): a user-supplied name always wins; otherwise an empty
+/// input means there is nothing to summarise yet, so the daemon sets a
+/// deterministic placeholder and the manager renames best-effort later; a
+/// non-empty input lets the manager derive the name immediately from `_input`.
+fn run_name_hint(name: Option<&str>, input: &str) -> prompt_augmenter::RunNameHint {
+    if name.is_some_and(|n| !n.is_empty()) {
+        prompt_augmenter::RunNameHint::UserProvided
+    } else if input.trim().is_empty() {
+        prompt_augmenter::RunNameHint::Placeholder
+    } else {
+        prompt_augmenter::RunNameHint::DeriveFromInput
+    }
+}
+
 async fn create_run_core(
     state: &AppState,
     req: CreateRunRequest,
@@ -4238,10 +4265,18 @@ async fn create_run_inner(
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
-    if let Some(ref name) = req.name {
-        if !name.is_empty() {
-            run_payload["name"] = serde_json::json!(name);
-        }
+    // Naming decision (#184), shared between the payload write here and the
+    // manager spawn below so they can never disagree. The user's name wins; with
+    // no name, an empty input gets a deterministic placeholder (the prompt-less
+    // case), and a non-empty input is left unnamed so the manager derives it.
+    let name_hint = run_name_hint(req.name.as_deref(), &req.input);
+    let display_name: Option<String> = match name_hint {
+        prompt_augmenter::RunNameHint::UserProvided => req.name.clone(),
+        prompt_augmenter::RunNameHint::Placeholder => Some(placeholder_run_name(&run_id)),
+        prompt_augmenter::RunNameHint::DeriveFromInput => None,
+    };
+    if let Some(name) = &display_name {
+        run_payload["name"] = serde_json::json!(name);
     }
     if let Some(ref trigger_id) = req.triggered_by {
         if !trigger_id.is_empty() {
@@ -4320,8 +4355,7 @@ async fn create_run_inner(
 
     spawn_ready_after_event(state, &run_id).await;
 
-    let needs_name = req.name.as_ref().is_none_or(|n| n.is_empty());
-    spawn_manager_session(state, &run_id, &worktree_dir, needs_name);
+    spawn_manager_session(state, &run_id, &worktree_dir, name_hint);
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
@@ -4332,7 +4366,7 @@ fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
     worktree_dir: &std::path::Path,
-    needs_name: bool,
+    name_hint: prompt_augmenter::RunNameHint,
 ) {
     let daemon_url = format!("http://localhost:{}", state.port);
 
@@ -4346,7 +4380,7 @@ fn spawn_manager_session(
     .unwrap_or_default();
 
     let full_prompt =
-        prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, needs_name);
+        prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
     if let Err(e) = tmux_session_manager::spawn(
@@ -17025,6 +17059,43 @@ edges:
     #[test]
     fn prompt_optional_pipeline_still_accepts_a_prompt() {
         assert!(validate_run_input(false, "extra context").is_ok());
+    }
+
+    // --- placeholder display name for prompt-less runs (#184) ---
+
+    #[test]
+    fn placeholder_name_is_deterministic_from_run_id_timestamp() {
+        assert_eq!(
+            placeholder_run_name("20260629-150013-4a2f1c0"),
+            "Untitled run 20260629-150013"
+        );
+    }
+
+    #[test]
+    fn run_name_hint_matrix() {
+        use prompt_augmenter::RunNameHint;
+        // A user-supplied (non-empty) name always wins, regardless of input.
+        assert_eq!(
+            run_name_hint(Some("My Run"), ""),
+            RunNameHint::UserProvided
+        );
+        assert_eq!(
+            run_name_hint(Some("My Run"), "some input"),
+            RunNameHint::UserProvided
+        );
+        // No name + no (meaningful) input → deterministic placeholder.
+        assert_eq!(run_name_hint(None, ""), RunNameHint::Placeholder);
+        assert_eq!(run_name_hint(None, "   \n\t "), RunNameHint::Placeholder);
+        assert_eq!(run_name_hint(Some(""), ""), RunNameHint::Placeholder);
+        // No name but real input → manager derives the name from `_input`.
+        assert_eq!(
+            run_name_hint(None, "do a thing"),
+            RunNameHint::DeriveFromInput
+        );
+        assert_eq!(
+            run_name_hint(Some(""), "do a thing"),
+            RunNameHint::DeriveFromInput
+        );
     }
 
     // --- launch validation: dangling port references (#211 / #206) ---

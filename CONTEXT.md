@@ -424,6 +424,16 @@ Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner s
 
 `<run-id>` = slug `<timestamp>-<short-uuid>` pour rester lisible humainement et garanti unique.
 
+**Nom placeholder (placeholder name)** :
+Nom lisible posé par le daemon au spawn du Run, déterministe et immédiat (dérivé du timestamp du
+run-id), garanti présent même pour un Run prompt-less ou déclenché par Trigger.
+_Éviter_ : nom temporaire, titre par défaut.
+
+**Nom descriptif (descriptive name)** :
+Nom lisible posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que
+fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom).
+_Éviter_ : nom final, nom auto, rename automatique.
+
 ### Statistiques de Run
 
 Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100). Trois métriques retenues ; le **coût** (tokens/$) est **hors-scope** — aucune télémétrie de coût fiable n'existe côté machine utilisateur (la télémétrie Claude Code y est redirigée).
@@ -518,6 +528,7 @@ Agent conversationnel attaché à un Pipeline Run. Permet à l'utilisateur de **
 
 - **Un manager par Run.** Spawn automatique au démarrage du Run dans une session tmux dédiée nommée `pdo-mgr-<run-id>`. Persiste tant que le Run n'est pas cleanup (donc aussi après success/failed/blocked, pour interrogation post-mortem).
 - **Pas de polling actif.** Le manager ne tourne effectivement que quand l'utilisateur lui parle. Quand attaché, il lit l'état frais à la demande.
+- **Nommage descriptif dans son propre tour.** Quand un Run porte un *nom placeholder* (posé par le daemon au spawn, cf. *cycle de vie*), le manager lui donne un *nom descriptif* via `rename_run` **best-effort, à l'intérieur de son propre tour** — une fois qu'il sait ce que fait le Run, jamais réveillé par le daemon ni par un nœud (cohérent avec « Pas de polling actif »). Pour un Run prompt-less purement non-attendu, le manager n'a souvent jamais le contexte : le placeholder persiste, et c'est le comportement voulu (#184).
 
 ### Implémentation
 
@@ -542,6 +553,7 @@ Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
 | `mark_node_done` | Force la complétion d'un NodeRun (cas typique : nœud `interactive: true` que l'utilisateur signale fini) |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts, événements |
+| `rename_run` | Donne au Run un nom descriptif (remplace le nom placeholder posé au spawn) |
 
 L'effet de chaque commande est l'**append d'un événement** dans l'event log. Le runtime consomme ces événements et agit en conséquence.
 

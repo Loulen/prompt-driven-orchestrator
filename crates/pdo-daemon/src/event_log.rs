@@ -138,6 +138,22 @@ impl RunStatus {
             RunStatus::Running | RunStatus::AwaitingUser | RunStatus::Paused
         )
     }
+
+    /// A Run is terminal exactly when it is not live — the total complement of
+    /// [`is_live`](Self::is_live). `{Completed, Failed, Skipped, Halted,
+    /// Archived}`. `Paused` is NOT terminal (it is live: holds a slot, blocks
+    /// overlap, is resumable). Defined as `!is_live()` so the two stay mutually
+    /// exclusive and exhaustive and a future variant cannot silently fall
+    /// between them.
+    ///
+    /// NOTE: several call sites use a *different* terminality set on purpose
+    /// (boot recovery omits `Skipped`; `retry_all` omits `Archived`; the
+    /// delete-pipeline guard is a third "active run" predicate). Those are
+    /// deliberately NOT migrated onto this method — see the F1/F2/F3 follow-ups
+    /// in the #237 plan.
+    pub fn is_terminal(&self) -> bool {
+        !self.is_live()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +170,32 @@ pub enum NodeStatus {
     Failed,
     Stopped,
     Stale,
+}
+
+impl NodeStatus {
+    /// Whether a node in this status currently holds a live NodeRun tmux
+    /// session, and therefore consumes a global admission slot.
+    /// `{Running, AwaitingUser}` (an interactive node keeps its tmux session
+    /// attachable indefinitely). EXCLUDES `Waiting`: a throttled node is ready
+    /// to run but has *not* spawned a session yet, so it holds no slot (#159).
+    pub fn holds_session(&self) -> bool {
+        matches!(self, NodeStatus::Running | NodeStatus::AwaitingUser)
+    }
+
+    /// Whether a node in this status can still drive the run forward, so its
+    /// presence suppresses a silent-stall verdict (#214).
+    /// `{Running, Waiting, AwaitingUser}`. INCLUDES `Waiting` (a throttled node
+    /// will spawn and progress as soon as an admission slot frees) — this is
+    /// the load-bearing difference from [`holds_session`](Self::holds_session),
+    /// which excludes `Waiting`. Collapsing the two would falsely declare a
+    /// throttled-but-healthy run stalled (CONTEXT.md, § Réconciliation au
+    /// niveau Run).
+    pub fn can_progress(&self) -> bool {
+        matches!(
+            self,
+            NodeStatus::Running | NodeStatus::Waiting | NodeStatus::AwaitingUser
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,6 +368,52 @@ impl RunState {
             sessions_spawned: 0,
             loc: None,
         }
+    }
+
+    /// Status of `node_id` in this run's projection, if the node exists.
+    ///
+    /// Borrows (`NodeStatus` is `Clone`-not-`Copy`); use for status-only reads
+    /// where the whole [`NodeState`] is not needed.
+    pub fn node_status(&self, node_id: &str) -> Option<&NodeStatus> {
+        self.nodes.get(node_id).map(|n| &n.status)
+    }
+
+    /// The latest `Completed` iteration of `node_id`, if any (#210).
+    ///
+    /// History-max over `Completed` iterations (failed/stopped iters are
+    /// quarantined — their artifacts stay on disk but are never resolvable as
+    /// inputs), falling back to the head `iter` when the head status is
+    /// `Completed` but no per-iteration history exists (legacy states). This is
+    /// the single home for the rule formerly duplicated as a free fn in
+    /// `input_resolution`.
+    pub fn latest_completed_iter(&self, node_id: &str) -> Option<i64> {
+        let node = self.nodes.get(node_id)?;
+        let from_history = node
+            .iterations
+            .iter()
+            .filter(|it| it.status == NodeStatus::Completed)
+            .map(|it| it.iter)
+            .max();
+        from_history.or_else(|| (node.status == NodeStatus::Completed).then_some(node.iter))
+    }
+
+    /// True iff `node_ids` is non-empty AND every id resolves to a node whose
+    /// status is `Completed`.
+    ///
+    /// Completed-only: `Failed`/`Stopped`/`Stale`/`Skipped` do NOT count (those
+    /// are handled by the stall / fail-fast paths). A never-spawned id (no
+    /// `NodeState`) counts as not-done. An empty set yields `false`, NOT
+    /// vacuous-true: a run with no expected nodes is not "all done" (preserving
+    /// the original `!is_empty()` guard).
+    ///
+    /// The authoritative node set is the caller's (`pipeline.nodes` at the
+    /// completion/stall sites, the runtime `expected_node_ids` at the
+    /// node-done sites) — `RunState` owns neither, so it receives the ids.
+    pub fn all_nodes_completed(&self, node_ids: &[String]) -> bool {
+        !node_ids.is_empty()
+            && node_ids
+                .iter()
+                .all(|id| self.node_status(id) == Some(&NodeStatus::Completed))
     }
 }
 
@@ -3153,6 +3241,222 @@ mod tests {
             !routes.contains_key("other_loop"),
             "an unrouted sibling region has no route entry"
         );
+    }
+
+    // --- RunState / RunStatus / NodeStatus query interface (#237) ---
+
+    fn node_state(
+        id: &str,
+        status: NodeStatus,
+        iter: i64,
+        iters: &[(i64, NodeStatus)],
+    ) -> NodeState {
+        NodeState {
+            node_id: id.to_string(),
+            status,
+            iter,
+            started_at: None,
+            completed_at: None,
+            failure_reason: None,
+            iterations: iters
+                .iter()
+                .map(|(i, s)| IterationInfo {
+                    iter: *i,
+                    status: s.clone(),
+                    started_at: None,
+                    completed_at: None,
+                })
+                .collect(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+        }
+    }
+
+    fn run_with(nodes: Vec<NodeState>) -> RunState {
+        let mut s = RunState::new("run-1".into(), "test".into());
+        for n in nodes {
+            s.nodes.insert(n.node_id.clone(), n);
+        }
+        s
+    }
+
+    #[test]
+    fn node_status_predicates_diverge_only_on_waiting() {
+        use NodeStatus::*;
+        let all = [
+            Pending,
+            Waiting,
+            Running,
+            AwaitingUser,
+            Completed,
+            Failed,
+            Stopped,
+            Stale,
+        ];
+        for s in &all {
+            match s {
+                Running | AwaitingUser => {
+                    assert!(s.holds_session(), "{s:?} holds a NodeRun session");
+                    assert!(s.can_progress(), "{s:?} can drive the run forward");
+                }
+                Waiting => {
+                    assert!(
+                        !s.holds_session(),
+                        "Waiting holds NO session yet (no admission slot consumed)"
+                    );
+                    assert!(
+                        s.can_progress(),
+                        "Waiting CAN progress (it spawns once a slot frees)"
+                    );
+                }
+                Pending | Completed | Failed | Stopped | Stale => {
+                    assert!(!s.holds_session(), "{s:?} holds no session");
+                    assert!(!s.can_progress(), "{s:?} cannot drive the run forward");
+                }
+            }
+        }
+        // The load-bearing fact: the admission set and the stall set differ on
+        // exactly one variant — `Waiting`. Collapsing them is the #237 trap.
+        assert!(
+            !Waiting.holds_session() && Waiting.can_progress(),
+            "the admission-vs-stall divergence lives entirely on Waiting"
+        );
+    }
+
+    #[test]
+    fn run_status_is_terminal_is_the_total_complement_of_is_live() {
+        use RunStatus::*;
+        let all = [
+            Running,
+            AwaitingUser,
+            Completed,
+            Failed,
+            Skipped,
+            Halted,
+            Paused,
+            Archived,
+        ];
+        for s in &all {
+            assert_eq!(
+                s.is_terminal(),
+                !s.is_live(),
+                "{s:?}: is_terminal must be the exact complement of is_live"
+            );
+        }
+        // Spot-check the variants the partition is easy to get wrong.
+        assert!(
+            !Paused.is_terminal(),
+            "Paused is live (resumable, holds a slot, blocks overlap) — NOT terminal"
+        );
+        assert!(Skipped.is_terminal(), "Skipped is a terminal no-op (#245)");
+        assert!(Archived.is_terminal(), "Archived is terminal");
+        assert!(Completed.is_terminal());
+        assert!(Failed.is_terminal());
+        assert!(Halted.is_terminal());
+        assert!(!Running.is_terminal());
+        assert!(!AwaitingUser.is_terminal());
+    }
+
+    #[test]
+    fn latest_completed_iter_quarantines_failed_iterations() {
+        // #210: failed iter 1 then completed iter 2 → resolves to iter 2.
+        let s = run_with(vec![node_state(
+            "a",
+            NodeStatus::Completed,
+            2,
+            &[(1, NodeStatus::Failed), (2, NodeStatus::Completed)],
+        )]);
+        assert_eq!(s.latest_completed_iter("a"), Some(2));
+    }
+
+    #[test]
+    fn latest_completed_iter_picks_the_max_completed_history_iter() {
+        let s = run_with(vec![node_state(
+            "a",
+            NodeStatus::Completed,
+            1,
+            &[(1, NodeStatus::Completed)],
+        )]);
+        assert_eq!(s.latest_completed_iter("a"), Some(1));
+    }
+
+    #[test]
+    fn latest_completed_iter_falls_back_to_head_when_history_is_empty() {
+        // Legacy state: head status Completed, no per-iteration history recorded.
+        let s = run_with(vec![node_state("a", NodeStatus::Completed, 4, &[])]);
+        assert_eq!(s.latest_completed_iter("a"), Some(4));
+    }
+
+    #[test]
+    fn latest_completed_iter_is_none_when_nothing_completed() {
+        let s = run_with(vec![node_state(
+            "a",
+            NodeStatus::Running,
+            1,
+            &[(1, NodeStatus::Running)],
+        )]);
+        assert_eq!(s.latest_completed_iter("a"), None);
+    }
+
+    #[test]
+    fn latest_completed_iter_is_none_for_an_absent_node() {
+        let s = run_with(vec![]);
+        assert_eq!(s.latest_completed_iter("ghost"), None);
+    }
+
+    #[test]
+    fn all_nodes_completed_true_only_when_every_id_is_completed() {
+        let s = run_with(vec![
+            node_state("a", NodeStatus::Completed, 1, &[]),
+            node_state("b", NodeStatus::Completed, 1, &[]),
+        ]);
+        assert!(s.all_nodes_completed(&["a".into(), "b".into()]));
+    }
+
+    #[test]
+    fn all_nodes_completed_is_false_on_an_empty_set() {
+        // NOT vacuous-true: a run with no expected nodes is not "all done".
+        let s = run_with(vec![node_state("a", NodeStatus::Completed, 1, &[])]);
+        assert!(!s.all_nodes_completed(&[]));
+    }
+
+    #[test]
+    fn all_nodes_completed_is_completed_only_never_terminal_tolerant() {
+        let s = run_with(vec![
+            node_state("a", NodeStatus::Completed, 1, &[]),
+            node_state("b", NodeStatus::Failed, 1, &[]),
+        ]);
+        assert!(
+            !s.all_nodes_completed(&["a".into(), "b".into()]),
+            "a Failed node is not Completed — completed-only, never terminal-tolerant"
+        );
+    }
+
+    #[test]
+    fn all_nodes_completed_counts_a_missing_node_as_not_done() {
+        let s = run_with(vec![node_state("a", NodeStatus::Completed, 1, &[])]);
+        assert!(
+            !s.all_nodes_completed(&["a".into(), "b".into()]),
+            "a never-spawned id (no NodeState) counts as not-done"
+        );
+    }
+
+    #[test]
+    fn all_nodes_completed_does_not_let_an_out_of_set_node_rescue_a_missing_one() {
+        // `c` is Completed but is not in the queried slice; it must not mask the
+        // absence of `b`.
+        let s = run_with(vec![
+            node_state("a", NodeStatus::Completed, 1, &[]),
+            node_state("c", NodeStatus::Completed, 1, &[]),
+        ]);
+        assert!(!s.all_nodes_completed(&["a".into(), "b".into()]));
+    }
+
+    #[test]
+    fn node_status_returns_the_status_for_a_present_node_and_none_otherwise() {
+        let s = run_with(vec![node_state("a", NodeStatus::Running, 1, &[])]);
+        assert_eq!(s.node_status("a"), Some(&NodeStatus::Running));
+        assert_eq!(s.node_status("absent"), None);
     }
 
     // --- is_stalled: run-level stale derivation (#180) ---

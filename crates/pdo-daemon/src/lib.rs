@@ -2819,6 +2819,10 @@ async fn delete_pipeline(
             let Some(run_state) = event_log::project(&events) else {
                 continue;
             };
+            // NOTE: a third "active run" predicate, distinct from
+            // `RunStatus::is_terminal()` (which also treats Failed/Skipped/
+            // Halted as non-active). Whether this should be a named method is an
+            // open question (#237 follow-up F3).
             if run_state.pipeline_name == pipeline_id
                 && run_state.status != event_log::RunStatus::Completed
                 && run_state.status != event_log::RunStatus::Archived
@@ -3540,14 +3544,8 @@ async fn maybe_complete_run(
     if run_state.status != event_log::RunStatus::Running {
         return;
     }
-    let all_done = !pipeline.nodes.is_empty()
-        && pipeline.nodes.iter().all(|n| {
-            run_state
-                .nodes
-                .get(&n.id)
-                .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-        });
-    if all_done {
+    let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
+    if run_state.all_nodes_completed(&pipeline_node_ids) {
         let run_completed = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
@@ -3647,14 +3645,10 @@ fn run_stall_reason(
 
     // A live node (or an in-flight merge resolver) means the run can still
     // advance organically — never reconcile under it.
-    let has_live_node = run_state.nodes.values().any(|n| {
-        matches!(
-            n.status,
-            event_log::NodeStatus::Running
-                | event_log::NodeStatus::Waiting
-                | event_log::NodeStatus::AwaitingUser
-        )
-    });
+    let has_live_node = run_state
+        .nodes
+        .values()
+        .any(|n| n.status.can_progress());
     let resolver_active = run_state
         .merge_resolver
         .as_ref()
@@ -3683,14 +3677,8 @@ fn run_stall_reason(
 
     // All pipeline nodes Completed is the success case handled by
     // `maybe_complete_run`; do not steal it here.
-    let all_completed = !pipeline.nodes.is_empty()
-        && pipeline.nodes.iter().all(|n| {
-            run_state
-                .nodes
-                .get(&n.id)
-                .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-        });
-    if all_completed {
+    let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
+    if run_state.all_nodes_completed(&pipeline_node_ids) {
         return None;
     }
 
@@ -4821,6 +4809,9 @@ async fn run_boot_recovery(state: &AppState) {
         // reconcile it. Fail each dangling node at its current iter, routed
         // through the guard (so a second boot pass is a clean no-op), then skip
         // the live-run handling below — the run is terminal and must stay so.
+        // NOTE: deliberately NOT `RunStatus::is_terminal()` — this set omits
+        // `Skipped`. Whether a `Skipped` run at boot should route through
+        // dangling-node reconciliation is an open question (#237 follow-up F1).
         let run_terminal = matches!(
             run_state.status,
             event_log::RunStatus::Completed
@@ -5695,13 +5686,7 @@ async fn handle_merge_resolver_done(
                 } else {
                     run_state.nodes.keys().cloned().collect()
                 };
-                let all_done = !expected_node_ids.is_empty()
-                    && expected_node_ids.iter().all(|nid| {
-                        run_state
-                            .nodes
-                            .get(nid)
-                            .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-                    });
+                let all_done = run_state.all_nodes_completed(&expected_node_ids);
                 if all_done {
                     let run_completed = event_log::Event {
                         id: None,
@@ -5979,13 +5964,7 @@ async fn node_done(
             run_state.nodes.keys().cloned().collect()
         };
 
-        let all_done = !expected_node_ids.is_empty()
-            && expected_node_ids.iter().all(|nid| {
-                run_state
-                    .nodes
-                    .get(nid)
-                    .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-            });
+        let all_done = run_state.all_nodes_completed(&expected_node_ids);
 
         if all_done && run_state.status == event_log::RunStatus::Running {
             let run_completed = event_log::Event {
@@ -6703,13 +6682,7 @@ async fn run_command(
                             run_state.nodes.keys().cloned().collect()
                         };
 
-                        let all_done = !expected_node_ids.is_empty()
-                            && expected_node_ids.iter().all(|nid| {
-                                run_state
-                                    .nodes
-                                    .get(nid)
-                                    .is_some_and(|ns| ns.status == event_log::NodeStatus::Completed)
-                            });
+                        let all_done = run_state.all_nodes_completed(&expected_node_ids);
 
                         if all_done
                             && (run_state.status == event_log::RunStatus::Running
@@ -7285,6 +7258,9 @@ async fn run_command(
                 }
             };
 
+            // NOTE: deliberately NOT `RunStatus::is_terminal()` — this set omits
+            // `Archived`. Whether an `Archived` run should be retry-able is an
+            // open question (#237 follow-up F2).
             let is_terminal = matches!(
                 run_state.status,
                 event_log::RunStatus::Completed
@@ -10653,6 +10629,70 @@ mod tests {
             run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
             "a run with an open loop region awaiting a manager route must not be \
              auto-failed — that is the manager's recovery path, not a fail-fast stall"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_run_with_a_waiting_node_behind_a_blocker() {
+        // #237 regression lock. A run with a throttled `Waiting` node (no
+        // session yet — held back by the admission cap) sitting behind a
+        // `Stale`/`Failed` blocker is NOT stalled: the `Waiting` node will spawn
+        // and drive the run forward the instant a slot frees. `can_progress()`
+        // INCLUDES `Waiting` precisely so this run is left alone.
+        //
+        // This is the exact behaviour a naive `live_node_count()` collapse onto
+        // the admission `holds_session()` set (which EXCLUDES `Waiting`) would
+        // break: it would see "no live node", find the `Stale` blocker, and
+        // reconcile a healthy throttled run to Failed.
+        let pipeline = linear_two_node_pipeline();
+        let mut run_state =
+            event_log::RunState::new("20260629-waiting-blocker".into(), "linear".into());
+        // Entry node `a` is Stale (a concrete blocker for the fail-fast path).
+        run_state.nodes.insert(
+            "a".into(),
+            event_log::NodeState {
+                node_id: "a".into(),
+                status: event_log::NodeStatus::Stale,
+                iter: 1,
+                started_at: None,
+                completed_at: None,
+                failure_reason: None,
+                iterations: Vec::new(),
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+        // Node `b` is throttled `Waiting`: ready but no admission slot yet. No
+        // node is Running/AwaitingUser, so only `can_progress`'s inclusion of
+        // `Waiting` keeps this run from being declared stalled.
+        run_state.nodes.insert(
+            "b".into(),
+            event_log::NodeState {
+                node_id: "b".into(),
+                status: event_log::NodeStatus::Waiting,
+                iter: 1,
+                started_at: None,
+                completed_at: None,
+                failure_reason: None,
+                iterations: Vec::new(),
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            ready.is_empty(),
+            "precondition: nothing schedulable (the Stale node never completes, \
+             so `b`'s input edge is unsatisfied)"
+        );
+        assert!(loop_seed.is_empty(), "precondition: no loop to seed");
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            "a Waiting node can still progress (it spawns when a slot frees) — \
+             a run behind a blocker but holding a Waiting node is NOT stalled"
         );
     }
 

@@ -85,7 +85,7 @@ pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>
 /// `pub(crate)` so boot recovery can reuse the canonical "session-holding"
 /// definition when reconciling dangling nodes of terminal runs (#215).
 pub(crate) fn node_holds_session(status: &NodeStatus) -> bool {
-    matches!(status, NodeStatus::Running | NodeStatus::AwaitingUser)
+    status.holds_session()
 }
 
 #[cfg(test)]

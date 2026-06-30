@@ -3269,7 +3269,7 @@ async fn spawn_node(
     }
 }
 
-async fn handle_node_completion(
+pub(crate) async fn handle_node_completion(
     state: &AppState,
     run_state: &event_log::RunState,
     run_id: &str,
@@ -3502,7 +3502,7 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
 /// `waiting` node in a *different* Run start, so this scans every run.
 /// `spawn_node` re-checks admission per node, so a node that still can't get a
 /// slot simply stays `waiting`.
-async fn retry_waiting_nodes(state: &AppState) {
+pub(crate) async fn retry_waiting_nodes(state: &AppState) {
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
         Err(e) => {
@@ -5932,36 +5932,18 @@ async fn handle_merge_resolver_done(
             error!("failed to append node_completed for resolved node: {e}");
         }
 
-        let events = match load_events(&state.db, run_id).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("failed to reload events: {e}");
-                return (StatusCode::OK, "ok").into_response();
-            }
-        };
-
-        if let Some(run_state) = event_log::project(&events) {
-            handle_node_completion(state, &run_state, run_id, original_node_id, &events).await;
-        }
-
-        spawn_ready_after_event(state, run_id).await;
-        // A node just finished: a session slot may have freed. Re-drive any
-        // throttled `waiting` nodes across all runs (#159).
-        retry_waiting_nodes(state).await;
-
-        // Check run completion (same logic as node_done)
-        let events = match load_events(&state.db, run_id).await {
-            Ok(e) => e,
-            Err(e) => {
-                error!("failed to reload events: {e}");
-                return (StatusCode::OK, "ok").into_response();
-            }
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            let expected_node_ids = run_advance::expected_completion_node_ids(&run_state);
-            run_advance::maybe_complete_run(state, run_id, &expected_node_ids, &run_state, false)
-                .await;
-        }
+        // Shared post-`NodeCompleted` tail (#275). `completed_node_id` is the
+        // ORIGINAL conflicting node — whose `NodeCompleted` we just appended for
+        // the resolved work — not the `__merge_resolver__` route param; fire its
+        // edges, advance, re-drive waiters, then the single completion gate.
+        run_advance::complete_node(
+            state,
+            run_id,
+            original_node_id,
+            run_advance::CompletionOrder::CompletionFirst,
+            false,
+        )
+        .await;
     }
 
     (StatusCode::OK, "ok").into_response()
@@ -6192,43 +6174,22 @@ async fn node_done(
     // point (#77/#78). Post-mortem inspection survives via the snapshot.
     reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
 
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    if let Some(run_state) = event_log::project(&events) {
-        handle_node_completion(&state, &run_state, &run_id, &node_id, &events).await;
+    // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
+    // run, re-drive throttled waiters, then the single completion gate. Everything
+    // above — guard, node-type merge / cleanliness check, output validation, the
+    // `NodeCompleted` append, and the reap — is this caller's head, untouched.
+    match run_advance::complete_node(
+        &state,
+        &run_id,
+        &node_id,
+        run_advance::CompletionOrder::CompletionFirst,
+        false,
+    )
+    .await
+    {
+        run_advance::CompletionOutcome::Halted => info!("Run {run_id} halted"),
+        _ => info!("Node {node_id} completed in run {run_id}"),
     }
-
-    spawn_ready_after_event(&state, &run_id).await;
-    // A node just finished: a session slot may have freed. Re-drive any
-    // throttled `waiting` nodes across all runs (#159).
-    retry_waiting_nodes(&state).await;
-
-    // Check run completion
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            error!("failed to reload events: {e}");
-            return (StatusCode::OK, "ok").into_response();
-        }
-    };
-
-    if let Some(run_state) = event_log::project(&events) {
-        if run_state.status == event_log::RunStatus::Halted {
-            info!("Run {run_id} halted");
-            return (StatusCode::OK, "ok").into_response();
-        }
-
-        let expected_node_ids = run_advance::expected_completion_node_ids(&run_state);
-        run_advance::maybe_complete_run(&state, &run_id, &expected_node_ids, &run_state, false)
-            .await;
-    }
-
-    info!("Node {node_id} completed in run {run_id}");
     (StatusCode::OK, "ok").into_response()
 }
 
@@ -6972,48 +6933,22 @@ async fn run_command(
                 error!("failed to append mark_node_done command event: {e}");
             }
 
-            // Dispatch downstream nodes
-            spawn_ready_after_event(&state, &run_id).await;
-            // The interactive node completed: its session slot freed. Re-drive
-            // throttled `waiting` nodes across all runs (#159).
-            retry_waiting_nodes(&state).await;
-
-            // Check run completion
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-
-            if let Some(run_state) = event_log::project(&events) {
-                handle_node_completion(&state, &run_state, &run_id, &node_id, &events).await;
-
-                let events = match load_events(&state.db, &run_id).await {
-                    Ok(e) => e,
-                    Err(_) => {
-                        return (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
-                            .into_response();
-                    }
-                };
-                if let Some(run_state) = event_log::project(&events) {
-                    // The just-finished node was interactive, so the run can
-                    // still project as `AwaitingUser` here — this path completes
-                    // on `Running` OR `AwaitingUser` (flag = true), unlike the
-                    // other single-pass sites (#235).
-                    let expected_node_ids =
-                        run_advance::expected_completion_node_ids(&run_state);
-                    run_advance::maybe_complete_run(
-                        &state,
-                        &run_id,
-                        &expected_node_ids,
-                        &run_state,
-                        true,
-                    )
-                    .await;
-                }
-            }
+            // Shared post-`NodeCompleted` tail (#275), `SweepFirst`: advance the
+            // run + re-drive throttled waiters, THEN fire this node's edges (the
+            // interactive node is already gone), then the single completion gate.
+            // flag = true: the just-finished node was interactive, so the run can
+            // still project `AwaitingUser` at the gate and must still complete —
+            // unlike the other sites (flag = false, #235). The `NodeCompleted`
+            // (with its `source` payload) + `CommandIssued` appends above are the
+            // caller's head.
+            run_advance::complete_node(
+                &state,
+                &run_id,
+                &node_id,
+                run_advance::CompletionOrder::SweepFirst,
+                true,
+            )
+            .await;
 
             info!("mark_node_done: node {node_id} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -10748,6 +10683,450 @@ mod tests {
         let payload = cmd_events[0].payload.as_ref().unwrap();
         assert_eq!(payload["command"], "mark_node_done");
         assert_eq!(payload["node_id"], "griller");
+    }
+
+    // --- #275: node-completion tail convergence (`complete_node`) --------------
+    //
+    // These pin the *observable* completion behavior the `complete_node` carve
+    // must preserve across all three entrypoints (`node_done`, the
+    // `mark_node_done` command arm, and `handle_merge_resolver_done`). Written
+    // FIRST (ADR-0004) and kept green *unchanged* through the extraction — that
+    // invariance is the behavior-preservation proof. The headline invariant is
+    // exactly-one `RunCompleted` per run: `append_event` does NOT de-dup it
+    // (`run_advance.rs` module doc), so a regression that double-routes
+    // completion would surface here. Each test runs in the gate-only harness (no
+    // pipeline file), so `handle_node_completion` / `advance_run` no-op on the
+    // missing pipeline and the shared completion gate is exercised in isolation.
+
+    fn count_run_completed(events: &[event_log::Event]) -> usize {
+        events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::RunCompleted)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn node_done_emits_exactly_one_run_completed() {
+        // Caller A (CompletionFirst, flag=false): a single-node run driven to
+        // terminal by `pdo complete` emits `RunCompleted` exactly once.
+        let state = test_state().await;
+        let run_id = "c275-node-done-single";
+        for ev in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "test" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &ev).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_run_completed(&events),
+            1,
+            "node_done must emit exactly one RunCompleted"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_emits_exactly_one_run_completed() {
+        // Caller C (SweepFirst, flag=true): an interactive node completed via the
+        // `mark_node_done` command drives the run to terminal with one
+        // `RunCompleted`.
+        let state = test_state().await;
+        let run_id = "c275-mark-single";
+        for ev in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "interactive" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("griller"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeAwaitingUser,
+                Some("griller"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &ev).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "griller", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_run_completed(&events),
+            1,
+            "mark_node_done must emit exactly one RunCompleted"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_resolver_done_records_original_node_and_completes_once() {
+        // Caller B (CompletionFirst, flag=false): resolving a conflict records the
+        // `NodeCompleted` under the ORIGINAL conflicting node id — never the
+        // `__merge_resolver__` pseudo-node — and completes the run exactly once.
+        // This caller's tail had zero coverage before #275.
+        let tmp = tempfile::tempdir().unwrap();
+        // The merge path first validates the run worktree is clean; an empty
+        // (non-repo) dir trivially has no conflict markers / tracked changes, so
+        // validation passes and we exercise the completion tail itself.
+        let worktree = tmp
+            .path()
+            .join(".pdo")
+            .join("runs")
+            .join("c275-merge")
+            .join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "c275-merge";
+        for ev in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({
+                    "pipeline_name": "conflict",
+                    "node_defs": [
+                        { "id": "worker", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                    ],
+                    "edges": []
+                })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::MergeResolverStarted,
+                None,
+                None,
+                Some(serde_json::json!({
+                    "conflicting_node_id": "worker",
+                    "iter": 1,
+                    "session_name": "pdo-c275-merge-__merge_resolver__-iter-1"
+                })),
+            ),
+        ] {
+            append_event(&state, &ev).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/{MERGE_RESOLVER_NODE_ID}/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::MergeResolverCompleted),
+            "merge resolver completion is recorded"
+        );
+        // The resolved work is attributed to the ORIGINAL node, not the pseudo-node.
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
+            1,
+            "NodeCompleted recorded for the original conflicting node"
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeCompleted, MERGE_RESOLVER_NODE_ID),
+            0,
+            "no NodeCompleted for the __merge_resolver__ pseudo-node"
+        );
+        assert_eq!(
+            count_run_completed(&events),
+            1,
+            "merge-resolver completion must emit exactly one RunCompleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_node_done_completion_carries_source_payload() {
+        // The head stays caller-owned: `mark_node_done` tags its `NodeCompleted`
+        // with `source = "mark_node_done"`. The carve must NOT homogenize it.
+        let state = test_state().await;
+        let run_id = "c275-mark-source";
+        for ev in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "interactive" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("griller"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeAwaitingUser,
+                Some("griller"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &ev).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "griller", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let nc = events
+            .iter()
+            .find(|e| {
+                e.kind == event_log::EventKind::NodeCompleted
+                    && e.node_id.as_deref() == Some("griller")
+            })
+            .expect("griller NodeCompleted present");
+        assert_eq!(
+            nc.payload.as_ref().expect("source payload present")["source"],
+            "mark_node_done"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_done_completion_has_no_source_payload() {
+        // The complement of the source-payload test: `node_done`'s `NodeCompleted`
+        // carries no payload, so the two callers stay distinguishable in the log.
+        let state = test_state().await;
+        let run_id = "c275-node-done-nosrc";
+        for ev in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "test" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(&state, &ev).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let nc = events
+            .iter()
+            .find(|e| {
+                e.kind == event_log::EventKind::NodeCompleted
+                    && e.node_id.as_deref() == Some("worker")
+            })
+            .expect("worker NodeCompleted present");
+        assert!(
+            nc.payload.is_none(),
+            "node_done's NodeCompleted must carry no source payload, got: {:?}",
+            nc.payload
+        );
+    }
+
+    #[tokio::test]
+    async fn awaiting_user_completion_respects_per_caller_flag() {
+        // The completion flag diverges by caller: `node_done` (flag=false) must
+        // NOT complete a run still projecting `AwaitingUser`; `mark_node_done`
+        // (flag=true) must. A second interactive `holder` node — present in the
+        // live `nodes` map but OUTSIDE the expected completion set (`node_defs`
+        // lists only `worker`) — keeps the run `AwaitingUser` while the expected
+        // `worker` completes, so the per-caller flag is the only thing that
+        // decides completion. (The pure gate semantics are pinned in
+        // `run_advance.rs`; this pins the per-caller WIRING.)
+        async fn seed(state: &Arc<AppState>, run_id: &str) {
+            for ev in [
+                seed_event(
+                    run_id,
+                    event_log::EventKind::RunStarted,
+                    None,
+                    None,
+                    Some(serde_json::json!({
+                        "pipeline_name": "interactive",
+                        "node_defs": [
+                            { "id": "worker", "node_type": "doc-only", "inputs": [], "outputs": [] }
+                        ],
+                        "edges": []
+                    })),
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeStarted,
+                    Some("worker"),
+                    Some(1),
+                    None,
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeStarted,
+                    Some("holder"),
+                    Some(1),
+                    None,
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeAwaitingUser,
+                    Some("holder"),
+                    Some(1),
+                    None,
+                ),
+            ] {
+                append_event(state, &ev).await.unwrap();
+            }
+        }
+
+        // flag=false (node_done): does NOT complete while `holder` still awaits.
+        let state = test_state().await;
+        seed(&state, "c275-flag-false").await;
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/c275-flag-false/nodes/worker/done")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let events = load_events(&state.db, "c275-flag-false").await.unwrap();
+        assert_eq!(
+            count_run_completed(&events),
+            0,
+            "node_done (flag=false) must not complete an AwaitingUser run"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::AwaitingUser
+        );
+
+        // flag=true (mark_node_done): completes despite the awaiting `holder`.
+        let state = test_state().await;
+        seed(&state, "c275-flag-true").await;
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/c275-flag-true/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let events = load_events(&state.db, "c275-flag-true").await.unwrap();
+        assert_eq!(
+            count_run_completed(&events),
+            1,
+            "mark_node_done (flag=true) must complete the run despite an awaiting node"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed
+        );
     }
 
     #[tokio::test]

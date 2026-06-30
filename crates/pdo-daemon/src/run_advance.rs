@@ -7,15 +7,26 @@
 //! one place.
 //!
 //! Scope (slice-1): only the **single-pass** family is consolidated here. The
-//! two-pass *edge-firing* sites (`handle_node_completion` /
-//! `re_evaluate_after_command`) keep their load-bearing `reload_run_state`
-//! re-projection in `lib.rs` and are deferred to a tracked follow-up — they
-//! have no integration backstop yet (see the #235 plan, §5 follow-up A).
+//! two-pass *edge-firing* site `handle_node_completion`'s **body** still lives in
+//! `lib.rs` with its load-bearing `reload_run_state` re-projection, deferred to a
+//! tracked follow-up (no integration backstop yet — #235 plan, §5 follow-up A).
+//!
+//! Node-completion convenience command (#275): this module also owns
+//! [`complete_node`], the shared post-`NodeCompleted` tail that the three node-done
+//! sites (`node_done`, the `mark_node_done` command arm, `handle_merge_resolver_done`)
+//! used to re-implement inline. It *composes* the deferred two-pass HNC site
+//! (`handle_node_completion`, still bodied in `lib.rs`) with [`advance_run`], the
+//! cross-run `retry_waiting_nodes`, and the single completion gate. It is a Layer-3
+//! convenience command (ADR-0009): the caller owns its bespoke *head* (guard,
+//! validation, its own `NodeCompleted`/companion appends, any reap); this owns the
+//! identical *tail*.
 //!
 //! Non-reentrancy (ADR-0009 / #122): [`advance_run`] calls [`spawn_node`], the
 //! pure `scheduler*` evaluators, and `append_event`/`emit_*` in a **linear**
 //! sequence. It never calls another advancement helper or itself, and never
 //! wires scheduler-driving code onto `event_tx`. [`spawn_node`] stays a leaf.
+//! [`complete_node`] is likewise linear and non-reentrant: it runs HNC + the sweep
+//! + retry once, then the single completion gate — never from an all-runs sweep.
 
 use tracing::{error, info};
 
@@ -24,8 +35,9 @@ use crate::pipeline;
 use crate::scheduler;
 use crate::scheduler_dispatcher;
 use crate::{
-    append_event, effective_repo_root, emit_loop_action, load_events, resolve_run_pipeline_path,
-    resolve_run_variables, spawn_node, worktree_dir_for_run, AppState, SpawnContext,
+    append_event, effective_repo_root, emit_loop_action, handle_node_completion, load_events,
+    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, spawn_node,
+    worktree_dir_for_run, AppState, SpawnContext,
 };
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready
@@ -177,23 +189,26 @@ pub(crate) fn should_complete_run(
     status_permits && run_state.all_nodes_completed(expected_node_ids)
 }
 
-/// Emit exactly one `RunCompleted` if [`should_complete_run`] says so.
+/// Emit exactly one `RunCompleted` if [`should_complete_run`] says so; returns
+/// whether it emitted.
 ///
 /// The single home for run-completion emission on the single-pass paths: the
-/// `advance_run` "nothing ready" branch and the three node-done sites
-/// (`node_done`, the `mark_node_done` command arm, `handle_merge_resolver_done`)
-/// all route here. `append_event` does **not** de-dup `RunCompleted`, so this
-/// must stay the only completion emitter on these paths — never call it from an
-/// all-runs/waiting sweep.
+/// `advance_run` "nothing ready" branch and the shared node-done tail
+/// [`complete_node`] (reached by `node_done`, the `mark_node_done` command arm,
+/// and `handle_merge_resolver_done`) all route here. `append_event` does **not**
+/// de-dup `RunCompleted`, so this must stay the only completion emitter on these
+/// paths — never call it from an all-runs/waiting sweep. The returned `bool`
+/// makes the single-`RunCompleted` invariant directly observable to
+/// [`complete_node`] without a re-projection; `advance_run` ignores it.
 pub(crate) async fn maybe_complete_run(
     state: &AppState,
     run_id: &str,
     expected_node_ids: &[String],
     run_state: &event_log::RunState,
     complete_when_awaiting_user: bool,
-) {
+) -> bool {
     if !should_complete_run(run_state, expected_node_ids, complete_when_awaiting_user) {
-        return;
+        return false;
     }
     let run_completed = event_log::Event {
         id: None,
@@ -206,6 +221,127 @@ pub(crate) async fn maybe_complete_run(
     };
     if let Err(e) = append_event(state, &run_completed).await {
         error!("failed to append run_completed: {e}");
+        return false;
+    }
+    true
+}
+
+/// Which order the completion tail runs the producer's edge-firing pass
+/// ([`handle_node_completion`]) relative to the readiness sweep ([`advance_run`]).
+///
+/// Behavior-equivalent on the final state today — HNC and `advance_run` cover
+/// disjoint spawn sets (HNC fires the just-completed producer's conditional /
+/// loop / foreach edges; `advance_run` spawns only unconditionally-ready nodes,
+/// its `ready_nodes` set explicitly skipping Switch/Loop/ForEach and any node
+/// already present), `spawn_node` re-validates each transition before any side
+/// effect (a duplicate `NodeStarted` is a NoOp), and `all_nodes_completed`
+/// requires the *full* expected set — so neither order can re-fire the other's
+/// spawns nor complete the run early. The two orders are nonetheless preserved
+/// per-caller, so the #275 extraction is a strictly behavior-preserving carve
+/// auditable by diff. Collapsing to one variant is #235 follow-up A (needs the
+/// order-equivalence integration test first).
+pub(crate) enum CompletionOrder {
+    /// `node_done` & `handle_merge_resolver_done`: edges, then sweep.
+    CompletionFirst,
+    /// `mark_node_done` arm: sweep, then edges (the interactive node is already gone).
+    SweepFirst,
+}
+
+/// What the completion tail did — lets each caller keep its own log line / HTTP
+/// response while sharing the tail.
+pub(crate) enum CompletionOutcome {
+    /// `RunCompleted` was emitted on this call.
+    RunCompleted,
+    /// The run advanced but not all expected nodes are done yet (or it completed
+    /// earlier in the same tail via an HNC `Complete`/`Halt` action — either way
+    /// the completion gate emitted nothing).
+    StillRunning,
+    /// The run projects as `Halted`; no completion emitted (`node_done`'s
+    /// short-circuit, now uniform across callers — see [`complete_node`]).
+    Halted,
+}
+
+/// Reload + re-project, then fire the just-completed producer's outgoing edges
+/// via [`handle_node_completion`].
+///
+/// HNC needs a *fresh* `events` slice + `RunState` (its first pass re-projects
+/// nothing itself), so this reloads rather than trusting a stale caller
+/// projection — matching what each node-done site did inline before #275. A load
+/// failure is logged and skipped (same as the inline sites' `else { return }`).
+async fn fire_edges(state: &AppState, run_id: &str, completed_node_id: &str) {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("complete_node: failed to load events for {run_id}: {e}");
+            return;
+        }
+    };
+    let Some(run_state) = event_log::project(&events) else {
+        return;
+    };
+    handle_node_completion(state, &run_state, run_id, completed_node_id, &events).await;
+}
+
+/// Layer-3 convenience command (ADR-0009): the shared post-`NodeCompleted` tail
+/// that drives a Run forward after one of its nodes completes.
+///
+/// PRECONDITION (the **post-append seam**): the caller has already appended its
+/// `NodeCompleted` (and any bespoke companion events — e.g. `mark_node_done`'s
+/// `source` payload + `CommandIssued`) and done any session reap. `completed_node_id`
+/// is the node whose edges to fire; for the merge-resolver path this is the
+/// *original conflicting node*, not the route's `__merge_resolver__` param, which
+/// is why it cannot be re-derived from the request.
+///
+/// Linear, non-reentrant: fire the producer's edges + the readiness sweep
+/// (`advance_run`) + the cross-run `retry_waiting_nodes` (a freed session slot can
+/// start a `waiting` node in another run, #159), in the requested `order`, then a
+/// single reload → Halted short-circuit → the single completion gate
+/// ([`maybe_complete_run`], the only `RunCompleted` emitter here). Never call it
+/// from an all-runs/waiting sweep (single-emitter rule).
+///
+/// The Halted short-circuit is uniform across all three callers: only `node_done`
+/// short-circuited before, but `maybe_complete_run` already no-ops on a terminal
+/// status, so returning [`CompletionOutcome::Halted`] for the merge / mark paths
+/// emits no `RunCompleted` either way — behavior-preserving.
+pub(crate) async fn complete_node(
+    state: &AppState,
+    run_id: &str,
+    completed_node_id: &str,
+    order: CompletionOrder,
+    complete_when_awaiting_user: bool,
+) -> CompletionOutcome {
+    match order {
+        CompletionOrder::CompletionFirst => {
+            fire_edges(state, run_id, completed_node_id).await;
+            advance_run(state, run_id).await;
+            retry_waiting_nodes(state).await;
+        }
+        CompletionOrder::SweepFirst => {
+            advance_run(state, run_id).await;
+            retry_waiting_nodes(state).await;
+            fire_edges(state, run_id, completed_node_id).await;
+        }
+    }
+
+    // Single reload → project → Halted short-circuit → single completion gate.
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("complete_node: failed to reload events for {run_id}: {e}");
+            return CompletionOutcome::StillRunning;
+        }
+    };
+    let Some(run_state) = event_log::project(&events) else {
+        return CompletionOutcome::StillRunning;
+    };
+    if run_state.status == event_log::RunStatus::Halted {
+        return CompletionOutcome::Halted;
+    }
+    let expected = expected_completion_node_ids(&run_state);
+    if maybe_complete_run(state, run_id, &expected, &run_state, complete_when_awaiting_user).await {
+        CompletionOutcome::RunCompleted
+    } else {
+        CompletionOutcome::StillRunning
     }
 }
 

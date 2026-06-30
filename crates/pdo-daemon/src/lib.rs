@@ -169,6 +169,16 @@ struct AppState {
     /// immediate startup sweep doesn't consume it first. An `Arc<AtomicBool>` (not
     /// process-global env) so parallel test daemons never race (#181).
     panic_on_stale_sweep: Arc<std::sync::atomic::AtomicBool>,
+    /// Debug-only fault-injection knob (#279): a one-shot poison pill. When armed
+    /// (`true`), the next `spawn_node` panics inside its post-worktree span, then
+    /// disarms itself (`swap`) — exercising the spawn window's `catch_unwind`
+    /// isolation, proving the orphaned sub-worktree is reaped and the run is
+    /// failed *loud* (`RunFailed`) instead of wedging `Running` forever. `false`
+    /// in production unless `PDO_DEBUG_PANIC_SPAWN` arms it at boot; tests arm it
+    /// *post-boot* via [`DaemonHandle::arm_spawn_panic`] so the run's entry-node
+    /// spawn can be targeted deterministically. An `Arc<AtomicBool>` (not
+    /// process-global env) so parallel test daemons never race (#181).
+    panic_on_spawn: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -461,6 +471,19 @@ impl DaemonHandle {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Arm the one-shot spawn poison (#279): the next [`spawn_node`] panics
+    /// inside its post-worktree span, then disarms itself. Test seam only; lets
+    /// a test prove the spawn window's `catch_unwind` isolation reaps the
+    /// orphaned sub-worktree and fails the run loud (`RunFailed`) rather than
+    /// leaving it wedged `Running` with no live node. Arm *after* boot so the
+    /// run's entry-node spawn can be targeted. Production arms this once at boot
+    /// via `PDO_DEBUG_PANIC_SPAWN`.
+    pub fn arm_spawn_panic(&self) {
+        self.state
+            .panic_on_spawn
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Force a Trigger's next fire into the past so the next
     /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
     /// next-fire times come from the cron schedule.
@@ -497,6 +520,12 @@ pub struct DaemonConfig {
     /// isolated and the next sweep recovers. `false` in production unless
     /// `PDO_DEBUG_PANIC_STALE` is set.
     pub panic_on_stale_sweep: bool,
+    /// Debug-only chaos knob (#279): when `true`, the next `spawn_node` panics
+    /// inside its post-worktree span (one-shot, then disarms), so a test can
+    /// prove the spawn window's `catch_unwind` isolation reaps the orphaned
+    /// sub-worktree and fails the run loud. `false` in production unless
+    /// `PDO_DEBUG_PANIC_SPAWN` is set.
+    pub panic_on_spawn: bool,
 }
 
 impl DaemonConfig {
@@ -514,6 +543,11 @@ impl DaemonConfig {
             // Debug-only chaos knob (#251), sibling of PDO_DEBUG_PANIC_TRIGGER.
             // Truthy (set and not "" / "0") arms the one-shot stale poison.
             panic_on_stale_sweep: std::env::var("PDO_DEBUG_PANIC_STALE")
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false),
+            // Debug-only chaos knob (#279), sibling of PDO_DEBUG_PANIC_STALE.
+            // Truthy (set and not "" / "0") arms the one-shot spawn poison.
+            panic_on_spawn: std::env::var("PDO_DEBUG_PANIC_SPAWN")
                 .map(|v| !v.is_empty() && v != "0")
                 .unwrap_or(false),
         }
@@ -605,6 +639,7 @@ pub async fn serve_with_config(
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
         )),
+        panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -3124,6 +3159,10 @@ async fn spawn_node(
     let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
         || node.node_type == pipeline::NodeType::Merge;
 
+    // Track the sub-worktree + branch this spawn creates so an abort in the
+    // panic-isolated span below can reap them (#279). `None` for nodes that own
+    // no worktree (doc-only / control nodes).
+    let mut orphan_to_reap: Option<(PathBuf, String)> = None;
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -3138,106 +3177,176 @@ async fn spawn_node(
             error!("failed to create sub-worktree for {}: {e}", node.id);
             return;
         }
+        orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
         sub_wt_dir
     } else {
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
-    let is_entry_node = spawn_ctx.pipeline.edges.iter().any(|e| {
-        e.target.node == node.id
-            && spawn_ctx
-                .pipeline
-                .nodes
-                .iter()
-                .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
-    });
-    let input_images = if is_entry_node {
-        prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
-    } else {
-        Vec::new()
-    };
+    // Panic/cancellation-isolated spawn window (#279). Everything from here to
+    // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
+    // input resolution) or — when this runs in-request inside `node_done` — be
+    // dropped if the completing client disconnects (hyper drops the in-flight
+    // future at an `.await`). Before #279 either left the freshly-created
+    // sub-worktree orphaned with NO `NodeStarted`, wedging the run `running`
+    // forever: no live node, no error, nothing logged. It slips past every
+    // recovery path — `advance_run` is event-triggered, the stale detector only
+    // inspects live tmux sessions, and `reconcile_run_level_stall` saw the node
+    // as "ready, about to be driven". Run the window under `catch_unwind` so a
+    // panic becomes a LOUD failure (reap the orphan, fail the run) instead of a
+    // silent stall (ADR-0004 « jamais de stall silencieux »). A dropped
+    // (cancelled) future can't be caught here; the periodic detector in
+    // `run_stall_reason` (#279 Layer 2) is the backstop for that path.
+    // `tokio::sync::Mutex` doesn't poison, so the DB / admission state stay
+    // usable after a caught panic (the property `run_isolated` relies on too).
+    let span = std::panic::AssertUnwindSafe(async {
+        // Debug-only one-shot fault injection (#279): exercises the catch + reap
+        // + RunFailed path. Armed via `PDO_DEBUG_PANIC_SPAWN` or
+        // `DaemonHandle::arm_spawn_panic`. Checked at the span head so the
+        // orphaned worktree already exists and the reap has something to remove.
+        if state
+            .panic_on_spawn
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("PDO_DEBUG_PANIC_SPAWN fault injection (#279)");
+        }
 
-    // Canonical input resolution (#194 / #210): re-project the run state at
-    // spawn time so each input path follows its source's latest COMPLETED
-    // iteration — a failed iteration's artifacts are never consumed, and an
-    // external feeder keeps serving its completed iter at any lap.
-    let source_iters = match reload_run_state(state, run_id).await {
-        Some((_, fresh_state)) => input_resolution::resolved_source_iters(
-            spawn_ctx.pipeline,
-            &fresh_state,
-            &node.id,
-            iter,
-        ),
-        None => HashMap::new(),
-    };
+        let is_entry_node = spawn_ctx.pipeline.edges.iter().any(|e| {
+            e.target.node == node.id
+                && spawn_ctx
+                    .pipeline
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
+        });
+        let input_images = if is_entry_node {
+            prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
+        } else {
+            Vec::new()
+        };
 
-    // Precompute whether the Start prompt carries content so `build_preamble`
-    // stays pure (#274). Gate on `!prompt_required` (the only branch that
-    // consults it), NOT on the edge-based `is_entry_node` — that would regress
-    // the `task`-port fallback (a node with no incoming edge still reads from
-    // `_input`). On a genuine I/O error, fail toward "prompt present" and log:
-    // a false negative would silently discard the run's actual brief.
-    let start_prompt_present = if spawn_ctx.pipeline.prompt_required {
-        false // value is never consulted for prompt-required pipelines — skip the read
-    } else {
-        match prompt_augmenter::read_start_prompt_present(spawn_ctx.artifacts_dir) {
-            Ok(present) => present,
-            Err(e) => {
-                warn!(
-                    "entry-node input read failed (run {run_id} node {} iter {iter}): {e}; \
-                     assuming a prompt is present",
-                    node.id
-                );
-                true // fail toward "prompt present" — never tell the agent "no prompt" on an I/O error
+        // Canonical input resolution (#194 / #210): re-project the run state at
+        // spawn time so each input path follows its source's latest COMPLETED
+        // iteration — a failed iteration's artifacts are never consumed, and an
+        // external feeder keeps serving its completed iter at any lap.
+        let source_iters = match reload_run_state(state, run_id).await {
+            Some((_, fresh_state)) => input_resolution::resolved_source_iters(
+                spawn_ctx.pipeline,
+                &fresh_state,
+                &node.id,
+                iter,
+            ),
+            None => HashMap::new(),
+        };
+
+        // Precompute whether the Start prompt carries content so `build_preamble`
+        // stays pure (#274). Gate on `!prompt_required` (the only branch that
+        // consults it), NOT on the edge-based `is_entry_node` — that would regress
+        // the `task`-port fallback (a node with no incoming edge still reads from
+        // `_input`). On a genuine I/O error, fail toward "prompt present" and log:
+        // a false negative would silently discard the run's actual brief.
+        let start_prompt_present = if spawn_ctx.pipeline.prompt_required {
+            false // value is never consulted for prompt-required pipelines — skip the read
+        } else {
+            match prompt_augmenter::read_start_prompt_present(spawn_ctx.artifacts_dir) {
+                Ok(present) => present,
+                Err(e) => {
+                    warn!(
+                        "entry-node input read failed (run {run_id} node {} iter {iter}): {e}; \
+                         assuming a prompt is present",
+                        node.id
+                    );
+                    true // fail toward "prompt present" — never tell the agent "no prompt" on an I/O error
+                }
             }
+        };
+
+        let aug_ctx = prompt_augmenter::AugmentContext {
+            pipeline: spawn_ctx.pipeline,
+            node,
+            run_id,
+            iter,
+            artifacts_dir: spawn_ctx.artifacts_dir,
+            variables: spawn_ctx.resolved_vars,
+            daemon_url: &format!("http://localhost:{}", state.port),
+            foreach_context,
+            source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+            input_images,
+            start_prompt_present,
+            source_iters,
+        };
+
+        let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
+
+        let node_started = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some(node.id.clone()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({
+                "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
+                "node_type": match node.node_type {
+                    pipeline::NodeType::DocOnly => "doc-only",
+                    pipeline::NodeType::CodeMutating => "code-mutating",
+                    pipeline::NodeType::Start => "start",
+                    pipeline::NodeType::End => "end",
+                    pipeline::NodeType::Switch => "switch",
+                    pipeline::NodeType::Loop => "loop",
+                    pipeline::NodeType::ForEach => "for-each",
+                    pipeline::NodeType::Merge => "merge",
+                },
+            })),
+        };
+        // A failed `NodeStarted` append means the reservation was NOT recorded:
+        // treat it as a spawn abort (reap + RunFailed) rather than launching a
+        // tmux session the run's event log has no record of.
+        append_event(state, &node_started)
+            .await
+            .context("failed to append node_started")?;
+        Ok::<String, anyhow::Error>(full_prompt)
+    });
+
+    let span_outcome = futures_util::future::FutureExt::catch_unwind(span).await;
+
+    // The reservation (`NodeStarted`) is recorded iff the span returned
+    // `Ok(Ok(_))`; either way the admission lock can be released now — on failure
+    // nothing was reserved, on success the projected state already counts the
+    // session.
+    drop(admission_guard);
+
+    let full_prompt = match span_outcome {
+        Ok(Ok(full_prompt)) => full_prompt,
+        Ok(Err(e)) => {
+            fail_spawn_before_start(
+                state,
+                spawn_ctx.repo_root,
+                run_id,
+                &node.id,
+                orphan_to_reap.as_ref(),
+                &format!("spawn of node {} aborted before start: {e}", node.id),
+            )
+            .await;
+            return;
+        }
+        Err(panic) => {
+            fail_spawn_before_start(
+                state,
+                spawn_ctx.repo_root,
+                run_id,
+                &node.id,
+                orphan_to_reap.as_ref(),
+                &format!(
+                    "spawn of node {} panicked before start: {}",
+                    node.id,
+                    panic_payload_message(panic.as_ref())
+                ),
+            )
+            .await;
+            return;
         }
     };
-
-    let aug_ctx = prompt_augmenter::AugmentContext {
-        pipeline: spawn_ctx.pipeline,
-        node,
-        run_id,
-        iter,
-        artifacts_dir: spawn_ctx.artifacts_dir,
-        variables: spawn_ctx.resolved_vars,
-        daemon_url: &format!("http://localhost:{}", state.port),
-        foreach_context,
-        source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
-        input_images,
-        start_prompt_present,
-        source_iters,
-    };
-
-    let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
-
-    let node_started = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeStarted,
-        node_id: Some(node.id.clone()),
-        iter: Some(iter),
-        payload: Some(serde_json::json!({
-            "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
-            "node_type": match node.node_type {
-                pipeline::NodeType::DocOnly => "doc-only",
-                pipeline::NodeType::CodeMutating => "code-mutating",
-                pipeline::NodeType::Start => "start",
-                pipeline::NodeType::End => "end",
-                pipeline::NodeType::Switch => "switch",
-                pipeline::NodeType::Loop => "loop",
-                pipeline::NodeType::ForEach => "for-each",
-                pipeline::NodeType::Merge => "merge",
-            },
-        })),
-    };
-    if let Err(e) = append_event(state, &node_started).await {
-        error!("failed to append node_started: {e}");
-    }
-    // Reservation recorded: the projected state now counts this session, so the
-    // next spawn's admission count sees it. Release the admission lock before
-    // the (potentially slow) tmux spawn — the slot is already held.
-    drop(admission_guard);
 
     let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
     if let Err(e) = tmux_session_manager::spawn(
@@ -3266,6 +3375,80 @@ async fn spawn_node(
         if let Err(e) = append_event(state, &awaiting).await {
             error!("failed to append node_awaiting_user: {e}");
         }
+    }
+}
+
+/// Extract a human-readable message from a caught panic payload.
+/// `std::panic`'s default payload is a `&str` or `String`; anything else is
+/// opaque, so we fall back to a generic label.
+fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Reap a sub-worktree + branch left orphaned by a spawn that aborted before
+/// `NodeStarted` (#279). The worktree was created at the pipeline branch's tip
+/// with no agent run, so removing it loses no work. Best-effort throughout
+/// (mirrors `cleanup_run`): a missing dir / branch is fine.
+fn reap_orphan_sub_worktree(
+    repo_root: &std::path::Path,
+    sub_worktree_dir: &std::path::Path,
+    sub_branch: &str,
+) {
+    if sub_worktree_dir.exists() {
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(sub_worktree_dir)
+            .current_dir(repo_root)
+            .output();
+    }
+    let _ = std::process::Command::new("git")
+        .args(["branch", "-D", sub_branch])
+        .current_dir(repo_root)
+        .output();
+    info!(
+        "Reaped orphaned sub-worktree {} (branch {sub_branch}) after aborted spawn (#279)",
+        sub_worktree_dir.display()
+    );
+}
+
+/// Fail a run loud when a node spawn aborts *before* `NodeStarted` is appended
+/// (#279, Layer 1). Reaps any orphaned sub-worktree + branch the spawn created,
+/// then appends a visible cause.
+///
+/// The cause is `RunFailed`, **not** `NodeFailed`: the node has no
+/// `NodeStarted`, so `transition_guard::validate_fail` treats a `NodeFailed`
+/// for it as a guard no-op (a failure for an iteration "that was never started")
+/// — the run would stay `Running` and the fix would be defeated. `RunFailed` is
+/// un-guarded and reliably moves the run terminal.
+async fn fail_spawn_before_start(
+    state: &AppState,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    orphan: Option<&(PathBuf, String)>,
+    reason: &str,
+) {
+    error!("Run {run_id}: node {node_id} spawn aborted before NodeStarted — {reason}");
+    if let Some((sub_worktree_dir, sub_branch)) = orphan {
+        reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
+    }
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    if let Err(e) = append_event(state, &run_failed).await {
+        error!("Run {run_id}: failed to append RunFailed after spawn abort: {e}");
     }
 }
 
@@ -3554,6 +3737,29 @@ async fn retry_waiting_nodes(state: &AppState) {
     }
 }
 
+/// Idle window (#279) after which a `Running` run with a ready-to-spawn node but
+/// no live node is treated as a silent spawn-abort rather than a node about to
+/// be driven. `advance_run` starts a ready node within milliseconds of it
+/// becoming ready; if the run has instead sat idle this long with the node never
+/// started, the event-driven spawn aborted (a panic, or a dropped completion
+/// future) and nothing will re-drive it. Matches `stale_detector::STALE_THRESHOLD`
+/// so the daemon's two "idle past N" notions agree.
+const SPAWN_STALL_GRACE_SECS: i64 = 120;
+
+/// Seconds elapsed since the run's most recent event, or `None` when no event
+/// carries a parseable RFC3339 timestamp. The most recent event has the
+/// *smallest* age, so this is the `min` over ages — i.e. "how long since the run
+/// last did anything". Used by [`reconcile_run_level_stall`] to tell a node
+/// about to be driven (idle ≈ 0) from one silently wedged (#279).
+fn max_event_age_secs(events: &[event_log::Event]) -> Option<i64> {
+    let now = chrono::Utc::now();
+    events
+        .iter()
+        .filter_map(|e| chrono::DateTime::parse_from_rfc3339(&e.ts).ok())
+        .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds())
+        .min()
+}
+
 /// Reconcile a run that is silently stalled at the **run level** (#214): no
 /// live node, nothing the scheduler can spawn, yet still `Running`. Loads the
 /// pipeline and the real scheduler outputs, runs [`run_stall_reason`], and on a
@@ -3585,7 +3791,13 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
     let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
 
-    let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed) else {
+    // Seconds since the run's most recent event. A ready-to-spawn node with no
+    // live node should be driven by `advance_run` within milliseconds; if the
+    // run has instead gone idle past the grace window, the event-driven spawn
+    // silently aborted (#279) and nothing will re-drive it.
+    let idle_secs = max_event_age_secs(&events);
+
+    let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, idle_secs) else {
         return;
     };
 
@@ -3620,6 +3832,13 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
 /// when the run still has a path forward (a live node, a schedulable node, a
 /// loop to seed) or is legitimately awaiting a human (`AwaitingUser`).
 ///
+/// `idle_secs` is the seconds elapsed since the run's most recent event (`None`
+/// if unknown). It distinguishes a node *about to be driven* (idle ≈ 0) from one
+/// silently wedged (#279): a ready-to-spawn node with no live node should be
+/// started by `advance_run` within milliseconds — if instead the run has sat
+/// idle past [`SPAWN_STALL_GRACE_SECS`] with the node never started, the
+/// event-driven spawn aborted and nothing will re-drive it.
+///
 /// Pure over the already-computed scheduler outputs (`ready` from
 /// [`scheduler_dispatcher::compute_ready_to_spawn`], `loop_seed` from
 /// [`scheduler::seed_pending_loops`]) so the schedulability oracle is the real
@@ -3629,6 +3848,7 @@ fn run_stall_reason(
     run_state: &event_log::RunState,
     ready: &[scheduler_dispatcher::ReadySpawn],
     loop_seed: &[scheduler::SchedulerAction],
+    idle_secs: Option<i64>,
 ) -> Option<String> {
     // Only a Running run can silently stall. AwaitingUser is a legitimate live
     // state (waiting on a human); Paused/Halted/terminal need no reconciliation.
@@ -3650,9 +3870,35 @@ fn run_stall_reason(
         return None;
     }
 
-    // The scheduler can still produce work (a ready node to spawn, a loop to
-    // seed): the run is not stuck, it just hasn't been driven yet.
-    if !ready.is_empty() || !loop_seed.is_empty() {
+    // (#279, Layer 2) A node the scheduler can spawn but no live node to run it.
+    // `compute_ready_to_spawn` only returns nodes with NO state (or a Completed
+    // loop-back), so a node here that an `advance_run` reached would already be
+    // `Running` or (cap-throttled) `Waiting` — never still "ready". Its presence
+    // means `advance_run` never completed for it. In normal operation that gap
+    // is closed within milliseconds; if the run has instead gone idle past the
+    // grace window, the spawn silently aborted (a panic the catch in `spawn_node`
+    // somehow missed, or — the case Layer 1 can't catch — a dropped completion
+    // future). Fail loud rather than wedge `Running` forever. Below the grace
+    // window we defer: `advance_run` is about to drive it.
+    if !ready.is_empty() {
+        if idle_secs.is_some_and(|s| s >= SPAWN_STALL_GRACE_SECS) {
+            let mut names: Vec<&str> = ready.iter().map(|r| r.node_id.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            return Some(format!(
+                "run_stalled: ready node(s) never driven — no live node, idle {}s \
+                 (silent spawn-abort, #279): {}",
+                idle_secs.unwrap_or_default(),
+                names.join(", ")
+            ));
+        }
+        return None;
+    }
+
+    // The scheduler can still seed a loop: that is the scheduler's / Pipeline
+    // Manager's to drive (and an exhausted-unrouted region is deferred just
+    // below). Not a fail-fast stall.
+    if !loop_seed.is_empty() {
         return None;
     }
 
@@ -9243,6 +9489,7 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -11148,7 +11395,7 @@ mod tests {
         assert!(ready.is_empty(), "precondition: nothing schedulable");
         assert!(loop_seed.is_empty(), "precondition: no loop to seed");
 
-        let reason = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed)
+        let reason = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None)
             .expect("a Running run with no live node and nothing schedulable is stuck");
         assert!(
             reason.contains("a"),
@@ -11169,7 +11416,7 @@ mod tests {
         assert!(!ready.is_empty(), "precondition: entry node is schedulable");
 
         assert!(
-            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
             "a run with a schedulable node has a path forward — never reconcile it"
         );
     }
@@ -11192,7 +11439,7 @@ mod tests {
         let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
 
         assert!(
-            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
             "a live Running node means the run can still finish — never reconcile it"
         );
     }
@@ -11215,7 +11462,7 @@ mod tests {
         let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
 
         assert!(
-            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
             "an AwaitingUser run is waiting on a human, not stalled"
         );
     }
@@ -11278,7 +11525,7 @@ mod tests {
         let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
 
         assert!(
-            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
             "a run with an open loop region awaiting a manager route must not be \
              auto-failed — that is the manager's recovery path, not a fail-fast stall"
         );
@@ -11342,9 +11589,275 @@ mod tests {
         assert!(loop_seed.is_empty(), "precondition: no loop to seed");
 
         assert!(
-            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed).is_none(),
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
             "a Waiting node can still progress (it spawns when a slot frees) — \
              a run behind a blocker but holding a Waiting node is NOT stalled"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_ready_node_never_driven_past_grace() {
+        // #279 Layer 2. After a silent spawn-abort the next node has NO event at
+        // all, so the scheduler still computes it as `ready` — the pre-#279 guard
+        // returned None ("about to be driven"). But with no live node and the run
+        // gone idle past the grace window, `advance_run` never completed for it
+        // and nothing will re-drive it (advance_run is event-triggered, the stale
+        // detector only inspects live sessions). Fail loud rather than wedge.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = event_log::RunState::new("20260630-spawn-abort".into(), "linear".into());
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            !ready.is_empty(),
+            "precondition: entry node `a` is ready with no event (the orphan signature)"
+        );
+        assert!(
+            run_state.nodes.values().all(|n| !n.status.can_progress()),
+            "precondition: no live node"
+        );
+
+        let reason = run_stall_reason(
+            &pipeline,
+            &run_state,
+            &ready,
+            &loop_seed,
+            Some(SPAWN_STALL_GRACE_SECS),
+        )
+        .expect("a ready node idle past the grace window with no live node is a #279 silent abort");
+        assert!(
+            reason.contains("#279): a"),
+            "cause {reason:?} must name the undriven node and reference #279"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_ready_node_within_the_grace_window() {
+        // The normal initial state of every run: the entry node is ready and
+        // `advance_run` is about to drive it. Failing here would kill a healthy
+        // run mid-spawn. Within the grace window the idle dimension defers.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = event_log::RunState::new("20260630-mid-spawn".into(), "linear".into());
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(!ready.is_empty(), "precondition: entry node is ready");
+
+        assert!(
+            run_stall_reason(
+                &pipeline,
+                &run_state,
+                &ready,
+                &loop_seed,
+                Some(SPAWN_STALL_GRACE_SECS - 1),
+            )
+            .is_none(),
+            "a ready node within the grace window is about to be driven — never fail it"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_ready_node_when_idle_is_unknown() {
+        // Unknown idle (no parseable event timestamp) must never trigger the
+        // fail-fast: only a *measured* idle past the grace window does. Fail-open
+        // here would regress the pre-#279 "ready set ⇒ defer" guarantee.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = event_log::RunState::new("20260630-unknown-idle".into(), "linear".into());
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, None).is_none(),
+            "unknown idle must never fail a run — the ready node may be about to spawn"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_never_flags_a_live_node_even_past_grace() {
+        // The live-node guard precedes the idle check: a Running node idle past
+        // the grace window is healthy long-running work (a slow agent), never a
+        // #279 stall. (`idle` measures the event log, not the node's own work.)
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_with_node(
+            "20260630-live-old",
+            "a",
+            "doc-only",
+            event_log::NodeStatus::Running,
+            1,
+        );
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, Some(100_000)).is_none(),
+            "a live Running node is never a stall, regardless of how long the log has been idle"
+        );
+    }
+
+    /// Append an event carrying an explicit (here: backdated) timestamp, so a
+    /// test can make a run read as "idle for N seconds" without sleeping.
+    async fn append_event_at(
+        state: &Arc<AppState>,
+        run_id: &str,
+        ts: &str,
+        kind: event_log::EventKind,
+        node_id: Option<&str>,
+        iter: Option<i64>,
+        payload: Option<serde_json::Value>,
+    ) {
+        let ev = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: ts.into(),
+            kind,
+            node_id: node_id.map(Into::into),
+            iter,
+            payload,
+        };
+        append_event(state, &ev).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_fails_a_run_with_an_orphaned_ready_node_idle_past_grace() {
+        // #279 Layer 2, end-to-end through the periodic reconcile path. Build the
+        // exact silent-spawn-abort end-state: `a` completed, `b` is ready with NO
+        // event (advance_run never drove it), no live node, and the log has gone
+        // idle past the grace window. The pre-#279 reconcile saw `b` as "ready,
+        // about to be driven" and left the run Running forever. It must now fail
+        // it loud (RunFailed) with a cause naming the undriven node.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipelines = tmp.path().join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines).unwrap();
+        std::fs::write(
+            pipelines.join("stall-test.yaml"),
+            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "20260630-l2-orphan";
+
+        // Backdate every event well past the grace window so the run reads as idle.
+        let old_ts = (chrono::Utc::now()
+            - chrono::Duration::seconds(SPAWN_STALL_GRACE_SECS + 180))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+        append_event_at(
+            &state,
+            run_id,
+            &old_ts,
+            event_log::EventKind::RunStarted,
+            None,
+            None,
+            Some(serde_json::json!({ "pipeline_name": "stall-test" })),
+        )
+        .await;
+        append_event_at(
+            &state,
+            run_id,
+            &old_ts,
+            event_log::EventKind::NodeStarted,
+            Some("a"),
+            Some(1),
+            None,
+        )
+        .await;
+        append_event_at(
+            &state,
+            run_id,
+            &old_ts,
+            event_log::EventKind::NodeCompleted,
+            Some("a"),
+            Some(1),
+            None,
+        )
+        .await;
+
+        // Precondition: `b` is the orphan signature — ready, no event, no live node.
+        let (events, run_state) = reload_run_state(&state, run_id).await.unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Running);
+        assert!(
+            !run_state.nodes.contains_key("b"),
+            "precondition: `b` has no event (silent spawn-abort orphan)"
+        );
+        let pipeline = pipeline::parse_pipeline(
+            &std::fs::read_to_string(pipelines.join("stall-test.yaml")).unwrap(),
+        )
+        .unwrap()
+        .pipeline;
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        assert_eq!(
+            ready.iter().map(|r| r.node_id.as_str()).collect::<Vec<_>>(),
+            vec!["b"],
+            "precondition: only `b` is ready to spawn"
+        );
+        assert!(
+            max_event_age_secs(&events).is_some_and(|s| s >= SPAWN_STALL_GRACE_SECS),
+            "precondition: the run is idle past the grace window"
+        );
+
+        // The periodic reconcile path must now fail the run loud.
+        reconcile_run_level_stall(&state, run_id).await;
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_failed = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::RunFailed)
+            .expect("reconcile must append a RunFailed for the wedged run (#279)");
+        let reason = run_failed
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("reason"))
+            .and_then(|r| r.as_str())
+            .unwrap_or_default();
+        assert!(
+            reason.contains("#279): b"),
+            "RunFailed cause {reason:?} must name the undriven node `b` and reference #279"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Failed,
+            "the run must be terminal (Failed), not wedged Running"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_leaves_a_fresh_run_running_within_the_grace_window() {
+        // The other side of the grace window: the SAME orphan-shaped state but
+        // with fresh (current) timestamps must NOT be failed — `advance_run` is
+        // about to drive `b`. Guards against a reconcile that races every healthy
+        // just-completed node to a false RunFailed.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipelines = tmp.path().join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines).unwrap();
+        std::fs::write(
+            pipelines.join("stall-test.yaml"),
+            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "20260630-l2-fresh";
+
+        seed_run_for_node_control(&state, run_id, "stall-test").await;
+        seed_node_started(&state, run_id, "a", 1).await;
+        seed_node_completed(&state, run_id, "a", 1).await;
+
+        reconcile_run_level_stall(&state, run_id).await;
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "a freshly-completed node within the grace window must not be reconciled to Failed"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Running,
+            "the run must remain Running — advance_run is about to drive `b`"
         );
     }
 
@@ -11707,6 +12220,7 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -15585,6 +16099,7 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         let app = build_router(state);
 
@@ -15762,6 +16277,7 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         let app = build_router(state);
 

@@ -103,12 +103,22 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
     await runTab.click();
   }
 
-  // The auto-selected live node opens with the terminal expanded fullscreen,
-  // which hides the details pane (Inputs/Outputs/Initial Prompt). Collapse the
-  // terminal via its expand toggle to reveal the details pane.
+  // #270 regression: entering a live run auto-selects the live node, but its
+  // terminal must NOT be expanded by default — the details pane shows first.
+  await expect(page.getByTestId("details-pane")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("terminal-fullsize")).toHaveCount(0);
+
+  // Post-#270 the auto-selected live node opens with the terminal NOT expanded,
+  // so the details pane (Inputs/Outputs/Initial Prompt) is visible by default.
+  // Only toggle the terminal's expand button when the pane isn't already shown
+  // (keeps the spec green in both pre- and post-fix worlds).
+  const detailsPane = page.getByTestId("details-pane");
   const expandToggle = page.getByTestId("term-expand");
   await expect(expandToggle).toBeVisible({ timeout: 5_000 });
-  await expandToggle.click();
+  if (!(await detailsPane.isVisible())) {
+    await expandToggle.click();
+  }
+  await expect(detailsPane).toBeVisible({ timeout: 5_000 });
 
   // The Initial Prompt section is collapsed by default (post-refonte
   // NodeDetailPanel.PromptSection) — expand it to reveal the prompt block.

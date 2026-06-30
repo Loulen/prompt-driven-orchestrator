@@ -345,6 +345,8 @@ Conséquences :
 - **Un Node peut être marqué `interactive: true`** à l'édition. Quand son NodeRun spawn, il s'arrête en attente que l'utilisateur attache la session et signale la complétion (slash command, fichier sentinelle, ou autre — TBD). Cas typique : nœud d'entrée qui grille l'utilisateur pour construire l'input du pipeline (à la `grill-with-docs`).
 - **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état. Il vit dans l'onglet info de la toolbar (cf. *UX — un seul mode d'édition unifié*).
 - **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné dans le graphe, auditable. (Révise l'ancien « pas d'auto-merge, jamais » : l'interdit ne porte plus sur l'*effet* mais sur son *origine* — jamais le runtime, toujours le pipeline.)
+  - **« auto-cleanup » vs « reapable surfacing » (#128).** Faire **supprimer** worktrees/branches par le runtime de lui-même = `auto-cleanup` = **interdit** (ADR-0012(a) ; un `git branch -D` est irréversible, même classe d'effet que merge/PR). **Exposer** les candidats sans rien supprimer = `reapable surfacing` = **autorisé** : le runtime *liste*, la suppression reste au pipeline/humain via `cleanup_run`. C'est ce que fait `GET /runs/reapable` (lecture seule). La recette `docs/recipes/disk-janitor.md` ferme le disk-fill non-surveillé en câblant ce surfacing à un Trigger cron qui appelle `cleanup_run` — l'autonomie reste *dans le pipeline*.
+  - **Reapable run** *(terme)* : un Run **terminal** (`completed`/`failed`/`halted`/`skipped`) et **pas encore `archived`**, dont le(s) worktree(s) sur disque existent encore. Son disque est récupérable via `cleanup_run`. Le *surfacer* est lecture seule et permis au runtime ; *exécuter* la récupération est une action pipeline/humaine (ADR-0012).
 
 À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate, then autonomous* parle du **runtime** (on ne court-circuite pas l'humain de force ; on lui laisse *choisir* d'inscrire l'autonomie dans son pipeline).
 
@@ -412,6 +414,7 @@ NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event),
 - Reprendre la main directement sur la branche.
 - Débloquer via le **Pipeline Manager** : conversation au cours de laquelle le user peut, par exemple, demander *"continue le cycle pour 3 itérations de plus"*. Le manager dispose des commandes pour modifier l'état runtime.
 - Éditer le graphe à chaud (ADR-0007) — ajouter un Reviewer, déconnecter une edge bloquante, etc.
+- Automatiser le cleanup **sans réintroduire l'auto-cleanup runtime** : `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux dont le worktree traîne encore ; une pipeline janitor + Trigger cron exécute la récupération via `cleanup_run`. Recette : `docs/recipes/disk-janitor.md` (#128, Track A). L'origine de la suppression reste *dans le pipeline*, jamais le runtime.
 
 ### Parallélisation entre Runs
 

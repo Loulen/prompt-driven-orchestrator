@@ -1586,6 +1586,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines", post(create_pipeline))
         .route("/runs", post(create_run))
         .route("/runs", get(list_runs))
+        // #128 Track A: read-only surfacing of terminal, non-archived runs whose
+        // worktree(s) still occupy disk. Static path wins over `/runs/{run_id}`.
+        .route("/runs/reapable", get(list_reapable_runs))
         .route("/sessions", get(sessions))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
         .route("/runs/{run_id}/events", get(get_run_events))
@@ -4425,6 +4428,159 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
     Json(runs).into_response()
 }
 
+/// One entry of `GET /runs/reapable` (#128 Track A): a terminal, non-archived
+/// run whose on-disk worktree(s) still exist and can be reclaimed via the
+/// explicit `cleanup_run` command.
+#[derive(Serialize)]
+struct ReapableEntry {
+    run_id: String,
+    pipeline_name: String,
+    /// The run's terminal status (`completed`/`failed`/`halted`/`skipped`).
+    /// Surfacing is read-only and does NOT pre-filter failures — the consumer
+    /// (e.g. the disk-janitor recipe) applies its own status policy.
+    status: event_log::RunStatus,
+    /// ISO timestamp of the terminal transition (projection sets it for every
+    /// terminal status). The age a janitor TTL policy compares against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<String>,
+    /// Seconds since `completed_at` (`None` when it is absent/unparseable), so a
+    /// consumer can apply an age threshold without re-parsing timestamps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    age_secs: Option<i64>,
+    /// Always `true` on an emitted entry (the endpoint only lists worktree-present
+    /// runs); carried explicitly so the payload is self-describing.
+    worktree_present: bool,
+    /// Resolved target repo the worktree lives under (`effective_repo_root`).
+    effective_repo: String,
+    /// Best-effort recursive byte size of the run dir, present only when the
+    /// caller passes `?size=true` (the default omits it to stay fast). `None`
+    /// when not requested or when sizing failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approx_disk_bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ReapableQuery {
+    /// `?size=true` computes `approx_disk_bytes` per run (walks the tree, so it
+    /// is opt-in). Defaults to `false` to keep the listing cheap.
+    #[serde(default)]
+    size: bool,
+}
+
+/// Best-effort recursive byte size of a directory tree, summing regular-file
+/// lengths (apparent size). Symlinks are not followed (so it cannot cycle).
+/// Returns `None` only when the root does not exist; per-entry I/O errors are
+/// skipped. Used solely behind `?size=true` on `GET /runs/reapable` because a
+/// run worktree can hold a full `node_modules`, so it is opt-in.
+fn dir_size_bytes(root: &Path) -> Option<u64> {
+    if !root.exists() {
+        return None;
+    }
+    let mut total: u64 = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue; // don't follow — avoids cycles and double counting
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    Some(total)
+}
+
+/// GET /runs/reapable — read-only surfacing of terminal runs whose on-disk
+/// worktree(s) still exist, so a human or a janitor pipeline can reclaim the
+/// disk via the explicit `cleanup_run` command (#128, Track A).
+///
+/// DOCTRINE (ADR-0012(a)): this endpoint NEVER deletes anything. The runtime
+/// only *surfaces* candidates; performing the irreversible teardown (worktree +
+/// branch removal) stays a pipeline/human action. The companion recipe at
+/// `docs/recipes/disk-janitor.md` wires this to a cron Trigger so the disk-fill
+/// is solved unattended while the deletion's *origin* stays in the pipeline.
+///
+/// A run is emitted iff it is terminal (`is_terminal()` — the complement of
+/// `is_live()`) AND not already `Archived` (archived runs had their disk
+/// reclaimed) AND a `worktree/` or `nodes/` dir still exists under its run dir.
+async fn list_reapable_runs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ReapableQuery>,
+) -> Response {
+    let run_ids = match load_all_run_ids(&state.db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+
+    let now = chrono::Utc::now();
+    let mut entries = Vec::new();
+    for run_id in run_ids {
+        let events = match load_events(&state.db, &run_id).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let Some(run_state) = event_log::project(&events) else {
+            continue;
+        };
+
+        // Eligible = terminal AND not already reclaimed. `Archived` is terminal
+        // too, so `is_terminal()` alone is not enough — exclude it explicitly.
+        let eligible = run_state.status.is_terminal()
+            && run_state.status != event_log::RunStatus::Archived;
+        if !eligible {
+            continue;
+        }
+
+        let repo_root = effective_repo_root(&state, &run_state);
+        let run_dir = repo_root.join(".pdo").join("runs").join(&run_id);
+        let worktree_present =
+            run_dir.join("worktree").exists() || run_dir.join("nodes").exists();
+        if !worktree_present {
+            continue;
+        }
+
+        // Age from the terminal transition; `completed_at` is borrowed here,
+        // then moved into the entry below (compute before the move).
+        let age_secs = run_state
+            .completed_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| now.signed_duration_since(dt.with_timezone(&chrono::Utc)).num_seconds());
+
+        let approx_disk_bytes = if q.size {
+            dir_size_bytes(&run_dir)
+        } else {
+            None
+        };
+
+        entries.push(ReapableEntry {
+            run_id: run_state.run_id,
+            pipeline_name: run_state.pipeline_name,
+            status: run_state.status,
+            completed_at: run_state.completed_at,
+            age_secs,
+            worktree_present,
+            effective_repo: repo_root.to_string_lossy().into_owned(),
+            approx_disk_bytes,
+        });
+    }
+
+    Json(entries).into_response()
+}
+
 async fn get_run(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -5818,8 +5974,12 @@ async fn node_done(
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
 
-    // Per #23: session stays alive for terminal preview. The reaper kills it
-    // after the TTL (default 1h), or cleanup_run kills it immediately.
+    // Post-#205: a node's tmux session is snapshot-then-killed *immediately* at
+    // its terminal transition (see the "#205" reaps below), so post-mortem
+    // preview survives via the persisted pane snapshot, not a lingering session.
+    // The reaper TTL is now only an escaped-session backstop, not the primary
+    // kill path. `cleanup_run` additionally removes the worktree/branches on
+    // demand; the runtime never deletes those on its own (ADR-0012(a), #128).
 
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
@@ -9185,6 +9345,290 @@ mod tests {
             .unwrap();
         let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(runs.is_empty());
+    }
+
+    // --- GET /runs/reapable (#128 Track A) -----------------------------------
+    //
+    // Read-only surfacing of terminal runs whose on-disk worktree(s) still
+    // exist, so a human or a janitor pipeline can reclaim the disk via the
+    // explicit `cleanup_run` command. The runtime NEVER deletes here
+    // (ADR-0012(a)); `reaper_never_deletes_worktree` below is the executable
+    // pin of that doctrine.
+
+    /// Seed a run as `RunStarted` followed by `extra` run-level events (e.g.
+    /// `RunCompleted`, `RunFailed`, `RunArchived`), with no nodes spawned. Lets
+    /// the `/runs/reapable` tests construct a run in any terminal/live status.
+    async fn seed_run_with_run_events(
+        state: &Arc<AppState>,
+        run_id: &str,
+        pipeline_name: &str,
+        extra: &[event_log::EventKind],
+    ) {
+        let mut events = vec![event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": pipeline_name })),
+        }];
+        for kind in extra {
+            events.push(event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: kind.clone(),
+                node_id: None,
+                iter: None,
+                payload: None,
+            });
+        }
+        for ev in &events {
+            append_event(state, ev).await.unwrap();
+        }
+    }
+
+    /// Create the on-disk worktree dir the daemon would have forked for a run,
+    /// so the `/runs/reapable` `worktree_present` check sees it.
+    fn mk_run_worktree_dir(repo_root: &std::path::Path, run_id: &str) {
+        std::fs::create_dir_all(
+            repo_root
+                .join(".pdo")
+                .join("runs")
+                .join(run_id)
+                .join("worktree"),
+        )
+        .unwrap();
+    }
+
+    async fn get_reapable(state: &Arc<AppState>, query: &str) -> Vec<serde_json::Value> {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/reapable{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "GET /runs/reapable should 200");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn reapable_lists_terminal_run_with_worktree_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-completed";
+        seed_run_with_run_events(&state, run_id, "test-pipe", &[
+            event_log::EventKind::RunCompleted,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+
+        let runs = get_reapable(&state, "").await;
+        assert_eq!(runs.len(), 1, "expected the completed worktree-present run: {runs:?}");
+        let e = &runs[0];
+        assert_eq!(e["run_id"], run_id);
+        assert_eq!(e["pipeline_name"], "test-pipe");
+        assert_eq!(e["status"], "completed");
+        assert_eq!(e["worktree_present"], true);
+        assert!(e["completed_at"].is_string(), "completed_at must be surfaced");
+        assert!(
+            e["age_secs"].as_i64().map(|a| a >= 0).unwrap_or(false),
+            "age_secs must be a non-negative number: {:?}",
+            e.get("age_secs")
+        );
+        // No size requested → the field is omitted (default stays fast).
+        assert!(
+            e.get("approx_disk_bytes").is_none() || e["approx_disk_bytes"].is_null(),
+            "approx_disk_bytes must be absent without ?size=true"
+        );
+    }
+
+    #[tokio::test]
+    async fn reapable_excludes_live_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        // Running (RunStarted only) and Paused are both live — never reapable,
+        // even with a worktree on disk.
+        seed_run_with_run_events(&state, "reap-running", "p", &[]).await;
+        mk_run_worktree_dir(tmp.path(), "reap-running");
+        seed_run_with_run_events(&state, "reap-paused", "p", &[
+            event_log::EventKind::RunPaused,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), "reap-paused");
+
+        let runs = get_reapable(&state, "").await;
+        assert!(runs.is_empty(), "live runs must never be reapable: {runs:?}");
+    }
+
+    #[tokio::test]
+    async fn reapable_excludes_archived_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-archived";
+        seed_run_with_run_events(&state, run_id, "p", &[
+            event_log::EventKind::RunCompleted,
+            event_log::EventKind::RunArchived,
+        ])
+        .await;
+        // Even if a stray worktree dir lingers, an archived run never surfaces
+        // (its disk was already reclaimed by cleanup_run).
+        mk_run_worktree_dir(tmp.path(), run_id);
+
+        let runs = get_reapable(&state, "").await;
+        assert!(runs.is_empty(), "archived runs are already reclaimed: {runs:?}");
+    }
+
+    #[tokio::test]
+    async fn reapable_reflects_worktree_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-gone";
+        seed_run_with_run_events(&state, run_id, "p", &[
+            event_log::EventKind::RunCompleted,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+        assert_eq!(
+            get_reapable(&state, "").await.len(),
+            1,
+            "present worktree → listed"
+        );
+
+        // Reclaim the disk (what cleanup_run does to the worktree) → drops off.
+        std::fs::remove_dir_all(tmp.path().join(".pdo").join("runs").join(run_id)).unwrap();
+        assert!(
+            get_reapable(&state, "").await.is_empty(),
+            "gone worktree → de-listed"
+        );
+    }
+
+    #[tokio::test]
+    async fn reapable_tags_terminal_status_for_consumer_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        // Surfacing is read-only: Failed/Halted/Skipped all appear, each tagged
+        // with its status, so the consumer (janitor recipe) applies its own
+        // policy (e.g. completed-only). We do NOT pre-filter failures here.
+        seed_run_with_run_events(&state, "reap-failed", "p", &[
+            event_log::EventKind::RunFailed,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), "reap-failed");
+        seed_run_with_run_events(&state, "reap-halted", "p", &[
+            event_log::EventKind::RunHalted,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), "reap-halted");
+        seed_run_with_run_events(&state, "reap-skipped", "p", &[
+            event_log::EventKind::RunSkipped,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), "reap-skipped");
+
+        let runs = get_reapable(&state, "").await;
+        let by_id: std::collections::HashMap<String, String> = runs
+            .iter()
+            .map(|e| {
+                (
+                    e["run_id"].as_str().unwrap().to_string(),
+                    e["status"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(by_id.get("reap-failed").map(String::as_str), Some("failed"));
+        assert_eq!(by_id.get("reap-halted").map(String::as_str), Some("halted"));
+        assert_eq!(
+            by_id.get("reap-skipped").map(String::as_str),
+            Some("skipped")
+        );
+        assert_eq!(runs.len(), 3, "all three terminal-non-archived runs surface");
+    }
+
+    #[tokio::test]
+    async fn reapable_size_query_reports_disk_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-size";
+        seed_run_with_run_events(&state, run_id, "p", &[
+            event_log::EventKind::RunCompleted,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+        std::fs::write(
+            tmp.path()
+                .join(".pdo")
+                .join("runs")
+                .join(run_id)
+                .join("worktree")
+                .join("blob.bin"),
+            vec![0u8; 4096],
+        )
+        .unwrap();
+
+        // ?size=true → a numeric size reflecting the on-disk bytes.
+        let runs = get_reapable(&state, "?size=true").await;
+        assert_eq!(runs.len(), 1);
+        let bytes = runs[0]["approx_disk_bytes"].as_u64();
+        assert!(
+            bytes.map(|b| b >= 4096).unwrap_or(false),
+            "expected approx_disk_bytes >= 4096, got {:?}",
+            runs[0].get("approx_disk_bytes")
+        );
+    }
+
+    /// DOCTRINE INVARIANT (ADR-0012(a)): the reaper sweep kills tmux sessions
+    /// but MUST NEVER delete a run's worktree or branches, nor archive the run.
+    /// This pins the verdict of the #128 grilling — a future change that makes
+    /// the runtime auto-delete will turn this test red.
+    #[tokio::test]
+    async fn reaper_never_deletes_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "doctrine-completed";
+        seed_run_with_run_events(&state, run_id, "p", &[
+            event_log::EventKind::RunCompleted,
+        ])
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+        let worktree = tmp
+            .path()
+            .join(".pdo")
+            .join("runs")
+            .join(run_id)
+            .join("worktree");
+        assert!(worktree.exists(), "precondition: worktree on disk");
+
+        // Run the reaper with maximum aggression (ttl=0) against an isolated,
+        // non-existent tmux socket (no sessions to kill — we only care that the
+        // sweep leaves the disk and run status untouched).
+        run_orphan_sweep(
+            &state.db,
+            "pdo-test-doctrine-nonexistent",
+            std::time::Duration::ZERO,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            worktree.exists(),
+            "DOCTRINE REGRESSION: reaper deleted the worktree"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(
+            run_state.status,
+            event_log::RunStatus::Completed,
+            "DOCTRINE REGRESSION: reaper archived the run on its own"
+        );
     }
 
     #[tokio::test]

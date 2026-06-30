@@ -67,6 +67,7 @@ impl TestDaemon {
                 tmux_cmd_override,
                 panic_on_trigger_name: None,
                 panic_on_stale_sweep: false,
+                panic_on_spawn: false,
             },
         )
         .await?;
@@ -99,6 +100,7 @@ impl TestDaemon {
                 tmux_cmd_override: Some("exec sleep 600".to_string()),
                 panic_on_trigger_name: Some(panic_name.to_string()),
                 panic_on_stale_sweep: false,
+                panic_on_spawn: false,
             },
         )
         .await?;
@@ -152,6 +154,16 @@ impl TestDaemon {
     pub fn arm_stale_panic(&self) {
         if let Some(handle) = self.handle.as_ref() {
             handle.arm_stale_panic();
+        }
+    }
+
+    /// Arm the one-shot spawn poison so the next `spawn_node` panics inside its
+    /// post-worktree span, then disarms itself (#279 fault injection, test seam).
+    /// Arm *after* boot and *before* the spawn under test (e.g. before `POST
+    /// /runs` so the entry-node spawn consumes it).
+    pub fn arm_spawn_panic(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.arm_spawn_panic();
         }
     }
 

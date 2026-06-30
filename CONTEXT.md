@@ -554,12 +554,13 @@ Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts, événements |
 | `rename_run` | Donne au Run un nom descriptif (remplace le nom placeholder posé au spawn) |
+| `start_node` | Spawne un NodeRun immédiatement, sans attendre la complétion amont (force-spawn) ; inputs résolus best-effort ; refusé (`409`) si le Run n'accepte pas de spawn ou si le cap de sessions est atteint |
 
 L'effet de chaque commande est l'**append d'un événement** dans l'event log. Le runtime consomme ces événements et agit en conséquence.
 
 ### Ce que le manager ne peut **pas** faire
 
-- **Spawner des sous-agents ad hoc.** Pas d'orchestration probabiliste émergente. Le manager parle, lit, et exécute des commandes prédéfinies. Si l'utilisateur veut une investigation profonde, il attache directement la session tmux du nœud concerné.
+- **Spawner des sous-agents ad hoc hors-DAG.** Pas d'orchestration probabiliste émergente. Le manager parle, lit, et exécute des commandes prédéfinies. Il peut en revanche force-spawn un nœud **déjà déclaré** dans le DAG via `start_node` (hors ordre de dépendance). Si l'utilisateur veut une investigation profonde, il attache directement la session tmux du nœud concerné.
 
 ---
 

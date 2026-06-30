@@ -13,6 +13,7 @@ import {
   markNodeDone,
   killNode,
   restartNode,
+  startNode,
   stopNode,
   retryNode,
   retryNodePreview,
@@ -208,6 +209,17 @@ export default function NodeDetailPanel({
     }
   }, [runId, node.node_id]);
 
+  // #204: force-spawn a pending node out of dependency order. The daemon owns
+  // the run-status gate (a non-spawnable run returns 409), so a click on a
+  // pending node in a terminal run just no-ops with a caught error.
+  const handleStart = useCallback(async () => {
+    try {
+      await startNode(runId, node.node_id);
+    } catch {
+      // best-effort
+    }
+  }, [runId, node.node_id]);
+
   const handleMarkComplete = useCallback(async () => {
     setMissingOutputs(null);
     try {
@@ -260,7 +272,7 @@ export default function NodeDetailPanel({
         </div>
       </div>
 
-      {!isArchived && node.status !== "pending" && (
+      {!isArchived && (
         <div
           className="flex items-center gap-1.5 border-b border-line px-3 py-1.5"
           data-testid="node-controls"
@@ -279,6 +291,17 @@ export default function NodeDetailPanel({
             <Square size={10} />
             Stop
           </button>
+          {node.status === "pending" && (
+            <button
+              data-testid="start-btn"
+              onClick={handleStart}
+              className={RETRY_BUTTON_CLASS}
+              style={RETRY_BUTTON_STYLE}
+            >
+              <Play size={10} />
+              Start
+            </button>
+          )}
           <RetryPlayButton status={node.status} onClick={handleRetry} />
         </div>
       )}

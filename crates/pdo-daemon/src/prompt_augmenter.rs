@@ -523,6 +523,16 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"rename_run","name":"<display name>"}}'
 ```
 
+### 9. start_node
+
+Force-spawn a node now, without waiting for its upstream producers to complete. Use when you deliberately want to start a node ahead of its dependencies. Inputs resolve best-effort: any not-yet-produced upstream artifact resolves to the path where it *will* appear, so the node may run against missing or stale inputs. This is reversible — `restart_node` or `kill_node` it if it ran too early.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"start_node","node_id":"<node-id>"}}'
+```
+
 ---
 
 "#

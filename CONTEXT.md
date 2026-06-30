@@ -657,6 +657,7 @@ ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS nat
 - **Statut** (pending / running / awaiting_user / done / failed / blocked) — projeté depuis l'event log.
 - **Terminal interactif inline** dans le panneau de détail du nœud, rendu via xterm.js. Le daemon expose `WS /sessions/<id>/pty` : pour chaque connexion, il spawn `tmux attach -t <session>` dans un PTY (crate `portable-pty`) et bridge les bytes I/O entre le browser et le PTY. Bidirectionnel : l'utilisateur tape dedans, voit la sortie en temps réel. Plus de polling 1-2 s — la WebSocket pousse.
 - **Icônes du panneau** : (1) **agrandir** — le terminal occupe tout l'espace vertical du panneau de détail ; (2) **détacher** — fallback opt-in qui spawn une fenêtre OS native (`gnome-terminal`/`konsole`/`Terminal.app`/`kitty`) attachée à la session via `tmux attach`. Garde un escape hatch pour les cas limite (copy-paste exotique, freeze WebSocket).
+- **« agrandir » est toujours un geste utilisateur explicite (#270)** : ni la sélection d'un nœud, ni l'auto-snap sur le nœud vivant à l'entrée d'un Run live n'agrandit le terminal de lui-même. On garde l'auto-sélection du nœud vivant ; seule l'expansion forcée est retirée. Un réglage rendant l'auto-agrandissement opt-in est différé à la page de réglages (#129, n'existe pas encore).
 
 Détection du terminal natif (pour l'icône détacher) : variable `PDO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
 

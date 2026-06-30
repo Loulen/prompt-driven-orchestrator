@@ -159,11 +159,6 @@ export default function App() {
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
-  // Tracks the node id last filled in by auto-selection. Used to decide
-  // whether to start the terminal in fullsize for the current selection.
-  const [autoSelectedNodeId, setAutoSelectedNodeId] = useState<string | null>(
-    null,
-  );
 
   // Track which library-YAML version we've already prompted about for a given
   // run-scoped tab. Re-prompting only when the library changes again avoids
@@ -275,7 +270,6 @@ export default function App() {
           runId={selectedRun.run_id}
           isArchived={isArchived}
           nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
-          initialTerminalExpanded={isAutoSelected}
         />
       );
     }
@@ -344,16 +338,7 @@ export default function App() {
     const nodeId = pickLatestLiveNode(selectedRun);
     if (!nodeId) return;
     setSelection({ kind: "node", id: nodeId });
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- bounded cascade: setSelection above takes the kind!="none" branch on the next run, so this effect won't re-fire and tag a second node.
-    setAutoSelectedNodeId(nodeId);
   }, [selectedRun, selection.kind, selection.id, setSelection]);
-
-  // The marker only counts while it matches the current selection; once the
-  // user picks a different node manually, the comparison falls to false.
-  const isAutoSelected =
-    selection.kind === "node" &&
-    selection.id != null &&
-    selection.id === autoSelectedNodeId;
 
   const handleSelectRun = useCallback(
     async (runId: string) => {
@@ -636,7 +621,6 @@ export default function App() {
                     runId={selectedRun.run_id}
                     isArchived={isArchived}
                     nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
-                    initialTerminalExpanded={selectedNodeId != null && selectedNodeId === autoSelectedNodeId}
                   />
                 )}
                 {!selectedNode && selectedNodeType !== "start" && isArchived && selectedRun && (

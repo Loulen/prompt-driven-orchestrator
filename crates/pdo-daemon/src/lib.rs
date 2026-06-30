@@ -6238,11 +6238,43 @@ async fn node_skip(
         .into_response()
 }
 
+/// REST entry point for the UI **Start** button (#204): force-spawn `node_id`
+/// out of dependency order. A thin wrapper — all logic and guards live in the
+/// shared [`force_spawn_node`] helper, which the `start_node` manager
+/// `/commands` kind also calls, so the two consumers can never drift.
 async fn node_start(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
 ) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
+    force_spawn_node(&state, &run_id, &node_id).await
+}
+
+/// Force-spawn a node now, without waiting for its upstream producers to
+/// complete (#204). The single implementation behind both consumers: the UI
+/// **Start** button (REST `POST .../nodes/{node}/start` → [`node_start`]) and
+/// the Pipeline Manager `start_node` `/commands` kind. Keeping the body here
+/// means the guards below live in exactly one place.
+///
+/// Guards run **before** any side effect, in order:
+///  - run must exist (`404`) and the node must not already be `Running` (`409`);
+///  - **D4 (orphan-session fix):** the derived `NodeStarted` is pre-validated
+///    through [`transition_guard`] *before* the primitive spawns its tmux
+///    session. `node_primitives::start_node` spawns the session and only then
+///    returns the event for the caller to append, so leaning on `append_event`'s
+///    backstop alone would leave an orphan session (and a lying `200`) whenever
+///    the run cannot accept a start. `RunStatus::is_live()` is deliberately
+///    *not* the predicate: it admits `Paused`, which the append backstop
+///    (`run_accepts_lifecycle` = `Running`/`AwaitingUser`) rejects — that gap
+///    would orphan a session on a paused run. Pre-validating the actual event
+///    with the same guard the backstop uses keeps the two in lockstep and also
+///    refuses a concurrent live iteration. Mirrors `spawn_node`'s own probe.
+///  - **D5 (cap fail-fast):** acquire `admission_lock` and reject with `409` if
+///    spawning one more session would exceed the global cap (#77/#78). The lock
+///    is held across the spawn + append so the check-and-reserve is atomic, as
+///    `spawn_node` does. Force-spawn fails fast rather than queueing to
+///    `waiting` — "start now" must not silently defer.
+async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) -> Response {
+    let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
@@ -6259,7 +6291,7 @@ async fn node_start(
         }
     };
 
-    if let Some(ns) = run_state.nodes.get(&node_id) {
+    if let Some(ns) = run_state.nodes.get(node_id) {
         if ns.status == event_log::NodeStatus::Running {
             return (
                 StatusCode::CONFLICT,
@@ -6269,9 +6301,39 @@ async fn node_start(
         }
     }
 
-    let repo_root = effective_repo_root(&state, &run_state);
+    let iter = run_state
+        .nodes
+        .get(node_id)
+        .map(|ns| ns.iter + 1)
+        .unwrap_or(1);
+
+    // D4 (#204): pre-validate the start against the SAME transition guard that
+    // backstops `append_event`, BEFORE the primitive spawns a tmux session — so
+    // a start refused by the backstop never leaves an orphan session behind.
+    let started_probe = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeStarted,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: None,
+    };
+    match transition_guard::validate_transition(Some(&run_state), &started_probe) {
+        transition_guard::Verdict::Allow => {}
+        transition_guard::Verdict::NoOp { reason }
+        | transition_guard::Verdict::Reject { reason } => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": reason })),
+            )
+                .into_response();
+        }
+    }
+
+    let repo_root = effective_repo_root(state, &run_state);
     let pipeline_path = {
-        let run_scoped = run_scoped_pipeline_path(&repo_root, &run_id);
+        let run_scoped = run_scoped_pipeline_path(&repo_root, run_id);
         if run_scoped.exists() {
             run_scoped
         } else {
@@ -6286,19 +6348,13 @@ async fn node_start(
     };
     let pipeline_def = parse_result.pipeline;
 
-    let iter = run_state
-        .nodes
-        .get(&node_id)
-        .map(|ns| ns.iter + 1)
-        .unwrap_or(1);
-
-    let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
+    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
     let resolved_vars = resolve_run_variables(&pipeline_def, &events);
 
     let params = node_primitives::StartNodeParams {
-        run_id: &run_id,
-        node_id: &node_id,
+        run_id,
+        node_id,
         iter,
         overrides: None,
         pipeline: &pipeline_def,
@@ -6312,17 +6368,38 @@ async fn node_start(
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
     };
 
+    // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
+    // from the count until the reservation event is appended — exactly as
+    // `spawn_node` does — so concurrent force-spawns can't both claim the same
+    // free slot and overshoot the cap toward the tmux-server collapse point
+    // (#77/#78). Force-spawn fails fast at the cap instead of queueing to
+    // `waiting`, which would defeat "start now".
+    let _admission_guard = state.admission_lock.lock().await;
+    let cap = admission::configured_cap();
+    let live = count_global_live_sessions(&state.db).await;
+    if !admission::can_admit(live, cap) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "session cap reached",
+                "live_sessions": live,
+                "cap": cap,
+            })),
+        )
+            .into_response();
+    }
+
     let result = node_primitives::start_node(&params);
 
     for ev in &result.events {
-        if let Err(e) = append_event(&state, ev).await {
+        if let Err(e) = append_event(state, ev).await {
             error!("failed to append event: {e}");
         }
     }
 
     match result.outcome {
         node_primitives::PrimitiveOutcome::Executed => {
-            info!("node_start: started {node_id} iter {iter} in run {run_id}");
+            info!("force_spawn_node: started {node_id} iter {iter} in run {run_id}");
             (
                 StatusCode::OK,
                 Json(serde_json::json!({ "ok": true, "iter": iter })),
@@ -7220,6 +7297,40 @@ async fn run_command(
 
             info!("restart_node: node {node_id} iter {iter} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        "start_node" => {
+            // Force-spawn a node out of dependency order (#204). The manager
+            // twin of the UI Start button: both funnel through `force_spawn_node`,
+            // which derives the iteration and owns the run-status (D4) and
+            // admission-cap (D5) guards. `req.iter` is deliberately ignored —
+            // letting the manager pin an iter would fight that derivation.
+            let Some(node_id) = req.node_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "node_id required for start_node" })),
+                )
+                    .into_response();
+            };
+
+            // Audit the manager's intent before acting, mirroring the other
+            // command arms' `CommandIssued` parity event.
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "start_node",
+                    "node_id": node_id,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                error!("failed to append start_node command event: {e}");
+            }
+
+            force_spawn_node(&state, &run_id, &node_id).await
         }
         "inject_artifact" => {
             let Some(path) = req.path else {
@@ -16278,6 +16389,183 @@ edges: []
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- Force-spawn via the `start_node` manager command (#204) ---
+
+    /// Append a run-level terminal event directly (not lifecycle-guarded), so a
+    /// test can drive a seeded run to a terminal status without spawning nodes.
+    async fn seed_run_terminal(state: &Arc<AppState>, run_id: &str, kind: event_log::EventKind) {
+        let ev = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind,
+            node_id: None,
+            iter: None,
+            payload: None,
+        };
+        append_event(state, &ev).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_node_command_force_spawns_pending_node() {
+        // Happy path: the `start_node` /commands kind force-spawns a pending
+        // worker on a live run, returns 200, and lands a NodeStarted event
+        // (proving the spawn went through `force_spawn_node`).
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "start-cmd-ok";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "start_node", "node_id": "worker" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        // The audit CommandIssued event landed...
+        assert!(
+            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
+                && e.payload
+                    .as_ref()
+                    .and_then(|p| p.get("command"))
+                    .and_then(|c| c.as_str())
+                    == Some("start_node")),
+            "expected a start_node CommandIssued audit event"
+        );
+        // ...and so did the NodeStarted the force-spawn produced.
+        assert!(
+            events.iter().any(|e| e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some("worker")),
+            "expected a NodeStarted event for the force-spawned worker"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_node_command_requires_node_id() {
+        let state = test_state().await;
+        let run_id = "start-cmd-no-node";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "start_node" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn force_spawn_on_terminal_run_is_rejected_without_orphan_session() {
+        // D4 (#204) orphan-session regression: force-spawning on a terminal run
+        // must be rejected with 409 BEFORE the tmux session is spawned. Pre-fix
+        // the primitive spawned first and the handler returned 200 while the
+        // NodeStarted append was silently rejected — an orphan session + lying
+        // 200. We assert the 409 (only the pre-spawn guard produces it) and that
+        // no NodeStarted event ever landed.
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "start-terminal";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_run_terminal(&state, run_id, event_log::EventKind::RunCompleted).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/start"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "no NodeStarted may be appended when force-spawn is rejected on a terminal run"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_spawn_at_session_cap_is_rejected() {
+        // D5 (#204): force-spawn must fail fast with 409 when the global session
+        // cap is already reached, rather than push past it toward tmux-server
+        // collapse (#77/#78). Seed `DEFAULT_SESSION_CAP` live sessions in a
+        // filler run so the assertion holds for any configured cap ≤ default
+        // (race-free vs the env-var cap test — no global state touched).
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let filler = "cap-filler";
+        seed_run_for_node_control(&state, filler, "test-pipe").await;
+        for i in 0..admission::DEFAULT_SESSION_CAP {
+            seed_node_started(&state, filler, &format!("filler-{i}"), 1).await;
+        }
+        assert_eq!(
+            count_global_live_sessions(&state.db).await,
+            admission::DEFAULT_SESSION_CAP
+        );
+
+        let run_id = "cap-target";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/start"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "session cap reached");
+
+        // The target's worker must not have started.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "no NodeStarted may be appended when force-spawn is rejected at the cap"
+        );
     }
 
     #[tokio::test]

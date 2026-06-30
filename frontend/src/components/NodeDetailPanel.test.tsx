@@ -22,6 +22,7 @@ const tmuxUnmountCount = { current: 0 };
 const killNodeMock = vi.fn().mockResolvedValue(undefined);
 const restartNodeMock = vi.fn().mockResolvedValue(undefined);
 const stopNodeMock = vi.fn().mockResolvedValue(undefined);
+const startNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 1 });
 const retryNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
 const retryNodePreviewMock = vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
 
@@ -34,7 +35,7 @@ vi.mock("../api", () => ({
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
   retryNode: (...args: unknown[]) => retryNodeMock(...args),
   retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
-  startNode: vi.fn(),
+  startNode: (...args: unknown[]) => startNodeMock(...args),
   attachSession: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
@@ -104,6 +105,7 @@ describe("NodeDetailPanel", () => {
     killNodeMock.mockClear();
     restartNodeMock.mockClear();
     stopNodeMock.mockClear();
+    startNodeMock.mockClear();
     retryNodeMock.mockClear();
     retryNodePreviewMock.mockClear();
     retryNodePreviewMock.mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
@@ -769,13 +771,18 @@ describe("NodeDetailPanel", () => {
       expect(stopBtn).toBeDisabled();
     });
 
-    it("does not show controls when node is pending", () => {
+    it("shows controls with a disabled Stop and a Start button when node is pending (#204)", () => {
+      // Un-gating the controls bar for pending nodes (#204) exposes the Start
+      // button. The Stop button stays present but disabled (only `running` can
+      // be stopped).
       render(
         <TooltipProvider>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
         </TooltipProvider>,
       );
-      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
+      expect(screen.getByTestId("node-controls")).toBeInTheDocument();
+      expect(screen.getByTestId("stop-btn")).toBeDisabled();
+      expect(screen.getByTestId("start-btn")).toBeInTheDocument();
     });
 
     it("does not show controls for archived runs", () => {
@@ -863,6 +870,54 @@ describe("NodeDetailPanel", () => {
       });
       expect(retryNodePreviewMock).toHaveBeenCalledWith("run-1", "test-node");
       expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+  });
+
+  describe("Start button (#204)", () => {
+    it("shows a Start button on a pending node", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      const startBtn = screen.getByTestId("start-btn");
+      expect(startBtn).toBeInTheDocument();
+      expect(startBtn).toHaveTextContent("Start");
+    });
+
+    it("clicking Start force-spawns the node via startNode API", async () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("start-btn"));
+      });
+      expect(startNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("does not show a Start button on a running node", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
+    });
+
+    it("does not show a Start button on a pending node of an archived run", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "pending" })}
+            runId="run-1"
+            isArchived
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
     });
   });
 

@@ -473,7 +473,7 @@ Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script option
 
 **Un firing = un Run.** PDO ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
 
-**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `PDO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable plus tard, #129), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
+**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `PDO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable via la *Configuration d'instance*, en secondes ; #129, ADR-0015 — l'env `PDO_GUARD_TIMEOUT_MS` reste le seam de test), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
 
 **Références cassées** : si le pipeline (library) ou le repo cible d'un Trigger a été supprimé/renommé depuis la création, le Trigger **ne fire plus et affiche un `last_outcome` d'erreur** (« pipeline not found ») dans l'onglet — pas d'auto-suppression, pas de pourrissement silencieux (*Sharp tool* : on surface, on ne masque pas).
 
@@ -620,6 +620,19 @@ Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmenta
 
 ---
 
+## Configuration d'instance (instance-wide config)
+
+Réglages **daemon-wide** — ils s'appliquent à *toutes* les Runs/Triggers d'une instance PDO, à distinguer d'une variable *pipeline* (scopée à un pipeline) ou d'un override de Run. Livrés par la **page de réglages instance-wide** (#129, ADR-0015). _Éviter_ : « préférences globales », « config » tout court (ambigu avec la config pipeline).
+
+- **Store** : table SQLite **singleton** `instance_config` de `pdo.db` (une seule ligne, `id = 1`, seedée à l'`init` avec les défauts). Même justification que les Triggers (config + état mutable, pas un artefact canvas-backed → mauvais fit YAML, cf. *Persistence — table SQLite*). Nouveau réglage = colonne `ALTER TABLE … ADD COLUMN` idempotente (précédent `max_concurrent` #239), jamais de migration runner.
+- **Réglages v1** : (1) **cap de sessions** (cf. *Cap de sessions concurrentes*) ; (2) **reaper TTL** (cf. *Reap sur état terminal*) ; (3) **timeout du guard de Trigger** (cf. *Trigger* — exposé en **secondes**, l'env `PDO_GUARD_TIMEOUT_MS` reste le seam de test en ms). Le troisième est *sécable* : le tracer minimal = cap + reaper TTL.
+- **Précédence `stored → env → default`** (ADR-0015) : la valeur **stockée (UI) gagne**, l'env est un bootstrap consulté quand le stored est `NULL`, le défaut est le plancher. _Éviter_ : « l'env gagne » (rendrait la page no-op pour les opérateurs qui l'utilisent).
+- **API** : `GET /settings` renvoie par champ `{ effective, source, stored, env, default }` (`source ∈ {stored, env, default}`) — assez riche pour que l'UI **révèle** un env masqué (« `PDO_SESSION_CAP=10` positionné mais surclassé par 30 »). `PUT /settings` écrit le seul tier `stored`, valide **fail-fast** (rejet `400` : cap `< 1`, TTL `< 1`, timeout hors `[1, 600]` s — pas de retombée silencieuse sur le défaut comme le parseur d'env). `GET /sessions` (barre de statut) reste inchangé.
+- **Prise d'effet sans redémarrage** : le reaper TTL est lu **une fois au boot** et figé dans la closure de la boucle de balayage — un `PUT` reste un no-op tant que la lecture n'est pas déplacée *dans* le corps de la boucle. Le cap (lu frais par admission) et le timeout guard (lu frais par tick) n'ont pas ce défaut.
+- **Hors scope (frontière ADR)** : « le manager vérifie périodiquement le pipeline » reste **exclu** — réveiller le manager depuis le runtime renverse *Pas de polling actif* (cf. *Pipeline Manager*) et touche l'origine-de-l'autonomie d'ADR-0012 ; décision humaine/ADR séparée.
+
+---
+
 ## Sessions tmux
 
 ### Modèle d'exécution
@@ -638,7 +651,7 @@ Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** 
 - **Définition de « session vivante » (#215)** : un nœud `Running`/`AwaitingUser` ne compte que s'il appartient à un **Run lui-même vivant** (`Running`/`AwaitingUser`/`Paused`). Un nœud resté `Running`/`AwaitingUser` dans un Run **terminal** (`Completed`/`Failed`/`Halted`, ou `Archived`) ne tient plus de session par construction (les sessions sont reapées à l'entrée terminale, #205) : le compter serait un artefact de projection qui ampute le cap d'un slot fantôme à vie. Le compteur (`count_live_node_sessions`) filtre donc sur la *liveness du Run*, pas seulement sur `≠ Archived`. (Le `RunStatus` terminal est `Completed`/`Failed`/`Halted` — il n'existe pas de `RunStatus::Stopped` ; `Stopped` est un statut de *nœud*.)
 - **Admission par spawn de nœud**, pas par Run : quand le scheduler veut spawner un NodeRun et que `live_sessions + 1 > cap`, le nœud passe en état **`waiting`** jusqu'à libération d'un slot, puis spawn. Le Run est admis immédiatement ; ce sont les *nœuds* qui s'étranglent.
 - **Les sessions Pipeline Manager ne comptent pas** dans le cap (légères, 1/Run ; les compter risquerait un soft-deadlock où N managers saturent le budget sans laisser de slot au travail réel).
-- **Valeur configurable** sur la page de réglages instance-wide (#129, n'existe pas encore).
+- **Valeur configurable** via la *Configuration d'instance* (page de réglages instance-wide ; #129, ADR-0015). Précédence `stored → env → default` : la valeur UI surclasse `PDO_SESSION_CAP`, lue frais à chaque décision d'admission (prend effet sans redémarrage).
 - **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde. C'est une **gauge instantanée** (sessions *vivantes* à l'instant T, au plus une par nœud) — **à ne pas confondre** avec la stat **« Sessions de nœud lancées »** d'un Run (total *cumulatif* des `NodeStarted`, cf. *Statistiques de Run* dans le cycle de vie).
 - **Admission atomique (check-and-reserve, #213)** : la décision d'admission (compter les sessions vivantes → décider → réserver le slot en appendant `NodeStarted`/`NodeWaiting`) est sérialisée par un verrou (`admission_lock`). Sans lui, des spawns concurrents (retries des nœuds `waiting` sur plusieurs Runs) observent tous le même slot libre et dépassent le cap.
 
@@ -660,7 +673,7 @@ ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS nat
 - **Statut** (pending / running / awaiting_user / done / failed / blocked) — projeté depuis l'event log.
 - **Terminal interactif inline** dans le panneau de détail du nœud, rendu via xterm.js. Le daemon expose `WS /sessions/<id>/pty` : pour chaque connexion, il spawn `tmux attach -t <session>` dans un PTY (crate `portable-pty`) et bridge les bytes I/O entre le browser et le PTY. Bidirectionnel : l'utilisateur tape dedans, voit la sortie en temps réel. Plus de polling 1-2 s — la WebSocket pousse.
 - **Icônes du panneau** : (1) **agrandir** — le terminal occupe tout l'espace vertical du panneau de détail ; (2) **détacher** — fallback opt-in qui spawn une fenêtre OS native (`gnome-terminal`/`konsole`/`Terminal.app`/`kitty`) attachée à la session via `tmux attach`. Garde un escape hatch pour les cas limite (copy-paste exotique, freeze WebSocket).
-- **« agrandir » est toujours un geste utilisateur explicite (#270)** : ni la sélection d'un nœud, ni l'auto-snap sur le nœud vivant à l'entrée d'un Run live n'agrandit le terminal de lui-même. On garde l'auto-sélection du nœud vivant ; seule l'expansion forcée est retirée. Un réglage rendant l'auto-agrandissement opt-in est différé à la page de réglages (#129, n'existe pas encore).
+- **« agrandir » est toujours un geste utilisateur explicite (#270)** : ni la sélection d'un nœud, ni l'auto-snap sur le nœud vivant à l'entrée d'un Run live n'agrandit le terminal de lui-même. On garde l'auto-sélection du nœud vivant ; seule l'expansion forcée est retirée. Un réglage rendant l'auto-agrandissement opt-in est différé : la *Configuration d'instance* existe (#129, ADR-0015) mais ce toggle terminal-spécifique reste hors du scope MVP de #129.
 
 Détection du terminal natif (pour l'icône détacher) : variable `PDO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
 

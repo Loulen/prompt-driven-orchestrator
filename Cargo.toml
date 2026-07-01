@@ -4,7 +4,7 @@ members = ["crates/pdo-daemon"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.49"
+version = "0.1.50"
 license = "MIT"
 
 [workspace.dependencies]

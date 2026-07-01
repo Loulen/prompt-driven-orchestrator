@@ -409,13 +409,41 @@ pub struct NodeRunInfo {
     pub is_archived: bool,
 }
 
-/// Read the reaper TTL from the env or use the default.
+/// Resolve the reaper TTL, `stored → env → default` (#129, ADR-0015).
+///
+/// `stored_secs` is the instance-wide setting persisted via the settings page
+/// (or `None` when unset). A stored value `>= 1` wins; otherwise the env var
+/// [`REAPER_TTL_SECS_ENV`] applies; otherwise [`DEFAULT_REAPER_TTL`]. A stored
+/// `0` is ignored (a zero TTL would reap sessions the instant they complete).
+///
+/// The module stays pure: the caller loads the stored value and passes it in.
+/// [`reaper_ttl`] is the `stored = None` shorthand (env-only, unchanged).
+///
+/// **Load-bearing (ADR-0015):** the reaper reads this **inside its sweep loop**,
+/// not once at boot — otherwise a `PUT /settings` is a silent no-op until the
+/// daemon restarts.
+pub fn reaper_ttl_with(stored_secs: Option<u64>) -> Duration {
+    stored_secs
+        .filter(|&n| n >= 1)
+        .or_else(env_reaper_ttl_secs)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_REAPER_TTL)
+}
+
+/// Read the reaper TTL from the env var alone (`stored = None`).
 pub fn reaper_ttl() -> Duration {
+    reaper_ttl_with(None)
+}
+
+/// The reaper TTL (seconds) contributed by [`REAPER_TTL_SECS_ENV`] alone, or
+/// `None` when unset or unparseable.
+///
+/// Exposed so `GET /settings` can disclose a shadowed env var and compute the
+/// winning tier identically to [`reaper_ttl_with`] (#129, ADR-0015).
+pub fn env_reaper_ttl_secs() -> Option<u64> {
     std::env::var(REAPER_TTL_SECS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_REAPER_TTL)
 }
 
 /// Read the reaper interval from the env or use the default.
@@ -609,12 +637,26 @@ mod tests {
 
     #[test]
     fn reaper_ttl_default_and_from_env() {
+        // Single test on purpose: `REAPER_TTL_SECS_ENV` is process-global, so a
+        // second test mutating it concurrently would flake. The stored-precedence
+        // assertions (#129, ADR-0015) therefore live here too.
         std::env::remove_var(REAPER_TTL_SECS_ENV);
         assert_eq!(reaper_ttl(), Duration::from_secs(3600));
 
         std::env::set_var(REAPER_TTL_SECS_ENV, "5");
         assert_eq!(reaper_ttl(), Duration::from_secs(5));
+
+        // --- stored → env → default precedence (#129, ADR-0015) ---
+        // Stored wins over env.
+        assert_eq!(reaper_ttl_with(Some(120)), Duration::from_secs(120));
+        // A zero stored value is ignored → falls through to env.
+        assert_eq!(reaper_ttl_with(Some(0)), Duration::from_secs(5));
+        // No stored value → env applies.
+        assert_eq!(reaper_ttl_with(None), Duration::from_secs(5));
+        // No stored and no env → default; stored still wins when env is unset.
         std::env::remove_var(REAPER_TTL_SECS_ENV);
+        assert_eq!(reaper_ttl_with(None), DEFAULT_REAPER_TTL);
+        assert_eq!(reaper_ttl_with(Some(90)), Duration::from_secs(90));
     }
 
     #[test]

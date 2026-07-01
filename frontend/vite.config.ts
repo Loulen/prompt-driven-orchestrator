@@ -24,6 +24,7 @@ export default defineConfig({
       '/repos': daemonTarget,
       '/triggers': daemonTarget,
       '/stale': daemonTarget,
+      '/settings': daemonTarget,
     },
   },
   test: {

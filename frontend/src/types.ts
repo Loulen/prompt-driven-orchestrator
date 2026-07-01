@@ -15,6 +15,40 @@ export interface DaemonStatus {
   cap: number;
   version?: string;
 }
+
+/** Which tier won for an instance-config knob (#129, ADR-0015). */
+export type SettingSource = "stored" | "env" | "default";
+
+/**
+ * One instance-config knob as `GET /settings` discloses it (#129, ADR-0015):
+ * the `effective` value the daemon uses, the winning `source` tier, and each
+ * tier's raw value so the UI can *reveal* a shadowed env var. Values are in the
+ * knob's canonical unit (count for the cap, seconds for the TTL and guard
+ * timeout) — except `guard_timeout_secs.env`, which is the raw
+ * `PDO_GUARD_TIMEOUT_MS` value in milliseconds.
+ */
+export interface SettingField {
+  effective: number;
+  source: SettingSource;
+  stored: number | null;
+  env: number | null;
+  default: number;
+}
+
+/** The full `GET /settings` view (#129, ADR-0015). */
+export interface InstanceSettings {
+  session_cap: SettingField;
+  reaper_ttl_secs: SettingField;
+  guard_timeout_secs: SettingField;
+  updated_at: string;
+}
+
+/** A partial `PUT /settings` edit; omitted fields are left unchanged. */
+export interface UpdateSettingsRequest {
+  session_cap?: number;
+  reaper_ttl_secs?: number;
+  guard_timeout_secs?: number;
+}
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old
 // YAML into a region. `loop` was likewise removed in #171.

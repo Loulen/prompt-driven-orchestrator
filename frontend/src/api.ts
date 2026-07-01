@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest } from "./types";
 
 const BASE = "";
 
@@ -30,6 +30,33 @@ export async function fetchRuns(): Promise<RunListEntry[]> {
 export async function fetchSessions(): Promise<DaemonStatus> {
   const resp = await fetch(`${BASE}/sessions`);
   if (!resp.ok) throw new Error(`GET /sessions failed: ${resp.status}`);
+  return resp.json();
+}
+
+/** Instance-wide settings, per knob (#129, ADR-0015). */
+export async function fetchSettings(): Promise<InstanceSettings> {
+  const resp = await fetch(`${BASE}/settings`);
+  if (!resp.ok) throw new Error(`GET /settings failed: ${resp.status}`);
+  return resp.json();
+}
+
+/**
+ * Persist one or more instance-config knobs and return the recomputed view
+ * (#129, ADR-0015). Surfaces the daemon's fail-fast validation error (`400`)
+ * verbatim so the modal can show it.
+ */
+export async function updateSettings(
+  patch: UpdateSettingsRequest,
+): Promise<InstanceSettings> {
+  const resp = await fetch(`${BASE}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `PUT /settings failed: ${resp.status}`);
+  }
   return resp.json();
 }
 

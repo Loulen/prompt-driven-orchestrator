@@ -41,17 +41,44 @@ pub fn can_admit(live_sessions: usize, cap: usize) -> bool {
     live_sessions < cap
 }
 
-/// The configured global session cap.
+/// The configured global session cap, resolving `stored → env → default`
+/// (#129, ADR-0015).
 ///
-/// Reads [`SESSION_CAP_ENV`] if set to a positive integer, else falls back to
-/// [`DEFAULT_SESSION_CAP`]. A zero or unparseable value is ignored (a cap of 0
-/// would deadlock every Run), so the default applies.
+/// `stored` is the instance-wide setting persisted via the settings page (or
+/// `None` when unset). A stored value `>= 1` wins; otherwise the env var
+/// [`SESSION_CAP_ENV`] (if a positive integer) applies; otherwise
+/// [`DEFAULT_SESSION_CAP`]. A zero/negative stored or env value is ignored — a
+/// cap of 0 would deadlock every Run (`can_admit` = `live < cap`).
+///
+/// The module stays pure: the caller loads the stored value (from
+/// `instance_config`) and passes it in. [`configured_cap`] is the
+/// `stored = None` shorthand, preserving the env-only behaviour every existing
+/// test relies on.
+pub fn configured_cap_with(stored: Option<usize>) -> usize {
+    stored
+        .filter(|&n| n >= 1)
+        .or_else(env_cap)
+        .unwrap_or(DEFAULT_SESSION_CAP)
+}
+
+/// The configured global session cap from the env var alone (`stored = None`).
+///
+/// Retained so existing call sites and tests that never touch the store keep
+/// their exact behaviour.
 pub fn configured_cap() -> usize {
+    configured_cap_with(None)
+}
+
+/// The session cap contributed by [`SESSION_CAP_ENV`] alone (ignoring any stored
+/// value), or `None` when unset, unparseable, or zero (a 0 cap would deadlock).
+///
+/// Exposed so `GET /settings` can disclose a shadowed env var and compute the
+/// winning tier identically to [`configured_cap_with`] (#129, ADR-0015).
+pub fn env_cap() -> Option<usize> {
     std::env::var(SESSION_CAP_ENV)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_SESSION_CAP)
 }
 
 /// Count the live NodeRun sessions across all known runs.
@@ -205,6 +232,10 @@ mod tests {
 
     #[test]
     fn configured_cap_reads_env_then_falls_back_to_default() {
+        // Kept as a single test to avoid a parallel-execution env-var race:
+        // `SESSION_CAP_ENV` is process-global, so two tests mutating it
+        // concurrently would flake. The stored-precedence assertions (#129,
+        // ADR-0015) therefore live here too.
         let saved = std::env::var(SESSION_CAP_ENV).ok();
 
         std::env::remove_var(SESSION_CAP_ENV);
@@ -218,6 +249,19 @@ mod tests {
         assert_eq!(configured_cap(), DEFAULT_SESSION_CAP);
         std::env::set_var(SESSION_CAP_ENV, "0");
         assert_eq!(configured_cap(), DEFAULT_SESSION_CAP);
+
+        // --- stored → env → default precedence (#129, ADR-0015) ---
+        std::env::set_var(SESSION_CAP_ENV, "9");
+        // Stored wins over env.
+        assert_eq!(configured_cap_with(Some(30)), 30);
+        // A zero/invalid stored value is ignored → falls through to env.
+        assert_eq!(configured_cap_with(Some(0)), 9);
+        // No stored value → env applies (identical to `configured_cap()`).
+        assert_eq!(configured_cap_with(None), 9);
+        // No stored and no env → default; stored still wins when the env is unset.
+        std::env::remove_var(SESSION_CAP_ENV);
+        assert_eq!(configured_cap_with(None), DEFAULT_SESSION_CAP);
+        assert_eq!(configured_cap_with(Some(5)), 5);
 
         match saved {
             Some(v) => std::env::set_var(SESSION_CAP_ENV, v),

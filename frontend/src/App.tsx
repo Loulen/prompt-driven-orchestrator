@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Settings } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
@@ -12,6 +13,7 @@ import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
+import SettingsModal from "./components/SettingsModal";
 import ConflictModal from "./components/ConflictModal";
 import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
@@ -138,6 +140,7 @@ export default function App() {
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   // When the New Run modal is opened from a Trigger (run-now / edit), this holds
   // the source Trigger and the intended mode (#162).
   const [triggerPrefill, setTriggerPrefill] = useState<TriggerPrefill | null>(null);
@@ -486,7 +489,7 @@ export default function App() {
   return (
     <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
-      <TopBar />
+      <TopBar onOpenSettings={() => setSettingsModalOpen(true)} />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
           orientation="horizontal"
@@ -647,6 +650,12 @@ export default function App() {
         prefillTrigger={triggerPrefill}
         onTriggerSaved={refreshTriggers}
       />
+      <SettingsModal
+        open={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        liveSessions={sessions.live}
+        onSaved={refreshSessions}
+      />
       <ConflictModal
         open={conflictTab != null}
         pipelineId={conflictTab?.id ?? ""}
@@ -674,7 +683,7 @@ export default function App() {
   );
 }
 
-function TopBar() {
+function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <header
       className="flex h-[44px] shrink-0 items-center gap-3 border-b border-line bg-bg-2 px-3"
@@ -695,6 +704,15 @@ function TopBar() {
         PDO
       </div>
 
+      {/* Right-aligned gear → instance settings (#129). */}
+      <button
+        onClick={onOpenSettings}
+        aria-label="Settings"
+        data-testid="open-settings"
+        className="ml-auto grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+      >
+        <Settings size={15} />
+      </button>
     </header>
   );
 }

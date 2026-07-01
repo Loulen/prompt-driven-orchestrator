@@ -12,6 +12,7 @@ mod frontmatter_parser;
 pub mod graph_resolver;
 mod guard_runner;
 mod input_resolution;
+mod instance_config;
 pub mod library_store;
 #[allow(dead_code)]
 mod loop_region;
@@ -695,11 +696,20 @@ pub async fn serve_with_config(
         let reaper_state = state.clone();
         Some(tokio::spawn(async move {
             let interval = tmux_session_manager::reaper_interval();
-            let ttl = tmux_session_manager::reaper_ttl();
             let socket = reaper_state.tmux_socket();
             let mut tick = time::interval(interval);
             loop {
                 tick.tick().await;
+                // Resolve the TTL *inside* the loop, not once at boot (#129,
+                // ADR-0015 D5): a `PUT /settings` must take effect on the next
+                // sweep without a restart. The stored value (if any) wins over
+                // `PDO_REAPER_TTL_SECS`, which wins over the default.
+                let stored_ttl = instance_config::get(&reaper_state.db)
+                    .await
+                    .ok()
+                    .and_then(|c| c.reaper_ttl_secs)
+                    .map(|n| n as u64);
+                let ttl = tmux_session_manager::reaper_ttl_with(stored_ttl);
                 // Panic-isolated like the trigger/stale sweeps (#251 "rule of
                 // three"): a panic in one sweep tick must not silently kill the
                 // reaper loop and leave sessions un-reaped for the daemon's life.
@@ -1694,6 +1704,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         // top-level `/stale` prefix → added to the vite dev proxy whitelist so a
         // dev-mode GET hits the daemon instead of the SPA fallback.
         .route("/stale/health", get(stale_health))
+        // Instance-wide settings (#129, ADR-0015). New top-level `/settings`
+        // prefix → added to the vite dev proxy whitelist so a dev-mode GET hits
+        // the daemon instead of the SPA fallback. `GET` returns the per-field
+        // {effective, source, stored, env, default} view; `PUT` writes the
+        // stored tier (fail-fast validation).
+        .route("/settings", get(get_settings).put(put_settings))
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -1722,6 +1738,10 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     trigger_store::init(db)
         .await
         .context("failed to create trigger tables")?;
+
+    instance_config::init(db)
+        .await
+        .context("failed to create instance_config table")?;
 
     Ok(())
 }
@@ -1960,6 +1980,20 @@ async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
     admission::count_live_node_sessions(states.iter())
 }
 
+/// The stored session cap from `instance_config`, as a `usize`, or `None` when
+/// unset or unreadable (#129, ADR-0015). Feeds
+/// [`admission::configured_cap_with`] so every admission read honours the
+/// `stored → env → default` precedence with the setting resolved fresh — a
+/// UI change takes effect on the next spawn, no restart. A DB read error falls
+/// back to `None` (env/default) rather than failing the caller.
+async fn stored_session_cap(db: &sqlx::SqlitePool) -> Option<usize> {
+    instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.session_cap)
+        .map(|n| n as usize)
+}
+
 // --- Trigger scheduler ---
 
 /// How many of the Trigger's *own* Runs are still live (#239). Scans projected
@@ -2160,7 +2194,16 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
         let guard = match (&trigger.guard_command, overlap_skips) {
             (Some(cmd), false) if !cmd.trim().is_empty() => {
                 let cwd = trigger_guard_cwd(state, &trigger);
-                Some(guard_runner::run_guard(cmd, &cwd, guard_runner::guard_timeout()).await)
+                // Resolve the timeout fresh each tick, `stored → env → default`
+                // (#129, ADR-0015): a settings change takes effect on the next
+                // tick without a restart. Stored is seconds; the env seam is ms.
+                let stored_secs = instance_config::get(&state.db)
+                    .await
+                    .ok()
+                    .and_then(|c| c.guard_timeout_secs)
+                    .map(|n| n as u64);
+                let timeout = guard_runner::guard_timeout_with(stored_secs);
+                Some(guard_runner::run_guard(cmd, &cwd, timeout).await)
             }
             _ => None,
         };
@@ -3129,7 +3172,7 @@ async fn spawn_node(
     // session; `retry_waiting_nodes` re-drives it once a slot frees. Checked
     // first so a throttled node creates no worktree.
     let admission_guard = state.admission_lock.lock().await;
-    let cap = admission::configured_cap();
+    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions(&state.db).await;
     if !admission::can_admit(live, cap) {
         let waiting = event_log::Event {
@@ -4586,13 +4629,157 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
 /// are not nodes).
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
-    let cap = admission::configured_cap();
+    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     Json(serde_json::json!({
         "live": live,
         "cap": cap,
         "version": env!("CARGO_PKG_VERSION"),
     }))
     .into_response()
+}
+
+/// One knob's `stored → env → default` disclosure for `GET /settings` (#129,
+/// ADR-0015, D6): `effective` is the value the daemon actually uses (produced by
+/// the same resolver), `source` names the winning tier, and `stored`/`env`/
+/// `default` expose each tier so the UI can *reveal* a shadowed env var instead
+/// of ignoring it. Values are in the knob's canonical unit (count for the cap,
+/// seconds for the TTL and guard timeout) — except the guard's `env`, which is
+/// the raw `PDO_GUARD_TIMEOUT_MS` value in milliseconds (the env seam's unit).
+fn settings_field(
+    effective: i64,
+    source: &str,
+    stored: Option<i64>,
+    env: Option<i64>,
+    default: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
+/// Build the `GET /settings` view: per knob, the effective value, the winning
+/// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
+/// computed by each knob's own resolver, so it can never drift from what the
+/// daemon uses at spawn / sweep / tick time.
+async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value, sqlx::Error> {
+    let cfg = instance_config::get(db).await?;
+
+    // --- session cap (count) ---
+    let cap_default = admission::DEFAULT_SESSION_CAP as i64;
+    let cap_stored_wins = cfg.session_cap.filter(|&n| n >= 1);
+    let cap_env = admission::env_cap().map(|n| n as i64);
+    let cap_effective = admission::configured_cap_with(cfg.session_cap.map(|n| n as usize)) as i64;
+    let cap_source = if cap_stored_wins.is_some() {
+        "stored"
+    } else if cap_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
+    // --- reaper TTL (seconds) ---
+    let ttl_default = tmux_session_manager::DEFAULT_REAPER_TTL.as_secs() as i64;
+    let ttl_stored_wins = cfg.reaper_ttl_secs.filter(|&n| n >= 1);
+    let ttl_env = tmux_session_manager::env_reaper_ttl_secs().map(|n| n as i64);
+    let ttl_effective =
+        tmux_session_manager::reaper_ttl_with(cfg.reaper_ttl_secs.map(|n| n as u64)).as_secs()
+            as i64;
+    let ttl_source = if ttl_stored_wins.is_some() {
+        "stored"
+    } else if ttl_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
+    // --- guard timeout (seconds; the env seam is milliseconds) ---
+    let guard_default = guard_runner::GUARD_TIMEOUT_SECS as i64;
+    let guard_stored_wins = cfg.guard_timeout_secs.filter(|&n| (1..=600).contains(&n));
+    let guard_env_ms = guard_runner::env_guard_timeout_ms().map(|n| n as i64);
+    let guard_effective =
+        guard_runner::guard_timeout_with(cfg.guard_timeout_secs.map(|n| n as u64)).as_secs() as i64;
+    let guard_source = if guard_stored_wins.is_some() {
+        "stored"
+    } else if guard_env_ms.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
+    Ok(serde_json::json!({
+        "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
+        "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
+        "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
+        "updated_at": cfg.updated_at,
+    }))
+}
+
+/// `GET /settings` — the instance-wide config, per knob, as
+/// `{effective, source, stored, env, default}` (#129, ADR-0015). `GET /sessions`
+/// stays the lean status-bar view; this is the settings page's rich view.
+async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
+    match build_settings_view(&state.db).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `PUT /settings` — persist the stored tier of one or more knobs, then return
+/// the recomputed [`build_settings_view`] so the UI shows the new
+/// effective/source without a second round-trip (#129, ADR-0015, D6). Validation
+/// is fail-fast (D7): a cap `< 1`, a TTL `< 1`, or a guard timeout outside
+/// `[1, 600]` s is rejected `400` before anything is persisted — no silent
+/// default like the env parser.
+async fn put_settings(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<instance_config::UpdateInstanceConfig>,
+) -> Response {
+    let bad = |msg: &str| -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response()
+    };
+    if let Some(c) = req.session_cap {
+        if c < 1 {
+            return bad("session_cap must be >= 1");
+        }
+    }
+    if let Some(t) = req.reaper_ttl_secs {
+        if t < 1 {
+            return bad("reaper_ttl_secs must be >= 1");
+        }
+    }
+    if let Some(g) = req.guard_timeout_secs {
+        if !(1..=600).contains(&g) {
+            return bad("guard_timeout_secs must be between 1 and 600 seconds");
+        }
+    }
+
+    match instance_config::update(&state.db, req).await {
+        Ok(_) => match build_settings_view(&state.db).await {
+            Ok(view) => Json(view).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// `GET /triggers/health` — scheduler liveness (#222). Reports `last_tick_at`
@@ -6742,7 +6929,7 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     // (#77/#78). Force-spawn fails fast at the cap instead of queueing to
     // `waiting`, which would defeat "start now".
     let _admission_guard = state.admission_lock.lock().await;
-    let cap = admission::configured_cap();
+    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions(&state.db).await;
     if !admission::can_admit(live, cap) {
         return (
@@ -18702,5 +18889,137 @@ edges:
         )
         .unwrap();
         assert!(runs.is_empty(), "no run must be created on refusal");
+    }
+
+    // --- Instance-wide settings routes (#129, ADR-0015) ---
+
+    async fn get_settings_json(state: &Arc<AppState>) -> serde_json::Value {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/settings").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "GET /settings should 200");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn put_settings_resp(state: &Arc<AppState>, body: &str) -> (StatusCode, serde_json::Value) {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn get_settings_default_shape_stored_null() {
+        // A fresh instance has an all-NULL row. Assert the robust invariants: the
+        // per-field shape, the `default` tier's constants, and `stored == null`.
+        // We deliberately do NOT assert `source`/`effective` for the cap here —
+        // they read the process-global `PDO_SESSION_CAP`, which a concurrent
+        // env-mutating unit test could transiently shadow (the resolver unit
+        // tests own the env-precedence assertions).
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+
+        for field in ["session_cap", "reaper_ttl_secs", "guard_timeout_secs"] {
+            let f = &view[field];
+            assert!(f["stored"].is_null(), "{field}.stored must be null on a fresh row: {f}");
+            assert!(f.get("effective").is_some(), "{field}.effective missing");
+            assert!(f.get("source").is_some(), "{field}.source missing");
+            assert!(f.get("env").is_some(), "{field}.env key missing");
+            assert!(f.get("default").is_some(), "{field}.default missing");
+        }
+        assert_eq!(view["session_cap"]["default"], 20);
+        assert_eq!(view["reaper_ttl_secs"]["default"], 3600);
+        assert_eq!(view["guard_timeout_secs"]["default"], 60);
+        assert!(view["updated_at"].is_string(), "updated_at must be surfaced");
+    }
+
+    #[tokio::test]
+    async fn put_settings_persists_and_stored_wins() {
+        // Stored always wins over env/default, so these assertions are race-free.
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(
+            &state,
+            r#"{"session_cap": 4, "reaper_ttl_secs": 120, "guard_timeout_secs": 30}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // PUT returns the recomputed view (D6) — no second round-trip needed.
+        assert_eq!(view["session_cap"]["stored"], 4);
+        assert_eq!(view["session_cap"]["source"], "stored");
+        assert_eq!(view["session_cap"]["effective"], 4);
+        assert_eq!(view["reaper_ttl_secs"]["stored"], 120);
+        assert_eq!(view["reaper_ttl_secs"]["source"], "stored");
+        assert_eq!(view["reaper_ttl_secs"]["effective"], 120);
+        assert_eq!(view["guard_timeout_secs"]["stored"], 30);
+        assert_eq!(view["guard_timeout_secs"]["source"], "stored");
+        assert_eq!(view["guard_timeout_secs"]["effective"], 30);
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["session_cap"]["stored"], 4);
+        assert_eq!(reget["session_cap"]["effective"], 4);
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_cap_below_one() {
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"session_cap": 0}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].is_string(), "400 must carry an error: {body}");
+        // Store untouched.
+        let view = get_settings_json(&state).await;
+        assert!(view["session_cap"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_ttl_below_one() {
+        let state = test_state().await;
+        let (status, _) = put_settings_resp(&state, r#"{"reaper_ttl_secs": 0}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let view = get_settings_json(&state).await;
+        assert!(view["reaper_ttl_secs"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_guard_out_of_range() {
+        let state = test_state().await;
+        let (lo, _) = put_settings_resp(&state, r#"{"guard_timeout_secs": 0}"#).await;
+        assert_eq!(lo, StatusCode::BAD_REQUEST);
+        let (hi, _) = put_settings_resp(&state, r#"{"guard_timeout_secs": 601}"#).await;
+        assert_eq!(hi, StatusCode::BAD_REQUEST);
+        // A boundary value is accepted.
+        let (ok, view) = put_settings_resp(&state, r#"{"guard_timeout_secs": 600}"#).await;
+        assert_eq!(ok, StatusCode::OK);
+        assert_eq!(view["guard_timeout_secs"]["stored"], 600);
+    }
+
+    #[tokio::test]
+    async fn put_settings_partial_edit_leaves_other_fields() {
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"session_cap": 7}"#).await;
+        let (_, view) = put_settings_resp(&state, r#"{"reaper_ttl_secs": 200}"#).await;
+        // The second edit must not clear the cap set by the first.
+        assert_eq!(view["session_cap"]["stored"], 7);
+        assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
     }
 }

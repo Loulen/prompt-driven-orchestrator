@@ -55,14 +55,37 @@ fn cap_tail(s: &str, limit: usize) -> String {
     format!("{TRUNCATION_MARKER}{}", &s[start..])
 }
 
-/// Resolve the guard timeout, honoring the [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`]
-/// test seam and falling back to [`GUARD_TIMEOUT_SECS`].
-pub fn guard_timeout() -> Duration {
+/// Resolve the guard timeout, `stored → env → default` (#129, ADR-0015).
+///
+/// **Unit care:** `stored_secs` is in **seconds** (the settings page unit),
+/// while the env seam [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] is in **milliseconds**.
+/// A stored value within `[1, 600]` seconds wins; otherwise the env override (in
+/// ms) applies; otherwise [`GUARD_TIMEOUT_SECS`]. An out-of-range stored value
+/// is ignored (fail-safe: the `PUT` handler already rejects it with `400`, so
+/// this is a defensive floor).
+///
+/// The guard timeout is read fresh on each tick, so a stored change takes effect
+/// on the next tick without a restart. [`guard_timeout`] is the `stored = None`
+/// shorthand (env-only, unchanged — preserves the ms test seam).
+pub fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
+    stored_secs
+        .filter(|&n| (1..=600).contains(&n))
+        .map(Duration::from_secs)
+        .or_else(|| env_guard_timeout_ms().map(Duration::from_millis))
+        .unwrap_or_else(|| Duration::from_secs(GUARD_TIMEOUT_SECS))
+}
+
+/// The guard timeout (**milliseconds**) contributed by
+/// [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] alone, or `None` when unset or unparseable.
+///
+/// Kept as the integration-test seam. Exposed so `GET /settings` can disclose a
+/// shadowed env var and compute the winning tier identically to
+/// [`guard_timeout_with`] (#129, ADR-0015). Note the unit is ms, while the
+/// stored/default guard values are seconds.
+pub fn env_guard_timeout_ms() -> Option<u64> {
     std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(GUARD_TIMEOUT_SECS))
 }
 
 /// Run a guard command and classify the outcome.
@@ -245,6 +268,46 @@ mod tests {
                 );
             }
             other => panic!("expected a prompt Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guard_timeout_precedence_stored_env_default() {
+        // Single test on purpose: `GUARD_TIMEOUT_MS_OVERRIDE_ENV` is
+        // process-global, so a second test mutating it concurrently would flake.
+        // Unit care (#129, ADR-0015): stored is SECONDS, env is MILLISECONDS.
+        let saved = std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV).ok();
+
+        // Default when nothing is set.
+        std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV);
+        assert_eq!(
+            guard_timeout_with(None),
+            Duration::from_secs(GUARD_TIMEOUT_SECS)
+        );
+
+        // Env override (ms) applies when no stored value.
+        std::env::set_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV, "250");
+        assert_eq!(guard_timeout_with(None), Duration::from_millis(250));
+
+        // Stored (seconds) wins over env (ms).
+        assert_eq!(guard_timeout_with(Some(30)), Duration::from_secs(30));
+        // Out-of-range stored is ignored → falls through to env.
+        assert_eq!(guard_timeout_with(Some(0)), Duration::from_millis(250));
+        assert_eq!(guard_timeout_with(Some(601)), Duration::from_millis(250));
+        // Boundaries are in range.
+        assert_eq!(guard_timeout_with(Some(1)), Duration::from_secs(1));
+        assert_eq!(guard_timeout_with(Some(600)), Duration::from_secs(600));
+
+        // No stored and no env → default.
+        std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV);
+        assert_eq!(
+            guard_timeout_with(None),
+            Duration::from_secs(GUARD_TIMEOUT_SECS)
+        );
+
+        match saved {
+            Some(v) => std::env::set_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV, v),
+            None => std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV),
         }
     }
 

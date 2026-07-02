@@ -34,10 +34,11 @@ use crate::event_log;
 use crate::pipeline;
 use crate::scheduler;
 use crate::scheduler_dispatcher;
+use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, effective_repo_root, emit_loop_action, handle_node_completion, load_events,
-    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, spawn_node,
-    worktree_dir_for_run, AppState, SpawnContext,
+    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, spawn_node, AppState,
+    SpawnContext,
 };
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready

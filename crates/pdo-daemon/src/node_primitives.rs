@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
+use crate::worktree_ops::{sub_worktree_branch, sub_worktree_path};
 use crate::{blackboard, tmux_session_manager};
 
 // ---------------------------------------------------------------------------
@@ -446,19 +447,11 @@ pub fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn sub_worktree_path(repo_root: &Path, run_id: &str, node_id: &str, iter: i64) -> PathBuf {
-    repo_root
-        .join(".pdo")
-        .join("runs")
-        .join(run_id)
-        .join("nodes")
-        .join(node_id)
-        .join(format!("iter-{iter}"))
-}
-
-fn sub_worktree_branch(run_id: &str, node_id: &str, iter: i64) -> String {
-    format!("pdo/sub-{run_id}-{node_id}-iter-{iter}")
-}
+// `sub_worktree_path` / `sub_worktree_branch` are the canonical path/branch
+// helpers, shared from `worktree_ops` (issue #276 de-dup). `create_sub_worktree`
+// below stays a local copy: it diverges from `worktree_ops`' version in error
+// handling (plain `{e}` render, no `info!` log) — unifying it is a behavior
+// decision tracked separately, not a mechanical de-dup.
 
 fn create_sub_worktree(
     repo_root: &Path,

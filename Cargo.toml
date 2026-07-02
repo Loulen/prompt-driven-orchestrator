@@ -21,6 +21,15 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_yaml = "0.9"
+# Workflow importer (#155 / ADR-0016): parse Claude Code workflow .js via an AST,
+# never executing untrusted JS. Pinned to =0.133.0 — the last release whose MSRV
+# (rust-version 1.93.0) matches this machine's floating nightly; 0.134+ bumps the
+# MSRV to 1.94.0. The only API delta at 0.133 is `ParserReturn.errors` (vs
+# `.diagnostics` in 0.138). See docs/adr/0016 (Decision T).
+oxc_allocator = "=0.133.0"
+oxc_parser = "=0.133.0"
+oxc_span = "=0.133.0"
+oxc_ast = "=0.133.0"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

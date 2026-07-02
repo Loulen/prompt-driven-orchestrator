@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
 import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, renameRun } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
@@ -78,6 +78,7 @@ export default function UnifiedLeftPanel({
   const activeTabId = useEditStore((s) => s.activeTabId);
 
   const [showNewModal, setShowNewModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PipelineListEntry | null>(null);
   // Busy guard so a double-click on a library row's Copy icon fires once (#224).
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
@@ -429,8 +430,16 @@ export default function UnifiedLeftPanel({
       >
         Library
         <button
-          onClick={() => setShowNewModal(true)}
+          onClick={() => setShowImportModal(true)}
           className="ml-auto grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          title="Import a workflow"
+          data-testid="import-workflow-button"
+        >
+          <FileUp size={12} />
+        </button>
+        <button
+          onClick={() => setShowNewModal(true)}
+          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="New pipeline"
         >
           <Plus size={12} />
@@ -657,6 +666,13 @@ export default function UnifiedLeftPanel({
       {showNewModal && (
         <NewPipelineModal onClose={() => setShowNewModal(false)} />
       )}
+
+      {showImportModal && (
+        <ImportWorkflowModal
+          onClose={() => setShowImportModal(false)}
+          onImported={onLibraryPipelinesChanged}
+        />
+      )}
     </aside>
   );
 }
@@ -733,6 +749,126 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           >
             Create
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
+/// file is read client-side and POSTed as text — the daemon parses it to an AST
+/// (never executes it) and returns a draft plus lossy-translation warnings.
+function ImportWorkflowModal({
+  onClose,
+  onImported,
+}: {
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[] | null>(null);
+  const loadPipelines = useEditStore((s) => s.loadPipelines);
+
+  async function handleImport() {
+    if (!file || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    setWarnings(null);
+    try {
+      const content = await file.text();
+      const result = await importWorkflow(file.name, content);
+      onImported();
+      await loadPipelines();
+      const w = result.warnings ?? [];
+      if (w.length > 0) {
+        // Surface the lossy-translation diagnostics (ADR-0001) rather than
+        // silently closing — the annotation is the onboarding tutorial.
+        setWarnings(w);
+      } else {
+        onClose();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div
+        className="w-[400px] rounded-lg border border-line bg-bg-4 p-4"
+        style={{ fontSize: "12px" }}
+        data-testid="import-workflow-modal"
+      >
+        <div className="mb-1 font-medium text-fg">Import a workflow</div>
+        <p className="mb-3 text-fg-4" style={{ fontSize: "11px" }}>
+          Decompile a Claude Code workflow (<code>.js</code>) into a draft
+          pipeline. The file is parsed, never run; unmapped idioms become
+          annotated placeholders.
+        </p>
+
+        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
+          Workflow file
+        </label>
+        <input
+          type="file"
+          accept=".js"
+          data-testid="workflow-file-input"
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            setError(null);
+            setWarnings(null);
+          }}
+          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none file:mr-2 file:rounded file:border-0 file:bg-bg-4 file:px-2 file:py-0.5 file:text-fg-3"
+        />
+
+        {error && (
+          <div
+            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
+            style={{ fontSize: "11px" }}
+            data-testid="import-workflow-error"
+          >
+            {error}
+          </div>
+        )}
+
+        {warnings && (
+          <div
+            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2"
+            style={{ fontSize: "11px" }}
+            data-testid="import-workflow-warnings"
+          >
+            <div className="mb-1 font-medium text-st-await">
+              Imported with {warnings.length} translation warning
+              {warnings.length === 1 ? "" : "s"}:
+            </div>
+            <ul className="list-disc pl-4">
+              {warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+          >
+            {warnings ? "Done" : "Cancel"}
+          </button>
+          {!warnings && (
+            <button
+              onClick={handleImport}
+              disabled={!file || submitting}
+              className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
+            >
+              {submitting ? "Importing…" : "Import"}
+            </button>
+          )}
         </div>
       </div>
     </div>

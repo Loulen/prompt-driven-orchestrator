@@ -17288,7 +17288,14 @@ edges: []
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        let status = resp.status();
+        let body = String::from_utf8_lossy(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .into_owned();
+        assert_eq!(status, StatusCode::OK, "force-spawn returned {status}: {body}");
 
         let events = load_events(&state.db, run_id).await.unwrap();
         // The audit CommandIssued event landed...

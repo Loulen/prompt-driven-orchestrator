@@ -3410,6 +3410,7 @@ async fn spawn_node(
         iter,
         state.port,
         state.tmux_cmd_override.as_deref(),
+        node.model.as_deref(),
     ) {
         error!("failed to spawn tmux session: {e}");
     }
@@ -4570,6 +4571,7 @@ fn spawn_manager_session(
         0,
         state.port,
         state.tmux_cmd_override.as_deref(),
+        None, // manager has no NodeDef — always the account default (#296)
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -6226,6 +6228,7 @@ async fn spawn_merge_resolver(
         1,
         state.port,
         state.tmux_cmd_override.as_deref(),
+        None, // __merge_resolver__ has no NodeDef — account default (#296)
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -11662,6 +11665,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -16004,6 +16008,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -16054,6 +16059,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {

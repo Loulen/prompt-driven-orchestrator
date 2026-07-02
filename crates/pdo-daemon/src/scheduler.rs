@@ -1125,6 +1125,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -1147,6 +1148,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -2285,6 +2287,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -3000,6 +3003,7 @@ mod tests {
                 max_iter,
             ))),
             over: None,
+            model: None,
         }
     }
 
@@ -3513,6 +3517,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -3756,6 +3761,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 

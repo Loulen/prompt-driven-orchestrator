@@ -350,6 +350,9 @@ export interface NodeDef {
   view?: { x: number; y: number } | null;
   max_iter?: number | string | null;
   over?: string | null;
+  /** Optional per-node model override (#296): free-text pass-through to
+   *  `claude --model <x>`. Absent/null ⇒ account default (no flag). */
+  model?: string | null;
 }
 
 export interface EdgeEndpoint {

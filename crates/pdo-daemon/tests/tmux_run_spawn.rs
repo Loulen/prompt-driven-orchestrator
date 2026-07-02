@@ -85,7 +85,7 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     // `claude --dangerously-skip-permissions` and the `exec bash -c` shape.
     // `None` override → production claude tail.
     let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
-    let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None);
+    let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
 
     assert!(
         script.starts_with("exec bash -c "),

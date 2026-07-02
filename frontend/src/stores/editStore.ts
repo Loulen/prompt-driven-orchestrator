@@ -202,6 +202,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
+    // Per-node model override (#296): semantic (compared in the pipeline diff),
+    // emitted only when set so an unset node and a library twin with no model
+    // both produce objects without the key and stay `synced`, not `diverged`.
+    if (n.model) node.model = n.model;
     // A collection's `over` driver now lives on the `loops:` region, not on any
     // node (#151) — no node-level `over` serialization.
     if (n.inputs.length > 0)

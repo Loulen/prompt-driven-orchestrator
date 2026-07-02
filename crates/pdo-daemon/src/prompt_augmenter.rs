@@ -585,6 +585,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -717,6 +718,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -775,6 +777,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -805,6 +808,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -850,6 +854,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -952,6 +957,7 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
+                    model: None,
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -971,6 +977,7 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
+                    model: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -1009,6 +1016,7 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
+                    model: None,
                 },
             ],
             edges: vec![
@@ -1115,6 +1123,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1302,6 +1311,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1350,6 +1360,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1393,6 +1404,7 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
+                model: None,
             }],
             edges: vec![],
             loops: Vec::new(),

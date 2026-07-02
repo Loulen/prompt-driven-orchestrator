@@ -169,6 +169,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         params.iter,
         params.daemon_port,
         params.tmux_cmd_override,
+        node.model.as_deref(),
     ) {
         return StartNodeResult {
             outcome: PrimitiveOutcome::Rejected {
@@ -487,6 +488,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -517,6 +519,7 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 

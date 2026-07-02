@@ -34,6 +34,24 @@ export default function MergeInspector() {
             className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
           />
         </Field>
+        {/* Model (#296): a merge node spawns an agent, so its model is settable
+            here too. Free-text pass-through to `claude --model <x>`; empty ⇒
+            null ⇒ never serialized ⇒ account default. */}
+        <Field label="Model">
+          <input
+            list="pdo-model-aliases"
+            data-testid="merge-model-input"
+            placeholder="default model"
+            value={node.model ?? ""}
+            onChange={(e) => updateNode(node.id, { model: e.target.value || null })}
+            className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+          />
+          <datalist id="pdo-model-aliases">
+            {["sonnet", "opus", "haiku", "opusplan", "fable"].map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        </Field>
 
         <SectionHead title="Ports" />
         <Field label="Input">

@@ -99,4 +99,20 @@ describe("MergeInspector", () => {
     render(<MergeInspector />);
     expect(screen.getByText(/Merge nodes wait for all upstream/)).toBeInTheDocument();
   });
+
+  // #296: a merge node spawns an agent, so its model is settable here too.
+  it("writes the typed model onto the merge node", () => {
+    setStoreState(makeMergeNode());
+    render(<MergeInspector />);
+    const input = screen.getByTestId("merge-model-input");
+    fireEvent.change(input, { target: { value: "opus" } });
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "mg1");
+    expect(node?.model).toBe("opus");
+  });
+
+  it("renders a seeded model as the input value", () => {
+    setStoreState(makeMergeNode({ model: "sonnet" }));
+    render(<MergeInspector />);
+    expect((screen.getByTestId("merge-model-input") as HTMLInputElement).value).toBe("sonnet");
+  });
 });

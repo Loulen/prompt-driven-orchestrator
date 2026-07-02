@@ -127,6 +127,10 @@ fn wrap_with_env(
 /// `tmux_cmd_override` replaces the default `claude …` tail when `Some` — the
 /// per-daemon test seam (see [`TMUX_CMD_OVERRIDE_ENV`]). `None` → production
 /// claude invocation.
+///
+/// `model` is the per-node model override (#296). `Some(m)` inserts
+/// `--model '<m>'` into the launch; `None` reproduces the legacy command
+/// byte-for-byte (no flag emitted). Ignored when `tmux_cmd_override` is `Some`.
 pub fn build_tmux_script(
     run_id: &str,
     node_id: &str,
@@ -134,13 +138,24 @@ pub fn build_tmux_script(
     daemon_port: u16,
     prompt_path: &Path,
     tmux_cmd_override: Option<&str>,
+    model: Option<&str>,
 ) -> String {
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
-        None => format!(
-            "exec claude --dangerously-skip-permissions \"$(cat {})\"",
-            sh_single_quote(&prompt_path.to_string_lossy())
-        ),
+        None => {
+            // `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing space;
+            // `None` ⇒ empty string, so the command collapses to the exact
+            // legacy literal (one space before the `"$(cat …)"`).
+            let model_flag = match model {
+                Some(m) => format!("--model {} ", sh_single_quote(m)),
+                None => String::new(),
+            };
+            format!(
+                "exec claude --dangerously-skip-permissions {}\"$(cat {})\"",
+                model_flag,
+                sh_single_quote(&prompt_path.to_string_lossy())
+            )
+        }
     };
 
     wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
@@ -150,6 +165,12 @@ pub fn build_tmux_script(
 ///
 /// `tmux_cmd_override` replaces the default `claude --continue` tail when
 /// `Some` — the per-daemon test seam.
+///
+/// No `--model` is threaded here (#296): a resumed session keeps the model it
+/// was launched with — "Resumed sessions started with `claude --resume`,
+/// `--continue`, or the `/resume` picker keep the model they were using when
+/// the transcript was saved" (https://code.claude.com/docs/en/model-config).
+/// So `--continue` never silently downgrades the per-node model.
 fn build_resume_script(
     run_id: &str,
     node_id: &str,
@@ -197,6 +218,7 @@ pub fn spawn(
     iter: i64,
     daemon_port: u16,
     tmux_cmd_override: Option<&str>,
+    model: Option<&str>,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
@@ -210,6 +232,7 @@ pub fn spawn(
         daemon_port,
         &prompt_path,
         tmux_cmd_override,
+        model,
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -615,7 +638,7 @@ mod tests {
         let prompt_path = Path::new("/tmp/test-prompt.md");
 
         // None → production claude tail.
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None);
+        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("PDO_RUN_ID"));
@@ -630,9 +653,53 @@ mod tests {
             5172,
             prompt_path,
             Some("exec sleep 60"),
+            None,
         );
         assert!(script.contains("exec sleep 60"));
         assert!(!script.contains("claude"));
+    }
+
+    #[test]
+    fn build_script_omits_model_when_none() {
+        // #296: the `None` model path must reproduce the legacy command
+        // byte-for-byte — no `--model`, exactly one space before `"$(cat …)"`.
+        // This is the byte-identity guard: adding the flag must not perturb the
+        // default launch.
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
+        assert!(!script.contains("--model"), "no model flag when unset: {script}");
+        // The exact legacy tail, single space before the cat substitution.
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail must be byte-identical: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_inserts_model_when_some() {
+        // #296: `Some(model)` inserts a single-quoted `--model '<m>'` between
+        // `--dangerously-skip-permissions` and the prompt `cat` substitution.
+        //
+        // The whole tail is re-wrapped in `bash -c '…'` by `wrap_with_env`, so
+        // the single quotes around the model value get rewritten by
+        // `sh_single_quote` as `'\''` — i.e. `--model 'opus'` becomes
+        // `--model '\''opus'\''` in the final script bytes.
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let script =
+            build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, Some("opus"));
+        assert!(script.contains("--model"), "model flag present: {script}");
+        assert!(
+            script.contains(r"--model '\''opus'\''"),
+            "model value single-quoted (bash -c escaping): {script}"
+        );
+        // The flag sits right after the base flag, before the prompt cat.
+        assert!(
+            script.contains(r"--dangerously-skip-permissions --model '\''opus'\'' "),
+            "model flag must sit right after the base flag: {script}"
+        );
+        let model_at = script.find("--model").unwrap();
+        let cat_at = script.find("$(cat").unwrap();
+        assert!(model_at < cat_at, "model flag must precede the prompt cat: {script}");
     }
 
     #[test]

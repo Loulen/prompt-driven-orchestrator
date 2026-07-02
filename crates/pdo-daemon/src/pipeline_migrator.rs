@@ -2186,6 +2186,7 @@ edges:
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -2216,6 +2217,7 @@ edges:
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 
@@ -2246,6 +2248,7 @@ edges:
             view: None,
             max_iter: None,
             over: None,
+            model: None,
         }
     }
 

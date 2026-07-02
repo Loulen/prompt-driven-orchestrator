@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use serde::Serialize;
 
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
-use crate::worktree_ops::{sub_worktree_branch, sub_worktree_path};
+use crate::worktree_ops::{create_sub_worktree, sub_worktree_branch, sub_worktree_path};
 use crate::{blackboard, tmux_session_manager};
 
 // ---------------------------------------------------------------------------
@@ -89,7 +88,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         {
             return StartNodeResult {
                 outcome: PrimitiveOutcome::Rejected {
-                    reason: format!("failed to create sub-worktree: {e}"),
+                    reason: format!("failed to create sub-worktree: {e:#}"),
                 },
                 events: vec![],
             };
@@ -441,40 +440,6 @@ pub fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
         outcome: PrimitiveOutcome::Executed,
         written_paths,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// `sub_worktree_path` / `sub_worktree_branch` are the canonical path/branch
-// helpers, shared from `worktree_ops` (issue #276 de-dup). `create_sub_worktree`
-// below stays a local copy: it diverges from `worktree_ops`' version in error
-// handling (plain `{e}` render, no `info!` log) — unifying it is a behavior
-// decision tracked separately, not a mechanical de-dup.
-
-fn create_sub_worktree(
-    repo_root: &Path,
-    sub_worktree_dir: &Path,
-    sub_branch: &str,
-    base_branch: &str,
-) -> Result<()> {
-    std::fs::create_dir_all(sub_worktree_dir.parent().unwrap_or(Path::new(".")))?;
-
-    let output = std::process::Command::new("git")
-        .args(["worktree", "add", "-b", sub_branch])
-        .arg(sub_worktree_dir)
-        .arg(base_branch)
-        .current_dir(repo_root)
-        .output()
-        .map_err(|e| anyhow::anyhow!("failed to run git worktree add for sub-worktree: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git worktree add (sub) failed: {stderr}");
-    }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

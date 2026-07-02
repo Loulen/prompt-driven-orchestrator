@@ -100,19 +100,23 @@ async fn browse_lists_dirs_only_with_flags_sorted() {
 
     let by_name = |n: &str| entries.iter().find(|e| e["name"] == n).unwrap();
     assert_eq!(
-        by_name("alpha-project")["is_git_repo"], true,
+        by_name("alpha-project")["is_git_repo"],
+        true,
         "alpha-project has .git → flagged"
     );
     assert_eq!(
-        by_name("beta-plain")["is_git_repo"], false,
+        by_name("beta-plain")["is_git_repo"],
+        false,
         "beta-plain has no .git → not flagged"
     );
     assert_eq!(
-        by_name("alpha-project")["is_symlink"], false,
+        by_name("alpha-project")["is_symlink"],
+        false,
         "alpha-project is a real dir"
     );
     assert_eq!(
-        by_name("zeta-link")["is_symlink"], true,
+        by_name("zeta-link")["is_symlink"],
+        true,
         "zeta-link is a symlink → flagged"
     );
 

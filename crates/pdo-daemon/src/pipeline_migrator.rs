@@ -2762,7 +2762,10 @@ edges:
             "prompt B"
         );
         // The emptied flat dir is removed.
-        assert!(!flat.exists(), "flat prompts dir should be removed once emptied");
+        assert!(
+            !flat.exists(),
+            "flat prompts dir should be removed once emptied"
+        );
     }
 
     #[test]
@@ -2814,7 +2817,10 @@ edges:
             "known"
         );
         // The unmatched orphan is preserved, and so is the dir holding it.
-        assert!(flat.join("ORPHAN99.md").exists(), "orphan prompt must not be destroyed");
+        assert!(
+            flat.join("ORPHAN99.md").exists(),
+            "orphan prompt must not be destroyed"
+        );
         assert!(flat.exists());
     }
 

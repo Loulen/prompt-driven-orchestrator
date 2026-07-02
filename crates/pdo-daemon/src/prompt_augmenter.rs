@@ -1242,8 +1242,11 @@ mod tests {
 
     #[test]
     fn manager_preamble_derive_from_input_keeps_existing_instruction() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::DeriveFromInput);
+        let preamble = build_manager_preamble(
+            "run-1",
+            "http://localhost:5172",
+            RunNameHint::DeriveFromInput,
+        );
         assert!(preamble.contains("No display name was provided"));
         assert!(preamble.contains("rename_run"));
     }

@@ -229,7 +229,10 @@ async fn triggers_list_resolves_effective_repo_without_mutating_raw_target() {
     for r in &rows {
         assert!(r["name"].is_string(), "name must stay top-level: {r:?}");
         assert!(r["cron"].is_string(), "cron must stay top-level: {r:?}");
-        assert!(r["enabled"].is_boolean(), "enabled must stay top-level: {r:?}");
+        assert!(
+            r["enabled"].is_boolean(),
+            "enabled must stay top-level: {r:?}"
+        );
         assert!(
             r["pipeline_name"].is_string(),
             "pipeline_name must stay top-level: {r:?}"

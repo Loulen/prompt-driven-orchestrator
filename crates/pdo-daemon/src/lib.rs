@@ -25,7 +25,6 @@ pub mod node_primitives;
 mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
-mod workflow_importer;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod pty_bridge;
@@ -43,6 +42,7 @@ mod trigger_scheduler;
 mod trigger_store;
 #[allow(dead_code)]
 mod variable_resolver;
+mod workflow_importer;
 mod worktree_ops;
 
 use std::collections::HashMap;
@@ -67,13 +67,13 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
 
+#[cfg(test)]
+use crate::worktree_ops::commit_and_merge_sub_worktree;
 use crate::worktree_ops::{
     commit_and_merge_sub_worktree_inner, create_sub_worktree, create_worktree,
     reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
     worktree_dir_for_run, worktree_has_tracked_changes, MergeResult,
 };
-#[cfg(test)]
-use crate::worktree_ops::commit_and_merge_sub_worktree;
 
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
@@ -748,8 +748,9 @@ pub async fn serve_with_config(
     } else {
         let stale_state = state.clone();
         Some(tokio::spawn(async move {
-            let mut tick =
-                time::interval(Duration::from_secs(stale_detector::STALE_TICK_INTERVAL_SECS));
+            let mut tick = time::interval(Duration::from_secs(
+                stale_detector::STALE_TICK_INTERVAL_SECS,
+            ));
             loop {
                 tick.tick().await;
                 run_stale_detection_supervised(&stale_state).await;
@@ -1063,7 +1064,7 @@ async fn repos_browse(
     }
 
     // Case-insensitive, stable sort (ties keep read_dir order).
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
     if entries.len() > CAP {
         entries.truncate(CAP); // keep the alphabetically-first CAP
     }
@@ -1291,8 +1292,7 @@ async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
             let entries: Vec<TriggerListEntry> = triggers
                 .into_iter()
                 .map(|t| {
-                    let effective_repo =
-                        t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
+                    let effective_repo = t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
                     TriggerListEntry {
                         trigger: t,
                         effective_repo,
@@ -1462,9 +1462,10 @@ async fn patch_trigger(
     let mut repoint_prompt_required: Option<bool> = None;
     if let Some(ref new_pid) = req.pipeline_id {
         if *new_pid != existing.pipeline_id {
-            let yaml = library_store::pipelines::get_yaml(&state.repo_root, new_pid).or_else(|| {
-                std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok()
-            });
+            let yaml =
+                library_store::pipelines::get_yaml(&state.repo_root, new_pid).or_else(|| {
+                    std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok()
+                });
             let yaml = match yaml {
                 Some(y) => y,
                 None => {
@@ -2853,8 +2854,7 @@ async fn import_library_pipeline(
             let entry = library_store::pipelines::list(&state.repo_root)
                 .into_iter()
                 .find(|e| e.id == id);
-            let warnings: Vec<String> =
-                result.warnings.iter().map(|d| d.message.clone()).collect();
+            let warnings: Vec<String> = result.warnings.iter().map(|d| d.message.clone()).collect();
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
@@ -3898,7 +3898,8 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     // silently aborted (#279) and nothing will re-drive it.
     let idle_secs = max_event_age_secs(&events);
 
-    let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, idle_secs) else {
+    let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, idle_secs)
+    else {
         return;
     };
 
@@ -3959,10 +3960,7 @@ fn run_stall_reason(
 
     // A live node (or an in-flight merge resolver) means the run can still
     // advance organically — never reconcile under it.
-    let has_live_node = run_state
-        .nodes
-        .values()
-        .any(|n| n.status.can_progress());
+    let has_live_node = run_state.nodes.values().any(|n| n.status.can_progress());
     let resolver_active = run_state
         .merge_resolver
         .as_ref()
@@ -4744,9 +4742,8 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
     let ttl_default = tmux_session_manager::DEFAULT_REAPER_TTL.as_secs() as i64;
     let ttl_stored_wins = cfg.reaper_ttl_secs.filter(|&n| n >= 1);
     let ttl_env = tmux_session_manager::env_reaper_ttl_secs().map(|n| n as i64);
-    let ttl_effective =
-        tmux_session_manager::reaper_ttl_with(cfg.reaper_ttl_secs.map(|n| n as u64)).as_secs()
-            as i64;
+    let ttl_effective = tmux_session_manager::reaper_ttl_with(cfg.reaper_ttl_secs.map(|n| n as u64))
+        .as_secs() as i64;
     let ttl_source = if ttl_stored_wins.is_some() {
         "stored"
     } else if ttl_env.is_some() {
@@ -5030,16 +5027,15 @@ async fn list_reapable_runs(
 
         // Eligible = terminal AND not already reclaimed. `Archived` is terminal
         // too, so `is_terminal()` alone is not enough — exclude it explicitly.
-        let eligible = run_state.status.is_terminal()
-            && run_state.status != event_log::RunStatus::Archived;
+        let eligible =
+            run_state.status.is_terminal() && run_state.status != event_log::RunStatus::Archived;
         if !eligible {
             continue;
         }
 
         let repo_root = effective_repo_root(&state, &run_state);
         let run_dir = repo_root.join(".pdo").join("runs").join(&run_id);
-        let worktree_present =
-            run_dir.join("worktree").exists() || run_dir.join("nodes").exists();
+        let worktree_present = run_dir.join("worktree").exists() || run_dir.join("nodes").exists();
         if !worktree_present {
             continue;
         }
@@ -5050,7 +5046,10 @@ async fn list_reapable_runs(
             .completed_at
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| now.signed_duration_since(dt.with_timezone(&chrono::Utc)).num_seconds());
+            .map(|dt| {
+                now.signed_duration_since(dt.with_timezone(&chrono::Utc))
+                    .num_seconds()
+            });
 
         let approx_disk_bytes = if q.size {
             dir_size_bytes(&run_dir)
@@ -5597,8 +5596,8 @@ async fn run_stale_detection(state: &AppState) {
             // context *now* (cheaply available, gone moments later) and fold it
             // into the NodeFailed payload. Otherwise the daemon records only the
             // symptom and every occurrence forces from-scratch RCA.
-            let session_death_diag = (detection == stale_detector::Detection::SessionDied)
-                .then(|| {
+            let session_death_diag =
+                (detection == stale_detector::Detection::SessionDied).then(|| {
                     let diag =
                         gather_session_death_diagnostics(&socket, run_id, node_id, *iter, &running);
                     stale_detector::attach_diagnostics(&mut events, &diag);
@@ -8811,14 +8810,7 @@ fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_lo
         // `:(exclude).pdo/` is a literal pathspec argv element (no shell). `.pdo/`
         // is gitignored here, but the exclusion is defensive for external target
         // repos that may commit it.
-        .args([
-            "diff",
-            "--numstat",
-            &range,
-            "--",
-            ".",
-            ":(exclude).pdo/",
-        ])
+        .args(["diff", "--numstat", &range, "--", ".", ":(exclude).pdo/"])
         .current_dir(repo_root)
         .output()
         .ok()?;
@@ -9213,6 +9205,21 @@ mod tests {
     use axum::http::Request;
     use tower::util::ServiceExt;
 
+    /// A unique fake daemon port per test state, so the derived tmux socket
+    /// (`tmux_socket_name(port)` = `pdo-<port>`) is distinct per test. Tests spawn
+    /// stub sessions that exit immediately (`exec true`); on a *shared* socket
+    /// (every state used `port: 0` → `pdo-0`) one test's session-exit tears the
+    /// tmux server down just as a concurrent test's `new-session` runs, failing
+    /// that spawn — an intermittent 400 in CI under load (the flaky
+    /// `start_node_command_force_spawns_pending_node`). Isolating the socket per
+    /// test removes the cross-test race. This is a socket-name seed only, never a
+    /// bound port: oneshot tests never start an HTTP listener.
+    fn next_test_daemon_port() -> u16 {
+        use std::sync::atomic::{AtomicU16, Ordering};
+        static NEXT: AtomicU16 = AtomicU16::new(20000);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
     async fn test_state() -> Arc<AppState> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -9227,7 +9234,7 @@ mod tests {
             event_tx,
             pipeline_tx,
             repo_root: std::env::current_dir().unwrap(),
-            port: 0,
+            port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
@@ -9412,7 +9419,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "GET /runs/reapable should 200");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "GET /runs/reapable should 200"
+        );
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -9424,20 +9435,30 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "reap-completed";
-        seed_run_with_run_events(&state, run_id, "test-pipe", &[
-            event_log::EventKind::RunCompleted,
-        ])
+        seed_run_with_run_events(
+            &state,
+            run_id,
+            "test-pipe",
+            &[event_log::EventKind::RunCompleted],
+        )
         .await;
         mk_run_worktree_dir(tmp.path(), run_id);
 
         let runs = get_reapable(&state, "").await;
-        assert_eq!(runs.len(), 1, "expected the completed worktree-present run: {runs:?}");
+        assert_eq!(
+            runs.len(),
+            1,
+            "expected the completed worktree-present run: {runs:?}"
+        );
         let e = &runs[0];
         assert_eq!(e["run_id"], run_id);
         assert_eq!(e["pipeline_name"], "test-pipe");
         assert_eq!(e["status"], "completed");
         assert_eq!(e["worktree_present"], true);
-        assert!(e["completed_at"].is_string(), "completed_at must be surfaced");
+        assert!(
+            e["completed_at"].is_string(),
+            "completed_at must be surfaced"
+        );
         assert!(
             e["age_secs"].as_i64().map(|a| a >= 0).unwrap_or(false),
             "age_secs must be a non-negative number: {:?}",
@@ -9458,14 +9479,20 @@ mod tests {
         // even with a worktree on disk.
         seed_run_with_run_events(&state, "reap-running", "p", &[]).await;
         mk_run_worktree_dir(tmp.path(), "reap-running");
-        seed_run_with_run_events(&state, "reap-paused", "p", &[
-            event_log::EventKind::RunPaused,
-        ])
+        seed_run_with_run_events(
+            &state,
+            "reap-paused",
+            "p",
+            &[event_log::EventKind::RunPaused],
+        )
         .await;
         mk_run_worktree_dir(tmp.path(), "reap-paused");
 
         let runs = get_reapable(&state, "").await;
-        assert!(runs.is_empty(), "live runs must never be reapable: {runs:?}");
+        assert!(
+            runs.is_empty(),
+            "live runs must never be reapable: {runs:?}"
+        );
     }
 
     #[tokio::test]
@@ -9473,17 +9500,25 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "reap-archived";
-        seed_run_with_run_events(&state, run_id, "p", &[
-            event_log::EventKind::RunCompleted,
-            event_log::EventKind::RunArchived,
-        ])
+        seed_run_with_run_events(
+            &state,
+            run_id,
+            "p",
+            &[
+                event_log::EventKind::RunCompleted,
+                event_log::EventKind::RunArchived,
+            ],
+        )
         .await;
         // Even if a stray worktree dir lingers, an archived run never surfaces
         // (its disk was already reclaimed by cleanup_run).
         mk_run_worktree_dir(tmp.path(), run_id);
 
         let runs = get_reapable(&state, "").await;
-        assert!(runs.is_empty(), "archived runs are already reclaimed: {runs:?}");
+        assert!(
+            runs.is_empty(),
+            "archived runs are already reclaimed: {runs:?}"
+        );
     }
 
     #[tokio::test]
@@ -9491,10 +9526,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "reap-gone";
-        seed_run_with_run_events(&state, run_id, "p", &[
-            event_log::EventKind::RunCompleted,
-        ])
-        .await;
+        seed_run_with_run_events(&state, run_id, "p", &[event_log::EventKind::RunCompleted]).await;
         mk_run_worktree_dir(tmp.path(), run_id);
         assert_eq!(
             get_reapable(&state, "").await.len(),
@@ -9517,19 +9549,28 @@ mod tests {
         // Surfacing is read-only: Failed/Halted/Skipped all appear, each tagged
         // with its status, so the consumer (janitor recipe) applies its own
         // policy (e.g. completed-only). We do NOT pre-filter failures here.
-        seed_run_with_run_events(&state, "reap-failed", "p", &[
-            event_log::EventKind::RunFailed,
-        ])
+        seed_run_with_run_events(
+            &state,
+            "reap-failed",
+            "p",
+            &[event_log::EventKind::RunFailed],
+        )
         .await;
         mk_run_worktree_dir(tmp.path(), "reap-failed");
-        seed_run_with_run_events(&state, "reap-halted", "p", &[
-            event_log::EventKind::RunHalted,
-        ])
+        seed_run_with_run_events(
+            &state,
+            "reap-halted",
+            "p",
+            &[event_log::EventKind::RunHalted],
+        )
         .await;
         mk_run_worktree_dir(tmp.path(), "reap-halted");
-        seed_run_with_run_events(&state, "reap-skipped", "p", &[
-            event_log::EventKind::RunSkipped,
-        ])
+        seed_run_with_run_events(
+            &state,
+            "reap-skipped",
+            "p",
+            &[event_log::EventKind::RunSkipped],
+        )
         .await;
         mk_run_worktree_dir(tmp.path(), "reap-skipped");
 
@@ -9549,7 +9590,11 @@ mod tests {
             by_id.get("reap-skipped").map(String::as_str),
             Some("skipped")
         );
-        assert_eq!(runs.len(), 3, "all three terminal-non-archived runs surface");
+        assert_eq!(
+            runs.len(),
+            3,
+            "all three terminal-non-archived runs surface"
+        );
     }
 
     #[tokio::test]
@@ -9557,10 +9602,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "reap-size";
-        seed_run_with_run_events(&state, run_id, "p", &[
-            event_log::EventKind::RunCompleted,
-        ])
-        .await;
+        seed_run_with_run_events(&state, run_id, "p", &[event_log::EventKind::RunCompleted]).await;
         mk_run_worktree_dir(tmp.path(), run_id);
         std::fs::write(
             tmp.path()
@@ -9593,10 +9635,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "doctrine-completed";
-        seed_run_with_run_events(&state, run_id, "p", &[
-            event_log::EventKind::RunCompleted,
-        ])
-        .await;
+        seed_run_with_run_events(&state, run_id, "p", &[event_log::EventKind::RunCompleted]).await;
         mk_run_worktree_dir(tmp.path(), run_id);
         let worktree = tmp
             .path()
@@ -10939,7 +10978,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/runs/{run_id}/nodes/{MERGE_RESOLVER_NODE_ID}/done"))
+                    .uri(format!(
+                        "/runs/{run_id}/nodes/{MERGE_RESOLVER_NODE_ID}/done"
+                    ))
                     .header("content-type", "application/json")
                     .body(Body::from("{}"))
                     .unwrap(),
@@ -10962,7 +11003,11 @@ mod tests {
             "NodeCompleted recorded for the original conflicting node"
         );
         assert_eq!(
-            count_events(&events, event_log::EventKind::NodeCompleted, MERGE_RESOLVER_NODE_ID),
+            count_events(
+                &events,
+                event_log::EventKind::NodeCompleted,
+                MERGE_RESOLVER_NODE_ID
+            ),
             0,
             "no NodeCompleted for the __merge_resolver__ pseudo-node"
         );
@@ -11860,9 +11905,8 @@ mod tests {
         let run_id = "20260630-l2-orphan";
 
         // Backdate every event well past the grace window so the run reads as idle.
-        let old_ts = (chrono::Utc::now()
-            - chrono::Duration::seconds(SPAWN_STALL_GRACE_SECS + 180))
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let old_ts = (chrono::Utc::now() - chrono::Duration::seconds(SPAWN_STALL_GRACE_SECS + 180))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
         append_event_at(
             &state,
@@ -12173,7 +12217,7 @@ mod tests {
             event_tx,
             pipeline_tx,
             repo_root: dir.to_path_buf(),
-            port: 0,
+            port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
@@ -12226,10 +12270,9 @@ mod tests {
         let mut prompts = HashMap::new();
         prompts.insert("worker".to_string(), "the role prompt".to_string());
 
-        let yaml = std::fs::read_to_string(
-            dir.join(".pdo").join("pipelines").join("auto-issue.yaml"),
-        )
-        .unwrap();
+        let yaml =
+            std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
+                .unwrap();
         sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
 
         let pipelines = dir.join(".pdo").join("pipelines");
@@ -13095,8 +13138,7 @@ mod tests {
         );
         let prompts_dir = lib_dir.join(format!("{id}.prompts"));
         assert!(
-            prompts_dir.is_dir()
-                && std::fs::read_dir(&prompts_dir).unwrap().next().is_some(),
+            prompts_dir.is_dir() && std::fs::read_dir(&prompts_dir).unwrap().next().is_some(),
             "prompt sidecars written"
         );
     }
@@ -16037,7 +16079,7 @@ edges: []
             event_tx,
             pipeline_tx,
             repo_root: repo.clone(),
-            port: 0,
+            port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
@@ -16215,7 +16257,7 @@ edges: []
             event_tx,
             pipeline_tx,
             repo_root: repo.clone(),
-            port: 0,
+            port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
@@ -17295,23 +17337,31 @@ edges: []
                 .unwrap(),
         )
         .into_owned();
-        assert_eq!(status, StatusCode::OK, "force-spawn returned {status}: {body}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "force-spawn returned {status}: {body}"
+        );
 
         let events = load_events(&state.db, run_id).await.unwrap();
         // The audit CommandIssued event landed...
         assert!(
-            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
-                && e.payload
-                    .as_ref()
-                    .and_then(|p| p.get("command"))
-                    .and_then(|c| c.as_str())
-                    == Some("start_node")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("command"))
+                        .and_then(|c| c.as_str())
+                        == Some("start_node")),
             "expected a start_node CommandIssued audit event"
         );
         // ...and so did the NodeStarted the force-spawn produced.
         assert!(
-            events.iter().any(|e| e.kind == event_log::EventKind::NodeStarted
-                && e.node_id.as_deref() == Some("worker")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
             "expected a NodeStarted event for the force-spawned worker"
         );
     }
@@ -18028,12 +18078,8 @@ edges:
     fn resolve_browse_root_explicit_existing_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(
-            Some(tmp.path().to_str().unwrap()),
-            None,
-            repo_root.path(),
-        )
-        .unwrap();
+        let got = resolve_browse_root(Some(tmp.path().to_str().unwrap()), None, repo_root.path())
+            .unwrap();
         assert_eq!(got, tmp.path());
     }
 
@@ -18058,7 +18104,11 @@ edges:
             repo_root.path(),
         )
         .unwrap();
-        assert_eq!(got, home.path(), "non-existent path clamps to the default (home)");
+        assert_eq!(
+            got,
+            home.path(),
+            "non-existent path clamps to the default (home)"
+        );
     }
 
     #[test]
@@ -18087,12 +18137,8 @@ edges:
     fn resolve_browse_root_falls_through_to_filesystem_root() {
         // No home, and a repo_root that does not exist → falls through to `/`
         // (which always exists), so the chain never collapses in practice.
-        let got = resolve_browse_root(
-            None,
-            None,
-            Path::new("/this/repo/root/does/not/exist/131"),
-        )
-        .unwrap();
+        let got = resolve_browse_root(None, None, Path::new("/this/repo/root/does/not/exist/131"))
+            .unwrap();
         assert_eq!(got, Path::new("/"));
     }
 
@@ -18134,10 +18180,7 @@ edges:
     fn run_name_hint_matrix() {
         use prompt_augmenter::RunNameHint;
         // A user-supplied (non-empty) name always wins, regardless of input.
-        assert_eq!(
-            run_name_hint(Some("My Run"), ""),
-            RunNameHint::UserProvided
-        );
+        assert_eq!(run_name_hint(Some("My Run"), ""), RunNameHint::UserProvided);
         assert_eq!(
             run_name_hint(Some("My Run"), "some input"),
             RunNameHint::UserProvided
@@ -18231,7 +18274,12 @@ edges:
     async fn get_settings_json(state: &Arc<AppState>) -> serde_json::Value {
         let app = build_router(state.clone());
         let resp = app
-            .oneshot(Request::builder().uri("/settings").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "GET /settings should 200");
@@ -18241,7 +18289,10 @@ edges:
         serde_json::from_slice(&body).unwrap()
     }
 
-    async fn put_settings_resp(state: &Arc<AppState>, body: &str) -> (StatusCode, serde_json::Value) {
+    async fn put_settings_resp(
+        state: &Arc<AppState>,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
         let app = build_router(state.clone());
         let resp = app
             .oneshot(
@@ -18275,7 +18326,10 @@ edges:
 
         for field in ["session_cap", "reaper_ttl_secs", "guard_timeout_secs"] {
             let f = &view[field];
-            assert!(f["stored"].is_null(), "{field}.stored must be null on a fresh row: {f}");
+            assert!(
+                f["stored"].is_null(),
+                "{field}.stored must be null on a fresh row: {f}"
+            );
             assert!(f.get("effective").is_some(), "{field}.effective missing");
             assert!(f.get("source").is_some(), "{field}.source missing");
             assert!(f.get("env").is_some(), "{field}.env key missing");
@@ -18284,7 +18338,10 @@ edges:
         assert_eq!(view["session_cap"]["default"], 20);
         assert_eq!(view["reaper_ttl_secs"]["default"], 3600);
         assert_eq!(view["guard_timeout_secs"]["default"], 60);
-        assert!(view["updated_at"].is_string(), "updated_at must be surfaced");
+        assert!(
+            view["updated_at"].is_string(),
+            "updated_at must be surfaced"
+        );
     }
 
     #[tokio::test]

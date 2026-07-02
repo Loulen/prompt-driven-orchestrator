@@ -667,7 +667,10 @@ mod tests {
         // default launch.
         let prompt_path = Path::new("/tmp/test-prompt.md");
         let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
-        assert!(!script.contains("--model"), "no model flag when unset: {script}");
+        assert!(
+            !script.contains("--model"),
+            "no model flag when unset: {script}"
+        );
         // The exact legacy tail, single space before the cat substitution.
         assert!(
             script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
@@ -685,8 +688,7 @@ mod tests {
         // `sh_single_quote` as `'\''` — i.e. `--model 'opus'` becomes
         // `--model '\''opus'\''` in the final script bytes.
         let prompt_path = Path::new("/tmp/test-prompt.md");
-        let script =
-            build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, Some("opus"));
+        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, Some("opus"));
         assert!(script.contains("--model"), "model flag present: {script}");
         assert!(
             script.contains(r"--model '\''opus'\''"),
@@ -699,7 +701,10 @@ mod tests {
         );
         let model_at = script.find("--model").unwrap();
         let cat_at = script.find("$(cat").unwrap();
-        assert!(model_at < cat_at, "model flag must precede the prompt cat: {script}");
+        assert!(
+            model_at < cat_at,
+            "model flag must precede the prompt cat: {script}"
+        );
     }
 
     #[test]

@@ -46,14 +46,16 @@ beforeEach(() => {
 function renderPanel({
   runs = [],
   libraryPipelines = [],
+  selectedRunId = null,
 }: {
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
+  selectedRunId?: string | null;
 } = {}) {
   return render(
     <UnifiedLeftPanel
       runs={runs}
-      selectedRunId={null}
+      selectedRunId={selectedRunId}
       onSelectRun={noop}
       onNewRun={noop}
       libraryPipelines={libraryPipelines}
@@ -258,13 +260,17 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     );
   });
 
-  it("counts archived rows toward the threshold (a 2nd-repo archived run flips to grouped)", () => {
+  it("excludes archived rows from the repo-group threshold and lists them in the Archived section", () => {
     const runs: RunListEntry[] = [
       { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
       { run_id: "r2", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/bar" },
     ];
     renderPanel({ runs });
-    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+    // Only one *active* repo ⇒ active list stays flat (no repo-group header).
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    // The archived run is pulled into the Archived section instead.
+    expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
   });
 
   it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
@@ -278,6 +284,105 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     // add a third label.
     expect(labels).toEqual(["alpha", "root"]);
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+  });
+});
+
+// #136 — archived runs are lifted out of the active list into their own flat,
+// collapsible "Archived" section below it. Collapsed by default; auto-opens when
+// the currently-selected run is (or becomes) archived, but stays collapsible.
+describe("UnifiedLeftPanel archived section (#136)", () => {
+  const active: RunListEntry = {
+    run_id: "run-active",
+    pipeline_name: "p",
+    status: "running",
+    started_at: null,
+    name: "Active One",
+  };
+  const archived: RunListEntry = {
+    run_id: "run-archived",
+    pipeline_name: "p",
+    status: "archived",
+    started_at: null,
+    name: "Archived One",
+  };
+
+  it("collapses the Archived section by default (toggle shown, body hidden)", () => {
+    renderPanel({ runs: [active, archived] });
+    // Toggle + count are always visible…
+    expect(screen.getByTestId("run-archived-toggle")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    // …but the archived row's body stays folded: only the active row renders.
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("expands and re-collapses when the toggle is clicked", () => {
+    renderPanel({ runs: [active, archived] });
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("auto-expands when the selected run is already archived on mount", () => {
+    renderPanel({ runs: [active, archived], selectedRunId: "run-archived" });
+    // Visible without any click — the mount-time initializer path.
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+  });
+
+  it("auto-expands when the selected run is archived mid-session", () => {
+    const props = {
+      selectedRunId: "run-active",
+      onSelectRun: noop,
+      onNewRun: noop,
+      libraryPipelines: [],
+      onLibraryPipelinesChanged: noop,
+    };
+    const { rerender } = render(
+      <UnifiedLeftPanel runs={[active, archived]} {...props} />,
+    );
+    // Section collapsed to start (selected run is active): old archived row hidden.
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+
+    // The selected run flips to archived (its worktree got reaped mid-session).
+    const nowArchived: RunListEntry = { ...active, status: "archived" };
+    rerender(<UnifiedLeftPanel runs={[nowArchived, archived]} {...props} />);
+
+    // The transition force-opens the section — the previously-hidden row appears.
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+  });
+
+  it("stays collapsible while a selected archived run is present (anti-dead-lock, decision 4)", () => {
+    // Auto-open on mount because the selected run is archived…
+    renderPanel({ runs: [archived], selectedRunId: "run-archived" });
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+    // …then a single click must still collapse it. A naive
+    // `open = archivedOpen || some(selected)` gate would pin it open forever.
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("renders no Archived section when there are no archived runs", () => {
+    renderPanel({ runs: [active] });
+    expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
+  });
+
+  it("does not show 'No runs yet' for an archived-only list", () => {
+    renderPanel({ runs: [archived] });
+    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
+  });
+
+  it("groups the active list by repo while excluding archived runs from the threshold", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "a1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/zebra" },
+      { run_id: "a3", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/gamma" },
+    ];
+    renderPanel({ runs });
+    // Two active repos ⇒ two groups; the archived third repo adds no phantom group.
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
   });
 });
 

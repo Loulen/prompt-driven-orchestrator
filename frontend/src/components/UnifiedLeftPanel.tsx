@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
 import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, renameRun } from "../api";
@@ -278,9 +278,37 @@ export default function UnifiedLeftPanel({
     );
   }
 
-  // Group the Runs list by project (#258) only when ≥ 2 distinct repos are
+  // #136 — archived runs live in their own flat, collapsible section below the
+  // active list; the active list keeps the #258 per-repo grouping.
+  const activeRuns = runs.filter((r) => r.status !== "archived");
+  const archivedRuns = runs.filter((r) => r.status === "archived");
+
+  // Identity of the selected run *iff* it currently sits in the archived set,
+  // else null — the signal that must reveal the section.
+  const selectedArchivedId =
+    selectedRunId != null && archivedRuns.some((r) => r.run_id === selectedRunId)
+      ? selectedRunId
+      : null;
+
+  // Collapsed by default; expanded on mount only if the selected run is already
+  // archived (so it's visible on first paint).
+  const [archivedOpen, setArchivedOpen] = useState(() => selectedArchivedId !== null);
+
+  // Auto-expand when the selected-archived run *changes* (a live run archived
+  // mid-session while selected, or selecting a different archived run). Adjusting
+  // state during render on a tracked-key change — React's reset-on-prop pattern,
+  // cf. App.tsx `lastCanvasFocus` and useDismissedNudges `prevTabId` — fires the
+  // reveal exactly once per transition, so a later chevron collapse sticks (no
+  // dead-lock). Force-open only; never force-close.
+  const [prevSelectedArchivedId, setPrevSelectedArchivedId] = useState(selectedArchivedId);
+  if (prevSelectedArchivedId !== selectedArchivedId) {
+    setPrevSelectedArchivedId(selectedArchivedId);
+    if (selectedArchivedId !== null) setArchivedOpen(true);
+  }
+
+  // Group the active Runs list by project (#258) only when ≥ 2 distinct repos are
   // present; otherwise `null` ⇒ the flat list, byte-identical to before.
-  const runGroups = groupByRepo(runs, (r) => r.effective_repo);
+  const runGroups = groupByRepo(activeRuns, (r) => r.effective_repo);
 
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
@@ -337,7 +365,7 @@ export default function UnifiedLeftPanel({
             </div>
           )}
           {runGroups === null
-            ? runs.map(renderRunRow)
+            ? activeRuns.map(renderRunRow)
             : runGroups.map((group) => (
                 <div key={group.repoPath} data-testid="run-repo-group">
                   <div
@@ -352,6 +380,27 @@ export default function UnifiedLeftPanel({
                   {group.items.map(renderRunRow)}
                 </div>
               ))}
+          {/* #136 — archived runs in their own flat, collapsible section below
+              the active list. Reuses renderRunRow verbatim (same archived
+              styling / Forget action). The rendered gate is `archivedOpen`
+              ALONE — never `archivedOpen || some(selected)`, which dead-locks
+              the chevron while a selected run is archived (see decision 4). */}
+          {archivedRuns.length > 0 && (
+            <div data-testid="run-archived-section" className="border-t border-line">
+              <button
+                onClick={() => setArchivedOpen((o) => !o)}
+                className="flex w-full items-center gap-1.5 px-3 py-2 text-fg-2 transition-colors hover:bg-bg-3 cursor-pointer"
+                style={{ fontSize: "11.5px" }}
+                data-testid="run-archived-toggle"
+              >
+                {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span className="font-medium">
+                  Archived <span data-testid="run-archived-count">({archivedRuns.length})</span>
+                </span>
+              </button>
+              {archivedOpen && archivedRuns.map(renderRunRow)}
+            </div>
+          )}
         </div>
         </div>
       )}

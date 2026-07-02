@@ -3226,7 +3226,7 @@ async fn spawn_node(
             &sub_branch,
             &pipeline_branch,
         ) {
-            error!("failed to create sub-worktree for {}: {e}", node.id);
+            error!("failed to create sub-worktree for {}: {e:#}", node.id);
             return;
         }
         orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));

@@ -636,4 +636,34 @@ mod tests {
             "sub-branch must be deleted after reap"
         );
     }
+
+    #[test]
+    fn create_sub_worktree_spawn_failure_preserves_os_cause() {
+        // Regression guard (#298): on the spawn-failure branch the OS-level
+        // io::Error must survive as a *queryable* `source()`, i.e. a 2-link anyhow
+        // chain [context, io::Error]. The pre-#298 duplicate used
+        // `map_err(anyhow!("…: {e}"))`, which flattened the cause into the message
+        // → a 1-link chain. Asserting the chain length (not the OS-specific string)
+        // makes this test portable and gives it teeth against a regression to the
+        // flattening form.
+        let tmp = tempfile::tempdir().unwrap();
+
+        // repo_root does NOT exist → git's chdir(current_dir) fails with ENOENT
+        // *before* exec, so `.output()` returns Err(io::Error) (the spawn-failure
+        // branch). This holds even if `git` is not installed on the runner.
+        let nonexistent_repo = tmp.path().join("no-such-repo");
+
+        // sub_worktree_dir's parent IS a valid writable temp path, so the earlier
+        // `create_dir_all(parent)?` succeeds and does not shield the .output() error.
+        let sub_wt_dir = tmp.path().join("sub").join("iter-1");
+
+        let err = create_sub_worktree(&nonexistent_repo, &sub_wt_dir, "pdo/sub-x", "base")
+            .expect_err("spawn must fail when repo_root does not exist");
+
+        assert_eq!(
+            err.chain().count(),
+            2,
+            "OS cause must be preserved as a distinct source(); got chain: {err:#}"
+        );
+    }
 }

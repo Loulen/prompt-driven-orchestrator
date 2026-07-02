@@ -1064,6 +1064,25 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(absent)).not.toContain("prompt_required");
   });
 
+  it("emits a per-node model override when set (#296)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 }, model: "opus",
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).toContain("model: opus");
+  });
+
+  it("omits model when unset — the byte-identical / no-diverge default (#296)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    expect(serializePipeline(makeFullPipeline([impl]))).not.toContain("model:");
+  });
+
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "doc-only",

@@ -216,6 +216,27 @@ describe("pipelinesEquivalent", () => {
     });
     expect(pipelinesEquivalent(a, b)).toBe(false);
   });
+
+  // #296: the per-node model is SEMANTIC — two nodes differing only by model
+  // must diverge (unlike layout). Emitted only-when-set, so an unset node and a
+  // no-model twin stay equivalent (the "diverged forever" guard).
+  it("flags a real per-node model change", () => {
+    const a = def({ nodes: [node("a", { model: "opus" })] });
+    const b = def({ nodes: [node("a", { model: "sonnet" })] });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  it("treats identical per-node models as equivalent", () => {
+    const a = def({ nodes: [node("a", { model: "opus" })] });
+    const b = def({ nodes: [node("a", { model: "opus" })] });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("treats an unset model as equivalent to an absent one (no false diverge)", () => {
+    const a = def({ nodes: [node("a", { model: null })] });
+    const b = def({ nodes: [node("a")] });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
 });
 
 describe("computePipelineSyncState", () => {

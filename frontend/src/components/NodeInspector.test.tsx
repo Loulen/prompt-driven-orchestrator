@@ -159,6 +159,40 @@ describe("NodeInspector — pooled emergent inputs (#153)", () => {
   });
 });
 
+describe("NodeInspector — per-node model field (#296)", () => {
+  it("writes the typed model onto the node and marks the tab dirty", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const input = screen.getByTestId("node-model-input");
+    fireEvent.change(input, { target: { value: "opus" } });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.nodes[0].model).toBe("opus");
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("clears the model to null when emptied (stays unset, never serialized)", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    // Seed a model so we can watch it clear.
+    useEditStore.getState().updateNode("rv1", { model: "opus" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const input = screen.getByTestId("node-model-input");
+    expect((input as HTMLInputElement).value).toBe("opus");
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].model).toBeNull();
+  });
+
+  it("renders a seeded model as the input value", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "haiku" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect((screen.getByTestId("node-model-input") as HTMLInputElement).value).toBe("haiku");
+  });
+});
+
 describe("NodeInspector StarButton — library save is independent of pipeline save", () => {
   it("Save to library works when pipeline is dirty (no longer requires save first)", () => {
     seedTabWithReviewer(true, "Review this code.");

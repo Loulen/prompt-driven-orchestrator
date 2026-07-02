@@ -34,6 +34,16 @@ Distinct de :
 
 - **NodeRun** *(à valider)* — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux Claude Code dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
 
+### Modèle (par node)
+
+Chaque Node peut porter un **modèle** optionnel (`model: Option<String>`) : l'identifiant du modèle Claude avec lequel sa session est lancée (`claude --model <x>`). Absent ⇒ le node utilise le modèle par défaut du compte (aucun `--model` n'est passé). Permet de payer un modèle capable là où le raisonnement est dur (Planner, Reviewer) et un modèle économique sur les nodes mécaniques.
+
+- **Texte libre, pass-through, aucune validation** : la valeur est un alias (`opus`, `sonnet`, `haiku`, `opusplan`, `fable`…) ou un id complet (`claude-opus-4-8`), transmise verbatim à `claude`. Un id invalide fait échouer `claude` au démarrage — *sharp tool*, responsabilité du designer (ADR-0001). Pas d'enum fermé qui périmerait à chaque sortie de modèle.
+- **Sémantique, pas layout** : le modèle fait partie de l'identité du pipeline (il change *quel agent* tourne). Il entre donc dans le **diff sémantique**, contrairement à `view`/`mode`/`waypoints`/`target_side`. Deux pipelines ne différant que par le modèle d'un node comparent **différent**.
+- **S'applique aux nodes qui lancent un agent** : `doc-only`, `code-mutating`, `merge`. Les nodes structurels (`start`, `end`) ne lancent pas de session → pas de modèle.
+- **Resume** : une session reprise (`claude --continue`) **conserve son modèle** d'origine (garanti par la doc Claude Code), donc pas besoin de re-passer `--model` au resume.
+- **Défaut daemon-wide hors-scope** : un `default_model` d'instance viendra plus tard via `instance_config` (ADR-0015). _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node*, jamais par run).
+
 ## Dataflow
 
 Modèle (A) — **document-first, code en side-channel** :

@@ -125,6 +125,12 @@ pub struct NodeDef {
     pub max_iter: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub over: Option<String>,
+    /// Optional per-node model override (#296): free-text pass-through to
+    /// `claude --model <x>` when the node spawns. Absent ⇒ account default
+    /// (no flag emitted, launch command byte-identical to the legacy path).
+    /// Semantic, not layout — included in the pipeline diff (ADR-0001).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -3152,6 +3158,72 @@ nodes:
             .find(|n| n.id == "ab000001")
             .unwrap();
         assert_eq!(fe.over.as_deref(), Some("tasks"));
+    }
+
+    #[test]
+    fn parses_node_model_and_round_trips() {
+        // #296: an agent-spawning node may carry a `model:` override. It parses
+        // into `NodeDef.model` and survives a serialize → re-parse round-trip.
+        let yaml = with_start_end(
+            r#"
+name: per-node-model
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    model: opus
+    outputs:
+      - name: code
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node.model.as_deref(), Some("opus"));
+
+        // Round-trips: re-serialize, re-parse — the model survives.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        let node2 = result2
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node2.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn node_model_defaults_to_none() {
+        // A node with no `model:` parses to `None` and is never serialized —
+        // the absence gate that keeps an unset node byte-identical to a library
+        // twin with no model (#296, the "diverged forever" guard).
+        let yaml = with_start_end(
+            r#"
+name: no-model
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert!(node.model.is_none());
+        // Absent ⇒ never serialized (clean file, round-trips by absence).
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(!serialized.contains("model:"));
     }
 
     #[test]

@@ -53,6 +53,13 @@ describe("EditToolbar", () => {
     expect(onAddNode).toHaveBeenCalledWith("merge");
   });
 
+  it("script button calls onAddNode with script (#248)", () => {
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("toolbar-script"));
+    expect(onAddNode).toHaveBeenCalledWith("script");
+  });
+
   it("tooltips render the correct text on hover", async () => {
     const user = userEvent.setup();
     renderToolbar();

@@ -232,6 +232,7 @@ const edgeTypes = { orthogonal: OrthogonalEdge };
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "code-mutating": "implementer",
   "merge": "merge",
+  "script": "script",
 };
 
 interface EditCanvasProps {
@@ -551,6 +552,15 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           id, name, type, interactive: false, view,
           inputs: [{ name: "branches", repeated: true, side: "left" }],
           outputs: [{ name: "merged", repeated: false, side: "right" }],
+        };
+        break;
+      case "script":
+        // #248: a script node's inputs are emergent (edge-derived), like a work
+        // node — it declares none. One default output for its `output.md`.
+        newNode = {
+          id, name, type, interactive: false, view,
+          inputs: [],
+          outputs: [{ name: "out", repeated: false, side: "right" }],
         };
         break;
       default:

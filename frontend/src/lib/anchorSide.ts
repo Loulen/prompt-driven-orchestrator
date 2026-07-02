@@ -29,7 +29,9 @@ export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "botto
  * their declared, fixed-side ports and are never re-anchored by drop position.
  */
 export function isEmergentInputNode(type: NodeType): boolean {
-  return type === "doc-only" || type === "code-mutating";
+  // #248: a `script` node consumes whole artifacts by edge like a work node, so
+  // its inputs are emergent too — anchor incoming edges to the body by drop.
+  return type === "doc-only" || type === "code-mutating" || type === "script";
 }
 
 /**

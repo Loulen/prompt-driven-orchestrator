@@ -4,6 +4,7 @@ import {
   anchorHandleId,
   sideFromAnchorHandle,
   anchorsByDropOnBody,
+  isEmergentInputNode,
 } from "./anchorSide";
 
 // A 200x80 card whose top-left is at (100, 100); centre is (200, 140).
@@ -86,6 +87,20 @@ describe("anchorHandleId / sideFromAnchorHandle round-trip", () => {
     expect(sideFromAnchorHandle("result")).toBeNull();
     expect(sideFromAnchorHandle(null)).toBeNull();
     expect(sideFromAnchorHandle(undefined)).toBeNull();
+  });
+});
+
+describe("isEmergentInputNode", () => {
+  it("treats work nodes and script as emergent-input (#149 / #248)", () => {
+    expect(isEmergentInputNode("doc-only")).toBe(true);
+    expect(isEmergentInputNode("code-mutating")).toBe(true);
+    expect(isEmergentInputNode("script")).toBe(true);
+  });
+
+  it("keeps structural nodes on their declared, fixed-side ports", () => {
+    expect(isEmergentInputNode("start")).toBe(false);
+    expect(isEmergentInputNode("end")).toBe(false);
+    expect(isEmergentInputNode("merge")).toBe(false);
   });
 });
 

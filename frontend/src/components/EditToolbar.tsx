@@ -1,4 +1,4 @@
-import { Plus, GitMerge, Info, Undo2, Redo2 } from "lucide-react";
+import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal } from "lucide-react";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -60,6 +60,16 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
           className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
         >
           <GitMerge size={14} />
+        </button>
+      </Tooltip>
+
+      <Tooltip content="Script node (deterministic bash)">
+        <button
+          data-testid="toolbar-script"
+          onClick={() => onAddNode("script")}
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+        >
+          <SquareTerminal size={14} />
         </button>
       </Tooltip>
 

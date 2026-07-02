@@ -19,7 +19,7 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle d'agent — typiquement une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (cf. *Node `script`* ci-dessous, ADR-0017).
 
 Un Node se définit par :
 
@@ -43,6 +43,16 @@ Chaque Node peut porter un **modèle** optionnel (`model: Option<String>`) : l'i
 - **S'applique aux nodes qui lancent un agent** : `doc-only`, `code-mutating`, `merge`. Les nodes structurels (`start`, `end`) ne lancent pas de session → pas de modèle.
 - **Resume** : une session reprise (`claude --continue`) **conserve son modèle** d'origine (garanti par la doc Claude Code), donc pas besoin de re-passer `--model` au resume.
 - **Défaut daemon-wide hors-scope** : un `default_model` d'instance viendra plus tard via `instance_config` (ADR-0015). _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node*, jamais par run).
+
+### Node `script` — exécution déterministe (ADR-0017)
+
+Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude. Il tourne dans une **session tmux** (attachable comme tout NodeRun, ADR-0005) dont le tail est `timeout N bash <corps>` : **exit 0 ⇒ node `completed`**, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (pas de sous-worktree ; tourne dans le worktree du Run ; doit le laisser propre).
+
+- **I/O par variables d'environnement** (un script ne lit pas le préambule prose) : `PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`, plus les `PDO_RUN_ID/NODE_ID/NODE_ITER/DAEMON_URL` habituels. Le script écrit lui-même `output.md` à `$PDO_OUTPUT_<port>` ; pour piloter une edge `when:`, il y écrit sa propre frontmatter YAML. `outputs_validator` s'applique en **fail-fast** (pas de retry interactif — la session a quitté).
+- **Corps** stocké dans le slot prompt du node (`<pipeline>.prompts/<node>.md`). Un corps vide fait échouer le lancement (fail-loud, pas de no-op silencieux).
+- **Pas de `model`** (aucun agent lancé). Le seam de test `tmux_cmd_override` ne s'applique pas à un script (le bash *est* déterministe, donc testable sans stub).
+- **Sécurité** : équivalent au guard de Trigger et au bash d'un agent — le bash de l'auteur dans son propre pipeline, aucune nouvelle frontière de confiance (#260 reste le contrôle réel).
+- **Sharp tool** : un script doc-only qui fait `git commit` laisse l'arbre propre et passe le garde d'immutabilité — c'est la responsabilité de l'auteur.
 
 ## Dataflow
 

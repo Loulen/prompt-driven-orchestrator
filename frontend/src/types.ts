@@ -52,7 +52,9 @@ export interface UpdateSettingsRequest {
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old
 // YAML into a region. `loop` was likewise removed in #171.
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge";
+// `script` (#248 / ADR-0017) runs author-written bash deterministically instead
+// of launching Claude; the FE union is not 1:1 with the backend enum.
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge" | "script";
 
 export interface RunListEntry {
   run_id: string;

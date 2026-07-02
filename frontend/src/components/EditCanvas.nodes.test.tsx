@@ -211,6 +211,41 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
   });
 });
 
+describe("EditNode script node card (#248)", () => {
+  function scriptProps() {
+    return {
+      ...markerProps({ nodeType: "script" }),
+      id: "notify",
+      data: {
+        label: "notify",
+        nodeId: "notify",
+        nodeType: "script" as NodeType,
+        status: "pending" as NodeStatus,
+        reached: false,
+        inputs: [],
+        outputs: [{ name: "out", side: "right" as const }],
+        interactive: false,
+      },
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it("renders the terminal (script) icon, not the agent glyph", () => {
+    render(<EditNode {...scriptProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("node-icon-script")).toBeTruthy();
+    expect(screen.queryByTestId("node-icon-agent")).toBeNull();
+  });
+
+  it("grows all four body-anchor handles (emergent inputs, like a work node)", () => {
+    const { container } = render(<EditNode {...scriptProps()} />, { wrapper: Wrapper });
+    const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
+      h.getAttribute("data-handleid"),
+    );
+    for (const side of ["left", "right", "top", "bottom"]) {
+      expect(handleIds).toContain(`__anchor:${side}`);
+    }
+  });
+});
+
 describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
   it("renders one image chip per uploaded image, tagged by filename", () => {
     render(

@@ -1,4 +1,4 @@
-import { User, GitMerge, Play, Square, Code, FileText } from "lucide-react";
+import { User, GitMerge, Play, Square, Code, FileText, SquareTerminal } from "lucide-react";
 import type { NodeType } from "../types";
 
 interface IconProps {
@@ -15,6 +15,9 @@ export function NodeTypeIcon({ type, size = 14, className }: IconProps) {
       return <Play data-testid="node-icon-start" size={size} className={className} />;
     case "end":
       return <Square data-testid="node-icon-end" size={size} className={className} />;
+    case "script":
+      // #248: a script node runs deterministic bash, not an agent.
+      return <SquareTerminal data-testid="node-icon-script" size={size} className={className} />;
     default:
       return <User data-testid="node-icon-agent" size={size} className={className} />;
   }

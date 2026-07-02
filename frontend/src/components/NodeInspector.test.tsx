@@ -129,8 +129,72 @@ function seedPooledReviewPipeline() {
   });
 }
 
+function seedTabWithScript(prompt = "echo hi\n") {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "sc1",
+              name: "notify",
+              type: "script",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "out", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+          ],
+          edges: [],
+        },
+        prompts: { sc1: prompt },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "sc1" },
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("NodeInspector — script node surface (#248)", () => {
+  it("shows the Script (bash) body editor and hides the model field", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("script-body")).toBeInTheDocument();
+    expect(screen.getByTestId("script-help")).toBeInTheDocument();
+    // A script launches no agent — the model field must be absent.
+    expect(screen.queryByTestId("node-model-input")).toBeNull();
+  });
+
+  it("shows a static script type label, not the doc-only/code-mutating toggle", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("script-type-label")).toBeInTheDocument();
+  });
+
+  it("persists edits to the bash body and marks the tab dirty", () => {
+    seedTabWithScript("echo old\n");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const body = screen.getByTestId("script-body");
+    fireEvent.change(body, { target: { value: "curl -X POST $PDO_DAEMON_URL\n" } });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.prompts["sc1"]).toBe("curl -X POST $PDO_DAEMON_URL\n");
+    expect(tab.dirty).toBe(true);
+  });
 });
 
 describe("NodeInspector — pooled emergent inputs (#153)", () => {

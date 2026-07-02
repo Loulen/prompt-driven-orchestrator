@@ -838,3 +838,39 @@ Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/
 
 - **Duplicate (library pipeline)** (`POST /library/pipelines/{id}/duplicate`, #224) — clone **délié** d'une template de la bibliothèque : id frais, nom suffixé `(copy)`/`(copy N)` (calculé unique sur les deux scopes), **aucune** métadonnée de promotion (`meta.json` / `promoted_from`). Le YAML est réécrit **verbatim sauf la ligne `name:` de colonne 0** (jamais re-sérialisé), pour préserver clés top-level inconnues (`auto_merge_resolver`), commentaires et ordre des champs. À distinguer de **Promote** (qui enregistre `promoted_from`) et du **duplicate** de nœud sur le canvas (`{name} copy`, sans parenthèses). _Éviter_ : copy, clone quand le contexte le rend ambigu avec promote.
 - **Supprimer une pipeline ≠ supprimer sa copie en bibliothèque** (#227) — par défaut la copie favorite (durable) subsiste après la suppression de la pipeline de travail et reste visible comme entrée *library-only* (*Sharp tool* : on surface, on ne masque pas — pas d'auto-cleanup, pas de re-surfacement silencieux). Une case opt-in (décochée par défaut, libellé `Also remove the Library copy`) permet de retirer aussi la copie dans le même geste, **uniquement** si une seule copie de même nom existe (match sur le `name`, jamais sur l'id qui diverge) ; sur un double-favori ambigu la case est supprimée et les deux copies sont conservées. Toute suppression rafraîchit désormais les **deux** listes (merged `/pipelines` + `/library/pipelines`).
+
+---
+
+## Import de workflow (Claude Code → pipeline)
+
+**Import de workflow** :
+Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js`, format dynamique
+officiel CC) en un **brouillon de Pipeline** déposé en Bibliothèque (scope user, jamais lancé). But =
+**onboarding** depuis un artéfact officiellement supporté, **pas fidélité** — « importe le câblage,
+signale le reste ». Parsing par AST statique (`oxc`), **jamais d'exécution du `.js`** (ADR-0016).
+_Éviter_ : « conversion », « migration » — la **migration** (`pipeline_migrator`) réécrit du YAML PDO
+d'un ancien schéma vers le courant (même format) ; l'**import** traduit un format étranger.
+
+**Placeholder annoté** :
+Nœud `doc-only` (aucun type de nœud dédié) dont le corps explique un idiome de workflow que l'import
+v1 ne matérialise pas (boucle imbriquée, garde budgétaire, `try/finally`, accumulation cross-lap, prompt
+bâti par helper nu). L'annotation **est** le tutoriel d'onboarding : elle nomme ce qu'un utilisateur PDO
+n'écrirait jamais à la main (gestion worktrees, auto-cleanup, boucle budgétaire — remplacés par des
+features plateforme) et le traduit en interaction délibérée. Distinct du *nom placeholder* d'un Run (#184).
+
+**Extraction verbatim** :
+Règle de récupération des prompts. Un string-literal ou un template-literal **sans** interpolation →
+corps de prompt **verbatim**. Un template-literal inline **avec** `${…}` → texte statique extrait verbatim,
+chaque trou rendu en marqueur annoté câblable en port d'entrée. Un prompt **sans aucun texte statique**
+(appel de helper nu `agent(buildPrompt())`, identifiant) → placeholder annoté. Cohérent avec la *prompt
+augmentation* (le corps est ajouté verbatim, jamais substitué ; les inputs arrivent en bloc de chemins).
+
+### Relations
+
+- Un **Import de workflow** produit un **brouillon de Pipeline** en **Bibliothèque** (scope user).
+- Un workflow CC contient des **idiomes** mappés : `agent()` → **Node**, `pipeline()` → **boucle
+  `collection`**, `for`/`while` (dont le corps contient un `agent()`) → **boucle `bounded`**, `if`/`return`
+  gardé → **edge conditionnelle** (`when:`), schémas JSON → **frontmatter de port de sortie**.
+- Un idiome hors sous-ensemble reconnu → **placeholder annoté**. Un `git merge` scripté (fixed-worktree,
+  ordre imposé, build par merge) → **Node `code-mutating` annoté**, **pas** le **Merge** first-class
+  (ADR-0006) dont il excède le contrat.

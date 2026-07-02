@@ -828,6 +828,27 @@ export async function saveLibraryPipeline(
   return resp.json();
 }
 
+/// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
+/// `content` is the raw file text (read client-side via `File.text()` — the
+/// daemon never reads `~/.claude/workflows` off disk). `filename` seeds the
+/// fallback pipeline name. Returns the new id, scope, and any lossy-translation
+/// warnings; a 400 body carries a verbatim `error` a real `.js` can trigger.
+export async function importWorkflow(
+  filename: string,
+  content: string,
+): Promise<{ id: string; scope: string; warnings?: string[] }> {
+  const resp = await fetch(`${BASE}/library/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, content }),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `POST /library/import failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 /// Duplicate a library pipeline template into an unlinked clone: fresh id, name
 /// suffixed `(copy)` / `(copy N)`, no promotion metadata (#224). Returns the new
 /// id, its scope, and the freshly-listed library entry (or null if the list

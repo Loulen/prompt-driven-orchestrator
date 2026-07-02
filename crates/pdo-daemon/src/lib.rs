@@ -25,6 +25,7 @@ pub mod node_primitives;
 mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
+mod workflow_importer;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod pty_bridge;
@@ -1687,6 +1688,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/library/pipelines", get(list_library_pipelines))
         .route("/library/pipelines", post(save_library_pipeline))
+        // #155 — import a Claude Code workflow .js as a draft pipeline (user scope).
+        // Static segment beside `/library/pipelines`; the `/library` vite proxy
+        // prefix already covers it (no vite proxy edit).
+        .route("/library/import", post(import_library_pipeline))
         .route(
             "/library/pipelines/{id}",
             axum::routing::delete(delete_library_pipeline),
@@ -2790,6 +2795,74 @@ async fn save_library_pipeline(
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({ "id": id, "scope": scope.as_str(), "entry": entry })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// Request body for `POST /library/import` (#155): the raw `.js` source plus the
+/// original filename (used only for the fallback pipeline name and error
+/// messages). Transport is a browser file selector -> `File.text()` -> JSON, so
+/// the daemon never reads `~/.claude/workflows` off disk (host-agnostic; the
+/// daemon binds `0.0.0.0`).
+#[derive(serde::Deserialize)]
+struct ImportWorkflowRequest {
+    filename: String,
+    content: String,
+}
+
+/// Import a Claude Code workflow `.js` into a draft library pipeline (#155 /
+/// ADR-0016). The `.js` is parsed to an AST — never executed — and the recognized
+/// idioms are rewired into a `PipelineDef`; lossy-translation diagnostics ride
+/// back in `warnings`. On parse/translation failure the verbatim error is
+/// surfaced as 400 (a real `.js` can legitimately fall outside the subset).
+async fn import_library_pipeline(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportWorkflowRequest>,
+) -> Response {
+    let stem = std::path::Path::new(&req.filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("imported-workflow");
+    let result = match workflow_importer::import_workflow_js(&req.content, stem) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("import failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    match library_store::pipelines::save(
+        &state.repo_root,
+        None,
+        &result.name,
+        &result.yaml_text,
+        &result.prompts,
+        library_store::pipelines::Scope::User,
+    ) {
+        Ok(id) => {
+            let entry = library_store::pipelines::list(&state.repo_root)
+                .into_iter()
+                .find(|e| e.id == id);
+            let warnings: Vec<String> =
+                result.warnings.iter().map(|d| d.message.clone()).collect();
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": id,
+                    "scope": "user",
+                    "entry": entry,
+                    "warnings": warnings,
+                })),
             )
                 .into_response()
         }
@@ -12973,6 +13046,88 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // #155 — POST /library/import: a Claude Code workflow .js becomes a
+    // user-scope draft pipeline, written to the isolated HOME library dir.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn import_library_workflow_returns_201_and_writes_draft() {
+        let _fake_home = FakeHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(repo.path()).await;
+        let app = build_router(state);
+
+        let content = include_str!("../../../.claude/workflows/simple-bugfix.js");
+        let body = serde_json::json!({
+            "filename": "simple-bugfix.js",
+            "content": content,
+        })
+        .to_string();
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/library/import")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["scope"], "user");
+        assert!(result["entry"].is_object(), "listed entry returned");
+        assert!(result["warnings"].is_array(), "warnings array returned");
+
+        // The draft YAML + prompt sidecars land in the isolated HOME library dir.
+        let id = result["id"].as_str().unwrap();
+        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
+        assert!(
+            lib_dir.join(format!("{id}.yaml")).exists(),
+            "draft YAML written to user-scope library"
+        );
+        let prompts_dir = lib_dir.join(format!("{id}.prompts"));
+        assert!(
+            prompts_dir.is_dir()
+                && std::fs::read_dir(&prompts_dir).unwrap().next().is_some(),
+            "prompt sidecars written"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn import_library_workflow_rejects_invalid_js() {
+        let _fake_home = FakeHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(repo.path()).await;
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "filename": "broken.js",
+            "content": "const x = = ;",
+        })
+        .to_string();
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/library/import")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

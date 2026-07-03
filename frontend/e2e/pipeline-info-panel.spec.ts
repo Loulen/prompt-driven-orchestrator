@@ -213,11 +213,13 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await page.getByTestId("info-panel-close").click();
   await expect(infoPanel).not.toBeVisible();
 
-  // Add a new node via toolbar (post-refonte: `toolbar-add` inserts a
-  // `code-mutating` node whose default name is "implementer"; node ids are now
-  // random nanoids, no longer `node-N`).
+  // Add a new node via toolbar. Since #307/#310 `toolbar-add` is a dropdown
+  // (Node | Note) — open it, then pick "Node" (`add-menu-node`), which inserts a
+  // `code-mutating` node whose default name is "implementer" (node ids are random
+  // nanoids, no longer `node-N`).
   await dismissConflictIfPresent(page);
   await page.getByTestId("toolbar-add").click();
+  await page.getByTestId("add-menu-node").click();
   await page.waitForTimeout(500);
 
   // Re-open the info panel and check YAML tab reflects the new node

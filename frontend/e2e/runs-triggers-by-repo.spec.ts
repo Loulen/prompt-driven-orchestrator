@@ -146,8 +146,15 @@ test("Triggers list groups by repo across ≥2 repos; null target resolves to th
   expect(labels).toContain(path.basename(WORKSPACE_ROOT));
   expect(labels.join(" ")).not.toMatch(/unassigned/i);
 
-  // Group labels are sorted alphabetically by full path.
-  expect([...labels]).toEqual([...labels].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+  // Groups are ordered by full PATH (groupByRepo), not by the basename label.
+  // Assert the displayed label order equals sorting the three repos by full path,
+  // so the check is robust to the workspace's absolute path — which differs
+  // between local (…/Maestro) and CI (…/prompt-driven-orchestrator) and would
+  // otherwise flip basename order relative to full-path order.
+  const expectedLabelOrder = [repoA, repoB, WORKSPACE_ROOT]
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .map((p) => path.basename(p));
+  expect(labels).toEqual(expectedLabelOrder);
 
   // Full path on hover: the repoA group header carries title=repoA.
   const repoALabel = page

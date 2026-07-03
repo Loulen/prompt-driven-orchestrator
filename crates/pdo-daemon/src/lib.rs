@@ -6448,9 +6448,7 @@ async fn run_stale_detection(state: &AppState) {
                                 payload: Some(serde_json::json!({ "signal": "usage_limit_menu" })),
                             };
                             if let Err(e) = append_event(state, &ev).await {
-                                error!(
-                                    "Stale detector: failed to append NodeBlockedOnLimit: {e}"
-                                );
+                                error!("Stale detector: failed to append NodeBlockedOnLimit: {e}");
                             }
                         }
                     }

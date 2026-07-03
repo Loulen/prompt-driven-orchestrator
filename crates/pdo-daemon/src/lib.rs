@@ -33,6 +33,7 @@ mod run_advance;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
+mod service_unit;
 pub mod stale_detector;
 mod switch_router;
 pub mod tmux_session_manager;
@@ -117,6 +118,38 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
+    /// Manage the persistent OS service unit for the daemon (#156, ADR-0019).
+    ///
+    /// Installs the daemon as a `systemd --user` unit (Linux) or a launchd
+    /// LaunchAgent (macOS, best-effort) so it starts at boot and survives
+    /// logout — turning "Triggers only fire while you're logged in" into a
+    /// reliable unattended orchestrator (resolves the ADR-0012 v1 limitation).
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+/// Actions for `pdo service` (#156, D2). A new top-level subcommand rather than
+/// flags on `Daemon`: every existing verb is one-shot → one `run_*` fn, whereas
+/// `Daemon` builds a tokio runtime and blocks forever. `Service` is a blocking
+/// one-shot like `Complete`/`Fail`/`Skip` — no tokio runtime.
+#[derive(Subcommand, Debug)]
+pub enum ServiceAction {
+    /// Generate + enable the service unit so the daemon starts at boot / survives logout.
+    Install {
+        #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
+        port: u16,
+        /// Print the unit file + the exact commands, make NO changes (safe
+        /// preview / test seam). Still probes the port so the conflict guard is
+        /// visible, but performs zero writes and runs no `systemctl`.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Stop, disable, and remove the service unit.
+    Uninstall,
+    /// Show the service unit's status (`systemctl --user status pdo` / launchd equivalent).
+    Status,
 }
 
 struct AppState {
@@ -191,6 +224,11 @@ struct AppState {
     /// spawn can be targeted deterministically. An `Arc<AtomicBool>` (not
     /// process-global env) so parallel test daemons never race (#181).
     panic_on_spawn: Arc<std::sync::atomic::AtomicBool>,
+    /// Persistent-service health (#156, D5), computed once at boot and cached
+    /// here so the polled `GET /sessions` pays zero subprocess cost per request.
+    /// Surfaced as the `service` object on `/sessions`; drives the status bar's
+    /// `ephemeral` pill.
+    service_health: Arc<ServiceHealth>,
 }
 
 impl AppState {
@@ -443,6 +481,524 @@ pub fn run_skip(reason: String) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// `pdo service {install|uninstall|status}` (#156, ADR-0019)
+// ---------------------------------------------------------------------------
+
+/// What the port-conflict pre-flight probe found on `127.0.0.1:<port>` (#156, D1).
+///
+/// Two daemons can never share a port (`run_daemon` binds with no `SO_REUSEADDR`
+/// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled
+/// unit whose ExecStart daemon collides with an already-bound port would
+/// crash-loop under `Restart=on-failure`. The guard classifies the port so
+/// `install` can refuse loudly or degrade to idempotent instead of blindly
+/// enabling a doomed unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PortState {
+    /// Nothing is listening — safe to enable + start.
+    Free,
+    /// A PDO daemon already answers `GET /sessions` here. Treat idempotently:
+    /// ensure the unit is written + enabled for boot, but do NOT `--now` a
+    /// competing instance onto the bound port.
+    PdoDaemon,
+    /// Something else holds the port (a non-PDO process, or a bare `pdo daemon`
+    /// that isn't answering yet). Refuse: enabling would crash-loop.
+    Foreign,
+}
+
+/// Outcome of a spawned side-effect command (`systemctl` / `loginctl` / `launchctl`).
+struct CmdOutcome {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// Injectable side-effect surface for `pdo service` (#156, D4).
+///
+/// Mirrors the `tmux_cmd_override` seam philosophy (#181): production uses the
+/// real implementations, tests use a recording fake so no real
+/// `systemctl`/`launchctl` ever runs and no `~/.config` is touched (ADR-0004
+/// line 29 — host-mutating acts stay out of the automated suite). Everything
+/// non-hermetic (exe/cwd/home/user lookup, port probe, file write, command
+/// spawn) funnels through this trait.
+trait ServiceEnv {
+    /// Absolute path of the running `pdo` binary — the unit's `ExecStart`.
+    fn current_exe(&self) -> Result<PathBuf>;
+    /// Current working directory — the unit's `WorkingDirectory` (→ repo_root).
+    fn current_dir(&self) -> Result<PathBuf>;
+    /// Directory holding `node`, or `None` when it isn't on `$PATH`.
+    fn node_dir(&self) -> Option<PathBuf>;
+    /// `$XDG_CONFIG_HOME`-resolved config home (systemd unit lives under it).
+    fn config_home(&self) -> Result<PathBuf>;
+    /// `$HOME` — launchd plist location + the plist's `HOME` env var.
+    fn home(&self) -> Result<PathBuf>;
+    /// `$USER` — for `loginctl enable-linger $USER`.
+    fn user(&self) -> Result<String>;
+    /// Classify `127.0.0.1:<port>` for the conflict guard (D1).
+    fn probe_port(&self, port: u16) -> PortState;
+    /// Write a unit/plist file, creating parent dirs.
+    fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
+    /// Remove a unit/plist file (uninstall); Ok if already absent.
+    fn remove_file(&self, path: &Path) -> Result<()>;
+    /// Run a side-effect command, capturing its outcome.
+    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome>;
+}
+
+/// Production [`ServiceEnv`]: real env lookups, real TCP probe, real
+/// `std::process::Command`.
+struct RealServiceEnv;
+
+impl ServiceEnv for RealServiceEnv {
+    fn current_exe(&self) -> Result<PathBuf> {
+        let exe = std::env::current_exe().context("failed to determine current executable path")?;
+        // Canonicalise so the unit points at the resolved binary, not a symlink
+        // that might move. Fall back to the raw path if canonicalisation fails.
+        Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
+    }
+
+    fn current_dir(&self) -> Result<PathBuf> {
+        std::env::current_dir().context("failed to determine current directory")
+    }
+
+    fn node_dir(&self) -> Option<PathBuf> {
+        service_unit::resolve_node_dir()
+    }
+
+    fn config_home(&self) -> Result<PathBuf> {
+        service_unit::resolve_config_home().context(
+            "neither $XDG_CONFIG_HOME nor $HOME is set: cannot locate the systemd user dir",
+        )
+    }
+
+    fn home(&self) -> Result<PathBuf> {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .context("$HOME is not set")
+    }
+
+    fn user(&self) -> Result<String> {
+        std::env::var("USER").context("$USER is not set")
+    }
+
+    fn probe_port(&self, port: u16) -> PortState {
+        use std::net::TcpStream;
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        // A refused connection means the port is free. Anything else means
+        // something is listening; identify whether it's a PDO daemon.
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
+            return PortState::Free;
+        }
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(800))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return PortState::Foreign,
+        };
+        match client.get(format!("http://127.0.0.1:{port}/sessions")).send() {
+            Ok(resp) if resp.status().is_success() => {
+                let body = resp.text().unwrap_or_default();
+                // The `/sessions` payload carries `cap` + `version` — markers no
+                // random service would emit together.
+                if body.contains("\"cap\"") && body.contains("\"version\"") {
+                    PortState::PdoDaemon
+                } else {
+                    PortState::Foreign
+                }
+            }
+            // Something is listening but it isn't a healthy PDO daemon.
+            _ => PortState::Foreign,
+        }
+    }
+
+    fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::write(path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+        }
+    }
+
+    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
+        let output = std::process::Command::new(program)
+            .args(args)
+            .output()
+            .with_context(|| format!("failed to spawn `{program}`"))?;
+        Ok(CmdOutcome {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+/// Entry point for `Commands::Service` (#156). A blocking one-shot — no tokio
+/// runtime — dispatched from `main.rs` like `Complete`/`Fail`/`Skip`.
+pub fn run_service(action: ServiceAction) -> Result<()> {
+    let mut out = std::io::stdout();
+    run_service_with(action, &RealServiceEnv, &mut out)
+}
+
+/// Core `pdo service` logic against an injected [`ServiceEnv`] and output sink.
+///
+/// Split from [`run_service`] so tests drive it with a recording fake (asserting
+/// the exact argv sequence + written-file bytes) and a captured buffer (asserting
+/// `--dry-run` output), never touching real systemd or `~/.config`.
+fn run_service_with(
+    action: ServiceAction,
+    env: &dyn ServiceEnv,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
+    let is_macos = cfg!(target_os = "macos");
+    match action {
+        ServiceAction::Install { port, dry_run } => {
+            if is_macos {
+                service_install_launchd(env, out, port, dry_run)
+            } else {
+                service_install_systemd(env, out, port, dry_run)
+            }
+        }
+        ServiceAction::Uninstall => {
+            if is_macos {
+                service_uninstall_launchd(env, out)
+            } else {
+                service_uninstall_systemd(env, out)
+            }
+        }
+        ServiceAction::Status => {
+            if is_macos {
+                service_status_launchd(env, out)
+            } else {
+                service_status_systemd(env, out)
+            }
+        }
+    }
+}
+
+/// Human-readable description of a port-probe result, for the plan / guard output.
+fn describe_port_state(port: u16, state: &PortState) -> String {
+    match state {
+        PortState::Free => format!("port {port} is free"),
+        PortState::PdoDaemon => {
+            format!("a PDO daemon is already answering on 127.0.0.1:{port}")
+        }
+        PortState::Foreign => {
+            format!("port {port} is already bound by a non-PDO process (or a not-yet-ready daemon)")
+        }
+    }
+}
+
+/// `pdo service install` — Linux systemd `--user` path (#156, D3/D4).
+fn service_install_systemd(
+    env: &dyn ServiceEnv,
+    out: &mut dyn std::io::Write,
+    port: u16,
+    dry_run: bool,
+) -> Result<()> {
+    let exe = env.current_exe()?;
+    let working_dir = env.current_dir()?;
+    let node_dir = env.node_dir();
+    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
+    let user = env.user().unwrap_or_else(|_| "$USER".to_string());
+    let config_home = env.config_home()?;
+    let unit_path = service_unit::systemd_unit_path(&config_home);
+    let unit = service_unit::render_systemd_unit(&exe, port, &working_dir, &path_env);
+    let state = env.probe_port(port);
+
+    // The ordered enable command plan (also printed under --dry-run). The final
+    // `enable` gains `--now` only when the port is free — never start a
+    // competitor onto a port a PDO daemon already owns (D1).
+    let start_now = state == PortState::Free;
+    let enable_args: &[&str] = if start_now {
+        &["--user", "enable", "--now", "pdo"]
+    } else {
+        &["--user", "enable", "pdo"]
+    };
+
+    if node_dir.is_none() {
+        writeln!(
+            out,
+            "# WARNING: `node` was not found on $PATH — the unit's Environment=PATH \
+             will lack the node dir and the service daemon may fail to spawn claude/node."
+        )?;
+    }
+
+    if dry_run {
+        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
+        writeln!(out, "# {}", describe_port_state(port, &state))?;
+        if state == PortState::Foreign {
+            writeln!(
+                out,
+                "# WARNING: a real install would REFUSE — enabling a unit here would \
+                 crash-loop on EADDRINUSE. Stop the process on port {port} or pass --port."
+            )?;
+        } else if state == PortState::PdoDaemon {
+            writeln!(
+                out,
+                "# NOTE: a PDO daemon already serves this port; a real install would enable \
+                 the unit for boot WITHOUT starting a competing instance (no --now)."
+            )?;
+        }
+        writeln!(out, "# --- unit file ({}) ---", unit_path.display())?;
+        write!(out, "{unit}")?;
+        writeln!(out, "# --- command plan ---")?;
+        writeln!(out, "#   write unit to {}", unit_path.display())?;
+        writeln!(out, "#   systemctl --user daemon-reload")?;
+        writeln!(out, "#   loginctl enable-linger {user}")?;
+        writeln!(out, "#   systemctl {}", enable_args.join(" "))?;
+        return Ok(());
+    }
+
+    // Real install: refuse loudly on a foreign port (would crash-loop).
+    if state == PortState::Foreign {
+        anyhow::bail!(
+            "refusing to install: {}. The enabled unit's daemon would crash-loop on \
+             EADDRINUSE (Restart=on-failure). Stop the process on port {port}, or install \
+             with a free --port.",
+            describe_port_state(port, &state)
+        );
+    }
+    if state == PortState::PdoDaemon {
+        writeln!(
+            out,
+            "note: {} — enabling the unit for boot but NOT starting a competing instance.",
+            describe_port_state(port, &state)
+        )?;
+    }
+
+    env.write_file(&unit_path, &unit)?;
+    writeln!(out, "wrote {}", unit_path.display())?;
+
+    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
+
+    // `enable-linger` lets the user's units run without a login (no reboot-death,
+    // no logout-death). Self-linger needs no sudo from an active session; on a
+    // hardened/headless box it can fail — degrade with a hint, don't abort.
+    match env.run_cmd("loginctl", &["enable-linger", &user]) {
+        Ok(o) if o.success => writeln!(out, "loginctl enable-linger {user}: ok")?,
+        Ok(o) => writeln!(
+            out,
+            "warning: `loginctl enable-linger {user}` failed ({}). Run `sudo loginctl \
+             enable-linger {user}` so the daemon survives logout.",
+            o.stderr.trim()
+        )?,
+        Err(e) => writeln!(
+            out,
+            "warning: could not run loginctl ({e}). Run `sudo loginctl enable-linger {user}`."
+        )?,
+    }
+
+    run_checked(env, out, "systemctl", enable_args)?;
+
+    writeln!(
+        out,
+        "\nPDO service installed. The daemon will now start at boot and survive logout."
+    )?;
+    if !start_now {
+        writeln!(
+            out,
+            "It was enabled but not started (a daemon already owns port {port})."
+        )?;
+    }
+    Ok(())
+}
+
+/// `pdo service uninstall` — Linux systemd `--user` path. Leaves linger (it's
+/// user-global, not this unit's to revoke).
+fn service_uninstall_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
+    let config_home = env.config_home()?;
+    let unit_path = service_unit::systemd_unit_path(&config_home);
+
+    // `disable --now` stops + disables; tolerate a non-zero exit (unit may be
+    // absent) so uninstall is idempotent.
+    match env.run_cmd("systemctl", &["--user", "disable", "--now", "pdo"]) {
+        Ok(o) if o.success => writeln!(out, "systemctl --user disable --now pdo: ok")?,
+        Ok(o) => writeln!(
+            out,
+            "systemctl --user disable --now pdo: {} (continuing)",
+            o.stderr.trim()
+        )?,
+        Err(e) => writeln!(out, "warning: could not run systemctl ({e})")?,
+    }
+
+    env.remove_file(&unit_path)?;
+    writeln!(out, "removed {}", unit_path.display())?;
+
+    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
+    writeln!(out, "\nPDO service uninstalled (linger left intact — it is user-global).")?;
+    Ok(())
+}
+
+/// `pdo service status` — Linux. Read-only: prints the unit's status and never
+/// mutates state. A non-zero exit (inactive/missing unit) is not an error.
+fn service_status_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
+    match env.run_cmd("systemctl", &["--user", "--no-pager", "status", "pdo"]) {
+        Ok(o) => {
+            write!(out, "{}", o.stdout)?;
+            if !o.stderr.is_empty() {
+                write!(out, "{}", o.stderr)?;
+            }
+        }
+        Err(e) => writeln!(out, "could not run systemctl ({e})")?,
+    }
+    Ok(())
+}
+
+/// `pdo service install` — macOS launchd LaunchAgent path (#156, D6).
+/// **Best-effort / untested on the Linux CI box** (generation is golden-tested).
+fn service_install_launchd(
+    env: &dyn ServiceEnv,
+    out: &mut dyn std::io::Write,
+    port: u16,
+    dry_run: bool,
+) -> Result<()> {
+    let exe = env.current_exe()?;
+    let working_dir = env.current_dir()?;
+    let home = env.home()?;
+    let node_dir = env.node_dir();
+    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
+    let plist_path = service_unit::launchd_plist_path(&home);
+    let plist = service_unit::render_launchd_plist(&exe, port, &working_dir, &home, &path_env);
+    let state = env.probe_port(port);
+    let label = service_unit::LAUNCHD_LABEL;
+
+    if node_dir.is_none() {
+        writeln!(
+            out,
+            "# WARNING: `node` was not found on $PATH — the plist's PATH will lack the \
+             node dir and the service daemon may fail to spawn claude/node."
+        )?;
+    }
+
+    if dry_run {
+        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
+        writeln!(out, "# {}", describe_port_state(port, &state))?;
+        if state == PortState::Foreign {
+            writeln!(
+                out,
+                "# WARNING: a real install would REFUSE — the daemon would crash-loop on \
+                 EADDRINUSE. Free port {port} or pass --port."
+            )?;
+        }
+        writeln!(out, "# --- LaunchAgent plist ({}) ---", plist_path.display())?;
+        write!(out, "{plist}")?;
+        writeln!(out, "# --- command plan ---")?;
+        writeln!(out, "#   write plist to {}", plist_path.display())?;
+        writeln!(out, "#   launchctl bootout gui/$(id -u)/{label}  (ignore error)")?;
+        writeln!(out, "#   launchctl bootstrap gui/$(id -u) {}", plist_path.display())?;
+        writeln!(
+            out,
+            "# NOTE: LaunchAgents do NOT run while logged out (no linger equivalent); \
+             true headless needs a root LaunchDaemon (deferred, ADR-0019)."
+        )?;
+        return Ok(());
+    }
+
+    if state == PortState::Foreign {
+        anyhow::bail!(
+            "refusing to install: {}. Free the port or pass a free --port.",
+            describe_port_state(port, &state)
+        );
+    }
+
+    env.write_file(&plist_path, &plist)?;
+    writeln!(out, "wrote {}", plist_path.display())?;
+
+    let uid = env.run_cmd("id", &["-u"]).map(|o| o.stdout.trim().to_string());
+    let uid = match uid {
+        Ok(u) if !u.is_empty() => u,
+        _ => anyhow::bail!("could not determine uid via `id -u`"),
+    };
+    let target = format!("gui/{uid}");
+    let bootout_target = format!("{target}/{label}");
+    // bootstrap is not idempotent — bootout first (ignore error), then bootstrap.
+    let _ = env.run_cmd("launchctl", &["bootout", &bootout_target]);
+    run_checked(
+        env,
+        out,
+        "launchctl",
+        &["bootstrap", &target, &plist_path.to_string_lossy()],
+    )?;
+    writeln!(
+        out,
+        "\nPDO LaunchAgent installed (best-effort). Note: it will NOT run while logged out."
+    )?;
+    Ok(())
+}
+
+/// `pdo service uninstall` — macOS launchd path.
+fn service_uninstall_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
+    let home = env.home()?;
+    let plist_path = service_unit::launchd_plist_path(&home);
+    let label = service_unit::LAUNCHD_LABEL;
+
+    let uid = env
+        .run_cmd("id", &["-u"])
+        .map(|o| o.stdout.trim().to_string())
+        .unwrap_or_default();
+    if !uid.is_empty() {
+        let _ = env.run_cmd("launchctl", &["bootout", &format!("gui/{uid}/{label}")]);
+    }
+    env.remove_file(&plist_path)?;
+    writeln!(out, "removed {}", plist_path.display())?;
+    writeln!(out, "\nPDO LaunchAgent uninstalled.")?;
+    Ok(())
+}
+
+/// `pdo service status` — macOS launchd path. Read-only.
+fn service_status_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
+    let label = service_unit::LAUNCHD_LABEL;
+    let uid = env
+        .run_cmd("id", &["-u"])
+        .map(|o| o.stdout.trim().to_string())
+        .unwrap_or_default();
+    let target = format!("gui/{uid}/{label}");
+    match env.run_cmd("launchctl", &["print", &target]) {
+        Ok(o) => {
+            write!(out, "{}", o.stdout)?;
+            if !o.stderr.is_empty() {
+                write!(out, "{}", o.stderr)?;
+            }
+        }
+        Err(e) => writeln!(out, "could not run launchctl ({e})")?,
+    }
+    Ok(())
+}
+
+/// Run a side-effect command, printing a one-line trace, and fail the install if
+/// it returns non-zero (the steps that MUST succeed: `daemon-reload`,
+/// `enable`, `bootstrap`).
+fn run_checked(
+    env: &dyn ServiceEnv,
+    out: &mut dyn std::io::Write,
+    program: &str,
+    args: &[&str],
+) -> Result<()> {
+    let o = env
+        .run_cmd(program, args)
+        .with_context(|| format!("failed to run `{program} {}`", args.join(" ")))?;
+    if o.success {
+        writeln!(out, "{program} {}: ok", args.join(" "))?;
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "`{program} {}` failed: {}{}",
+            args.join(" "),
+            o.stdout.trim(),
+            o.stderr.trim()
+        )
+    }
+}
+
 pub struct DaemonHandle {
     pub addr: SocketAddr,
     pub task: tokio::task::JoinHandle<Result<()>>,
@@ -509,6 +1065,139 @@ impl DaemonHandle {
     }
 }
 
+/// Persistent-service health for the status bar (#156, ADR-0019, D5).
+///
+/// Computed **once at daemon boot** and cached in [`AppState`], so the polled
+/// `GET /sessions` pays zero subprocess cost per request and needs no new
+/// vite-proxy whitelist entry (folding this into `/sessions` mirrors the
+/// version-field decision, CONTEXT.md). Serialized as the `service` object on
+/// `/sessions`.
+///
+/// **Accepted v1 staleness:** because install happens out-of-process, if a user
+/// installs the service while a *non-service* daemon is already running, that
+/// daemon's cached value stays stale until its next restart. The normal flow is
+/// install-then-run, so this is acceptable (documented in ADR-0019).
+#[derive(Debug, Clone, Serialize)]
+struct ServiceHealth {
+    /// How THIS process was launched, best-effort from env markers:
+    /// `"systemd"` | `"launchd"` | `"none"`. A diagnostic hint, not a guarantee
+    /// (the markers are inheritable).
+    supervisor: String,
+    /// Will a daemon come back after reboot? `Some(true)` when an enabled `pdo`
+    /// unit is present, `Some(false)` when reachable-but-ephemeral, `None`
+    /// (serialized `null`) when unknown/unsupported (non-Linux, no systemd,
+    /// spawn failure, or timeout). **Never** surfaced as an error — the UI
+    /// silences on `true`/`null` and shows an amber `ephemeral` pill only on
+    /// `false`.
+    persistent: Option<bool>,
+}
+
+/// Forced service-health observation (#156, D5), armed by `PDO_SERVICE_HEALTH`.
+///
+/// A debug/observation seam (sibling of `PDO_DEBUG_PANIC_*`), `None` in prod
+/// (real detection). It exists so the `ephemeral` status-bar branch is
+/// demonstrable in a real browser on a box where an enabled `pdo.service`
+/// already exists — the prod dev box — without touching the real unit (FP-156).
+#[derive(Debug, Clone, Copy)]
+pub enum ServiceHealthOverride {
+    Persistent,
+    Ephemeral,
+    Unknown,
+}
+
+impl ServiceHealthOverride {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "persistent" => Some(Self::Persistent),
+            "ephemeral" => Some(Self::Ephemeral),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
+    fn into_health(self) -> ServiceHealth {
+        let persistent = match self {
+            Self::Persistent => Some(true),
+            Self::Ephemeral => Some(false),
+            Self::Unknown => None,
+        };
+        // Keep the *real* supervisor hint even when forcing the persistence bit —
+        // only `persistent` is under test control.
+        ServiceHealth {
+            supervisor: detect_supervisor().to_string(),
+            persistent,
+        }
+    }
+}
+
+/// Compute the real [`ServiceHealth`] once at boot (#156, D5).
+fn compute_service_health() -> ServiceHealth {
+    ServiceHealth {
+        supervisor: detect_supervisor().to_string(),
+        persistent: detect_persistent(),
+    }
+}
+
+/// Best-effort detection of how this process was launched (#156, D5).
+/// Env markers only — treat as a hint. `launchd` wins first (macOS), then the
+/// systemd markers; anything else is `none`.
+fn detect_supervisor() -> &'static str {
+    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
+        "launchd"
+    } else if std::env::var_os("INVOCATION_ID").is_some()
+        || std::env::var_os("NOTIFY_SOCKET").is_some()
+        || std::env::var_os("JOURNAL_STREAM").is_some()
+    {
+        "systemd"
+    } else {
+        "none"
+    }
+}
+
+/// Is an enabled `pdo` service unit present — "will a daemon come back after
+/// reboot?" (#156, D5). `None` when unknown/unsupported; never an error.
+fn detect_persistent() -> Option<bool> {
+    if cfg!(target_os = "macos") {
+        // Best-effort: the LaunchAgent plist's presence. `null` is acceptable
+        // in v1 if $HOME is unset.
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        return Some(service_unit::launchd_plist_path(&home).exists());
+    }
+    detect_systemd_enabled()
+}
+
+/// `systemctl --user is-enabled pdo.service`, timeout-guarded (#156, D5).
+///
+/// Runs on a detached thread so a wedged systemctl can't block boot past ~1s;
+/// on timeout / spawn failure / any non-`enabled` state we degrade to `None`
+/// (unknown) or `Some(false)`, never an error. Called once at boot.
+fn detect_systemd_enabled() -> Option<bool> {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new("systemctl")
+            .args(["--user", "is-enabled", service_unit::SYSTEMD_UNIT_NAME])
+            .output();
+        let _ = tx.send(out);
+    });
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            match stdout.trim() {
+                // `enabled` / `enabled-runtime` → a daemon returns at boot.
+                "enabled" | "enabled-runtime" => Some(true),
+                // Any other reported state (disabled/static/masked/not-found…)
+                // means it will NOT come back → ephemeral.
+                s if !s.is_empty() => Some(false),
+                // Empty output with a spawn we can't classify → unknown.
+                _ => None,
+            }
+        }
+        // systemctl absent (spawn error) or wedged (timeout) → unknown.
+        Ok(Err(_)) | Err(_) => None,
+    }
+}
+
 /// Boot-time configuration for a daemon instance.
 ///
 /// Carries the knobs that must be decided *per daemon* rather than read from
@@ -538,6 +1227,12 @@ pub struct DaemonConfig {
     /// sub-worktree and fails the run loud. `false` in production unless
     /// `PDO_DEBUG_PANIC_SPAWN` is set.
     pub panic_on_spawn: bool,
+    /// Forced service-health observation (#156, D5): `Some` overrides the
+    /// boot-time detection so the status-bar `ephemeral`/`persistent` branches
+    /// are demonstrable without real systemd. `None` in production (real
+    /// detection). Armed by `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|
+    /// `unknown`); tests set it directly.
+    pub service_health_override: Option<ServiceHealthOverride>,
 }
 
 impl DaemonConfig {
@@ -562,6 +1257,11 @@ impl DaemonConfig {
             panic_on_spawn: std::env::var("PDO_DEBUG_PANIC_SPAWN")
                 .map(|v| !v.is_empty() && v != "0")
                 .unwrap_or(false),
+            // Observation seam (#156, D5): force the reported service health.
+            // `None`/unset in prod (real detection); invalid values are ignored.
+            service_health_override: std::env::var("PDO_SERVICE_HEALTH")
+                .ok()
+                .and_then(|v| ServiceHealthOverride::parse(&v)),
         }
     }
 }
@@ -633,6 +1333,14 @@ pub async fn serve_with_config(
         .local_addr()
         .context("failed to read bound local addr")?;
 
+    // Service health is computed ONCE here at boot (#156, D5) — real detection,
+    // or the forced observation value when `PDO_SERVICE_HEALTH` is set — and
+    // cached in `AppState`, so `GET /sessions` never shells out per poll.
+    let service_health = Arc::new(match config.service_health_override {
+        Some(o) => o.into_health(),
+        None => compute_service_health(),
+    });
+
     let state = Arc::new(AppState {
         db,
         event_tx,
@@ -652,6 +1360,7 @@ pub async fn serve_with_config(
             config.panic_on_stale_sweep,
         )),
         panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
+        service_health,
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -4762,10 +5471,12 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
-/// `GET /sessions` — the live NodeRun-session count, the configured cap, and
-/// the daemon version, for the bottom status bar (admission control #159,
-/// version display #139). Manager sessions are excluded by construction (they
-/// are not nodes).
+/// `GET /sessions` — the live NodeRun-session count, the configured cap, the
+/// daemon version, and the persistent-service health, for the bottom status bar
+/// (admission control #159, version display #139, service persistence #156).
+/// Manager sessions are excluded by construction (they are not nodes). The
+/// `service` object is computed once at boot and cached in `AppState`, so this
+/// polled endpoint stays subprocess-free (#156, D5).
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
@@ -4773,6 +5484,7 @@ async fn sessions(State(state): State<Arc<AppState>>) -> Response {
         "live": live,
         "cap": cap,
         "version": env!("CARGO_PKG_VERSION"),
+        "service": &*state.service_health,
     }))
     .into_response()
 }
@@ -9416,6 +10128,44 @@ mod tests {
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // Neutral default (#156): tests that assert the `/sessions` service
+            // field build their own state via `test_state_with_service_health`.
+            service_health: Arc::new(ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
+        })
+    }
+
+    /// Like [`test_state`], but with an injected [`ServiceHealth`] so the
+    /// `/sessions` `service` field can be asserted without real systemd (#156, D5).
+    async fn test_state_with_service_health(service_health: ServiceHealth) -> Arc<AppState> {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        let (event_tx, _) = broadcast::channel(64);
+        let (pipeline_tx, _) = broadcast::channel(16);
+        Arc::new(AppState {
+            db,
+            event_tx,
+            pipeline_tx,
+            repo_root: std::env::current_dir().unwrap(),
+            port: 0,
+            merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
+            recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            run_watcher: Arc::new(Mutex::new(None)),
+            tmux_cmd_override: Some("exec true".to_string()),
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: None,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            service_health: Arc::new(service_health),
         })
     }
 
@@ -9865,6 +10615,97 @@ mod tests {
             env!("CARGO_PKG_VERSION"),
             "the status-bar payload carries the daemon version (#139)"
         );
+    }
+
+    #[tokio::test]
+    async fn sessions_endpoint_reports_cached_service_health() {
+        // #156 (D5): `GET /sessions` carries the boot-cached `service` object.
+        // Here it is ephemeral (reachable but not installed as a unit) — the
+        // exact state that drives the status bar's amber `ephemeral` pill.
+        let state = test_state_with_service_health(ServiceHealth {
+            supervisor: "systemd".to_string(),
+            persistent: Some(false),
+        })
+        .await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["service"]["supervisor"], "systemd",
+            "the service supervisor hint is surfaced verbatim from AppState"
+        );
+        assert_eq!(
+            json["service"]["persistent"], false,
+            "persistent:false is the reachable-but-ephemeral signal the pill consumes"
+        );
+    }
+
+    #[tokio::test]
+    async fn sessions_service_persistent_is_null_when_unknown() {
+        // The neutral default (non-Linux / no systemd / spawn failure) serializes
+        // `persistent: null` — the UI silences on null exactly as it does on true.
+        let state = test_state_with_service_health(ServiceHealth {
+            supervisor: "none".to_string(),
+            persistent: None,
+        })
+        .await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["service"]["persistent"].is_null(),
+            "unknown persistence must serialize as null, not an error or false"
+        );
+    }
+
+    #[test]
+    fn service_health_override_maps_to_persistence_bit() {
+        // The PDO_SERVICE_HEALTH observation seam (#156, D5).
+        assert_eq!(
+            ServiceHealthOverride::parse("ephemeral")
+                .unwrap()
+                .into_health()
+                .persistent,
+            Some(false)
+        );
+        assert_eq!(
+            ServiceHealthOverride::parse("PERSISTENT")
+                .unwrap()
+                .into_health()
+                .persistent,
+            Some(true)
+        );
+        assert_eq!(
+            ServiceHealthOverride::parse("unknown")
+                .unwrap()
+                .into_health()
+                .persistent,
+            None
+        );
+        assert!(ServiceHealthOverride::parse("garbage").is_none());
     }
 
     #[tokio::test]
@@ -12364,6 +13205,12 @@ mod tests {
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // Neutral default (#156): tests that assert the `/sessions` service
+            // field build their own state via `test_state_with_service_health`.
+            service_health: Arc::new(ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
         })
     }
 
@@ -13785,6 +14632,309 @@ mod tests {
     #[test]
     fn cli_fail_requires_reason() {
         assert!(Cli::try_parse_from(["pdo", "fail"]).is_err());
+    }
+
+    // --- Layer 1: `pdo service` CLI parsing (#156) ---
+
+    #[test]
+    fn cli_parses_service_install() {
+        let cli = Cli::try_parse_from(["pdo", "service", "install"]).unwrap();
+        let expected_port = std::env::var("PDO_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_PORT);
+        match cli.command {
+            Commands::Service {
+                action: ServiceAction::Install { port, dry_run },
+            } => {
+                assert_eq!(port, expected_port);
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Service Install"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_service_install_with_port_and_dry_run() {
+        let cli =
+            Cli::try_parse_from(["pdo", "service", "install", "--port", "6183", "--dry-run"])
+                .unwrap();
+        match cli.command {
+            Commands::Service {
+                action: ServiceAction::Install { port, dry_run },
+            } => {
+                assert_eq!(port, 6183);
+                assert!(dry_run);
+            }
+            _ => panic!("expected Service Install"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_service_uninstall() {
+        let cli = Cli::try_parse_from(["pdo", "service", "uninstall"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Service {
+                action: ServiceAction::Uninstall
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_service_status() {
+        let cli = Cli::try_parse_from(["pdo", "service", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Service {
+                action: ServiceAction::Status
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_service_requires_an_action() {
+        // `pdo service` with no subcommand is a usage error, not a silent no-op.
+        assert!(Cli::try_parse_from(["pdo", "service"]).is_err());
+    }
+
+    // --- Layer 3a: `run_service` against a recording fake env (#156, D4).
+    // No real systemctl/launchctl, no ~/.config touched.
+
+    /// A recording [`ServiceEnv`]: fixed identity, configurable port state, real
+    /// file writes into an injected (temp) config home, and a command log.
+    struct FakeServiceEnv {
+        exe: PathBuf,
+        cwd: PathBuf,
+        node_dir: Option<PathBuf>,
+        config_home: PathBuf,
+        home: PathBuf,
+        user: String,
+        port_state: PortState,
+        commands: std::cell::RefCell<Vec<(String, Vec<String>)>>,
+    }
+
+    impl FakeServiceEnv {
+        fn new(config_home: PathBuf, port_state: PortState) -> Self {
+            Self {
+                exe: PathBuf::from("/home/user/.local/bin/pdo"),
+                cwd: PathBuf::from("/home/user/.pdo/app"),
+                node_dir: Some(PathBuf::from("/opt/node/bin")),
+                config_home,
+                home: PathBuf::from("/home/user"),
+                user: "user".to_string(),
+                port_state,
+                commands: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn command_log(&self) -> Vec<(String, Vec<String>)> {
+            self.commands.borrow().clone()
+        }
+    }
+
+    impl ServiceEnv for FakeServiceEnv {
+        fn current_exe(&self) -> Result<PathBuf> {
+            Ok(self.exe.clone())
+        }
+        fn current_dir(&self) -> Result<PathBuf> {
+            Ok(self.cwd.clone())
+        }
+        fn node_dir(&self) -> Option<PathBuf> {
+            self.node_dir.clone()
+        }
+        fn config_home(&self) -> Result<PathBuf> {
+            Ok(self.config_home.clone())
+        }
+        fn home(&self) -> Result<PathBuf> {
+            Ok(self.home.clone())
+        }
+        fn user(&self) -> Result<String> {
+            Ok(self.user.clone())
+        }
+        fn probe_port(&self, _port: u16) -> PortState {
+            self.port_state.clone()
+        }
+        fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, contents)?;
+            Ok(())
+        }
+        fn remove_file(&self, path: &Path) -> Result<()> {
+            match std::fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.into()),
+            }
+        }
+        fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
+            self.commands.borrow_mut().push((
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+            ));
+            Ok(CmdOutcome {
+                success: true,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn service_dry_run_is_side_effect_free_and_prints_unit_and_plan() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(
+            ServiceAction::Install {
+                port: 6183,
+                dry_run: true,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // The systemd path prints on Linux CI; assert the load-bearing lines.
+        if !cfg!(target_os = "macos") {
+            assert!(s.contains("KillMode=process"), "unit missing KillMode: {s}");
+            assert!(s.contains("Environment=PDO_PORT=6183"));
+            assert!(s.contains("ExecStart=/home/user/.local/bin/pdo daemon"));
+            assert!(s.contains("WorkingDirectory=/home/user/.pdo/app"));
+            // Command plan, in order.
+            assert!(s.contains("systemctl --user daemon-reload"));
+            assert!(s.contains("loginctl enable-linger user"));
+            assert!(s.contains("systemctl --user enable --now pdo"));
+        }
+        // No command was run and no unit file was written (side-effect-free).
+        assert!(env.command_log().is_empty(), "dry-run ran commands!");
+        assert!(
+            !service_unit::systemd_unit_path(tmp.path()).exists(),
+            "dry-run wrote the unit file!"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn service_install_writes_unit_and_runs_exact_systemctl_sequence() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(
+            ServiceAction::Install {
+                port: 6183,
+                dry_run: false,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap();
+
+        // The unit file was written with byte-identical content.
+        let unit_path = service_unit::systemd_unit_path(tmp.path());
+        let written = std::fs::read_to_string(&unit_path).unwrap();
+        let expected = service_unit::render_systemd_unit(
+            Path::new("/home/user/.local/bin/pdo"),
+            6183,
+            Path::new("/home/user/.pdo/app"),
+            "/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin",
+        );
+        assert_eq!(written, expected);
+
+        // The exact command sequence, in order (D4 install flow).
+        let log = env.command_log();
+        assert_eq!(
+            log,
+            vec![
+                ("systemctl".into(), vec!["--user".into(), "daemon-reload".into()]),
+                ("loginctl".into(), vec!["enable-linger".into(), "user".into()]),
+                (
+                    "systemctl".into(),
+                    vec!["--user".into(), "enable".into(), "--now".into(), "pdo".into()]
+                ),
+            ]
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn service_install_refuses_a_foreign_port_and_touches_nothing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Foreign);
+        let mut out: Vec<u8> = Vec::new();
+        let err = run_service_with(
+            ServiceAction::Install {
+                port: 6183,
+                dry_run: false,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("refusing to install"),
+            "expected loud refusal, got: {err}"
+        );
+        // No systemctl ran and no unit was written.
+        assert!(env.command_log().is_empty());
+        assert!(!service_unit::systemd_unit_path(tmp.path()).exists());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn service_install_is_idempotent_when_a_pdo_daemon_already_owns_the_port() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::PdoDaemon);
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(
+            ServiceAction::Install {
+                port: 6183,
+                dry_run: false,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap();
+        // Unit is still written + enabled, but WITHOUT `--now` (no competitor).
+        assert!(service_unit::systemd_unit_path(tmp.path()).exists());
+        let log = env.command_log();
+        let enable = log
+            .iter()
+            .find(|(p, a)| p == "systemctl" && a.contains(&"enable".to_string()))
+            .expect("expected an enable command");
+        assert!(
+            !enable.1.contains(&"--now".to_string()),
+            "enable must NOT carry --now when a daemon already owns the port: {enable:?}"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn service_uninstall_disables_removes_and_reloads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
+        // Seed a unit file so removal is observable.
+        let unit_path = service_unit::systemd_unit_path(tmp.path());
+        std::fs::create_dir_all(unit_path.parent().unwrap()).unwrap();
+        std::fs::write(&unit_path, "stub").unwrap();
+
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(ServiceAction::Uninstall, &env, &mut out).unwrap();
+
+        assert!(!unit_path.exists(), "unit file should be removed");
+        let log = env.command_log();
+        assert_eq!(
+            log,
+            vec![
+                (
+                    "systemctl".into(),
+                    vec!["--user".into(), "disable".into(), "--now".into(), "pdo".into()]
+                ),
+                ("systemctl".into(), vec!["--user".into(), "daemon-reload".into()]),
+            ]
+        );
     }
 
     #[test]
@@ -16230,6 +17380,12 @@ edges: []
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // Neutral default (#156): tests that assert the `/sessions` service
+            // field build their own state via `test_state_with_service_health`.
+            service_health: Arc::new(ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
         });
         let app = build_router(state);
 
@@ -16408,6 +17564,12 @@ edges: []
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // Neutral default (#156): tests that assert the `/sessions` service
+            // field build their own state via `test_state_with_service_health`.
+            service_health: Arc::new(ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
         });
         let app = build_router(state);
 

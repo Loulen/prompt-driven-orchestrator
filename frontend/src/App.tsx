@@ -10,6 +10,7 @@ import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
 import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
 import SessionCounter from "./components/SessionCounter";
+import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
@@ -806,6 +807,7 @@ function StatusBar({
         {label}
       </span>
       <span className="flex-1" />
+      <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
       {sessions.version && <span>v{sessions.version}</span>}
     </footer>

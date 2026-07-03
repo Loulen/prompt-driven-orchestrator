@@ -30,6 +30,7 @@ import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
 import EdgeDetailPanel from "./components/EdgeDetailPanel";
 import RegionInspector from "./components/RegionInspector";
+import NoteInspector from "./components/NoteInspector";
 import TriggerDetailPanel from "./components/TriggerDetailPanel";
 import type { TriggerPrefill } from "./components/NewRunModal";
 import { deriveEdgeTrigger } from "./lib/edgeTrigger";
@@ -339,9 +340,9 @@ export default function App() {
   useEffect(() => {
     if (!selectedRun) return;
     if (selection.kind === "node" && selection.id) return;
-    // An explicit region/edge selection (#150 / #147) wins over the auto-snap:
-    // the user opened an inspector and must keep it on a live run.
-    if (selection.kind === "region" || selection.kind === "edge") return;
+    // An explicit region/edge/note selection (#150 / #147 / #307) wins over the
+    // auto-snap: the user opened an inspector and must keep it on a live run.
+    if (selection.kind === "region" || selection.kind === "edge" || selection.kind === "note") return;
     if (!LIVE_RUN_STATUSES.has(selectedRun.status)) return;
     const nodeId = pickLatestLiveNode(selectedRun);
     if (!nodeId) return;
@@ -597,6 +598,8 @@ export default function App() {
                   <EdgeDetailPanel trigger={edgeTrigger} />
                 ) : selection.kind === "region" ? (
                   <RegionInspector />
+                ) : selection.kind === "note" ? (
+                  <NoteInspector />
                 ) : null}
                 {selection.kind === "none" && isEditingRun && selectedRun && (
                   <RunInfoSidebar run={selectedRun} />

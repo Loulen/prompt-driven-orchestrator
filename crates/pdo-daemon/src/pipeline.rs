@@ -261,6 +261,24 @@ pub struct LoopRegion {
     pub over: Option<String>,
 }
 
+/// An inert canvas note (#307 / ADR-0018): a documentation post-it laid on the
+/// canvas. It has no title, no port, no edge; it is never spawned, lives outside
+/// the DAG and the runtime. It travels with the shared pipeline file but is
+/// *layout, not semantics* — excluded from the semantic pipeline-diff (the
+/// synced/diverged star does not move when a note is created/moved/edited/deleted).
+/// The Rust field is MANDATORY: the frontend rehydrates from the daemon-parsed
+/// `PipelineDef`, never the raw YAML — without this field serde would drop the
+/// note silently and it would vanish on reload (#307 / lesson #296).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub content: String,
+    /// Canvas position. Absent ⇒ not yet placed; reuses `ViewPosition` like
+    /// `NodeDef.view`. Omitted from YAML when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ViewPosition>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub name: String,
@@ -275,6 +293,11 @@ pub struct PipelineDef {
     /// loops; round-trips when present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loops: Vec<LoopRegion>,
+    /// Inert canvas notes (#307 / ADR-0018). Absent on pipelines with no notes;
+    /// round-trips when present. Layout, not semantics — excluded from the
+    /// pipeline-diff on the frontend but persisted verbatim here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
     /// Whether a manual Run must be launched with a non-empty user prompt (#158).
     /// Defaults to `true` (the prompt is mandatory) and is omitted from YAML in
     /// that case, so prompt-required pipelines stay clean. When `false`, a Run
@@ -371,6 +394,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "nodes",
     "edges",
     "loops",
+    "notes",
     "prompt_required",
 ];
 
@@ -3765,6 +3789,12 @@ loops:
     kind: bounded
     members: [ab000001, ab000002]
     max_iter: "$max_iter_review"
+notes:
+  - id: note-1
+    content: "remember to bound this loop"
+    view:
+      x: 120.0
+      y: 240.0
 "#;
         let result = parse_pipeline(yaml).unwrap();
         assert!(

@@ -175,6 +175,7 @@ mod tests {
                 },
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let state = state_with(vec![

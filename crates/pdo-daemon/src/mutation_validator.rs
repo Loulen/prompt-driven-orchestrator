@@ -242,6 +242,7 @@ mod tests {
             nodes,
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }

@@ -11660,6 +11660,7 @@ mod tests {
             nodes: vec![doc_node_def("a"), doc_node_def("b")],
             edges: vec![edge("a", "b")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: false,
         }
     }
@@ -11785,6 +11786,7 @@ mod tests {
             nodes: vec![doc_node_def("a"), doc_node_def("b")],
             edges: vec![conditional_edge],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: false,
         };
         let mut run_state = event_log::RunState::new("20260613-loop".into(), "cond".into());
@@ -16071,6 +16073,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -16122,6 +16125,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -16827,6 +16831,7 @@ edges: []
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -16915,6 +16920,7 @@ edges: []
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 

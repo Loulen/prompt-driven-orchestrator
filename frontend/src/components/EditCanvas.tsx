@@ -17,7 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { buildLoopRegionNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
+import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -26,6 +26,7 @@ import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
+import { NoteNode } from "./NoteNode";
 import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
@@ -226,7 +227,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   );
 }
 
-const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegionNode };
+const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegionNode, note: NoteNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -257,10 +258,13 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const deleteEdge = useEditStore((s) => s.deleteEdge);
   const updateEdge = useEditStore((s) => s.updateEdge);
   const addNodeToStore = useEditStore((s) => s.addNode);
+  const addNoteToStore = useEditStore((s) => s.addNote);
+  const moveNote = useEditStore((s) => s.moveNote);
+  const deleteNote = useEditStore((s) => s.deleteNote);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    type: "node" | "edge";
+    type: "node" | "edge" | "note";
     id: string;
     edgeIndex?: number;
   } | null>(null);
@@ -319,7 +323,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     // cards, and given `pointer-events: none` so edges crossing the box stay
     // clickable (#167).
     const regionNodes: Node[] = buildLoopRegionNodes(pipeline, activeRunState);
-    return [...regionNodes, ...cards];
+    // Inert canvas notes (#307 / ADR-0018) render as draggable/selectable cards
+    // with no handle. They carry no run status, so they're derived from the
+    // pipeline alone (independent of run state).
+    const noteNodes: Node[] = buildNoteNodes(pipeline);
+    return [...regionNodes, ...cards, ...noteNodes];
   }, [pipeline, activeRunState]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
@@ -369,17 +377,24 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const onNodeDragStop = useCallback(
     (_: unknown, _node: Node, nodes: Node[]) => {
       // xyflow hands us EVERY dragged node (the selected set, or just [node] for
-      // a single drag) with final positions, in ONE call (#232). Persist them
-      // all in one batched store write — pre-fix we ignored this 3rd arg and
-      // wrote only the grabbed node, so every other selected node snapped back.
-      // Defensively skip the decorative loop-region boxes (already
-      // draggable:false, but belt-and-suspenders against config drift).
-      const moved = nodes
-        .filter((n) => n.type !== "loopRegion")
-        .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
-      if (moved.length > 0) updateNodeViews(moved);
+      // a single drag) with final positions, in ONE call (#232). Partition by
+      // type: pipeline nodes persist via `updateNodeViews`, notes via `moveNote`
+      // (#307 trap #1). A note is NOT in `pipeline.nodes`, so `updateNodeViews`
+      // would silently drop its move (unknown id → ignored) and it would snap
+      // back on the next re-derivation. Decorative loop-region boxes are skipped
+      // (draggable:false already, belt-and-suspenders against config drift).
+      const movedNodes: { id: string; x: number; y: number }[] = [];
+      for (const n of nodes) {
+        if (n.type === "loopRegion") continue;
+        if (n.type === "note") {
+          moveNote(n.id, n.position.x, n.position.y);
+          continue;
+        }
+        movedNodes.push({ id: n.id, x: n.position.x, y: n.position.y });
+      }
+      if (movedNodes.length > 0) updateNodeViews(movedNodes);
     },
-    [updateNodeViews],
+    [updateNodeViews, moveNote],
   );
 
   const handleNodeContextMenu = useCallback(
@@ -387,6 +402,18 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       event.preventDefault();
       // Loop-region boxes are decorative, not pipeline nodes — no context menu.
       if (node.type === "loopRegion") return;
+      // A note (#307 trap #2) is NOT in `pipeline.nodes`, so the node lookup
+      // below would miss it and its Delete would call `deleteNode(noteId)` — a
+      // no-op. Give it its own `"note"` menu whose Delete routes to `deleteNote`.
+      if (node.type === "note") {
+        setContextMenu({
+          x: event.clientX,
+          y: event.clientY,
+          type: "note",
+          id: node.id,
+        });
+        return;
+      }
       const nodeDef = pipeline?.nodes.find((n) => n.id === node.id);
       if (nodeDef?.type === "start" || nodeDef?.type === "end") return;
       setContextMenu({
@@ -573,10 +600,20 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     addNodeToStore(newNode);
   };
 
+  const handleAddNote = () => {
+    // A note (#307 / ADR-0018) is created empty and selected, positioned at the
+    // viewport centre — same drop logic as a node. It carries no ports/name/type.
+    const id = generateNodeId();
+    const view = computeDropPosition();
+    addNoteToStore({ id, content: "", view });
+    setSelection({ kind: "note", id: null, noteId: id });
+  };
+
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
       <EditToolbar
         onAddNode={handleAddNode}
+        onAddNote={handleAddNote}
         libraryEntries={libraryEntries}
         onLibraryDelete={onLibraryDelete}
         getDropPosition={computeDropPosition}
@@ -623,6 +660,13 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
             // Region boxes are decorative; clicking one is a no-op (they fall
             // back to the pane selection path via their pass-through body).
             if (node.type === "loopRegion") return;
+            // A note (#307) opens the NoteInspector, not the node inspector — it
+            // is a canvas concept, not a pipeline node.
+            if (node.type === "note") {
+              setSelection({ kind: "note", id: null, noteId: node.id });
+              onCloseInfo?.();
+              return;
+            }
             setSelection({ kind: "node", id: node.id });
             onCloseInfo?.();
           }}
@@ -660,6 +704,10 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           {...contextMenu}
           onDeleteNode={() => {
             deleteNode(contextMenu.id);
+            setContextMenu(null);
+          }}
+          onDeleteNote={() => {
+            deleteNote(contextMenu.id);
             setContextMenu(null);
           }}
           onDuplicateNode={() => {
@@ -705,14 +753,16 @@ function ContextMenu({
   y,
   type,
   onDeleteNode,
+  onDeleteNote,
   onDuplicateNode,
   onDeleteEdge,
   onClose,
 }: {
   x: number;
   y: number;
-  type: "node" | "edge";
+  type: "node" | "edge" | "note";
   onDeleteNode: () => void;
+  onDeleteNote: () => void;
   onDuplicateNode: () => void;
   onDeleteEdge: () => void;
   onClose: () => void;
@@ -739,6 +789,16 @@ function ContextMenu({
               Delete
             </button>
           </>
+        ) : type === "note" ? (
+          // #307 trap #2: a note's Delete must call `deleteNote`, not
+          // `deleteNode` (which would no-op on an id absent from pipeline.nodes).
+          <button
+            data-testid="context-menu-delete"
+            onClick={onDeleteNote}
+            className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
+          >
+            Delete note
+          </button>
         ) : (
           <button
             onClick={onDeleteEdge}

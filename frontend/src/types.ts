@@ -433,6 +433,22 @@ export interface LoopRegion {
   over?: string | null;
 }
 
+/**
+ * An inert canvas note (#307 / ADR-0018): a documentation post-it laid on the
+ * canvas. It has no title, no port, no edge; it is never spawned and lives
+ * outside the DAG and the runtime. Clicking it opens the detail panel to edit
+ * its `content`. Like `view`/`waypoints`/`target_side` it is LAYOUT, not
+ * semantics: it travels in the pipeline file but is excluded from the semantic
+ * pipeline-diff (`comparablePipelineObject`), so the synced/diverged star does
+ * not move when a note is created/moved/edited/deleted. Note the `note` xyflow
+ * node `type` is a canvas concern only — it is NOT a PDO `NodeType`.
+ */
+export interface NoteDef {
+  id: string;
+  content: string;
+  view?: { x: number; y: number } | null;
+}
+
 export interface PipelineDef {
   name: string;
   version?: string | null;
@@ -441,6 +457,8 @@ export interface PipelineDef {
   edges: EdgeDef[];
   /** Named bounded loop regions (ADR-0011 / #148). Absent when there are none. */
   loops?: LoopRegion[];
+  /** Inert canvas notes (#307 / ADR-0018). Absent when there are none. */
+  notes?: NoteDef[];
   /**
    * Whether a manual Run must supply a non-empty prompt (#158). Defaults to
    * `true` (prompt mandatory) and is omitted from YAML in that case. When

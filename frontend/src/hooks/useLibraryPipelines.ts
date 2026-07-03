@@ -20,7 +20,10 @@ export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 // Layout is stripped from both sides before comparison:
 //   - node `view: { x, y }` — node positions,
 //   - edge `mode` + `waypoints` — orthogonal routing / manual pins (#154),
-//   - edge `target_side` — incoming-edge anchor side / drop position (#168).
+//   - edge `target_side` — incoming-edge anchor side / drop position (#168),
+//   - the whole `notes:` block — inert canvas notes (#307 / ADR-0018): a note is
+//     documentation layout, so two pipelines differing only by their notes
+//     compare equal and the synced/diverged star does not move.
 // Library pipelines don't carry layout, and even a starred local pipeline can
 // be freely rearranged (move a node, pin an edge route) without that
 // registering as "diverged". Layout travels in the file (so a shared workflow
@@ -46,6 +49,11 @@ function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
       delete edge.target_side;
     }
   }
+  // #307: canvas notes are layout, not semantics — strip the whole block (the
+  // strip half of the emit/strip couple in pipelineToYamlObject). Both content
+  // and position are excluded, so editing/moving/adding/deleting a note never
+  // moves the star (R1 default: full-layout classification).
+  delete obj.notes;
   return obj;
 }
 

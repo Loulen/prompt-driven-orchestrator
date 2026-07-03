@@ -120,6 +120,29 @@ test("Start button force-spawns a pending downstream node", async ({
   });
 
   const startBtn = page.getByTestId("start-btn");
+  // DIAGNOSTIC (temporary): this fails deterministically in CI but not locally.
+  // Dump worker-b's real status, the run status, and the controls-bar HTML so the
+  // CI log reveals why the Start button (gated on status === "pending") is absent.
+  if (!(await startBtn.isVisible().catch(() => false))) {
+    const snap = await (
+      await page.request.get(`${baseURL}/runs/${runId}`)
+    ).json();
+    console.log(
+      "DIAG force-start: run.status=",
+      snap.status,
+      "worker-a=",
+      snap.nodes?.["worker-a"]?.status,
+      "worker-b=",
+      snap.nodes?.["worker-b"]?.status,
+    );
+    console.log(
+      "DIAG node-controls html=",
+      await page
+        .getByTestId("node-controls")
+        .innerHTML()
+        .catch(() => "<no node-controls bar>"),
+    );
+  }
   await expect(startBtn).toBeVisible({ timeout: 5_000 });
   await startBtn.click();
 

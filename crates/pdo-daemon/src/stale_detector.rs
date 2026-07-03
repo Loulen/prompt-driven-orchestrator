@@ -13,6 +13,58 @@ pub const STALE_THRESHOLD: Duration = Duration::from_secs(120);
 /// and mirrors `trigger_scheduler::TICK_INTERVAL_SECS`.
 pub const STALE_TICK_INTERVAL_SECS: u64 = 30;
 
+/// On-screen anchors for Claude Code's usage-limit interactive menu (#290).
+///
+/// The menu wording is NOT officially documented and DRIFTS across CC versions
+/// (corroborated by anthropics/claude-code#28484 + a direct capture 2026-06-30).
+/// These are the substrings observed most stable; match is case-insensitive after
+/// ANSI-stripping + whitespace-collapsing. Detection is best-effort /
+/// observability-only (#290 Slice 1): a miss is the status quo (no regression), a
+/// false positive is one harmless informational event. UPDATE THIS LIST when CC
+/// wording changes.
+const USAGE_LIMIT_ANCHORS: &[&str] = &[
+    "stop and wait for limit to reset",
+    "stop and wait for the limit to reset",
+];
+
+/// Strip ANSI/CSI escape sequences from a tmux pane capture (which is taken with
+/// `-e`, so it contains escapes). Char-safe: preserves multi-byte UTF-8 (e.g. the
+/// menu's `❯`). Best-effort — handles CSI (`ESC [ … final @-~`) and drops a lone
+/// escape's next char; good enough for pane text (mostly SGR colour codes).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                while let Some(&nc) = chars.peek() {
+                    chars.next();
+                    if matches!(nc, '\u{40}'..='\u{7e}') {
+                        break; // CSI final byte
+                    }
+                }
+            } else {
+                chars.next(); // lone/other escape — drop the following char
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// True if the captured pane shows Claude Code's usage-limit interactive menu.
+/// `pane` is raw tmux capture (may contain ANSI). Observability-only (#290): the
+/// caller flags the node but never changes its fate.
+pub fn detect_usage_limit(pane: &str) -> bool {
+    // Normalise: strip ANSI, lowercase (anchors are ASCII), collapse whitespace so
+    // line-wrap / padding can't split an anchor.
+    let stripped = strip_ansi(pane).to_ascii_lowercase();
+    let norm = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    USAGE_LIMIT_ANCHORS.iter().any(|a| norm.contains(a))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detection {
     SessionDied,
@@ -258,6 +310,53 @@ pub fn running_nodes(run_state: &event_log::RunState) -> Vec<(String, i64)> {
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    // --- detect_usage_limit / strip_ansi (#290) ---
+
+    #[test]
+    fn detects_usage_limit_menu_with_ansi() {
+        // A realistic capture: the selected line carries SGR colour codes and the
+        // `❯` cursor glyph, wrapped by the surrounding menu text.
+        let pane = "What do you want to do?\n\x1b[2m❯\x1b[0m 1. Stop and \
+                    wait for limit to reset\n  2. Switch to usage credits\n";
+        assert!(detect_usage_limit(pane));
+    }
+
+    #[test]
+    fn detects_the_the_variant() {
+        assert!(detect_usage_limit(
+            "…please wait for the limit to reset. Stop and wait for the limit to reset\n"
+        ));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(detect_usage_limit("STOP AND WAIT FOR LIMIT TO RESET"));
+    }
+
+    #[test]
+    fn wrapped_anchor_still_matches() {
+        // The anchor split by a newline + padding (as a narrow pane would wrap it)
+        // must still match — proves the whitespace-collapse normalisation.
+        assert!(detect_usage_limit("stop and wait\n   for   limit\nto reset"));
+    }
+
+    #[test]
+    fn normal_running_pane_is_not_flagged() {
+        let pane = "\x1b[2m✻\x1b[0m Thinking… (esc to interrupt)\n\
+                    ● Running: cargo test -p pdo-daemon\n";
+        assert!(!detect_usage_limit(pane));
+    }
+
+    #[test]
+    fn empty_pane_is_not_flagged() {
+        assert!(!detect_usage_limit(""));
+    }
+
+    #[test]
+    fn strip_ansi_preserves_unicode() {
+        assert_eq!(strip_ansi("\x1b[1m❯\x1b[0m x"), "❯ x");
+    }
 
     // --- encode_working_dir ---
 

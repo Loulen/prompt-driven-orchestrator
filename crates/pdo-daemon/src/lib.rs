@@ -206,6 +206,13 @@ struct AppState {
     /// `last_trigger_tick_ms` (#222). Written at sweep start so a wedged sweep
     /// freezes the value; an isolated panic still advances it (the loop is alive).
     last_stale_tick_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Count of live nodes observed blocked on Claude Code's usage-limit
+    /// interactive menu, as of the most recent stale-detection sweep (#290).
+    /// Recomputed each sweep (leak-free — a node that leaves the live set is
+    /// simply not recounted), `0` if none. Process-lifetime; surfaced by
+    /// `GET /stale/health` next to the heartbeat. Observability-only: the sweep
+    /// never changes a flagged node's status (Slice 1).
+    blocked_on_limit: Arc<std::sync::atomic::AtomicI64>,
     /// Debug-only fault-injection knob (#251): a one-shot poison pill. When armed
     /// (`true`), the next stale sweep `panic!`s, then disarms itself (`swap`) —
     /// exercising the sweep's panic isolation and proving the *next* sweep
@@ -1356,6 +1363,7 @@ pub async fn serve_with_config(
         last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_trigger_name: config.panic_on_trigger_name,
         last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
         )),
@@ -1772,7 +1780,7 @@ async fn repos_browse(
     }
 
     // Case-insensitive, stable sort (ties keep read_dir order).
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|a| a.name.to_lowercase());
     if entries.len() > CAP {
         entries.truncate(CAP); // keep the alphabetically-first CAP
     }
@@ -5671,6 +5679,11 @@ async fn stale_health(State(state): State<Arc<AppState>>) -> Response {
     Json(serde_json::json!({
         "last_tick_at": last_tick_at,
         "tick_interval_secs": stale_detector::STALE_TICK_INTERVAL_SECS,
+        // #290: how many live nodes were found stuck on Claude Code's usage-limit
+        // menu as of the last sweep (observability-only; the node stays Running).
+        "blocked_on_limit": state
+            .blocked_on_limit
+            .load(std::sync::atomic::Ordering::Relaxed),
     }))
     .into_response()
 }
@@ -6318,6 +6331,12 @@ async fn run_stale_detection(state: &AppState) {
     let socket = state.tmux_socket();
     let now = std::time::SystemTime::now();
 
+    // #290 (Slice 1, observability only): count of live nodes found stuck on
+    // Claude Code's usage-limit menu across this whole sweep. Recomputed each
+    // sweep (leak-free — a node that leaves the live set drops out naturally);
+    // published to the `blocked_on_limit` gauge after the loop.
+    let mut blocked_on_limit_count: i64 = 0;
+
     for run_id in &run_ids {
         let events = match load_events(&state.db, run_id).await {
             Ok(e) => e,
@@ -6380,6 +6399,40 @@ async fn run_stale_detection(state: &AppState) {
 
             let detection = stale_detector::decide(&probe);
             if detection == stale_detector::Detection::Ok {
+                // #290 (Slice 1, observability only): a node can be alive &
+                // non-stale yet stuck on Claude Code's usage-limit menu (a
+                // host-level prompt, no progress). Detect it, flag it, and KEEP
+                // THE NODE RUNNING — no recovery here (deferred to Slice 2/3).
+                if let Some(pane) = tmux_session_manager::capture(&socket, &session_name) {
+                    if stale_detector::detect_usage_limit(&pane) {
+                        blocked_on_limit_count += 1;
+                        // Rising-edge de-dup: emit once per (node, iter) episode,
+                        // else a held menu would emit every ~30 s sweep tick. The
+                        // durable event log (reloaded fresh each sweep) is the
+                        // dedup key, so this also survives a daemon restart.
+                        let already = events.iter().any(|e| {
+                            e.kind == event_log::EventKind::NodeBlockedOnLimit
+                                && e.node_id.as_deref() == Some(node_id.as_str())
+                                && e.iter == Some(*iter)
+                        });
+                        if !already {
+                            let ev = event_log::Event {
+                                id: None,
+                                run_id: run_id.to_string(),
+                                ts: event_log::now_iso(),
+                                kind: event_log::EventKind::NodeBlockedOnLimit,
+                                node_id: Some(node_id.to_string()),
+                                iter: Some(*iter),
+                                payload: Some(serde_json::json!({ "signal": "usage_limit_menu" })),
+                            };
+                            if let Err(e) = append_event(state, &ev).await {
+                                error!(
+                                    "Stale detector: failed to append NodeBlockedOnLimit: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -6454,6 +6507,13 @@ async fn run_stale_detection(state: &AppState) {
         // so it observes any failure just appended above.
         reconcile_run_level_stall(state, run_id).await;
     }
+
+    // #290: publish the per-sweep count of usage-limit-blocked nodes. Recomputed
+    // from scratch each sweep, so a node that completed/failed since last sweep
+    // simply isn't recounted — no stale set to prune. Surfaced on `/stale/health`.
+    state
+        .blocked_on_limit
+        .store(blocked_on_limit_count, std::sync::atomic::Ordering::Relaxed);
 }
 
 // --- Orphan sweep / reaper ---
@@ -10126,6 +10186,7 @@ mod tests {
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
@@ -10163,6 +10224,7 @@ mod tests {
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
@@ -13203,6 +13265,7 @@ mod tests {
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
@@ -17378,6 +17441,7 @@ edges: []
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
@@ -17562,6 +17626,7 @@ edges: []
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service

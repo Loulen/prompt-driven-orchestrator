@@ -592,3 +592,166 @@ async fn stale_health_reports_last_tick_and_advances() {
         "last_tick_at must advance across sweeps: {t1} then {t2}"
     );
 }
+
+// --- #290: blocked-on-usage-limit menu detection (observability only) ---
+
+/// The Claude Code usage-limit interactive menu, painted verbatim into the node
+/// pane by the tmux command override (literal `\n` so `printf` renders newlines).
+const USAGE_LIMIT_MENU: &str =
+    "What do you want to do?\\n  1. Stop and wait for limit to reset\\n  2. Switch to usage credits\\n";
+
+/// Fetch the run's event log over HTTP and return the `node_blocked_on_limit`
+/// events for `(node, iter)` — the durable, queryable surface the daemon uses to
+/// record the observation (#290).
+async fn blocked_on_limit_events(
+    daemon_url: &str,
+    run_id: &str,
+    node: &str,
+    iter: i64,
+) -> Vec<serde_json::Value> {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}/events"))
+        .send()
+        .await
+        .unwrap();
+    let events: Vec<serde_json::Value> = resp.json().await.unwrap();
+    events
+        .into_iter()
+        .filter(|e| {
+            e["kind"].as_str() == Some("node_blocked_on_limit")
+                && e["node_id"].as_str() == Some(node)
+                && e["iter"].as_i64() == Some(iter)
+        })
+        .collect()
+}
+
+/// #290 core: a node whose pane is stuck on Claude Code's usage-limit menu is
+/// SURFACED (gauge + one durable event) while KEPT `running` — never false-failed.
+/// The override paints the menu into every node pane, so the node genuinely sits
+/// on the blocking prompt (no real Claude session, no real 5-h wait). Recovery is
+/// explicitly out of scope (Slice 2/3): the assertion is observability + no
+/// false-positive, plus rising-edge de-dup across a second sweep.
+#[tokio::test]
+async fn usage_limit_menu_is_flagged_and_node_stays_running() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn_with_override(
+        seed,
+        Some(format!("printf '{USAGE_LIMIT_MENU}'; exec sleep 600")),
+    )
+    .await
+    .unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon.url()).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+    // Give `printf` a moment to render the menu into the pane before we sweep.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Pre-condition: the node is Running (the menu is a host prompt, not a death).
+    let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(status.as_deref(), Some("running"));
+
+    // One detector sweep observes the menu.
+    daemon.run_stale_detection_tick().await;
+
+    // Surfaced on the gauge …
+    let health = get_stale_health(&daemon).await;
+    assert_eq!(
+        health["blocked_on_limit"].as_i64(),
+        Some(1),
+        "the stuck node must be counted on /stale/health"
+    );
+
+    // … and the node is STILL running (the core resilience assertion — a throttle
+    // must never be mistaken for a break).
+    let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("running"),
+        "a menu-blocked node must NOT be failed/staled — observability only"
+    );
+
+    // … and exactly one durable event records the episode.
+    let events = blocked_on_limit_events(&daemon.url(), &run_id, NODE_ID, 1).await;
+    assert_eq!(
+        events.len(),
+        1,
+        "exactly one node_blocked_on_limit event for (worker, iter 1)"
+    );
+    assert_eq!(
+        events[0]["payload"]["signal"].as_str(),
+        Some("usage_limit_menu"),
+        "the event payload must carry the signal that flagged it"
+    );
+
+    // Rising-edge de-dup: a second sweep on the still-held menu must NOT emit a
+    // second event, and the gauge stays at 1 (no per-tick climb / spam).
+    daemon.run_stale_detection_tick().await;
+    let health = get_stale_health(&daemon).await;
+    assert_eq!(
+        health["blocked_on_limit"].as_i64(),
+        Some(1),
+        "gauge must stay 1 across a second sweep (recomputed, not accumulating)"
+    );
+    let events = blocked_on_limit_events(&daemon.url(), &run_id, NODE_ID, 1).await;
+    assert_eq!(
+        events.len(),
+        1,
+        "rising-edge de-dup: still exactly one event after a second sweep"
+    );
+
+    let _ = std::process::Command::new("tmux")
+        .args(["-L", &socket, "kill-session", "-t", &session])
+        .output();
+}
+
+/// #290 negative control: a normal Running node (no menu in the pane) must NOT be
+/// flagged — guards against a hair-trigger detector emitting false positives in
+/// the wild. Default spawn paints nothing (`exec sleep 600`).
+#[tokio::test]
+async fn usage_limit_detector_does_not_flag_a_normal_running_node() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon.url()).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    daemon.run_stale_detection_tick().await;
+
+    let health = get_stale_health(&daemon).await;
+    assert_eq!(
+        health["blocked_on_limit"].as_i64(),
+        Some(0),
+        "an un-blocked node must not be counted (no false positive)"
+    );
+    assert!(
+        blocked_on_limit_events(&daemon.url(), &run_id, NODE_ID, 1)
+            .await
+            .is_empty(),
+        "an un-blocked node must emit no node_blocked_on_limit event"
+    );
+    let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
+    assert_eq!(status.as_deref(), Some("running"));
+
+    let _ = std::process::Command::new("tmux")
+        .args(["-L", &socket, "kill-session", "-t", &session])
+        .output();
+}

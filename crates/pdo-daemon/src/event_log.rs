@@ -79,6 +79,11 @@ pub enum EventKind {
     NodeAutoCompleted,
     NodeStale,
     NodeInvalidated,
+    /// Informational (#290): a node's Claude Code session is blocked on the
+    /// usage-limit interactive menu (host-level; session alive, no progress).
+    /// Behaviour-preserving no-op in projection — the node stays Running;
+    /// recovery is deferred (Slice 2/3). Wire form: `"node_blocked_on_limit"`.
+    NodeBlockedOnLimit,
     PipelineLint,
     PipelineModified,
     RunCompleted,
@@ -509,6 +514,11 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::PipelineLint | EventKind::PipelineModified => {
                 apply_pipeline_event(&mut state, event)
             }
+
+            // #290: informational only — the node stays in its current status
+            // (Running). Behaviour-preserving no-op, exactly like `PipelineLint`;
+            // recovery/unblocking is deferred (Slice 2/3). No node/run state touched.
+            EventKind::NodeBlockedOnLimit => {}
 
             EventKind::CommandIssued => apply_command_event(&mut state, event),
         }
@@ -2963,6 +2973,7 @@ mod tests {
             EventKind::NodeStopped,
             EventKind::NodeAutoCompleted,
             EventKind::NodeStale,
+            EventKind::NodeBlockedOnLimit,
             EventKind::RunPaused,
             EventKind::RunResumed,
         ];
@@ -2970,6 +2981,7 @@ mod tests {
             "\"node_stopped\"",
             "\"node_auto_completed\"",
             "\"node_stale\"",
+            "\"node_blocked_on_limit\"",
             "\"run_paused\"",
             "\"run_resumed\"",
         ];

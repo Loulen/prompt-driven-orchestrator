@@ -851,8 +851,9 @@ function PortRow({
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
   const portType = port.port_type ?? "markdown";
-  // URL of the thumbnail currently shown fullscreen in the lightbox, or null.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // The ordered image list + clicked index currently shown fullscreen in the
+  // lightbox, or null when it is closed (#312).
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const isImage = portType === "image" || portType === "image_list";
 
   let dotClass = "bg-fg-5";
@@ -952,9 +953,17 @@ function PortRow({
               className="h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80"
               onClick={(e) => {
                 // Open this thumbnail fullscreen instead of bubbling up to the
-                // row button (which opens the artifact modal).
+                // row button (which opens the artifact modal). Snapshot the
+                // FULL imageFiles list (not the .slice(0,4) shown as
+                // thumbnails) so arrows reach images behind the +N chip; `i`
+                // is a valid index into the full array since the slice starts
+                // at 0. A snapshot at click time is immune to poll churn
+                // (NodeDetailPanel re-polls IO ~every 1s).
                 e.stopPropagation();
-                setLightboxSrc(artifactUrl(runId, f.path));
+                setLightbox({
+                  images: imageFiles.map((im) => artifactUrl(runId, im.path)),
+                  index: i,
+                });
               }}
               data-testid={`thumbnail-${i}`}
             />
@@ -988,8 +997,12 @@ function PortRow({
     </>
   );
 
-  const lightbox = lightboxSrc && (
-    <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+  const lightboxEl = lightbox && (
+    <ImageLightbox
+      images={lightbox.images}
+      index={lightbox.index}
+      onClose={() => setLightbox(null)}
+    />
   );
 
   if (anyExists) {
@@ -1003,7 +1016,7 @@ function PortRow({
         >
           {children}
         </button>
-        {lightbox}
+        {lightboxEl}
       </>
     );
   }
@@ -1014,7 +1027,7 @@ function PortRow({
       style={gridStyle}
     >
       {children}
-      {lightbox}
+      {lightboxEl}
     </div>
   );
 }

@@ -14,8 +14,9 @@ interface Props {
 export default function StartInspector({ startNode, runId, nodeId }: Props) {
   const [inputText, setInputText] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  // URL of the input image currently shown fullscreen, or null (issue #145).
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // The ordered image list + clicked index currently shown fullscreen, or null
+  // when the lightbox is closed (issue #145, arrow-nav #312).
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   // Images uploaded with the run are stored in `_input/` alongside the prompt.
   const inputImages = startNode.input_images ?? [];
@@ -92,13 +93,20 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
               Input images
             </div>
             <div className="flex flex-wrap gap-2">
-              {inputImages.map((name) => {
+              {inputImages.map((name, i) => {
                 const src = artifactUrl(runId, `_input/${name}`);
                 return (
                   <button
                     key={name}
                     type="button"
-                    onClick={() => setLightboxSrc(src)}
+                    onClick={() =>
+                      setLightbox({
+                        images: inputImages.map((n) =>
+                          artifactUrl(runId, `_input/${n}`),
+                        ),
+                        index: i,
+                      })
+                    }
                     title={name}
                     className="overflow-hidden rounded border border-line bg-bg-0 transition-opacity hover:opacity-80"
                   >
@@ -135,8 +143,12 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
         />
       )}
 
-      {lightboxSrc && (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      {lightbox && (
+        <ImageLightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+        />
       )}
     </aside>
   );

@@ -186,6 +186,131 @@ pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> 
         .collect()
 }
 
+/// Sanitize a port / variable name into an env-var suffix: ASCII-upper-cased,
+/// every non-alphanumeric byte replaced with `_` (#248). `out` → `OUT`,
+/// `my-port.v2` → `MY_PORT_V2`.
+fn env_name_suffix(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Render a pipeline-variable value as the raw string a `script` node's bash
+/// reads from `$PDO_VAR_<NAME>` (#248). Scalars are emitted verbatim — NOT via
+/// `serde_yaml::to_string`, which would quote bool-/number-looking strings
+/// (`"true"` → `'true'`) and leak those quotes into the env value. Sequences and
+/// mappings have no natural scalar form, so they are emitted as compact JSON a
+/// script can parse deterministically (e.g. with `jq`).
+fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
+    match value {
+        serde_yaml::Value::Null => String::new(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// Build the `PDO_*` environment catalogue handed to a `script` node's bash
+/// (#248 / ADR-0017). A script can't read the prose preamble, so its inputs,
+/// outputs, artifacts root, and pipeline variables arrive as environment
+/// variables. Mirrors the `resolve_input_paths` / `resolve_output_paths`
+/// resolution the preamble uses — a single source of truth, not a second path.
+///
+/// - `PDO_ARTIFACTS_DIR` — the Blackboard root.
+/// - `PDO_INPUT_<PORT>` — absolute path (or `iter-*` glob) of each resolved input.
+/// - `PDO_INPUT_<PORT>_REPEATED=1` — set when that input is a `repeated` glob.
+/// - `PDO_OUTPUT_<PORT>` — absolute path the script writes its `output.md` to.
+/// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
+///
+/// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
+/// by `tmux_session_manager::wrap_with_env` and are *not* repeated here.
+pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+
+    env.push((
+        "PDO_ARTIFACTS_DIR".to_string(),
+        ctx.artifacts_dir.to_string_lossy().into_owned(),
+    ));
+
+    for input in resolve_input_paths(ctx) {
+        let key = format!("PDO_INPUT_{}", env_name_suffix(&input.port_name));
+        if input.repeated {
+            env.push((format!("{key}_REPEATED"), "1".to_string()));
+        }
+        env.push((key, input.path.to_string_lossy().into_owned()));
+    }
+
+    for output in resolve_output_paths(ctx) {
+        env.push((
+            format!("PDO_OUTPUT_{}", env_name_suffix(&output.port_name)),
+            output.path.to_string_lossy().into_owned(),
+        ));
+    }
+
+    // HashMap iteration order is non-deterministic; sort so the emitted script
+    // bytes are stable (test determinism, ADR-0002 mechanical determinism).
+    let mut vars: Vec<_> = ctx.variables.iter().collect();
+    vars.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in vars {
+        env.push((
+            format!("PDO_VAR_{}", env_name_suffix(name)),
+            var_value_to_env_string(value),
+        ));
+    }
+
+    // Name sanitization (`env_name_suffix`) can collapse distinct port/variable
+    // names onto the same env key (`foo-bar` and `foo_bar` → `PDO_INPUT_FOO_BAR`),
+    // and the last export silently wins. That is a per-spec mapping (the plan's
+    // "non-alnum → _"), but a silent shadow is a footgun — surface it loudly so
+    // an author can rename, rather than debugging a script that read the wrong
+    // path (ADR-0004 « jamais de comportement silencieux »).
+    let mut seen = std::collections::HashSet::new();
+    for (key, _) in &env {
+        if !seen.insert(key.as_str()) {
+            tracing::warn!(
+                "script node {}: env var {key} is set more than once — port/variable \
+                 names collide after sanitization; the last value wins",
+                ctx.node.id
+            );
+        }
+    }
+
+    env
+}
+
+/// Pre-create the directory of every declared output port for a `script` node
+/// (#248). Agents create these lazily via the Write tool, but a bash
+/// `> "$PDO_OUTPUT_out"` fails on a missing parent. For a Markdown port the path
+/// is `.../output.md` (create its parent); for an image port it is a directory
+/// (create it directly). Best-effort: a failure here is not fatal — the script's
+/// own redirect will surface any real problem.
+pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
+    for output in resolve_output_paths(ctx) {
+        let dir = match output.port_type {
+            PortType::Image | PortType::ImageList => output.path.clone(),
+            PortType::Markdown => output
+                .path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(output.path),
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                "failed to pre-create output dir {} for script node {}: {e}",
+                dir.display(),
+                ctx.node.id
+            );
+        }
+    }
+}
+
 pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     let inputs = resolve_input_paths(ctx);
     let outputs = resolve_output_paths(ctx);
@@ -589,6 +714,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -644,6 +770,115 @@ mod tests {
         assert_eq!(
             outputs[0].path,
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
+        );
+    }
+
+    #[test]
+    fn script_env_catalogue_is_built_from_the_same_resolution() {
+        // #248: a script node's I/O arrives as PDO_* env vars derived from the
+        // same input/output resolution the prose preamble uses.
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0]; // planner: input `task`, output `plan`
+        let mut vars = HashMap::new();
+        vars.insert(
+            "max_iter".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(5)),
+        );
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+
+        assert_eq!(
+            env.get("PDO_ARTIFACTS_DIR").map(String::as_str),
+            Some("/repo/.pdo/artifacts")
+        );
+        assert_eq!(
+            env.get("PDO_INPUT_TASK").map(String::as_str),
+            Some("/repo/.pdo/artifacts/_input/output.md")
+        );
+        assert_eq!(
+            env.get("PDO_OUTPUT_PLAN").map(String::as_str),
+            Some("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
+        );
+        assert_eq!(env.get("PDO_VAR_MAX_ITER").map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn script_env_var_values_are_raw_not_yaml_quoted() {
+        // #248 regression: serde_yaml::to_string quotes bool-/number-looking
+        // strings ("true" → 'true'); those quotes must NOT leak into the env
+        // value a script's bash reads. A script consumes raw bytes, so
+        // `[ "$PDO_VAR_FLAG" = "true" ]` must compare against `true`, not `'true'`.
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let mut vars = HashMap::new();
+        vars.insert("flag".into(), serde_yaml::Value::String("true".into()));
+        vars.insert("port".into(), serde_yaml::Value::String("8080".into()));
+        vars.insert(
+            "count".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(3)),
+        );
+        vars.insert("enabled".into(), serde_yaml::Value::Bool(true));
+        vars.insert(
+            "plain".into(),
+            serde_yaml::Value::String("hello world".into()),
+        );
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(env.get("PDO_VAR_FLAG").map(String::as_str), Some("true"));
+        assert_eq!(env.get("PDO_VAR_PORT").map(String::as_str), Some("8080"));
+        assert_eq!(env.get("PDO_VAR_COUNT").map(String::as_str), Some("3"));
+        assert_eq!(env.get("PDO_VAR_ENABLED").map(String::as_str), Some("true"));
+        assert_eq!(
+            env.get("PDO_VAR_PLAIN").map(String::as_str),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn script_env_marks_repeated_inputs() {
+        // A `repeated` edge → PDO_INPUT_<PORT> is an iter-* glob + a _REPEATED=1
+        // flag so the script knows to glob rather than read a single file.
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes.push(NodeDef {
+            id: "collector".into(),
+            name: "collector".into(),
+            node_type: NodeType::Script,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            model: None,
+        });
+        pipeline.edges.push(EdgeDef {
+            source: EdgeEndpoint {
+                node: "planner".into(),
+                port: "plan".into(),
+            },
+            target: EdgeEndpoint {
+                node: "collector".into(),
+                port: "laps".into(),
+            },
+            repeated: true,
+            ..Default::default()
+        });
+        let node = pipeline.nodes.iter().find(|n| n.id == "collector").unwrap();
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(
+            env.get("PDO_INPUT_LAPS_REPEATED").map(String::as_str),
+            Some("1")
+        );
+        assert!(
+            env.get("PDO_INPUT_LAPS")
+                .map(|v| v.contains("iter-*"))
+                .unwrap_or(false),
+            "repeated input is a glob: {env:?}"
         );
     }
 
@@ -1052,6 +1287,7 @@ mod tests {
                 },
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1127,6 +1363,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1318,6 +1555,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];
@@ -1367,6 +1605,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];
@@ -1411,6 +1650,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];

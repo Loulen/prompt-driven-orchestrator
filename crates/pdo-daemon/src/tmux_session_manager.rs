@@ -53,6 +53,33 @@ fn enable_mouse(socket: &str, session_name: &str) {
         .output();
 }
 
+/// Default wall-clock bound for a `script` node's bash body (#248 / ADR-0017).
+/// Mirrors the trigger guard's 60 s (`guard_runner`). A script has no JSONL, so
+/// the stale-detector can never fire on it — the in-wrapper `timeout` is the
+/// *only* thing that bounds a hung script, hence it is mandatory, not optional.
+pub const SCRIPT_TIMEOUT_SECS: u64 = 60;
+
+/// What a spawned tmux session runs after the shared `PDO_*` env exports.
+///
+/// The default is [`SessionTail::Agent`] — launch `claude` with the node's
+/// prompt. A [`SessionTail::Script`] node (#248 / ADR-0017) instead runs the
+/// author's bash body under a `timeout` and self-signals via `pdo complete` /
+/// `pdo fail` — no LLM, no `tmux_cmd_override` (a script *is* deterministic
+/// bash, so the test seam must not clobber it).
+pub enum SessionTail<'a> {
+    /// Agent node / manager / merge-resolver. `model` is the per-node model
+    /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
+    Agent { model: Option<&'a str> },
+    /// Script node (#248). Runs `timeout <secs>s bash <body>` then completes on
+    /// exit 0 / fails otherwise. `env` is the `PDO_INPUT_*`/`PDO_OUTPUT_*`/… I/O
+    /// catalogue exported before the body (a script can't read the prose
+    /// preamble).
+    Script {
+        timeout_secs: u64,
+        env: &'a [(String, String)],
+    },
+}
+
 /// Env var that overrides the reaper TTL (seconds). Default: 3600 (1 h).
 pub const REAPER_TTL_SECS_ENV: &str = "PDO_REAPER_TTL_SECS";
 
@@ -99,20 +126,32 @@ fn sh_single_quote(s: &str) -> String {
 /// pushes `end_session`, claude tears down, opens `/dev/tty` (ENXIO inside the
 /// tmux pane), writes `~/.claude.json`, and force-exits via `kill(getpid(),
 /// SIGKILL)`. That's the "Tester dies silently 20–60 s in" bug.
+///
+/// `extra_env` are additional `export K=V` pairs injected *after* the base four
+/// and the CCR suppression, before the tail. Agents pass `&[]`, so the emitted
+/// bytes are identical to the legacy command (the #296 byte-identity discipline)
+/// — only `script` nodes populate it with the `PDO_INPUT_*`/`PDO_OUTPUT_*`/…
+/// catalogue.
 fn wrap_with_env(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    extra_env: &[(String, String)],
     tail_cmd: &str,
 ) -> String {
+    let extra_exports: String = extra_env
+        .iter()
+        .map(|(k, v)| format!("export {k}={} && ", sh_single_quote(v)))
+        .collect();
+
     let inner = format!(
         "export PDO_RUN_ID={run_id_q} && \
          export PDO_NODE_ID={node_id_q} && \
          export PDO_NODE_ITER={iter_q} && \
          export PDO_DAEMON_URL={daemon_url_q} && \
          export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 && \
-         {tail_cmd}",
+         {extra_exports}{tail_cmd}",
         run_id_q = sh_single_quote(run_id),
         node_id_q = sh_single_quote(node_id),
         iter_q = sh_single_quote(&iter.to_string()),
@@ -122,15 +161,53 @@ fn wrap_with_env(
     format!("exec bash -c {}", sh_single_quote(&inner))
 }
 
+/// Build the `exec claude …` tail for an agent node. `model` `Some(m)` inserts
+/// `--model '<m>'`; `None` reproduces the legacy command byte-for-byte.
+fn build_agent_tail(prompt_path: &Path, model: Option<&str>) -> String {
+    // `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing space;
+    // `None` ⇒ empty string, so the command collapses to the exact legacy
+    // literal (one space before the `"$(cat …)"`).
+    let model_flag = match model {
+        Some(m) => format!("--model {} ", sh_single_quote(m)),
+        None => String::new(),
+    };
+    format!(
+        "exec claude --dangerously-skip-permissions {}\"$(cat {})\"",
+        model_flag,
+        sh_single_quote(&prompt_path.to_string_lossy())
+    )
+}
+
+/// Build the bash tail for a `script` node (#248 / ADR-0017).
+///
+/// Runs the author's body under `timeout` then self-signals: exit 0 ⇒
+/// `pdo complete` (with a `pdo fail` fallback so a post-success output-validation
+/// rejection still terminates the node); exit 124 (timeout) or any non-zero ⇒
+/// `pdo fail` with a diagnostic reason. **Not** `exec`-ed: unlike the agent tail
+/// (`exec claude`), the wrapper must run the bash *and then* run `pdo`, so it is
+/// a plain sequence. Ordering `pdo complete` before shell exit makes the node
+/// terminal before the session dies (#304).
+fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
+    let body = sh_single_quote(&prompt_path.to_string_lossy());
+    format!(
+        "timeout {timeout_secs}s bash {body} ; ec=$? ; \
+         if [ $ec -eq 0 ]; then pdo complete || pdo fail --reason \"output validation failed after script success\" ; \
+         elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after {timeout_secs}s\" ; \
+         else pdo fail --reason \"script exited $ec\" ; fi"
+    )
+}
+
 /// Construct the script tmux launches for a node run.
 ///
 /// `tmux_cmd_override` replaces the default `claude …` tail when `Some` — the
 /// per-daemon test seam (see [`TMUX_CMD_OVERRIDE_ENV`]). `None` → production
-/// claude invocation.
+/// claude invocation. **Ignored for a [`SessionTail::Script`]** node: a script
+/// *is* deterministic bash, so the override must not clobber it (a strictly
+/// stronger property — a script node is end-to-end testable in CI with zero
+/// stubbing).
 ///
-/// `model` is the per-node model override (#296). `Some(m)` inserts
-/// `--model '<m>'` into the launch; `None` reproduces the legacy command
-/// byte-for-byte (no flag emitted). Ignored when `tmux_cmd_override` is `Some`.
+/// `tail` selects the launch: [`SessionTail::Agent`] with the per-node `model`
+/// (#296), or [`SessionTail::Script`] with its `timeout` and I/O env catalogue.
 pub fn build_tmux_script(
     run_id: &str,
     node_id: &str,
@@ -138,27 +215,23 @@ pub fn build_tmux_script(
     daemon_port: u16,
     prompt_path: &Path,
     tmux_cmd_override: Option<&str>,
-    model: Option<&str>,
+    tail: SessionTail<'_>,
 ) -> String {
-    let tail_cmd = match tmux_cmd_override {
-        Some(cmd) => cmd.to_string(),
-        None => {
-            // `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing space;
-            // `None` ⇒ empty string, so the command collapses to the exact
-            // legacy literal (one space before the `"$(cat …)"`).
-            let model_flag = match model {
-                Some(m) => format!("--model {} ", sh_single_quote(m)),
-                None => String::new(),
+    const NO_ENV: &[(String, String)] = &[];
+    let (tail_cmd, extra_env): (String, &[(String, String)]) = match tail {
+        SessionTail::Script { timeout_secs, env } => {
+            (build_script_tail(prompt_path, timeout_secs), env)
+        }
+        SessionTail::Agent { model } => {
+            let cmd = match tmux_cmd_override {
+                Some(cmd) => cmd.to_string(),
+                None => build_agent_tail(prompt_path, model),
             };
-            format!(
-                "exec claude --dangerously-skip-permissions {}\"$(cat {})\"",
-                model_flag,
-                sh_single_quote(&prompt_path.to_string_lossy())
-            )
+            (cmd, NO_ENV)
         }
     };
 
-    wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
+    wrap_with_env(run_id, node_id, iter, daemon_port, extra_env, &tail_cmd)
 }
 
 /// Build a resume script that uses `claude --continue` in the same working_dir.
@@ -183,7 +256,7 @@ fn build_resume_script(
         None => "exec claude --dangerously-skip-permissions --continue".to_string(),
     };
 
-    wrap_with_env(run_id, node_id, iter, daemon_port, &tail_cmd)
+    wrap_with_env(run_id, node_id, iter, daemon_port, &[], &tail_cmd)
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +291,7 @@ pub fn spawn(
     iter: i64,
     daemon_port: u16,
     tmux_cmd_override: Option<&str>,
-    model: Option<&str>,
+    tail: SessionTail<'_>,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
@@ -232,7 +305,7 @@ pub fn spawn(
         daemon_port,
         &prompt_path,
         tmux_cmd_override,
-        model,
+        tail,
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -638,7 +711,15 @@ mod tests {
         let prompt_path = Path::new("/tmp/test-prompt.md");
 
         // None → production claude tail.
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Agent { model: None },
+        );
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("PDO_RUN_ID"));
@@ -653,7 +734,7 @@ mod tests {
             5172,
             prompt_path,
             Some("exec sleep 60"),
-            None,
+            SessionTail::Agent { model: None },
         );
         assert!(script.contains("exec sleep 60"));
         assert!(!script.contains("claude"));
@@ -666,7 +747,15 @@ mod tests {
         // This is the byte-identity guard: adding the flag must not perturb the
         // default launch.
         let prompt_path = Path::new("/tmp/test-prompt.md");
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Agent { model: None },
+        );
         assert!(
             !script.contains("--model"),
             "no model flag when unset: {script}"
@@ -688,7 +777,17 @@ mod tests {
         // `sh_single_quote` as `'\''` — i.e. `--model 'opus'` becomes
         // `--model '\''opus'\''` in the final script bytes.
         let prompt_path = Path::new("/tmp/test-prompt.md");
-        let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, Some("opus"));
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Agent {
+                model: Some("opus"),
+            },
+        );
         assert!(script.contains("--model"), "model flag present: {script}");
         assert!(
             script.contains(r"--model '\''opus'\''"),
@@ -704,6 +803,127 @@ mod tests {
         assert!(
             model_at < cat_at,
             "model flag must precede the prompt cat: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_tail_runs_bash_and_self_signals() {
+        // #248: a script node's tail runs the author's bash under `timeout`,
+        // then completes on exit 0 / fails on non-zero or timeout. No claude,
+        // and the tail is NOT `exec`-ed (the wrapper must run bash *then* pdo).
+        let prompt_path = Path::new("/tmp/body.md");
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Script {
+                timeout_secs: 42,
+                env: &[],
+            },
+        );
+        assert!(script.starts_with("exec bash -c "));
+        assert!(
+            !script.contains("claude"),
+            "script node launches no claude: {script}"
+        );
+        assert!(
+            script.contains("timeout 42s bash"),
+            "runs body under timeout: {script}"
+        );
+        assert!(
+            script.contains("pdo complete"),
+            "completes on success: {script}"
+        );
+        assert!(
+            script.contains("pdo fail --reason"),
+            "fails otherwise: {script}"
+        );
+        assert!(
+            script.contains("script exited $ec"),
+            "reports the exit code: {script}"
+        );
+        assert!(
+            script.contains("script timed out after 42s"),
+            "reports timeout: {script}"
+        );
+        // Base env is still exported.
+        assert!(script.contains("PDO_RUN_ID"));
+        assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
+    }
+
+    #[test]
+    fn build_script_tail_bypasses_cmd_override() {
+        // #248: the test seam (`tmux_cmd_override`) swaps claude for a stub so CI
+        // never launches real claude. A script IS deterministic bash, so the
+        // override must NOT clobber it — the wrapper is built unconditionally.
+        let prompt_path = Path::new("/tmp/body.md");
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            Some("exec sleep 99"),
+            SessionTail::Script {
+                timeout_secs: 60,
+                env: &[],
+            },
+        );
+        assert!(
+            !script.contains("sleep 99"),
+            "override ignored for scripts: {script}"
+        );
+        assert!(
+            script.contains("timeout 60s bash"),
+            "script tail preserved: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_tail_injects_env_catalogue() {
+        // #248: a script can't read the prose preamble, so its I/O arrives as env
+        // vars, exported before the body — after the base four (byte-identity for
+        // agents preserved: they pass an empty env).
+        let prompt_path = Path::new("/tmp/body.md");
+        let env = vec![
+            (
+                "PDO_INPUT_TASK".to_string(),
+                "/art/_input/output.md".to_string(),
+            ),
+            (
+                "PDO_OUTPUT_OUT".to_string(),
+                "/art/solo/iter-1/out/output.md".to_string(),
+            ),
+        ];
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Script {
+                timeout_secs: 60,
+                env: &env,
+            },
+        );
+        assert!(
+            script.contains("export PDO_INPUT_TASK="),
+            "input env exported: {script}"
+        );
+        assert!(
+            script.contains("export PDO_OUTPUT_OUT="),
+            "output env exported: {script}"
+        );
+        // The env exports precede the body invocation.
+        let env_at = script.find("PDO_OUTPUT_OUT").unwrap();
+        let body_at = script.find("timeout 60s bash").unwrap();
+        assert!(
+            env_at < body_at,
+            "env must be exported before the body runs: {script}"
         );
     }
 

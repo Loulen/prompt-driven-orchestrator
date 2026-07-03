@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use common::TestDaemon;
 use pdo_daemon::build_tmux_script;
+use pdo_daemon::tmux_session_manager::SessionTail;
 
 const PIPELINE_NAME: &str = "minimal-tmux";
 const NODE_ID: &str = "solo";
@@ -85,7 +86,15 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     // `claude --dangerously-skip-permissions` and the `exec bash -c` shape.
     // `None` override → production claude tail.
     let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
-    let script = build_tmux_script("run-abc", "solo", 1, 5172, prompt_path, None, None);
+    let script = build_tmux_script(
+        "run-abc",
+        "solo",
+        1,
+        5172,
+        prompt_path,
+        None,
+        SessionTail::Agent { model: None },
+    );
 
     assert!(
         script.starts_with("exec bash -c "),

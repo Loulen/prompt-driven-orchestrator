@@ -479,6 +479,7 @@ mod tests {
             nodes,
             edges,
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }

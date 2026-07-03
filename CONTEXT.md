@@ -19,7 +19,7 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle d'agent — typiquement une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (cf. *Node `script`* ci-dessous, ADR-0017).
 
 Un Node se définit par :
 
@@ -43,6 +43,16 @@ Chaque Node peut porter un **modèle** optionnel (`model: Option<String>`) : l'i
 - **S'applique aux nodes qui lancent un agent** : `doc-only`, `code-mutating`, `merge`. Les nodes structurels (`start`, `end`) ne lancent pas de session → pas de modèle.
 - **Resume** : une session reprise (`claude --continue`) **conserve son modèle** d'origine (garanti par la doc Claude Code), donc pas besoin de re-passer `--model` au resume.
 - **Défaut daemon-wide hors-scope** : un `default_model` d'instance viendra plus tard via `instance_config` (ADR-0015). _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node*, jamais par run).
+
+### Node `script` — exécution déterministe (ADR-0017)
+
+Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude. Il tourne dans une **session tmux** (attachable comme tout NodeRun, ADR-0005) dont le tail est `timeout N bash <corps>` : **exit 0 ⇒ node `completed`**, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (pas de sous-worktree ; tourne dans le worktree du Run ; doit le laisser propre).
+
+- **I/O par variables d'environnement** (un script ne lit pas le préambule prose) : `PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`, plus les `PDO_RUN_ID/NODE_ID/NODE_ITER/DAEMON_URL` habituels. Le script écrit lui-même `output.md` à `$PDO_OUTPUT_<port>` ; pour piloter une edge `when:`, il y écrit sa propre frontmatter YAML. `outputs_validator` s'applique en **fail-fast** (pas de retry interactif — la session a quitté).
+- **Corps** stocké dans le slot prompt du node (`<pipeline>.prompts/<node>.md`). Un corps vide fait échouer le lancement (fail-loud, pas de no-op silencieux).
+- **Pas de `model`** (aucun agent lancé). Le seam de test `tmux_cmd_override` ne s'applique pas à un script (le bash *est* déterministe, donc testable sans stub).
+- **Sécurité** : équivalent au guard de Trigger et au bash d'un agent — le bash de l'auteur dans son propre pipeline, aucune nouvelle frontière de confiance (#260 reste le contrôle réel).
+- **Sharp tool** : un script doc-only qui fait `git commit` laisse l'arbre propre et passe le garde d'immutabilité — c'est la responsabilité de l'auteur.
 
 ## Dataflow
 
@@ -162,6 +172,19 @@ Le tracé d'une edge est **orthogonal** (connecteur à angle droit) : l'auto-rou
 Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur un dot d'input déclaré mais **sur le corps** du nœud cible. `target_side` mémorise **de quel côté** (`left` / `right` / `top` / `bottom`) la flèche s'ancre : la règle décidée est *le côté de la carte cible le plus proche du point de dépôt*. Le routage orthogonal arrive alors par ce côté (plus de gauche-vers-droite forcé). Absent ⇒ `left` (ancrage historique), jamais écrit.
 
 `target_side` est du **layout, pas de la sémantique** (au même titre que `mode`/`waypoints`/`view`) : il persiste dans le fichier (l'arrivée des flèches voyage avec un workflow partagé) mais est exclu du diff sémantique. Les ports **déclarés** (l'input `result` du nœud `End`, les ports des nœuds structurels `merge` / `loop` / `for-each`) gardent leur côté fixe et **ne sont pas** affectés par l'ancrage au dépôt.
+
+---
+
+## Note (note de canvas)
+
+Une **Note** est une annotation de documentation **inerte** posée sur le canvas : un texte libre que le designer épingle près d'un groupe de nœuds pour expliquer une intention (« ce loop est borné à 3 exprès », « TODO câbler l'edge d'épuisement »). Elle **n'est pas un Node** — aucun titre/`name`, aucun type (`doc-only`/`code-mutating`/`merge`/`script`), aucun port, aucune edge, aucune session, aucune place dans le dataflow ni l'ordonnancement : le runtime l'**ignore entièrement**.
+
+- **Persistée dans un bloc racine `notes:`** du YAML (sibling de `loops:`/`edges:`, jamais dans `nodes:`), chaque entrée = `{ id, content, view }`. C'est la forme éprouvée de `loops:` — une entité nommée de premier niveau, rendue sur le canvas, qui n'est délibérément **pas** un type de nœud (cf. ADR-0018).
+- **`content` = texte brut en v1** — pas de markdown, pour ne pas ouvrir une 2ᵉ surface `react-markdown` ni le sink `dangerouslySetInnerHTML` d'ADR-0013. Édité dans l'inspecteur (clic sur la note), pas inline sur la carte.
+- **`view` = layout, pas sémantique** — même classe que `view`/`mode`/`waypoints`/`target_side` : persiste **dans le fichier** (une note partagée suit le workflow) mais est **exclu du diff sémantique** ; deux pipelines ne différant que par leurs notes comparent **égaux** (le star « synced/diverged » ne bouge pas). La puce « non sauvegardé » (dirty), elle, s'allume — normal. Taille pilotée par le contenu en v1 ; redimensionnement différé.
+- **Mutable pendant un Run** : inerte, aucune session à orphaner — `mutation_validator` ne doit jamais rejeter l'ajout/édition/suppression d'une note sur un Run actif (contraste avec la suppression d'un node non-`pending`, interdite par ADR-0007).
+
+_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou un commentaire d'issue GitHub), et « placeholder annoté » (qui est, lui, un **vrai** nœud `doc-only` produit par l'import de workflow, ADR-0016).
 
 ---
 
@@ -510,7 +533,7 @@ Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (
 - **Invariant `next_fire_at` = UTC canonique (`…Z`)** (#222) : tout writer (création/édition/scheduler) stocke en UTC, et la requête « quels Triggers sont dûs » compare/ordonne via `julianday()` (tz-normalisé), donc une ligne à offset local (donnée legacy ou régression `Local::now()`) ne peut plus se mettre en dormance silencieuse pendant des heures.
 - **Résilience du tick** (#222) : un panic pendant un tick est **isolé** (frontière `tokio::spawn`) — la boucle survit et le tick suivant rattrape les Triggers non firés (forward-only). `GET /triggers/health` expose `last_tick_at` + l'intervalle, pour qu'un scheduler mort/bloqué soit observable plutôt que silencieux.
 - **Fires manqués = forward-only, pas de backfill.** Daemon down pendant 50 slots ⇒ au redémarrage `next_fire` est recalculé depuis *now*, les slots manqués ne sont pas rejoués. Correct *par construction* : le dedup étant externe, un seul poll forward voit *tout* le travail accumulé (`gh issue list` ramène toutes les issues en attente d'un coup).
-- **Daemon best-effort (v1)** : les Triggers ne firent que tant que le process daemon est vivant (survit à la fermeture de l'UI, meurt au reboot). L'onglet Triggers l'affiche clairement. Service unit persistant (systemd/launchd) traité séparément → #156.
+- **Daemon best-effort par défaut, persistant sur demande (#156)** : un `pdo daemon` lancé à la main ne fire que tant que le process vit (survit à la fermeture de l'UI, meurt au reboot/logout). `pdo service install` le rend **persistant** — installé comme **service unit** (systemd `--user` sous Linux, LaunchAgent launchd best-effort sous macOS), il démarre au boot et survit au logout, résolvant la limitation v1 que l'onglet Triggers signalait. La status-bar distingue désormais un daemon persistant (silencieux) d'un daemon **éphémère** (pastille ambre `ephemeral` pointant sur `pdo service install`). Détails : *Service unit persistant (#156)* + ADR-0019.
 
 ### Persistence — table SQLite
 
@@ -800,10 +823,20 @@ Cf. ADR-0003.
 - Plus tard : formula Homebrew (macOS), package AUR (Arch).
 - Plus tard (v2) : wrapper Tauri pour distribution desktop native, qui réutilise le même daemon Rust + le même frontend.
 
+### Service unit persistant (#156)
+
+**Service unit** : le fichier d'unité OS qui fait démarrer le daemon au boot et survivre au logout — une `systemd --user` unit sous Linux (`~/.config/systemd/user/pdo.service`), un LaunchAgent launchd sous macOS (`~/Library/LaunchAgents/com.pdo.daemon.plist`, best-effort). C'est la différence entre « les Triggers ne tournent que tant que tu es loggé » et un orchestrateur autonome fiable (résout la limitation v1 d'ADR-0012). Voir ADR-0019.
+
+- **CLI** : `pdo service {install [--port N] [--dry-run] | uninstall | status}` — un sous-commande top-level (comme `daemon`/`complete`/`fail`/`skip`), one-shot bloquant sans runtime tokio. `install` génère l'unité, la `daemon-reload`, `enable-linger` (pour survivre au logout, sans sudo depuis une session active — dégrade avec un hint `sudo …` sinon), puis `enable --now`. `--dry-run` imprime l'unité + le plan de commandes **sans aucun effet de bord** (seam de test/preview).
+- **Fidélité au recette prod** : l'unité systemd est un portage byte-fidèle de la recette `Makefile` (`service-install`), paramétrée. Deux lignes **load-bearing** : `KillMode=process` (le défaut `control-group` SIGKILL-erait le serveur tmux enfant qui tient toutes les sessions Claude live — cf. #234) et `Environment=PATH=…<dir de node>…` (le daemon shelle vers `claude`/`node`/`git`/`tmux` ; un PATH nu casse silencieusement les spawns). `WorkingDirectory` est load-bearing aussi (le daemon dérive `repo_root` du cwd). L'analogue macOS de `KillMode=process` est `AbandonProcessGroup=true`.
+- **Garde de conflit de port** : deux daemons ne peuvent jamais partager un port (bind sans `SO_REUSEADDR`, `EADDRINUSE` fatal). `install` sonde `127.0.0.1:<port>` : port libre → `enable --now` ; un daemon PDO répond déjà → idempotent (enable pour le boot **sans** `--now`, pas de compétiteur) ; process étranger → **refus loud** (l'unité crash-looperait sous `Restart=on-failure`). Remplace l'item « lazy-start » de l'issue, qui reposait sur un mécanisme d'auto-spawn inexistant dans le code.
+- **Signal UI** : le champ `service` de `GET /sessions` (`{ supervisor, persistent }`) est calculé **une fois au boot** et caché dans `AppState` (zéro coût par poll). `supervisor` = détection best-effort par marqueurs d'env (`systemd`/`launchd`/`none`) ; `persistent` = `systemctl --user is-enabled pdo.service` (timeout ~1s, dégrade en `null`, jamais une erreur). La status-bar reste silencieuse quand `persistent` vaut `true`/`null` et affiche une pastille ambre `ephemeral` (même token `text-st-await` que le dot reconnecting / le compteur near-cap) quand il vaut `false` — le seul signal que le dot de connexion ne peut pas exprimer (joignable ≠ persistant). Le seam d'observation `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|`unknown`, `None` en prod) force l'état affiché pour exercer la branche `ephemeral` sur une box où une unité est déjà enabled.
+- **Limites acceptées (v1)** : le chemin launchd réel n'est **pas testé sur la CI Linux** (génération golden-testée seulement) ; pas d'équivalent linger pour un LaunchAgent (headless macOS vrai = LaunchDaemon root, différé, human-ratified) ; la valeur `persistent` cachée peut être **stale** si on installe le service pendant qu'un daemon non-service tourne (le flux normal est install-puis-run) ; le bind `0.0.0.0` reste inchangé (→ #260).
+
 ### Versioning (#139)
 
 - **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel, ne jamais le bumper (le release flow ne touche que Cargo.toml).
-- Le daemon expose sa version compilée (`CARGO_PKG_VERSION`) dans la réponse de **`GET /sessions`** (`{ live, cap, version }`), l'endpoint qui alimente déjà la status-bar. Pas de route `GET /version` dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de plus dans la whitelist du proxy vite dev.
+- Le daemon expose sa version compilée (`CARGO_PKG_VERSION`) dans la réponse de **`GET /sessions`** (`{ live, cap, version, service }`), l'endpoint qui alimente déjà la status-bar. Pas de route `GET /version` dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de plus dans la whitelist du proxy vite dev. Le même argument vaut pour le champ **`service`** (#156, `{ supervisor, persistent }`, cf. *Service unit persistant*) : plutôt qu'une route `GET /service/status`, un champ additionnel — d'autant qu'il est **calculé une seule fois au boot et caché** (état quasi-statique, ne change qu'à l'install/uninstall), donc zéro coût subprocess par poll.
 - Le footer affiche `v<version>` à partir de ce payload, rafraîchi au mount et à chaque event WebSocket. Tant que le daemon n'a pas répondu, **rien n'est rendu** (pas de placeholder) ; le dot de connexion signale déjà l'injoignabilité.
 - En prod le binaire embarque le frontend, donc daemon et UI ne peuvent pas diverger. En dev le footer montre la version du daemon debug réellement joignable.
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildLoopRegionNodes,
+  buildNoteNodes,
   deriveEditEdges,
   deriveEditNodes,
   deriveLoopRegions,
@@ -662,5 +663,65 @@ describe("buildLoopRegionNodes — region box must not intercept edge clicks (is
     const p = regionPipeline();
     p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
     expect(buildLoopRegionNodes(p, null)).toHaveLength(0);
+  });
+});
+
+describe("buildNoteNodes — inert canvas notes (#307 / ADR-0018)", () => {
+  function notePipeline(): PipelineDef {
+    return {
+      name: "with-notes",
+      version: "1.0",
+      variables: {},
+      nodes: [],
+      edges: [],
+      notes: [
+        { id: "n1", content: "first note", view: { x: 120, y: 240 } },
+        { id: "n2", content: "second note", view: { x: 300, y: 80 } },
+      ],
+    };
+  }
+
+  it("renders one draggable/selectable `note` node per note at its view position", () => {
+    const nodes = buildNoteNodes(notePipeline());
+    expect(nodes).toHaveLength(2);
+    const [a, b] = nodes;
+    expect(a.id).toBe("n1");
+    expect(a.type).toBe("note");
+    expect(a.position).toEqual({ x: 120, y: 240 });
+    expect(a.draggable).toBe(true);
+    expect(a.selectable).toBe(true);
+    expect(b.id).toBe("n2");
+    expect(b.position).toEqual({ x: 300, y: 80 });
+  });
+
+  it("marks notes non-connectable so no edge can ever attach (inert)", () => {
+    for (const n of buildNoteNodes(notePipeline())) {
+      expect(n.connectable).toBe(false);
+    }
+  });
+
+  it("carries the content through to node data for canvas rendering", () => {
+    const n = buildNoteNodes(notePipeline())[0];
+    expect((n.data as { content: string }).content).toBe("first note");
+    expect((n.data as { noteId: string }).noteId).toBe("n1");
+  });
+
+  it("falls back to a default position when a note has no view", () => {
+    const p: PipelineDef = {
+      name: "p",
+      version: "1.0",
+      variables: {},
+      nodes: [],
+      edges: [],
+      notes: [{ id: "n1", content: "no view" }],
+    };
+    const n = buildNoteNodes(p)[0];
+    expect(typeof n.position.x).toBe("number");
+    expect(typeof n.position.y).toBe("number");
+  });
+
+  it("produces no note nodes when the pipeline has none", () => {
+    const p: PipelineDef = { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
+    expect(buildNoteNodes(p)).toHaveLength(0);
   });
 });

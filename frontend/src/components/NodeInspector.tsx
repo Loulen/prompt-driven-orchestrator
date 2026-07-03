@@ -62,6 +62,11 @@ export default function NodeInspector({
   // not declared on the node. Same-named edges pool into one list input.
   const pooledInputs = derivePooledInputs(tab.pipeline, node.id);
 
+  // #248: a `script` node runs deterministic bash, not an agent — so its type is
+  // fixed (no doc-only↔code-mutating toggle), it has no model, and its "prompt"
+  // is a bash body whose I/O arrives as PDO_* env vars, not a prose preamble.
+  const isScript = node.type === "script";
+
   function handleField(field: keyof NodeDef, value: unknown) {
     updateNode(node!.id, { [field]: value } as Partial<NodeDef>);
   }
@@ -128,25 +133,38 @@ export default function NodeInspector({
 
         {/* Type */}
         <SectionHead title="Type" />
-        <div className="flex gap-1">
-          {(["code-mutating", "doc-only"] as NodeType[]).map((t) => (
-            <Tooltip key={t} content={TYPE_TOOLTIPS[t] ?? t}>
-              <button
-                onClick={() => handleField("type", t)}
-                className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
-                  node.type === t
-                    ? t === "code-mutating"
-                      ? "border-acc bg-acc-bg text-acc"
-                      : "border-fg-4 bg-bg-3 text-fg"
-                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                }`}
-                style={{ fontSize: "10px" }}
-              >
-                {t}
-              </button>
-            </Tooltip>
-          ))}
-        </div>
+        {isScript ? (
+          // #248: a script node's type is fixed. Show a static label rather than
+          // the doc-only↔code-mutating toggle (which can't even express "script"
+          // and would silently retype the node away on click).
+          <div
+            data-testid="script-type-label"
+            className="rounded border border-fg-4 bg-bg-3 px-2 py-1 font-medium text-fg"
+            style={{ fontSize: "10px" }}
+          >
+            script (deterministic bash)
+          </div>
+        ) : (
+          <div className="flex gap-1">
+            {(["code-mutating", "doc-only"] as NodeType[]).map((t) => (
+              <Tooltip key={t} content={TYPE_TOOLTIPS[t] ?? t}>
+                <button
+                  onClick={() => handleField("type", t)}
+                  className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
+                    node.type === t
+                      ? t === "code-mutating"
+                        ? "border-acc bg-acc-bg text-acc"
+                        : "border-fg-4 bg-bg-3 text-fg"
+                      : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                  }`}
+                  style={{ fontSize: "10px" }}
+                >
+                  {t}
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+        )}
 
         {/* Behavior */}
         <SectionHead title="Behavior" />
@@ -170,31 +188,51 @@ export default function NodeInspector({
 
         {/* Model (#296): free-text pass-through to `claude --model <x>`; the
             datalist offers the common aliases but any full id is accepted.
-            Empty ⇒ null ⇒ never serialized ⇒ account default. */}
-        <Field label="Model">
-          <input
-            list="pdo-model-aliases"
-            data-testid="node-model-input"
-            placeholder="default model"
-            value={node.model ?? ""}
-            onChange={(e) => handleField("model", e.target.value || null)}
-            className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
-          />
-          <datalist id="pdo-model-aliases">
-            {["sonnet", "opus", "haiku", "opusplan", "fable"].map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </Field>
+            Empty ⇒ null ⇒ never serialized ⇒ account default. Hidden for a
+            script node (#248): it launches no agent, so it has no model. */}
+        {!isScript && (
+          <Field label="Model">
+            <input
+              list="pdo-model-aliases"
+              data-testid="node-model-input"
+              placeholder="default model"
+              value={node.model ?? ""}
+              onChange={(e) => handleField("model", e.target.value || null)}
+              className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+            />
+            <datalist id="pdo-model-aliases">
+              {["sonnet", "opus", "haiku", "opusplan", "fable"].map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </Field>
+        )}
 
-        {/* Prompt */}
-        <SectionHead title="Prompt" />
+        {/* Prompt / Script body. For a script node (#248) this textarea holds the
+            bash body; its I/O arrives as PDO_* env vars, not a prose preamble. */}
+        <SectionHead title={isScript ? "Script (bash)" : "Prompt"} />
+        {isScript && (
+          <p
+            data-testid="script-help"
+            className="rounded border border-acc/30 bg-acc/5 px-2 py-1.5 text-fg-3"
+            style={{ fontSize: "10.5px", lineHeight: "1.5" }}
+          >
+            Author-written bash, run deterministically (no LLM). Inputs/outputs
+            arrive as env vars: <code>$PDO_INPUT_&lt;PORT&gt;</code>,{" "}
+            <code>$PDO_OUTPUT_&lt;PORT&gt;</code>, <code>$PDO_ARTIFACTS_DIR</code>,{" "}
+            <code>$PDO_VAR_&lt;NAME&gt;</code>. Write your <code>output.md</code> to{" "}
+            <code>$PDO_OUTPUT_&lt;PORT&gt;</code> (add YAML frontmatter to drive a{" "}
+            <code>when:</code> edge). Exit 0 ⇒ node completes; non-zero or timeout
+            ⇒ fails. Runs in the run's shared worktree — leave tracked files clean.
+          </p>
+        )}
         <textarea
+          data-testid={isScript ? "script-body" : undefined}
           value={promptContent}
           onChange={(e) => updatePrompt(node.id, e.target.value)}
           className="min-h-[120px] w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc"
           style={{ fontSize: "11px", lineHeight: "1.5" }}
-          placeholder="Enter the node's role prompt..."
+          placeholder={isScript ? "#!/usr/bin/env bash\n# e.g. curl -X POST \"$DISCORD_WEBHOOK\" ..." : "Enter the node's role prompt..."}
         />
 
         {/* Inputs — emergent (#149): derived from incoming edges, read-only.

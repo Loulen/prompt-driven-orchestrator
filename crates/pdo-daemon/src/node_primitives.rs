@@ -144,6 +144,48 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
+    // A `script` node (#248 / ADR-0017) runs the author's bash instead of Claude:
+    // its I/O arrives as env vars (a script can't read the prose preamble) and
+    // its declared output dirs must exist before the body's `>` redirect runs.
+    // Critically, the file `bash` executes must be the RAW body, not the
+    // augmented prompt — the preamble is prose an agent reads, not runnable bash.
+    let is_script = node.node_type == pipeline::NodeType::Script;
+
+    // #248 / ADR-0017: an empty script body would `bash <empty>` → exit 0 → a
+    // silent no-op that masquerades as success. `create_run` refuses this at
+    // launch; guard the manual force-spawn / restart door here too (this
+    // primitive backs the `start_node` command, #204) so the hole stays closed.
+    if is_script && role_prompt.trim().is_empty() {
+        return StartNodeResult {
+            outcome: PrimitiveOutcome::Rejected {
+                reason: format!("script node '{}' has an empty body", params.node_id),
+            },
+            events: vec![],
+        };
+    }
+
+    let spawn_prompt: &str = if is_script {
+        &role_prompt
+    } else {
+        &full_prompt
+    };
+    let script_env = if is_script {
+        crate::prompt_augmenter::precreate_output_dirs(&aug_ctx);
+        crate::prompt_augmenter::build_script_env(&aug_ctx)
+    } else {
+        Vec::new()
+    };
+    let tail = if is_script {
+        tmux_session_manager::SessionTail::Script {
+            timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
+            env: &script_env,
+        }
+    } else {
+        tmux_session_manager::SessionTail::Agent {
+            model: node.model.as_deref(),
+        }
+    };
+
     let node_started = event_log::Event {
         id: None,
         run_id: params.run_id.to_string(),
@@ -162,14 +204,14 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
-        &full_prompt,
+        spawn_prompt,
         &working_dir,
         params.run_id,
         params.node_id,
         params.iter,
         params.daemon_port,
         params.tmux_cmd_override,
-        node.model.as_deref(),
+        tail,
     ) {
         return StartNodeResult {
             outcome: PrimitiveOutcome::Rejected {
@@ -285,6 +327,7 @@ fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
         pipeline::NodeType::Loop => "loop",
         pipeline::NodeType::ForEach => "for-each",
         pipeline::NodeType::Merge => "merge",
+        pipeline::NodeType::Script => "script",
     }
 }
 
@@ -610,6 +653,7 @@ mod tests {
             nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -652,6 +696,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -694,6 +739,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -750,6 +796,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -801,6 +848,7 @@ mod tests {
             nodes: vec![make_node("entry", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -855,6 +903,7 @@ mod tests {
                 make_edge("researcher", "research", "implementer", "research"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -908,6 +957,7 @@ mod tests {
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "reviews")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -955,6 +1005,7 @@ mod tests {
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1216,6 +1267,7 @@ mod tests {
             nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 

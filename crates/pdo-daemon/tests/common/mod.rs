@@ -68,6 +68,7 @@ impl TestDaemon {
                 panic_on_trigger_name: None,
                 panic_on_stale_sweep: false,
                 panic_on_spawn: false,
+                service_health_override: None,
             },
         )
         .await?;
@@ -101,6 +102,7 @@ impl TestDaemon {
                 panic_on_trigger_name: Some(panic_name.to_string()),
                 panic_on_stale_sweep: false,
                 panic_on_spawn: false,
+                service_health_override: None,
             },
         )
         .await?;

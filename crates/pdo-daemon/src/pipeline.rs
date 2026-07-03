@@ -28,15 +28,26 @@ pub enum NodeType {
     Loop,
     ForEach,
     Merge,
+    /// A node that runs author-written bash deterministically instead of
+    /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
+    /// like any NodeRun) whose tail is `timeout N bash <body>`: exit 0 ⇒ node
+    /// completes, non-zero/timeout ⇒ node fails. v1 is doc-only-effect (no
+    /// sub-worktree; runs in the run's shared worktree).
+    Script,
 }
 
 impl NodeType {
-    /// A *regular* node (doc-only / code-mutating) declares no inputs: its inputs
-    /// are emergent, derived from incoming edges and named after the edge target
-    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/for-each/
-    /// merge) keep their required, declared input ports.
+    /// A *regular* node (doc-only / code-mutating / script) declares no inputs:
+    /// its inputs are emergent, derived from incoming edges and named after the
+    /// edge target port (#149 / ADR-0011). Structural nodes (start/end/switch/
+    /// loop/for-each/merge) keep their required, declared input ports. A `script`
+    /// node consumes whole artifacts by edge just like a work node, so its inputs
+    /// are emergent too (#248).
     pub fn has_emergent_inputs(&self) -> bool {
-        matches!(self, NodeType::DocOnly | NodeType::CodeMutating)
+        matches!(
+            self,
+            NodeType::DocOnly | NodeType::CodeMutating | NodeType::Script
+        )
     }
 }
 
@@ -250,6 +261,24 @@ pub struct LoopRegion {
     pub over: Option<String>,
 }
 
+/// An inert canvas note (#307 / ADR-0018): a documentation post-it laid on the
+/// canvas. It has no title, no port, no edge; it is never spawned, lives outside
+/// the DAG and the runtime. It travels with the shared pipeline file but is
+/// *layout, not semantics* — excluded from the semantic pipeline-diff (the
+/// synced/diverged star does not move when a note is created/moved/edited/deleted).
+/// The Rust field is MANDATORY: the frontend rehydrates from the daemon-parsed
+/// `PipelineDef`, never the raw YAML — without this field serde would drop the
+/// note silently and it would vanish on reload (#307 / lesson #296).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub content: String,
+    /// Canvas position. Absent ⇒ not yet placed; reuses `ViewPosition` like
+    /// `NodeDef.view`. Omitted from YAML when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ViewPosition>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub name: String,
@@ -264,6 +293,11 @@ pub struct PipelineDef {
     /// loops; round-trips when present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loops: Vec<LoopRegion>,
+    /// Inert canvas notes (#307 / ADR-0018). Absent on pipelines with no notes;
+    /// round-trips when present. Layout, not semantics — excluded from the
+    /// pipeline-diff on the frontend but persisted verbatim here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
     /// Whether a manual Run must be launched with a non-empty user prompt (#158).
     /// Defaults to `true` (the prompt is mandatory) and is omitted from YAML in
     /// that case, so prompt-required pipelines stay clean. When `false`, a Run
@@ -360,6 +394,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "nodes",
     "edges",
     "loops",
+    "notes",
     "prompt_required",
 ];
 
@@ -385,6 +420,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         "loop",
         "for-each",
         "merge",
+        // #248: without this, a `type: script` node is silently rewritten to
+        // `doc-only` with only a diagnostic (see the layer-1 test).
+        "script",
     ];
 
     if let Some(nodes) = raw
@@ -2124,6 +2162,101 @@ nodes:
         assert_eq!(mg.outputs[0].name, "merged");
     }
 
+    // --- Script node tests (#248 / ADR-0017) ---
+
+    #[test]
+    fn parses_script_node() {
+        let yaml = with_start_end(
+            r#"
+name: script-test
+nodes:
+  - id: ab000001
+    name: notify
+    type: script
+    outputs:
+      - name: out
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node.node_type, NodeType::Script);
+        assert_eq!(node.outputs.len(), 1);
+        assert_eq!(node.outputs[0].name, "out");
+    }
+
+    #[test]
+    fn script_node_is_not_rewritten_to_doc_only() {
+        // ⚠️ silent-failure guard: `script` must be in `valid_types`, else
+        // `parse_pipeline` degrades the node to `doc-only` with a diagnostic.
+        let yaml = with_start_end(
+            r#"
+name: script-not-rewritten
+nodes:
+  - id: ab000001
+    name: notify
+    type: script
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(
+            node.node_type,
+            NodeType::Script,
+            "must not degrade to doc-only"
+        );
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("ab000001")),
+            "no rewrite diagnostic for a valid script node: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn script_node_has_emergent_inputs() {
+        assert!(NodeType::Script.has_emergent_inputs());
+    }
+
+    #[test]
+    fn script_node_roundtrips_via_serde() {
+        let node = NodeDef {
+            id: "s1".into(),
+            name: "notify".into(),
+            node_type: NodeType::Script,
+            inputs: vec![],
+            outputs: vec![Port {
+                name: "out".into(),
+                repeated: false,
+                side: None,
+                port_type: PortType::Markdown,
+                frontmatter: None,
+                when: None,
+                description: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            model: None,
+        };
+        let yaml = serde_yaml::to_string(&node).unwrap();
+        assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
+        let back: NodeDef = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.node_type, NodeType::Script);
+    }
+
     #[test]
     fn merge_node_rejects_wrong_input_name() {
         let yaml = with_start_end(
@@ -3660,6 +3793,12 @@ loops:
     kind: bounded
     members: [ab000001, ab000002]
     max_iter: "$max_iter_review"
+notes:
+  - id: note-1
+    content: "remember to bound this loop"
+    view:
+      x: 120.0
+      y: 240.0
 "#;
         let result = parse_pipeline(yaml).unwrap();
         assert!(

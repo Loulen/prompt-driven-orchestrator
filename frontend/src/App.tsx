@@ -11,6 +11,7 @@ import { rightPaneOwner } from "./lib/rightPaneOwner";
 import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
 import { isLiveRun } from "./types";
 import SessionCounter from "./components/SessionCounter";
+import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import NewRunModal from "./components/NewRunModal";
@@ -31,6 +32,7 @@ import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
 import EdgeDetailPanel from "./components/EdgeDetailPanel";
 import RegionInspector from "./components/RegionInspector";
+import NoteInspector from "./components/NoteInspector";
 import TriggerDetailPanel from "./components/TriggerDetailPanel";
 import type { TriggerPrefill } from "./components/NewRunModal";
 import { deriveEdgeTrigger } from "./lib/edgeTrigger";
@@ -286,6 +288,11 @@ export default function App() {
   function inspectorEditPane() {
     switch (editNodeType) {
       case "merge": return <MergeInspector />;
+      // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
+      // and hides the model field / doc-only↔code-mutating toggle for it.
+      // Without this case a script node would fall through and — before the
+      // in-inspector conditionals — render the wrong (agent) surface.
+      case "script":
       default: return (
         <NodeInspector
           libraryEntries={libraryEntries}
@@ -335,9 +342,9 @@ export default function App() {
   useEffect(() => {
     if (!selectedRun) return;
     if (selection.kind === "node" && selection.id) return;
-    // An explicit region/edge selection (#150 / #147) wins over the auto-snap:
-    // the user opened an inspector and must keep it on a live run.
-    if (selection.kind === "region" || selection.kind === "edge") return;
+    // An explicit region/edge/note selection (#150 / #147 / #307) wins over the
+    // auto-snap: the user opened an inspector and must keep it on a live run.
+    if (selection.kind === "region" || selection.kind === "edge" || selection.kind === "note") return;
     if (!LIVE_RUN_STATUSES.has(selectedRun.status)) return;
     const nodeId = pickLatestLiveNode(selectedRun);
     if (!nodeId) return;
@@ -615,6 +622,8 @@ export default function App() {
                   <EdgeDetailPanel trigger={edgeTrigger} />
                 ) : selection.kind === "region" ? (
                   <RegionInspector />
+                ) : selection.kind === "note" ? (
+                  <NoteInspector />
                 ) : null}
                 {selection.kind === "none" && isEditingRun && selectedRun && (
                   <RunInfoSidebar run={selectedRun} />
@@ -821,6 +830,7 @@ function StatusBar({
         {label}
       </span>
       <span className="flex-1" />
+      <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
       {sessions.version && <span>v{sessions.version}</span>}
     </footer>

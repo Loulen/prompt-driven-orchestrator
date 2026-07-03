@@ -24,6 +24,14 @@ pdo daemon
 
 Open `http://localhost:5172` in your browser.
 
+For **unattended Triggers** (the daemon starts at boot and survives logout, instead of dying when you close your session), install it as a persistent service:
+
+```bash
+pdo service install          # systemd --user unit (Linux) / launchd LaunchAgent (macOS)
+pdo service install --dry-run # preview the unit + commands, change nothing
+pdo service status            # inspect the installed service
+```
+
 ## Prerequisites (development)
 
 - [Rust](https://rustup.rs/) (stable)

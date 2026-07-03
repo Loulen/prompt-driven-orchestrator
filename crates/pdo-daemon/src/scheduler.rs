@@ -1277,6 +1277,7 @@ mod tests {
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1301,6 +1302,7 @@ mod tests {
                 make_edge("implementer", "summary", "reviewer", "summary"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1324,6 +1326,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1351,6 +1354,7 @@ mod tests {
                 make_edge("planner", "plan", "impl-b", "plan"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1379,6 +1383,7 @@ mod tests {
                 make_edge("impl-b", "summary", "merger", "summary-b"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1416,6 +1421,7 @@ mod tests {
                 make_edge("c", "out", "d", "in-c"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1439,6 +1445,7 @@ mod tests {
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1464,6 +1471,7 @@ mod tests {
             ],
             edges: vec![make_edge("a", "out", "b", "in")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1496,6 +1504,7 @@ mod tests {
                 "Blocked after {iter} iterations on {node-id}",
             )],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1539,6 +1548,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1571,6 +1581,7 @@ mod tests {
                 make_edge("reviewer", "review", "implementer", "review"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1608,6 +1619,7 @@ mod tests {
                 make_edge("a", "out", "c", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1660,6 +1672,7 @@ mod tests {
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1723,6 +1736,7 @@ mod tests {
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1806,6 +1820,7 @@ mod tests {
                 make_edge("backlog", "note", "merge1", "branches"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -1913,6 +1928,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -1983,6 +1999,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -2065,6 +2082,7 @@ mod tests {
                 make_end_edge("classifier", "triage", "direct-done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -2153,6 +2171,7 @@ mod tests {
                 make_end_edge("merge1", "merged", "done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -2249,6 +2268,7 @@ mod tests {
             ],
             edges: vec![make_end_edge("reviewer", "review", "Run halted")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2337,6 +2357,7 @@ mod tests {
                 make_edge("sw", "default", "c-default", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2384,6 +2405,7 @@ mod tests {
                 make_edge("sw", "default", "c-default", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2429,6 +2451,7 @@ mod tests {
             ],
             edges: vec![make_edge("sw", "pass", "downstream", "in")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2486,6 +2509,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2563,6 +2587,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2622,6 +2647,7 @@ mod tests {
                 make_edge("sw", "default", "rework", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2675,6 +2701,7 @@ mod tests {
                 make_edge("sw", "default", "rework", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2740,6 +2767,7 @@ mod tests {
                 make_edge("sw", "second", "second-handler", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2798,6 +2826,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2857,6 +2886,7 @@ mod tests {
                 make_edge("sw", "pass", "downstream", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -2902,6 +2932,7 @@ mod tests {
                 make_edge("sw", "default", "default-handler", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3025,6 +3056,7 @@ mod tests {
                 make_edge("loop1", "body", "worker", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3050,6 +3082,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3088,6 +3121,7 @@ mod tests {
                 make_edge("sw", "pass", "loop1", "break"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3121,6 +3155,7 @@ mod tests {
                 make_edge("sw", "default", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3177,6 +3212,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3226,6 +3262,7 @@ mod tests {
                 make_edge("loop1", "done", "downstream", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3287,6 +3324,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3363,6 +3401,7 @@ mod tests {
                 make_edge("loop1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3412,6 +3451,7 @@ mod tests {
                 make_edge("reviewer", "review", "loop1", "break"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3459,6 +3499,7 @@ mod tests {
                 make_edge("loop1", "done", "downstream", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3540,6 +3581,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let state = empty_run_state();
@@ -3575,6 +3617,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let state = empty_run_state();
@@ -3605,6 +3648,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let mut state = empty_run_state();
@@ -3633,6 +3677,7 @@ mod tests {
             nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let state = empty_run_state();
@@ -3658,6 +3703,7 @@ mod tests {
                 make_edge("loop1", "body", "impl", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let mut state = empty_run_state();
@@ -3688,6 +3734,7 @@ mod tests {
                 make_edge("loop1", "body", "b", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let state = empty_run_state();
@@ -3783,6 +3830,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3834,6 +3882,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3900,6 +3949,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -3950,6 +4000,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4013,6 +4064,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4064,6 +4116,7 @@ mod tests {
             ],
             edges: vec![make_edge("fe1", "body", "worker", "in")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4127,6 +4180,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4189,6 +4243,7 @@ mod tests {
                 make_edge("fe1", "done", "end", "result"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4453,6 +4508,7 @@ edges:
                 max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
                 over: None,
             }],
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -4706,6 +4762,7 @@ edges:
                 make_end_edge("tester", "screens_fixed", "done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4890,6 +4947,7 @@ edges:
                 make_end_edge("impl", "code", "done"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -4979,6 +5037,7 @@ edges:
                 max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
                 over: None,
             }],
+            notes: Vec::new(),
             prompt_required: true,
         }
     }

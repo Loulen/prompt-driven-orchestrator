@@ -9,10 +9,12 @@ import type { TabHistory } from "../stores/editStore";
 
 describe("EditToolbar", () => {
   const onAddNode = vi.fn();
+  const onAddNote = vi.fn();
   const onLibraryDelete = vi.fn();
 
   beforeEach(() => {
     onAddNode.mockClear();
+    onAddNote.mockClear();
     onLibraryDelete.mockClear();
   });
 
@@ -21,6 +23,7 @@ describe("EditToolbar", () => {
       <TooltipProvider>
         <EditToolbar
           onAddNode={onAddNode}
+          onAddNote={onAddNote}
           libraryEntries={[]}
           onLibraryDelete={onLibraryDelete}
         />
@@ -41,10 +44,34 @@ describe("EditToolbar", () => {
     expect(screen.queryByTestId("toolbar-loop")).toBeNull();
   });
 
-  it("add button calls onAddNode with code-mutating", () => {
+  it("add button opens a Node|Note dropdown (#307)", async () => {
+    const user = userEvent.setup();
     renderToolbar();
-    fireEvent.click(screen.getByTestId("toolbar-add"));
+    // The `+` is now a dropdown trigger, not a direct add — clicking it opens
+    // the menu instead of immediately adding a node.
+    await user.click(screen.getByTestId("toolbar-add"));
+    expect(await screen.findByTestId("add-menu-node")).toBeInTheDocument();
+    expect(screen.getByTestId("add-menu-note")).toBeInTheDocument();
+    expect(onAddNode).not.toHaveBeenCalled();
+    expect(onAddNote).not.toHaveBeenCalled();
+  });
+
+  it("dropdown Node item calls onAddNode with code-mutating (#307)", async () => {
+    const user = userEvent.setup();
+    renderToolbar();
+    await user.click(screen.getByTestId("toolbar-add"));
+    await user.click(await screen.findByTestId("add-menu-node"));
     expect(onAddNode).toHaveBeenCalledWith("code-mutating");
+    expect(onAddNote).not.toHaveBeenCalled();
+  });
+
+  it("dropdown Note item calls onAddNote (#307)", async () => {
+    const user = userEvent.setup();
+    renderToolbar();
+    await user.click(screen.getByTestId("toolbar-add"));
+    await user.click(await screen.findByTestId("add-menu-note"));
+    expect(onAddNote).toHaveBeenCalledTimes(1);
+    expect(onAddNode).not.toHaveBeenCalled();
   });
 
   it("merge button calls onAddNode with merge", () => {
@@ -53,20 +80,19 @@ describe("EditToolbar", () => {
     expect(onAddNode).toHaveBeenCalledWith("merge");
   });
 
+  it("script button calls onAddNode with script (#248)", () => {
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("toolbar-script"));
+    expect(onAddNode).toHaveBeenCalledWith("script");
+  });
+
   it("tooltips render the correct text on hover", async () => {
     const user = userEvent.setup();
     renderToolbar();
 
-    await user.hover(screen.getByTestId("toolbar-add"));
-    await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("New node");
-    });
-
-    fireEvent.pointerDown(screen.getByTestId("toolbar-add"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
-    });
-
+    // #307: the `+` is now a dropdown trigger (no tooltip); the library/merge
+    // sibling buttons keep their tooltips.
     await user.hover(screen.getByTestId("toolbar-library"));
     await waitFor(() => {
       expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Library");
@@ -120,7 +146,7 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
   function renderToolbar() {
     return render(
       <TooltipProvider>
-        <EditToolbar onAddNode={onAddNode} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
+        <EditToolbar onAddNode={onAddNode} onAddNote={vi.fn()} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
       </TooltipProvider>,
     );
   }

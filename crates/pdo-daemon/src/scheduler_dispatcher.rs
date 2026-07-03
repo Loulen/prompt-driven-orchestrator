@@ -186,6 +186,7 @@ mod tests {
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 

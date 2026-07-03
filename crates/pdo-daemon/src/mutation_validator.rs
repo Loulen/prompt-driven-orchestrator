@@ -242,6 +242,7 @@ mod tests {
             nodes,
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -676,6 +677,40 @@ mod tests {
         let result = validate_run_mutation(&old, &new, &rs);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].node_id, "a");
+    }
+
+    #[test]
+    fn rejects_retyping_running_script_node() {
+        // #248 / ADR-0007(d): a live `script` node is immutable including its
+        // type — retyping it away (script → doc-only) mid-run would desync the
+        // live pipeline from the run snapshot exactly as for any other node.
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].node_id, "a");
+        assert!(
+            result[0].reason.contains("type") && result[0].reason.contains("running"),
+            "reason must explain the retype rejection; got: {}",
+            result[0].reason
+        );
+    }
+
+    #[test]
+    fn allows_retyping_pending_script_node() {
+        // A not-yet-spawned script node has no session/snapshot to desync — its
+        // type is freely editable before it runs.
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
+
+        let result = validate_run_mutation(&old, &new, &rs);
+        assert!(
+            result.is_empty(),
+            "retyping a pending script node is allowed; got: {result:?}"
+        );
     }
 
     #[test]

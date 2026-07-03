@@ -6,14 +6,33 @@ export function isLiveRun(status: RunStatus): boolean {
 }
 
 /**
- * Live NodeRun-session count, the configured global cap, and the daemon
- * version, for the bottom status bar (#159 / ADR-0012, #139). Manager
- * sessions are excluded. `version` is absent until the daemon has responded.
+ * How the daemon process was launched + whether it is installed as a
+ * persistent service (#156 / ADR-0019). Folded into `GET /sessions` (not a
+ * new route) and computed once at daemon boot.
+ */
+export interface ServiceHealth {
+  /** Best-effort env-marker hint: how THIS process was launched. */
+  supervisor: "systemd" | "launchd" | "none";
+  /**
+   * Will a daemon come back after reboot? `true` when an enabled unit is
+   * present, `false` when reachable-but-ephemeral (drives the status-bar
+   * `ephemeral` pill), `null` when unknown/unsupported (non-Linux, no systemd,
+   * detection failure). Never an error — the UI silences on `true`/`null`.
+   */
+  persistent: boolean | null;
+}
+
+/**
+ * Live NodeRun-session count, the configured global cap, the daemon version,
+ * and the persistent-service health, for the bottom status bar (#159 /
+ * ADR-0012, #139, #156). Manager sessions are excluded. `version` and
+ * `service` are absent until the daemon has responded.
  */
 export interface DaemonStatus {
   live: number;
   cap: number;
   version?: string;
+  service?: ServiceHealth;
 }
 
 /** Which tier won for an instance-config knob (#129, ADR-0015). */
@@ -52,7 +71,9 @@ export interface UpdateSettingsRequest {
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old
 // YAML into a region. `loop` was likewise removed in #171.
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge";
+// `script` (#248 / ADR-0017) runs author-written bash deterministically instead
+// of launching Claude; the FE union is not 1:1 with the backend enum.
+export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge" | "script";
 
 export interface RunListEntry {
   run_id: string;
@@ -431,6 +452,22 @@ export interface LoopRegion {
   over?: string | null;
 }
 
+/**
+ * An inert canvas note (#307 / ADR-0018): a documentation post-it laid on the
+ * canvas. It has no title, no port, no edge; it is never spawned and lives
+ * outside the DAG and the runtime. Clicking it opens the detail panel to edit
+ * its `content`. Like `view`/`waypoints`/`target_side` it is LAYOUT, not
+ * semantics: it travels in the pipeline file but is excluded from the semantic
+ * pipeline-diff (`comparablePipelineObject`), so the synced/diverged star does
+ * not move when a note is created/moved/edited/deleted. Note the `note` xyflow
+ * node `type` is a canvas concern only — it is NOT a PDO `NodeType`.
+ */
+export interface NoteDef {
+  id: string;
+  content: string;
+  view?: { x: number; y: number } | null;
+}
+
 export interface PipelineDef {
   name: string;
   version?: string | null;
@@ -439,6 +476,8 @@ export interface PipelineDef {
   edges: EdgeDef[];
   /** Named bounded loop regions (ADR-0011 / #148). Absent when there are none. */
   loops?: LoopRegion[];
+  /** Inert canvas notes (#307 / ADR-0018). Absent when there are none. */
+  notes?: NoteDef[];
   /**
    * Whether a manual Run must supply a non-empty prompt (#158). Defaults to
    * `true` (prompt mandatory) and is omitted from YAML in that case. When

@@ -2286,6 +2286,7 @@ edges:
                 make_edge("impl-b", "out", "reviewer", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
@@ -2313,6 +2314,7 @@ edges:
                 make_edge("merger", "merged", "downstream", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
@@ -2332,6 +2334,7 @@ edges:
             nodes: vec![make_cm_node("impl-a"), make_doc_node("reviewer")],
             edges: vec![make_edge("impl-a", "out", "reviewer", "in")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);
@@ -2354,6 +2357,7 @@ edges:
                 make_edge("plan-b", "out", "summary", "in"),
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let diags = lint_missing_merge(&pipeline);

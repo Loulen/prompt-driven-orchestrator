@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use pdo_daemon::{run_complete, run_daemon, run_fail, run_skip, Cli, Commands};
+use pdo_daemon::{run_complete, run_daemon, run_fail, run_service, run_skip, Cli, Commands};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -25,5 +25,7 @@ fn main() -> Result<()> {
         Commands::Complete => run_complete(),
         Commands::Fail { reason } => run_fail(reason),
         Commands::Skip { reason } => run_skip(reason),
+        // A blocking one-shot like Complete/Fail/Skip — no tokio runtime (#156).
+        Commands::Service { action } => run_service(action),
     }
 }

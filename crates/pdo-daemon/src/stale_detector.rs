@@ -338,7 +338,9 @@ mod tests {
     fn wrapped_anchor_still_matches() {
         // The anchor split by a newline + padding (as a narrow pane would wrap it)
         // must still match — proves the whitespace-collapse normalisation.
-        assert!(detect_usage_limit("stop and wait\n   for   limit\nto reset"));
+        assert!(detect_usage_limit(
+            "stop and wait\n   for   limit\nto reset"
+        ));
     }
 
     #[test]
@@ -589,10 +591,7 @@ mod tests {
 
         let payload = events[0].payload.as_ref().unwrap();
         // The original symptom is preserved …
-        assert!(payload["reason"]
-            .as_str()
-            .unwrap()
-            .contains("session_died"));
+        assert!(payload["reason"].as_str().unwrap().contains("session_died"));
         // … and the diagnostics sit alongside it.
         assert_eq!(
             payload["diagnostics"]["tmux_server_alive"],
@@ -660,10 +659,7 @@ SwapFree:         204800 kB
     #[test]
     fn count_correlated_deaths_zero_when_peers_alive() {
         let running = vec![("a".to_string(), 1), ("b".to_string(), 1)];
-        assert_eq!(
-            count_correlated_deaths(&running, ("a", 1), |_, _| false),
-            0
-        );
+        assert_eq!(count_correlated_deaths(&running, ("a", 1), |_, _| false), 0);
     }
 
     #[test]

@@ -2010,7 +2010,9 @@ mod tests {
 
             let copy_id = pipelines::duplicate(repo, &id).unwrap();
             let lib_dir = pipelines::user_pipelines_dir().unwrap();
-            let copy_prompt = lib_dir.join(format!("{copy_id}.prompts")).join("planner.md");
+            let copy_prompt = lib_dir
+                .join(format!("{copy_id}.prompts"))
+                .join("planner.md");
             assert_eq!(
                 std::fs::read_to_string(&copy_prompt).unwrap(),
                 "You plan things."

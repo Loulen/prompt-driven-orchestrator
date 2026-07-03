@@ -819,7 +819,10 @@ mod tests {
             serde_yaml::Value::Number(serde_yaml::Number::from(3)),
         );
         vars.insert("enabled".into(), serde_yaml::Value::Bool(true));
-        vars.insert("plain".into(), serde_yaml::Value::String("hello world".into()));
+        vars.insert(
+            "plain".into(),
+            serde_yaml::Value::String("hello world".into()),
+        );
         let ctx = sample_ctx(&pipeline, node, &vars);
 
         let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
@@ -827,7 +830,10 @@ mod tests {
         assert_eq!(env.get("PDO_VAR_PORT").map(String::as_str), Some("8080"));
         assert_eq!(env.get("PDO_VAR_COUNT").map(String::as_str), Some("3"));
         assert_eq!(env.get("PDO_VAR_ENABLED").map(String::as_str), Some("true"));
-        assert_eq!(env.get("PDO_VAR_PLAIN").map(String::as_str), Some("hello world"));
+        assert_eq!(
+            env.get("PDO_VAR_PLAIN").map(String::as_str),
+            Some("hello world")
+        );
     }
 
     #[test]
@@ -864,7 +870,10 @@ mod tests {
         let ctx = sample_ctx(&pipeline, node, &vars);
 
         let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
-        assert_eq!(env.get("PDO_INPUT_LAPS_REPEATED").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get("PDO_INPUT_LAPS_REPEATED").map(String::as_str),
+            Some("1")
+        );
         assert!(
             env.get("PDO_INPUT_LAPS")
                 .map(|v| v.contains("iter-*"))
@@ -1470,8 +1479,11 @@ mod tests {
 
     #[test]
     fn manager_preamble_derive_from_input_keeps_existing_instruction() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::DeriveFromInput);
+        let preamble = build_manager_preamble(
+            "run-1",
+            "http://localhost:5172",
+            RunNameHint::DeriveFromInput,
+        );
         assert!(preamble.contains("No display name was provided"));
         assert!(preamble.contains("rename_run"));
     }

@@ -87,8 +87,7 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
         // here is the *current* pipeline (post-modification), not the run's
         // frozen snapshot — that is why this site derives ids from
         // `pipeline.nodes` rather than [`expected_completion_node_ids`].
-        let pipeline_node_ids: Vec<String> =
-            pipeline.nodes.iter().map(|n| n.id.clone()).collect();
+        let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
         maybe_complete_run(state, run_id, &pipeline_node_ids, &run_state, false).await;
         return;
     }
@@ -185,8 +184,7 @@ pub(crate) fn should_complete_run(
     complete_when_awaiting_user: bool,
 ) -> bool {
     let status_permits = run_state.status == event_log::RunStatus::Running
-        || (complete_when_awaiting_user
-            && run_state.status == event_log::RunStatus::AwaitingUser);
+        || (complete_when_awaiting_user && run_state.status == event_log::RunStatus::AwaitingUser);
     status_permits && run_state.all_nodes_completed(expected_node_ids)
 }
 
@@ -339,7 +337,15 @@ pub(crate) async fn complete_node(
         return CompletionOutcome::Halted;
     }
     let expected = expected_completion_node_ids(&run_state);
-    if maybe_complete_run(state, run_id, &expected, &run_state, complete_when_awaiting_user).await {
+    if maybe_complete_run(
+        state,
+        run_id,
+        &expected,
+        &run_state,
+        complete_when_awaiting_user,
+    )
+    .await
+    {
         CompletionOutcome::RunCompleted
     } else {
         CompletionOutcome::StillRunning

@@ -91,7 +91,11 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     let run = |args: &[&str]| -> anyhow::Result<()> {
         let out = Command::new("git").args(args).current_dir(repo).output()?;
         if !out.status.success() {
-            anyhow::bail!("git {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+            anyhow::bail!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         Ok(())
     };
@@ -106,7 +110,11 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// Seed the pipeline YAML + the script node's bash body (into its prompt slot).
-fn seed_with(yaml: &str, name: &str, body: &str) -> impl FnOnce(&std::path::Path) -> anyhow::Result<()> {
+fn seed_with(
+    yaml: &str,
+    name: &str,
+    body: &str,
+) -> impl FnOnce(&std::path::Path) -> anyhow::Result<()> {
     let yaml = yaml.to_string();
     let name = name.to_string();
     let body = body.to_string();
@@ -197,7 +205,10 @@ async fn script_node_completes_on_exit_zero() {
         .join(NODE_ID)
         .join("iter-1/out/output.md");
     let content = std::fs::read_to_string(&out).expect("output.md should exist");
-    assert!(content.contains("hello from a script node"), "output bytes: {content}");
+    assert!(
+        content.contains("hello from a script node"),
+        "output bytes: {content}"
+    );
 
     // The side effect landed in the run's shared worktree.
     let sentinel = daemon
@@ -205,7 +216,10 @@ async fn script_node_completes_on_exit_zero() {
         .join(".pdo/runs")
         .join(&run_id)
         .join("worktree/SENTINEL_SCRIPT");
-    assert!(sentinel.exists(), "sentinel side-effect should exist at {sentinel:?}");
+    assert!(
+        sentinel.exists(),
+        "sentinel side-effect should exist at {sentinel:?}"
+    );
 }
 
 #[tokio::test]
@@ -224,8 +238,13 @@ async fn script_node_fails_on_nonzero_exit() {
         run["nodes"][NODE_ID]["status"], "failed",
         "a non-zero exit must fail the node; run was: {run}"
     );
-    let reason = run["nodes"][NODE_ID]["failure_reason"].as_str().unwrap_or("");
-    assert!(reason.contains("exited 7"), "reason should name the exit code; got: {reason}");
+    let reason = run["nodes"][NODE_ID]["failure_reason"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        reason.contains("exited 7"),
+        "reason should name the exit code; got: {reason}"
+    );
 }
 
 #[tokio::test]
@@ -242,8 +261,13 @@ async fn script_node_timeout_exit_code_fails_with_timeout_reason() {
     let run_id = start_run(&daemon, PIPELINE_NAME).await;
     let run = wait_for_node_status(&daemon, &run_id, NODE_ID, "failed").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "failed", "run was: {run}");
-    let reason = run["nodes"][NODE_ID]["failure_reason"].as_str().unwrap_or("");
-    assert!(reason.contains("timed out"), "reason should say timed out; got: {reason}");
+    let reason = run["nodes"][NODE_ID]["failure_reason"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        reason.contains("timed out"),
+        "reason should say timed out; got: {reason}"
+    );
 }
 
 #[tokio::test]
@@ -267,7 +291,10 @@ async fn script_node_with_no_output_completes() {
         .join(".pdo/runs")
         .join(&run_id)
         .join("worktree/PING_SENTINEL");
-    assert!(sentinel.exists(), "side effect should have run at {sentinel:?}");
+    assert!(
+        sentinel.exists(),
+        "side effect should have run at {sentinel:?}"
+    );
 }
 
 #[tokio::test]
@@ -286,7 +313,11 @@ async fn empty_script_body_refuses_launch() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "empty script body must refuse the launch");
+    assert_eq!(
+        resp.status(),
+        400,
+        "empty script body must refuse the launch"
+    );
     let err = resp.json::<serde_json::Value>().await.unwrap();
     assert!(
         err["error"].as_str().unwrap_or("").contains("empty body"),

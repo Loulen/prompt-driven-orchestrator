@@ -707,7 +707,10 @@ mod tests {
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
-        assert!(result.is_empty(), "retyping a pending script node is allowed; got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "retyping a pending script node is allowed; got: {result:?}"
+        );
     }
 
     #[test]

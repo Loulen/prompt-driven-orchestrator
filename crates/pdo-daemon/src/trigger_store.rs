@@ -159,10 +159,11 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     // guard keeps it idempotent (a bare `ALTER … ADD COLUMN` errors "duplicate
     // column name" on an already-migrated DB), and is preferred over swallowing
     // the ALTER error blindly — a swallowed error would hide genuine failures.
-    let has_col = sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'")
-        .fetch_optional(db)
-        .await?
-        .is_some();
+    let has_col =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
     if !has_col {
         sqlx::query("ALTER TABLE triggers ADD COLUMN max_concurrent INTEGER")
             .execute(db)
@@ -175,8 +176,14 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     // a no-op there, so the columns must be added out-of-band or runtime
     // INSERT/SELECT would fail. Each guard keeps the ALTER idempotent.
     for (col, ddl) in [
-        ("guard_stdout", "ALTER TABLE trigger_fires ADD COLUMN guard_stdout TEXT"),
-        ("guard_stderr", "ALTER TABLE trigger_fires ADD COLUMN guard_stderr TEXT"),
+        (
+            "guard_stdout",
+            "ALTER TABLE trigger_fires ADD COLUMN guard_stdout TEXT",
+        ),
+        (
+            "guard_stderr",
+            "ALTER TABLE trigger_fires ADD COLUMN guard_stderr TEXT",
+        ),
         (
             "guard_exit_code",
             "ALTER TABLE trigger_fires ADD COLUMN guard_exit_code INTEGER",
@@ -860,7 +867,9 @@ mod tests {
         // #230: a Trigger must be movable to a different pipeline. Both the id and
         // the denormalised display name update together; unrelated fields survive.
         let db = test_db().await;
-        let t = create(&db, sample("repointable", "0 9 * * *")).await.unwrap();
+        let t = create(&db, sample("repointable", "0 9 * * *"))
+            .await
+            .unwrap();
         assert_eq!(t.pipeline_id, "lib-pipe-1");
         assert_eq!(t.pipeline_name, "Auditor");
 
@@ -935,12 +944,14 @@ mod tests {
         );
 
         // The default (unbounded) round-trips as NULL.
-        let unbounded = create(&db, sample("unbounded", "0 9 * * *"))
-            .await
-            .unwrap();
+        let unbounded = create(&db, sample("unbounded", "0 9 * * *")).await.unwrap();
         assert_eq!(unbounded.max_concurrent, None);
         assert_eq!(
-            get(&db, &unbounded.id).await.unwrap().unwrap().max_concurrent,
+            get(&db, &unbounded.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .max_concurrent,
             None
         );
     }
@@ -1052,7 +1063,10 @@ mod tests {
         .fetch_optional(&db)
         .await
         .unwrap();
-        assert!(before.is_none(), "precondition: legacy table lacks the column");
+        assert!(
+            before.is_none(),
+            "precondition: legacy table lacks the column"
+        );
 
         // init migrates it additively.
         init(&db).await.unwrap();
@@ -1072,7 +1086,11 @@ mod tests {
         // A second init is a no-op (the PRAGMA guard prevents a duplicate-column ALTER).
         init(&db).await.unwrap();
         assert_eq!(
-            get(&db, "trg-legacy").await.unwrap().unwrap().max_concurrent,
+            get(&db, "trg-legacy")
+                .await
+                .unwrap()
+                .unwrap()
+                .max_concurrent,
             None
         );
     }

@@ -273,7 +273,11 @@ async fn bounded_allow_fires_up_to_cap_then_skips() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let resp = create_trigger_with_overlap(&daemon, "bounded", "* * * * *", "allow", Some(2)).await;
-    assert_eq!(resp.status(), 201, "POST /triggers (bounded allow) should succeed");
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers (bounded allow) should succeed"
+    );
     let trigger: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
         trigger["max_concurrent"].as_i64(),
@@ -787,7 +791,11 @@ async fn patch_rejects_zero_max_concurrent() {
         serde_json::json!({ "max_concurrent": 0 }),
     )
     .await;
-    assert_eq!(resp.status(), 400, "patching max_concurrent=0 must be rejected");
+    assert_eq!(
+        resp.status(),
+        400,
+        "patching max_concurrent=0 must be rejected"
+    );
     let err: serde_json::Value = resp.json().await.unwrap();
     assert!(err["error"].as_str().unwrap().contains("max_concurrent"));
 }

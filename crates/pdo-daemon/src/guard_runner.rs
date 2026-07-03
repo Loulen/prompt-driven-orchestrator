@@ -330,7 +330,7 @@ mod tests {
         // valid UTF-8; we snap forward, so the cap is the *upper* bound.
         let s = "é".repeat(100); // each 'é' is 2 bytes → 200 bytes
         let capped = cap_tail(&s, 51); // 51 lands mid-codepoint
-        // Snapping forward drops the straddling byte, so ≤ 51 bytes of payload.
+                                       // Snapping forward drops the straddling byte, so ≤ 51 bytes of payload.
         assert!(capped.starts_with(TRUNCATION_MARKER));
         let payload = &capped[TRUNCATION_MARKER.len()..];
         assert!(payload.chars().all(|c| c == 'é'));

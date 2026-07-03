@@ -164,7 +164,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         };
     }
 
-    let spawn_prompt: &str = if is_script { &role_prompt } else { &full_prompt };
+    let spawn_prompt: &str = if is_script {
+        &role_prompt
+    } else {
+        &full_prompt
+    };
     let script_env = if is_script {
         crate::prompt_augmenter::precreate_output_dirs(&aug_ctx);
         crate::prompt_augmenter::build_script_env(&aug_ctx)

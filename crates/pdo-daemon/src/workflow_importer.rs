@@ -770,7 +770,12 @@ impl Importer {
             // Each sibling is entered from the same upstream sources (fan-out).
             let mut branch_cursor = entry_sources.clone();
             let id = self.emit_agent(a, &mut branch_cursor);
-            if self.nodes.last().map(|n| n.node_type == NodeType::CodeMutating) == Some(true) {
+            if self
+                .nodes
+                .last()
+                .map(|n| n.node_type == NodeType::CodeMutating)
+                == Some(true)
+            {
                 any_mutating = true;
             }
             new_cursor.push(Pending {
@@ -966,7 +971,8 @@ fn extract_meta_name(stmts: &[Statement]) -> Option<String> {
             }
             if let Some(init) = &d.init {
                 if let Expression::ObjectExpression(obj) = init.without_parentheses() {
-                    if let Some(name) = object_prop_obj(obj, "name").and_then(string_literal_value) {
+                    if let Some(name) = object_prop_obj(obj, "name").and_then(string_literal_value)
+                    {
                         if !name.trim().is_empty() {
                             return Some(name);
                         }
@@ -1423,10 +1429,11 @@ fn stmt_has_agent(stmt: &Statement, depth: u32) -> bool {
     }
     match stmt {
         Statement::ExpressionStatement(es) => expr_has_agent(&es.expression, depth + 1),
-        Statement::VariableDeclaration(d) => d
-            .declarations
-            .iter()
-            .any(|dc| dc.init.as_ref().is_some_and(|e| expr_has_agent(e, depth + 1))),
+        Statement::VariableDeclaration(d) => d.declarations.iter().any(|dc| {
+            dc.init
+                .as_ref()
+                .is_some_and(|e| expr_has_agent(e, depth + 1))
+        }),
         Statement::BlockStatement(b) => b.body.iter().any(|s| stmt_has_agent(s, depth + 1)),
         Statement::IfStatement(i) => {
             stmt_has_agent(&i.consequent, depth + 1)
@@ -1452,8 +1459,7 @@ fn stmt_has_agent(stmt: &Statement, depth: u32) -> bool {
 }
 
 fn if_has_agent(i: &oxc_ast::ast::IfStatement) -> bool {
-    stmt_has_agent(&i.consequent, 0)
-        || i.alternate.as_ref().is_some_and(|a| stmt_has_agent(a, 0))
+    stmt_has_agent(&i.consequent, 0) || i.alternate.as_ref().is_some_and(|a| stmt_has_agent(a, 0))
 }
 
 fn expr_has_agent(expr: &Expression, depth: u32) -> bool {
@@ -1539,7 +1545,9 @@ fn collect_agents_in_stmt<'a>(
         return;
     }
     match stmt {
-        Statement::ExpressionStatement(es) => collect_agents_in_expr(&es.expression, out, depth + 1),
+        Statement::ExpressionStatement(es) => {
+            collect_agents_in_expr(&es.expression, out, depth + 1)
+        }
         Statement::ReturnStatement(r) => {
             if let Some(e) = &r.argument {
                 collect_agents_in_expr(e, out, depth + 1);
@@ -1718,7 +1726,12 @@ mod tests {
         );
         assert_eq!(region.members.len(), 2, "fix + test are the loop body");
         // Members are the implementer + tester node ids.
-        let impl_id = &parsed.nodes.iter().find(|n| n.name == "implementer").unwrap().id;
+        let impl_id = &parsed
+            .nodes
+            .iter()
+            .find(|n| n.name == "implementer")
+            .unwrap()
+            .id;
         let test_id = &parsed.nodes.iter().find(|n| n.name == "tester").unwrap().id;
         assert!(region.members.contains(impl_id));
         assert!(region.members.contains(test_id));
@@ -1846,7 +1859,9 @@ mod tests {
         let (_result, parsed) = import_and_parse(src, "t");
         let whens = when_strings(&parsed);
         assert!(
-            whens.iter().any(|w| w.contains("verdict") && w.contains("eq") && w.contains("Bug")),
+            whens
+                .iter()
+                .any(|w| w.contains("verdict") && w.contains("eq") && w.contains("Bug")),
             "if (r.verdict === 'Bug') -> when {{ verdict: {{ eq: Bug }} }}, got {whens:?}"
         );
     }
@@ -1857,7 +1872,9 @@ mod tests {
         let (_result, parsed) = import_and_parse(src, "t");
         let whens = when_strings(&parsed);
         assert!(
-            whens.iter().any(|w| w.contains("status") && w.contains("done")),
+            whens
+                .iter()
+                .any(|w| w.contains("status") && w.contains("done")),
             "if (status === 'done') -> when {{ status: {{ eq: done }} }}, got {whens:?}"
         );
     }
@@ -1929,8 +1946,7 @@ mod tests {
         let result = import_workflow_js(src, "sandcastle-tdd")
             .expect("even a mostly-placeholder workflow must import without crashing");
         // It must produce a parseable draft…
-        pipeline::parse_pipeline(&result.yaml_text)
-            .expect("degraded import must still parse");
+        pipeline::parse_pipeline(&result.yaml_text).expect("degraded import must still parse");
         // …and flag the lossy translation (helper-nu prompts, nested loops, etc.).
         assert!(
             !result.warnings.is_empty(),

@@ -286,7 +286,9 @@ async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
     let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
 
     // The edit landed in the canonical template prompts dir...
-    let canonical = pipelines.join(format!("{PIPELINE_NAME}.prompts")).join("planner.md");
+    let canonical = pipelines
+        .join(format!("{PIPELINE_NAME}.prompts"))
+        .join("planner.md");
     assert_eq!(
         std::fs::read_to_string(&canonical).unwrap(),
         EDITED,

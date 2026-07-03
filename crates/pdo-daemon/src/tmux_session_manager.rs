@@ -756,7 +756,10 @@ mod tests {
             None,
             SessionTail::Agent { model: None },
         );
-        assert!(!script.contains("--model"), "no model flag when unset: {script}");
+        assert!(
+            !script.contains("--model"),
+            "no model flag when unset: {script}"
+        );
         // The exact legacy tail, single space before the cat substitution.
         assert!(
             script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
@@ -781,7 +784,9 @@ mod tests {
             5172,
             prompt_path,
             None,
-            SessionTail::Agent { model: Some("opus") },
+            SessionTail::Agent {
+                model: Some("opus"),
+            },
         );
         assert!(script.contains("--model"), "model flag present: {script}");
         assert!(
@@ -795,7 +800,10 @@ mod tests {
         );
         let model_at = script.find("--model").unwrap();
         let cat_at = script.find("$(cat").unwrap();
-        assert!(model_at < cat_at, "model flag must precede the prompt cat: {script}");
+        assert!(
+            model_at < cat_at,
+            "model flag must precede the prompt cat: {script}"
+        );
     }
 
     #[test]
@@ -817,12 +825,30 @@ mod tests {
             },
         );
         assert!(script.starts_with("exec bash -c "));
-        assert!(!script.contains("claude"), "script node launches no claude: {script}");
-        assert!(script.contains("timeout 42s bash"), "runs body under timeout: {script}");
-        assert!(script.contains("pdo complete"), "completes on success: {script}");
-        assert!(script.contains("pdo fail --reason"), "fails otherwise: {script}");
-        assert!(script.contains("script exited $ec"), "reports the exit code: {script}");
-        assert!(script.contains("script timed out after 42s"), "reports timeout: {script}");
+        assert!(
+            !script.contains("claude"),
+            "script node launches no claude: {script}"
+        );
+        assert!(
+            script.contains("timeout 42s bash"),
+            "runs body under timeout: {script}"
+        );
+        assert!(
+            script.contains("pdo complete"),
+            "completes on success: {script}"
+        );
+        assert!(
+            script.contains("pdo fail --reason"),
+            "fails otherwise: {script}"
+        );
+        assert!(
+            script.contains("script exited $ec"),
+            "reports the exit code: {script}"
+        );
+        assert!(
+            script.contains("script timed out after 42s"),
+            "reports timeout: {script}"
+        );
         // Base env is still exported.
         assert!(script.contains("PDO_RUN_ID"));
         assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
@@ -846,8 +872,14 @@ mod tests {
                 env: &[],
             },
         );
-        assert!(!script.contains("sleep 99"), "override ignored for scripts: {script}");
-        assert!(script.contains("timeout 60s bash"), "script tail preserved: {script}");
+        assert!(
+            !script.contains("sleep 99"),
+            "override ignored for scripts: {script}"
+        );
+        assert!(
+            script.contains("timeout 60s bash"),
+            "script tail preserved: {script}"
+        );
     }
 
     #[test]
@@ -857,8 +889,14 @@ mod tests {
         // agents preserved: they pass an empty env).
         let prompt_path = Path::new("/tmp/body.md");
         let env = vec![
-            ("PDO_INPUT_TASK".to_string(), "/art/_input/output.md".to_string()),
-            ("PDO_OUTPUT_OUT".to_string(), "/art/solo/iter-1/out/output.md".to_string()),
+            (
+                "PDO_INPUT_TASK".to_string(),
+                "/art/_input/output.md".to_string(),
+            ),
+            (
+                "PDO_OUTPUT_OUT".to_string(),
+                "/art/solo/iter-1/out/output.md".to_string(),
+            ),
         ];
         let script = build_tmux_script(
             "run-abc",
@@ -872,12 +910,21 @@ mod tests {
                 env: &env,
             },
         );
-        assert!(script.contains("export PDO_INPUT_TASK="), "input env exported: {script}");
-        assert!(script.contains("export PDO_OUTPUT_OUT="), "output env exported: {script}");
+        assert!(
+            script.contains("export PDO_INPUT_TASK="),
+            "input env exported: {script}"
+        );
+        assert!(
+            script.contains("export PDO_OUTPUT_OUT="),
+            "output env exported: {script}"
+        );
         // The env exports precede the body invocation.
         let env_at = script.find("PDO_OUTPUT_OUT").unwrap();
         let body_at = script.find("timeout 60s bash").unwrap();
-        assert!(env_at < body_at, "env must be exported before the body runs: {script}");
+        assert!(
+            env_at < body_at,
+            "env must be exported before the body runs: {script}"
+        );
     }
 
     #[test]

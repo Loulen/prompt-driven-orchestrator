@@ -235,7 +235,10 @@ WantedBy=default.target
             "/x:/opt/node/bin:/usr/bin",
         );
         // KillMode=process — keeps the child tmux server alive across restart (#234).
-        assert!(unit.contains("KillMode=process"), "missing KillMode=process");
+        assert!(
+            unit.contains("KillMode=process"),
+            "missing KillMode=process"
+        );
         // ExecStart points at THIS binary + the `daemon` subcommand.
         assert!(unit.contains("ExecStart=/x/pdo daemon"));
         // WorkingDirectory — daemon derives repo_root from cwd.

@@ -8,7 +8,8 @@ import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
-import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
+import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
+import { isLiveRun } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
@@ -257,10 +258,31 @@ export default function App() {
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
     useInspectorTab(editActiveTabId, isEditingRun);
 
-  const runNode =
-    selection.kind === "node" && selection.id && selectedRun
-      ? selectedRun.nodes[selection.id] ?? null
-      : null;
+  // The Run-pane node. A node present in the pipeline (canvas) but absent from the
+  // run's node map is genuinely pending: the event-sourced projection only lists a
+  // node once it has been scheduled (NodeStarted / NodeWaiting / …), so a
+  // not-yet-reached downstream node has no entry. On a live run, synthesize a
+  // pending NodeState so the inspector renders NodeDetailPanel (with its force-start
+  // Start button, #204) instead of the passive RunTabPlaceholder — the daemon's
+  // force_spawn_node already accepts a node absent from run state. Terminal runs and
+  // start/end pseudo-nodes stay null.
+  const runNode: NodeState | null = (() => {
+    if (selection.kind !== "node" || !selection.id || !selectedRun) return null;
+    const existing = selectedRun.nodes[selection.id];
+    if (existing) return existing;
+    if (!isLiveRun(selectedRun.status)) return null;
+    const def = selectedRun.node_defs?.find((d) => d.id === selection.id);
+    if (!def || def.node_type === "start" || def.node_type === "end") return null;
+    return {
+      node_id: selection.id,
+      status: "pending",
+      iter: 0,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+    };
+  })();
 
   // Both inspector panes are always rendered (with the inactive one hidden
   // via the `hidden` attribute) so that switching tabs does not unmount the

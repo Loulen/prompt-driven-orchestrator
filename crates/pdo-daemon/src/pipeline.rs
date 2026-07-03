@@ -2209,7 +2209,11 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert_eq!(node.node_type, NodeType::Script, "must not degrade to doc-only");
+        assert_eq!(
+            node.node_type,
+            NodeType::Script,
+            "must not degrade to doc-only"
+        );
         assert!(
             !result
                 .diagnostics

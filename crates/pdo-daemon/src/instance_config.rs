@@ -132,7 +132,10 @@ pub async fn update(
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
-    let sql = format!("UPDATE instance_config SET {} WHERE id = 1", sets.join(", "));
+    let sql = format!(
+        "UPDATE instance_config SET {} WHERE id = 1",
+        sets.join(", ")
+    );
     let mut query = sqlx::query(&sql);
     if let Some(v) = edit.session_cap {
         query = query.bind(v);

@@ -107,6 +107,10 @@ main() {
   else
     err "Installation verification failed — pdo binary did not run"
   fi
+
+  printf '\n'
+  info "Next" "run \`pdo daemon\` to start, then open http://localhost:5172"
+  info "Tip" "for unattended Triggers (start at boot, survive logout), run \`pdo service install\`"
 }
 
 main

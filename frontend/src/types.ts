@@ -6,14 +6,33 @@ export function isLiveRun(status: RunStatus): boolean {
 }
 
 /**
- * Live NodeRun-session count, the configured global cap, and the daemon
- * version, for the bottom status bar (#159 / ADR-0012, #139). Manager
- * sessions are excluded. `version` is absent until the daemon has responded.
+ * How the daemon process was launched + whether it is installed as a
+ * persistent service (#156 / ADR-0019). Folded into `GET /sessions` (not a
+ * new route) and computed once at daemon boot.
+ */
+export interface ServiceHealth {
+  /** Best-effort env-marker hint: how THIS process was launched. */
+  supervisor: "systemd" | "launchd" | "none";
+  /**
+   * Will a daemon come back after reboot? `true` when an enabled unit is
+   * present, `false` when reachable-but-ephemeral (drives the status-bar
+   * `ephemeral` pill), `null` when unknown/unsupported (non-Linux, no systemd,
+   * detection failure). Never an error — the UI silences on `true`/`null`.
+   */
+  persistent: boolean | null;
+}
+
+/**
+ * Live NodeRun-session count, the configured global cap, the daemon version,
+ * and the persistent-service health, for the bottom status bar (#159 /
+ * ADR-0012, #139, #156). Manager sessions are excluded. `version` and
+ * `service` are absent until the daemon has responded.
  */
 export interface DaemonStatus {
   live: number;
   cap: number;
   version?: string;
+  service?: ServiceHealth;
 }
 
 /** Which tier won for an instance-config knob (#129, ADR-0015). */

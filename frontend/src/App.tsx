@@ -8,7 +8,8 @@ import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
-import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
+import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
+import { isLiveRun } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
@@ -458,10 +459,32 @@ export default function App() {
     await reloadFromLibrary(tabId, libraryYaml);
   }, [pipelineChangedPrompt, reloadFromLibrary]);
 
-  const selectedNode =
-    selectedNodeId && selectedRun
-      ? selectedRun.nodes[selectedNodeId] ?? null
-      : null;
+  // A node present in the pipeline (canvas) but absent from the run's node map is
+  // genuinely pending: the event-sourced projection only lists a node once it has
+  // been scheduled (NodeStarted / NodeWaiting / …), so a not-yet-reached
+  // downstream node has no entry. On a live run, synthesize a pending NodeState so
+  // the inspector renders its controls — notably the force-start Start button
+  // (#204), whose purpose is to launch such a pending node out of dependency order
+  // (the daemon's force_spawn_node already accepts a node absent from run state).
+  // Terminal runs stay null: no Start on a finished run, and the "Run archived"
+  // fallback below is preserved.
+  const selectedNode: NodeState | null = (() => {
+    if (!selectedNodeId || !selectedRun) return null;
+    const existing = selectedRun.nodes[selectedNodeId];
+    if (existing) return existing;
+    if (!isLiveRun(selectedRun.status)) return null;
+    const def = selectedRun.node_defs?.find((d) => d.id === selectedNodeId);
+    if (!def || def.node_type === "start" || def.node_type === "end") return null;
+    return {
+      node_id: selectedNodeId,
+      status: "pending",
+      iter: 0,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+    };
+  })();
 
   const selectedNodeType = selectedRun?.node_defs?.find(
     (d) => d.id === selectedNodeId,

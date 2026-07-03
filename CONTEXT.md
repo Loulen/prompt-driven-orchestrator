@@ -175,6 +175,19 @@ Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur 
 
 ---
 
+## Note (note de canvas)
+
+Une **Note** est une annotation de documentation **inerte** posée sur le canvas : un texte libre que le designer épingle près d'un groupe de nœuds pour expliquer une intention (« ce loop est borné à 3 exprès », « TODO câbler l'edge d'épuisement »). Elle **n'est pas un Node** — aucun titre/`name`, aucun type (`doc-only`/`code-mutating`/`merge`/`script`), aucun port, aucune edge, aucune session, aucune place dans le dataflow ni l'ordonnancement : le runtime l'**ignore entièrement**.
+
+- **Persistée dans un bloc racine `notes:`** du YAML (sibling de `loops:`/`edges:`, jamais dans `nodes:`), chaque entrée = `{ id, content, view }`. C'est la forme éprouvée de `loops:` — une entité nommée de premier niveau, rendue sur le canvas, qui n'est délibérément **pas** un type de nœud (cf. ADR-0018).
+- **`content` = texte brut en v1** — pas de markdown, pour ne pas ouvrir une 2ᵉ surface `react-markdown` ni le sink `dangerouslySetInnerHTML` d'ADR-0013. Édité dans l'inspecteur (clic sur la note), pas inline sur la carte.
+- **`view` = layout, pas sémantique** — même classe que `view`/`mode`/`waypoints`/`target_side` : persiste **dans le fichier** (une note partagée suit le workflow) mais est **exclu du diff sémantique** ; deux pipelines ne différant que par leurs notes comparent **égaux** (le star « synced/diverged » ne bouge pas). La puce « non sauvegardé » (dirty), elle, s'allume — normal. Taille pilotée par le contenu en v1 ; redimensionnement différé.
+- **Mutable pendant un Run** : inerte, aucune session à orphaner — `mutation_validator` ne doit jamais rejeter l'ajout/édition/suppression d'une note sur un Run actif (contraste avec la suppression d'un node non-`pending`, interdite par ADR-0007).
+
+_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou un commentaire d'issue GitHub), et « placeholder annoté » (qui est, lui, un **vrai** nœud `doc-only` produit par l'import de workflow, ADR-0016).
+
+---
+
 ## Blackboard
 
 Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipeline Run. Toutes les sorties documentaires de tous les NodeRuns y sont persistées et adressées par chemin.

@@ -14549,6 +14549,83 @@ mod tests {
         );
     }
 
+    // #241 (regression lock) — unchecking « Prompt required » on a library
+    // template (`scope=library`) must survive the save→read round-trip:
+    // `prompt_required: false` is written verbatim to the library store, the
+    // scoped GET reports `false`, and no `unknown field 'prompt_required'`
+    // diagnostic fires. The bug was fixed by #216 (the scope=library save path);
+    // this test guards against a silent regression on that surface.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn save_pipeline_scope_library_preserves_prompt_required_false() {
+        let fake_home = FakeHome::new();
+        // Seeded WITHOUT the flag => defaults to `prompt_required: true`, so
+        // saving `false` below is a genuine state transition (non-vacuous).
+        write_test_pipeline(fake_home.path(), "shared");
+        library_store::pipelines::promote(fake_home.path(), "shared").unwrap();
+
+        let state = test_state_with_dir(fake_home.path()).await;
+
+        // Save the library template with the flag turned OFF (the "uncheck" edit).
+        let edited = format!(
+            "name: shared\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}"
+        );
+        let app = build_router(Arc::clone(&state));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/shared?scope=library")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "yaml": edited, "prompts": {} }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // On-disk library YAML keeps the flag verbatim.
+        let lib_yaml = library_store::pipelines::get_yaml(fake_home.path(), "shared").unwrap();
+        assert!(
+            lib_yaml.contains("prompt_required: false"),
+            "library YAML must persist prompt_required: false, got: {lib_yaml}"
+        );
+
+        // Read-back via scope=library exposes `false`, verbatim yaml, no diagnostic.
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/shared?scope=library")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["pipeline"]["prompt_required"], false);
+        assert!(
+            val["yaml"]
+                .as_str()
+                .unwrap()
+                .contains("prompt_required: false"),
+            "scoped GET yaml must expose prompt_required: false"
+        );
+        let diags = val["diagnostics"].as_array().unwrap();
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.as_str().unwrap_or("").contains("prompt_required")),
+            "no unknown-field diagnostic for prompt_required (cf. #183/#241): {diags:?}"
+        );
+    }
+
     // #216 (defense in depth) — an explicit `scope=user` delete resolves
     // strictly to the user store and never falls through to a same-named repo
     // pipeline (repo_root and HOME are kept distinct here so the two stores have

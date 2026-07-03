@@ -289,6 +289,28 @@ export function buildLoopRegionNodes(
     }));
 }
 
+/**
+ * Builds the xyflow `note` nodes for every inert canvas note (#307 / ADR-0018).
+ * A note is draggable and selectable but NOT connectable — it renders no handle,
+ * so no edge can ever attach. Missing `view` falls back to a default spot, like
+ * a node with no persisted position. Notes are a canvas concept, never part of
+ * `pipeline.nodes`; they carry no run status and never colour.
+ */
+export function buildNoteNodes(pipeline: PipelineDef): Node[] {
+  return (pipeline.notes ?? []).map((note, i) => ({
+    id: note.id,
+    type: "note",
+    position: {
+      x: note.view?.x ?? 240,
+      y: note.view?.y ?? 80 + i * 120,
+    },
+    data: { noteId: note.id, content: note.content },
+    draggable: true,
+    selectable: true,
+    connectable: false,
+  }));
+}
+
 const OP_SYMBOLS: Record<string, string> = {
   eq: "=",
   neq: "!=",

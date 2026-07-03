@@ -128,6 +128,92 @@ describe("addNode", () => {
   });
 });
 
+describe("note reducers (#307 / ADR-0018)", () => {
+  it("addNote appends an inert note and dirties the tab", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "hi", view: { x: 10, y: 20 } });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.notes).toHaveLength(1);
+    expect(tab.pipeline.notes![0]).toEqual({ id: "n1", content: "hi", view: { x: 10, y: 20 } });
+    expect(tab.dirty).toBe(true);
+    // A note is never a node — it must not leak into pipeline.nodes.
+    expect(tab.pipeline.nodes).toHaveLength(0);
+  });
+
+  it("addNote is copy-on-write (does not mutate the previous array)", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "a" });
+    const first = useEditStore.getState().openTabs[0].pipeline.notes;
+    useEditStore.getState().addNote({ id: "n2", content: "b" });
+    const second = useEditStore.getState().openTabs[0].pipeline.notes;
+    // New array reference each time — the undo snapshot's array stays frozen.
+    expect(second).not.toBe(first);
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(2);
+  });
+
+  it("updateNote edits content in place by id", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "before", view: { x: 0, y: 0 } });
+    useEditStore.getState().updateNote("n1", { content: "after" });
+
+    const note = useEditStore.getState().openTabs[0].pipeline.notes![0];
+    expect(note.content).toBe("after");
+    // Position untouched by a content edit.
+    expect(note.view).toEqual({ x: 0, y: 0 });
+  });
+
+  it("moveNote sets a rounded position without touching content", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "keep", view: { x: 0, y: 0 } });
+    useEditStore.getState().moveNote("n1", 12.7, 40.2);
+
+    const note = useEditStore.getState().openTabs[0].pipeline.notes![0];
+    expect(note.view).toEqual({ x: 13, y: 40 });
+    expect(note.content).toBe("keep");
+  });
+
+  it("deleteNote removes the note and clears the selection", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "x" });
+    useEditStore.getState().addNote({ id: "n2", content: "y" });
+    useEditStore.setState({ selection: { kind: "note", id: null, noteId: "n1" } });
+
+    useEditStore.getState().deleteNote("n1");
+
+    const state = useEditStore.getState();
+    expect(state.openTabs[0].pipeline.notes!.map((n) => n.id)).toEqual(["n2"]);
+    expect(state.selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("undo restores the note state before the last mutation (COW, ADR-0014)", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "original", view: { x: 0, y: 0 } });
+    // A fresh content edit (distinct coalesce key window is irrelevant here — it
+    // is a separate reducer call, so it records its own history entry).
+    useEditStore.getState().updateNote("n1", { content: "edited" });
+    expect(useEditStore.getState().openTabs[0].pipeline.notes![0].content).toBe("edited");
+
+    useEditStore.getState().undo();
+    expect(useEditStore.getState().openTabs[0].pipeline.notes![0].content).toBe("original");
+
+    useEditStore.getState().undo();
+    // Back before the note existed at all.
+    expect(useEditStore.getState().openTabs[0].pipeline.notes ?? []).toHaveLength(0);
+  });
+
+  it("serializePipeline emits a top-level notes block (round-trip shape)", () => {
+    seedTabWithPipeline(makePipeline());
+    useEditStore.getState().addNote({ id: "n1", content: "remember", view: { x: 3, y: 4 } });
+    const yaml = serializePipeline(useEditStore.getState().openTabs[0].pipeline);
+    expect(yaml).toContain("notes:");
+    expect(yaml).toContain("remember");
+    // Not nested under a node.
+    expect(yaml).toMatch(/\nnotes:/);
+  });
+});
+
 describe("updateNodeViews — batched group-move position write (#232)", () => {
   function seedThree() {
     const a = makeNode({ id: "aaaa1111", name: "a", view: { x: 100, y: 100 } });

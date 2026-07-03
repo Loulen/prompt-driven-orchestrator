@@ -714,6 +714,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -1277,6 +1278,7 @@ mod tests {
                 },
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1352,6 +1354,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -1540,6 +1543,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];
@@ -1589,6 +1593,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];
@@ -1633,6 +1638,7 @@ mod tests {
             }],
             edges: vec![],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
         let node = &pipeline.nodes[0];

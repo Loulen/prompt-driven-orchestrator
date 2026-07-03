@@ -869,6 +869,7 @@ impl Importer {
             nodes,
             edges: self.edges.clone(),
             loops: self.loops.clone(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }

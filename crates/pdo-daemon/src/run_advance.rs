@@ -398,6 +398,7 @@ mod tests {
             nodes: ids.iter().map(|id| doc_node(id)).collect(),
             edges: Vec::new(),
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }

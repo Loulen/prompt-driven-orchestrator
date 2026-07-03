@@ -108,6 +108,42 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
 
+  // #307: canvas notes are LAYOUT, not semantics (default R1 = full-layout).
+  // Two pipelines differing only by their notes — presence, content, OR
+  // position — must compare equal so the synced/diverged star never moves.
+  it("ignores a note added on one side so notes don't count as divergence", () => {
+    const a = def({ nodes: [node("a")] });
+    const b = def({
+      nodes: [node("a")],
+      notes: [{ id: "n1", content: "todo: bound this loop", view: { x: 5, y: 5 } }],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("ignores note content edits (full-layout classification, R1 default)", () => {
+    const a = def({
+      nodes: [node("a")],
+      notes: [{ id: "n1", content: "original", view: { x: 5, y: 5 } }],
+    });
+    const b = def({
+      nodes: [node("a")],
+      notes: [{ id: "n1", content: "edited", view: { x: 5, y: 5 } }],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("ignores note position moves", () => {
+    const a = def({
+      nodes: [node("a")],
+      notes: [{ id: "n1", content: "x", view: { x: 0, y: 0 } }],
+    });
+    const b = def({
+      nodes: [node("a")],
+      notes: [{ id: "n1", content: "x", view: { x: 400, y: 250 } }],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
   it("still flags a real edge difference (target change) despite routing exclusion", () => {
     const base = { source: { node: "a", port: "out" } };
     const a = def({

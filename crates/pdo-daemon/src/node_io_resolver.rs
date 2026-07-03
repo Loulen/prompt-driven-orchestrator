@@ -369,6 +369,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         }
     }
@@ -528,6 +529,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -672,6 +674,7 @@ mod tests {
                 },
             ],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -755,6 +758,7 @@ mod tests {
                 ..Default::default()
             }],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -831,6 +835,7 @@ mod tests {
             ],
             edges: vec![mk_edge("a"), mk_edge("b")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 
@@ -910,6 +915,7 @@ mod tests {
             ],
             edges: vec![mk_edge("planner", "plan"), mk_edge("designer", "spec")],
             loops: Vec::new(),
+            notes: Vec::new(),
             prompt_required: true,
         };
 

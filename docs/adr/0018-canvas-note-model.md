@@ -19,10 +19,18 @@ Le runtime **ignore entièrement** ce bloc — il n'entre ni dans l'ordonnanceme
 le dataflow, ni dans le graphe de nœuds (les consommateurs itèrent `pipeline.nodes`,
 jamais `pipeline.notes`).
 
-- **`content` = sémantique, `view` = layout.** `view` (position, et plus tard taille)
-  suit la règle établie du `view` d'un nœud et du `mode`/`waypoints`/`target_side` d'une
-  edge : persisté dans le fichier, **exclu du diff sémantique**. `content` est du texte
-  brut en v1 (markdown = enhancement ultérieur qui rouvre ADR-0013).
+- **Layout, pas sémantique — le bloc `notes:` entier est exclu du diff (défaut v1).**
+  Comme le `view` d'un nœud et le `mode`/`waypoints`/`target_side` d'une edge, une note
+  est persistée dans le fichier (elle voyage avec le pipeline partagé) mais **exclue du
+  diff sémantique** : `comparablePipelineObject` fait `delete obj.notes`, donc
+  **créer / déplacer / éditer / supprimer** une note ne fait **jamais** bouger le star
+  synced/diverged (la puce « non sauvegardé » s'allume, elle, comme pour tout déplacement
+  de nœud). C'est le défaut *R1* — classification « layout intégral » (position **et**
+  contenu hors diff), retenu parce qu'une note est de la documentation, pas de la donnée
+  d'orchestration. Point de ratification humaine réversible en ~1 ligne : si le reviewer
+  juge que « documentation = donnée sémantique », on strip **uniquement** `n.view` et on
+  garde `content` (éditer une note marquerait alors « diverged », la déplacer non).
+  `content` est du texte brut en v1 (markdown = enhancement ultérieur qui rouvre ADR-0013).
 - **Rendu = custom element xyflow** (ADR-0003). Un « xyflow node » de type `note` est un
   détail de rendu React-Flow et n'est **pas** un PDO `NodeType` — la distinction est
   volontaire et load-bearing.

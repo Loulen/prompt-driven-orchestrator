@@ -429,6 +429,7 @@ mod tests {
                 edge("rev", "review", "impl", "review"),
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let region = LoopRegion {
@@ -543,6 +544,7 @@ mod tests {
                 },
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let region = LoopRegion {
@@ -611,6 +613,7 @@ mod tests {
                 edge("worker", "out", "worker", "again"),
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let region = LoopRegion {
@@ -673,6 +676,7 @@ mod tests {
                 max_iter: Some(serde_yaml::Value::Number(3.into())),
                 over: None,
             }],
+            notes: Vec::new(),
             prompt_required: true,
         };
         // Deleting back-edge A (index 2) still leaves the impl->rev->mid->impl
@@ -743,6 +747,7 @@ mod tests {
                 },
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let region = LoopRegion {
@@ -882,6 +887,7 @@ mod tests {
                 edge("merge", "merged", "end", "result"),
             ],
             loops: vec![],
+            notes: Vec::new(),
             prompt_required: true,
         };
         let region = LoopRegion {

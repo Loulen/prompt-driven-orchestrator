@@ -1,12 +1,19 @@
-import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal } from "lucide-react";
+import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote } from "lucide-react";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
 import LibraryDropdown from "./LibraryDropdown";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "./ui/dropdown-menu";
 import { useEditStore } from "../stores/editStore";
 
 interface Props {
   onAddNode: (type: NodeType) => void;
+  onAddNote: () => void;
   libraryEntries: LibraryEntry[];
   onLibraryDelete: (name: string) => void;
   getDropPosition?: () => { x: number; y: number };
@@ -14,7 +21,7 @@ interface Props {
   onToggleInfo?: () => void;
 }
 
-export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add/merge callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -35,15 +42,42 @@ export default function EditToolbar({ onAddNode, libraryEntries, onLibraryDelete
       className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-bg-2/90 p-1 backdrop-blur-sm shadow-lg"
       data-testid="edit-toolbar"
     >
-      <Tooltip content="New node · N">
-        <button
+      {/* #307: the `+` is now a dropdown — create a Node (current behaviour) or
+          a canvas Note. The trigger keeps `data-testid="toolbar-add"`; the
+          sibling merge/script buttons are unchanged. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
           data-testid="toolbar-add"
-          onClick={() => onAddNode("code-mutating")}
-          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+          className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0 data-[popup-open]:bg-bg-4 data-[popup-open]:text-fg"
+          aria-label="Add"
         >
           <Plus size={14} />
-        </button>
-      </Tooltip>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          className="min-w-[160px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+          side="bottom"
+          align="start"
+        >
+          <DropdownMenuItem
+            data-testid="add-menu-node"
+            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            style={{ fontSize: "11.5px" }}
+            onClick={() => onAddNode("code-mutating")}
+          >
+            <Box size={13} className="shrink-0 text-fg-4" />
+            <span>Node</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="add-menu-note"
+            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            style={{ fontSize: "11.5px" }}
+            onClick={() => onAddNote()}
+          >
+            <StickyNote size={13} className="shrink-0 text-fg-4" />
+            <span>Note</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <span className="mx-0.5 h-4 w-px bg-line" />
 

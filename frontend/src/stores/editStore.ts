@@ -7,7 +7,7 @@ import type {
   EdgeDef,
 } from "../types";
 import type { LibraryPipelineScope } from "../api";
-import type { LoopRegion } from "../types";
+import type { LoopRegion, NoteDef } from "../types";
 import {
   fetchPipeline,
   fetchPipelines,
@@ -24,7 +24,7 @@ import {
   regionsDestroyedByEdgeRemoval,
 } from "../lib/loopRegions";
 
-export type SelectionKind = "node" | "edge" | "region" | "none";
+export type SelectionKind = "node" | "edge" | "region" | "note" | "none";
 
 export interface Selection {
   kind: SelectionKind;
@@ -41,6 +41,12 @@ export interface Selection {
    * inspector and `updateRegion` use. Undefined for other selections.
    */
   regionId?: string;
+  /**
+   * The selected canvas note's `id` when `kind === "note"` (#307). Notes carry
+   * a stable `id`, so the id is the selection key the note inspector and
+   * `updateNote`/`moveNote`/`deleteNote` use. Undefined for other selections.
+   */
+  noteId?: string;
 }
 
 export interface ConflictData {
@@ -135,6 +141,17 @@ interface EditState {
 
   // Region mutations (ADR-0011 / #150) — edit a bounded region's bound live.
   updateRegion: (regionId: string, updates: Partial<LoopRegion>) => void;
+
+  // Note mutations (#307 / ADR-0018) — inert canvas notes. All are COW and
+  // history-tracked (ADR-0014): they live on `PipelineDef.notes`, so a
+  // reference snapshot covers them for free as long as each reducer reassigns
+  // the array rather than mutating in place.
+  addNote: (note: NoteDef) => void;
+  updateNote: (noteId: string, updates: Partial<NoteDef>) => void;
+  // Position-only write for a note drag; coalesced at the drag-stop call site
+  // (mirror of `updateNodeViews`), so a whole drag folds into one undo step.
+  moveNote: (noteId: string, x: number, y: number) => void;
+  deleteNote: (noteId: string) => void;
 
   // Pipeline-level mutations
   updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required">>) => void;
@@ -271,6 +288,18 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       if (r.max_iter !== undefined && r.max_iter !== null)
         region.max_iter = r.max_iter;
       return region;
+    });
+  }
+
+  // Inert canvas notes (#307 / ADR-0018) — a top-level `notes:` block, sibling
+  // of `loops:`. Emitted only when present so note-less pipelines stay clean and
+  // round-trip identically. This is the emit half of the emit/strip couple: the
+  // strip (`comparablePipelineObject`) keeps notes out of the semantic diff.
+  if (p.notes && p.notes.length > 0) {
+    obj.notes = p.notes.map((n) => {
+      const note: Record<string, unknown> = { id: n.id, content: n.content };
+      if (n.view) note.view = { x: n.view.x, y: n.view.y };
+      return note;
     });
   }
 
@@ -737,6 +766,42 @@ export const useEditStore = create<EditState>((set, get) => ({
         r.id === regionId ? { ...r, ...updates } : r,
       );
     }, { coalesceKey: `updateRegion:${regionId}:${Object.keys(updates).sort().join(",")}` }));
+  },
+
+  addNote: (note: NoteDef) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
+      tab.pipeline.notes = [...(tab.pipeline.notes ?? []), note];
+    }));
+  },
+
+  updateNote: (noteId: string, updates: Partial<NoteDef>) => {
+    // Tracked (unlike `updatePrompt`): a note's content is edit data that must
+    // ride the undo stack. Coalesced per-note so a burst of keystrokes folds
+    // into one undo step (mirror of `updateRegion`).
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
+      tab.pipeline.notes = (tab.pipeline.notes ?? []).map((n) =>
+        n.id === noteId ? { ...n, ...updates } : n,
+      );
+    }, { coalesceKey: `updateNote:${noteId}:${Object.keys(updates).sort().join(",")}` }));
+  },
+
+  moveNote: (noteId: string, x: number, y: number) => {
+    set((s) => mutateActiveTabWithHistory(s, (tab) => {
+      tab.pipeline.notes = (tab.pipeline.notes ?? []).map((n) =>
+        n.id === noteId ? { ...n, view: { x: Math.round(x), y: Math.round(y) } } : n,
+      );
+    }));
+  },
+
+  deleteNote: (noteId: string) => {
+    set((s) => ({
+      ...mutateActiveTabWithHistory(s, (tab) => {
+        tab.pipeline.notes = (tab.pipeline.notes ?? []).filter((n) => n.id !== noteId);
+      }),
+      // Clear selection unconditionally (mirror `deleteNode`/`deleteEdge`): the
+      // deleted note's inspector must close.
+      selection: { kind: "none" as const, id: null },
+    }));
   },
 
   updatePipelineMeta: (updates) => {

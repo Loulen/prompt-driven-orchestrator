@@ -89,8 +89,9 @@ export default function MarkdownArtifactModal({
   const isImage = portType === "image" || portType === "image_list";
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(!isImage);
-  // URL of the image currently shown fullscreen in the lightbox, or null.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // The ordered image list + clicked index currently shown fullscreen in the
+  // lightbox, or null when it is closed (#312).
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   useEffect(() => {
     if (isImage) return;
@@ -138,8 +139,10 @@ export default function MarkdownArtifactModal({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       // While the lightbox is open it owns Escape (close lightbox, not the
-      // modal) and we suppress file/iter navigation behind it.
-      if (lightboxSrc !== null) return;
+      // modal) and the arrow keys (page images, not files/iters) — this guard
+      // is the ONLY thing preventing double-navigation: both listeners are on
+      // `window`, where stopPropagation between them is a no-op.
+      if (lightbox !== null) return;
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowLeft") {
         if (isRepeated && fileIndex > 0) setFileIndex(fileIndex - 1);
@@ -150,7 +153,7 @@ export default function MarkdownArtifactModal({
         else goNextIter();
       }
     },
-    [lightboxSrc, onClose, isRepeated, fileIndex, total, goPrevIter, goNextIter],
+    [lightbox, onClose, isRepeated, fileIndex, total, goPrevIter, goNextIter],
   );
 
   useEffect(() => {
@@ -263,7 +266,7 @@ export default function MarkdownArtifactModal({
               filesLoading={filesLoading}
               fileIndex={fileIndex}
               portType={portType}
-              onZoom={setLightboxSrc}
+              onZoom={(images, index) => setLightbox({ images, index })}
             />
           ) : (
             <>
@@ -301,7 +304,11 @@ export default function MarkdownArtifactModal({
                             alt={alt ?? ""}
                             className="cursor-zoom-in rounded transition-opacity hover:opacity-90"
                             onClick={() => {
-                              if (url) setLightboxSrc(url);
+                              // A markdown-embedded <img> is rendered in
+                              // isolation by react-markdown — there is no
+                              // collected list to page through, so it is an
+                              // honest single-image set.
+                              if (url) setLightbox({ images: [url], index: 0 });
                             }}
                           />
                         );
@@ -347,10 +354,11 @@ export default function MarkdownArtifactModal({
         </div>
       </div>
 
-      {lightboxSrc && (
+      {lightbox && (
         <ImageLightbox
-          src={lightboxSrc}
-          onClose={() => setLightboxSrc(null)}
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
         />
       )}
     </div>
@@ -381,7 +389,7 @@ function ImageBody({
   filesLoading: boolean;
   fileIndex: number;
   portType: PortType;
-  onZoom: (src: string) => void;
+  onZoom: (images: string[], index: number) => void;
 }) {
   const existingFiles = files.filter((f) => f.exists);
 
@@ -410,7 +418,12 @@ function ImageBody({
               src={artifactUrl(runId, f.path)}
               alt={f.path.split("/").pop() ?? ""}
               className="max-h-[60vh] w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
-              onClick={() => onZoom(artifactUrl(runId, f.path))}
+              onClick={() =>
+                onZoom(
+                  existingFiles.map((ef) => artifactUrl(runId, ef.path)),
+                  i,
+                )
+              }
               data-testid={`gallery-image-${i}`}
             />
             <span
@@ -425,7 +438,8 @@ function ImageBody({
     );
   }
 
-  const current = existingFiles[fileIndex] ?? existingFiles[0];
+  const currentIdx = existingFiles[fileIndex] ? fileIndex : 0;
+  const current = existingFiles[currentIdx];
   if (!current) return null;
 
   return (
@@ -434,7 +448,12 @@ function ImageBody({
         src={artifactUrl(runId, current.path)}
         alt={current.path.split("/").pop() ?? ""}
         className="max-h-[60vh] max-w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
-        onClick={() => onZoom(artifactUrl(runId, current.path))}
+        onClick={() =>
+          onZoom(
+            existingFiles.map((f) => artifactUrl(runId, f.path)),
+            currentIdx,
+          )
+        }
         data-testid="image-viewer-img"
       />
       <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>

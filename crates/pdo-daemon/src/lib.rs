@@ -3246,6 +3246,31 @@ async fn spawn_node(
         }
     }
 
+    // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
+    // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.
+    // `create_run` guards this at launch, but the scheduler and `restart_node`
+    // reach `spawn_node` directly, and a mid-run edit could have emptied a
+    // pending script's body since launch. Fail loud (before admission / any side
+    // effect) rather than silently no-op.
+    if node.node_type == pipeline::NodeType::Script {
+        let body_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
+        let body_empty = std::fs::read_to_string(&body_path)
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if body_empty {
+            fail_spawn_before_start(
+                state,
+                spawn_ctx.repo_root,
+                run_id,
+                &node.id,
+                None,
+                &format!("script node {} has an empty body", node.id),
+            )
+            .await;
+            return;
+        }
+    }
+
     // Admission control (#159 / #213): bound the number of live NodeRun
     // sessions daemon-wide. The check is an ATOMIC check-and-reserve — the
     // `admission_lock` is held from the count until the reservation event
@@ -3404,6 +3429,17 @@ async fn spawn_node(
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
+        // A `script` node (#248 / ADR-0017) runs the author's bash instead of
+        // Claude. Compute its I/O env catalogue and pre-create its output dirs
+        // here (inside the panic-isolated span, next to `aug_ctx`) and hand the
+        // env back to the spawn below — a script can't read the prose preamble.
+        let script_env = if node.node_type == pipeline::NodeType::Script {
+            prompt_augmenter::precreate_output_dirs(&aug_ctx);
+            prompt_augmenter::build_script_env(&aug_ctx)
+        } else {
+            Vec::new()
+        };
+
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
@@ -3422,6 +3458,7 @@ async fn spawn_node(
                     pipeline::NodeType::Loop => "loop",
                     pipeline::NodeType::ForEach => "for-each",
                     pipeline::NodeType::Merge => "merge",
+                    pipeline::NodeType::Script => "script",
                 },
             })),
         };
@@ -3431,7 +3468,7 @@ async fn spawn_node(
         append_event(state, &node_started)
             .await
             .context("failed to append node_started")?;
-        Ok::<String, anyhow::Error>(full_prompt)
+        Ok::<(String, Vec<(String, String)>), anyhow::Error>((full_prompt, script_env))
     });
 
     let span_outcome = futures_util::future::FutureExt::catch_unwind(span).await;
@@ -3442,8 +3479,8 @@ async fn spawn_node(
     // session.
     drop(admission_guard);
 
-    let full_prompt = match span_outcome {
-        Ok(Ok(full_prompt)) => full_prompt,
+    let (full_prompt, script_env) = match span_outcome {
+        Ok(Ok(pair)) => pair,
         Ok(Err(e)) => {
             fail_spawn_before_start(
                 state,
@@ -3475,16 +3512,30 @@ async fn spawn_node(
     };
 
     let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
+    let is_script = node.node_type == pipeline::NodeType::Script;
+    let tail = if is_script {
+        tmux_session_manager::SessionTail::Script {
+            timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
+            env: &script_env,
+        }
+    } else {
+        tmux_session_manager::SessionTail::Agent {
+            model: node.model.as_deref(),
+        }
+    };
+    // A script node executes the RAW bash body (`role_prompt`), never the
+    // augmented prompt — the preamble is prose an agent reads, not runnable bash.
+    let spawn_prompt: &str = if is_script { &role_prompt } else { &full_prompt };
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
-        &full_prompt,
+        spawn_prompt,
         &working_dir,
         run_id,
         &node.id,
         iter,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        node.model.as_deref(),
+        tail,
     ) {
         error!("failed to spawn tmux session: {e}");
     }
@@ -4484,6 +4535,34 @@ async fn create_run_inner(
         ));
     }
 
+    // Refuse the launch on an empty `script` body (#248 / ADR-0017). A `script`
+    // node runs `bash <body>`; an empty body exits 0 and masquerades as success —
+    // a silent no-op with no error anywhere. Fail loud at launch, like a dangling
+    // edge, so the author fixes it before the run starts (no run is created).
+    let empty_scripts: Vec<String> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == pipeline::NodeType::Script)
+        .filter(|n| {
+            let path = pipeline::canonical_prompt_path(&pipeline_path, &n.id);
+            std::fs::read_to_string(&path)
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .map(|n| n.id.clone())
+        .collect();
+    if !empty_scripts.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": format!(
+                    "cannot launch run: script node(s) have an empty body: {}",
+                    empty_scripts.join(", ")
+                ),
+            }),
+        ));
+    }
+
     // Empty input is allowed only for prompt-optional pipelines (#158).
     if let Err(msg) = validate_run_input(pipeline.prompt_required, &req.input) {
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
@@ -4645,7 +4724,8 @@ fn spawn_manager_session(
         0,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        None, // manager has no NodeDef — always the account default (#296)
+        // manager has no NodeDef — always an agent at the account default (#296)
+        tmux_session_manager::SessionTail::Agent { model: None },
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -5804,6 +5884,28 @@ async fn node_pane(
 
     if is_latest_iter && !iter_is_terminal && node_state.status != event_log::NodeStatus::Pending {
         let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
+
+        // #248 / ADR-0017: never resume a `script` node via `claude --continue`.
+        // A script runs deterministic bash, not an LLM; `resume` would launch a
+        // full Claude session in the run's shared worktree — the opposite of the
+        // contract. A dead-but-non-terminal script session can't be "continued";
+        // serve its last snapshot if we have one, else mark it unavailable.
+        if node_type == "script" {
+            let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
+            let (content, source) = match std::fs::read_to_string(&snapshot_path) {
+                Ok(c) => (c, "snapshot"),
+                Err(_) => ("Script session no longer available".to_string(), "unavailable"),
+            };
+            return Json(PaneResponse {
+                content,
+                session_name,
+                resumed: false,
+                stale: false,
+                source,
+            })
+            .into_response();
+        }
+
         let working_dir = tmux_session_manager::working_dir_for_node(
             &repo_root, &run_id, &node_id, iter, node_type,
         );
@@ -6074,7 +6176,8 @@ async fn spawn_merge_resolver(
         1,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        None, // __merge_resolver__ has no NodeDef — account default (#296)
+        // __merge_resolver__ has no NodeDef — agent at the account default (#296)
+        tmux_session_manager::SessionTail::Agent { model: None },
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -6360,7 +6463,12 @@ async fn node_done(
                 }
             }
         }
-        Some("doc-only") => match worktree_has_tracked_changes(&worktree_dir) {
+        // A `script` node (#248 / ADR-0017) is doc-only-effect in v1: like a
+        // doc-only node it runs in the run's shared worktree and must leave
+        // tracked files clean (untracked artifacts are fine — the guard ignores
+        // `??`). The sharp-tool caveat (a script that `git commit`s leaves a
+        // clean tree and passes) is documented in ADR-0017.
+        Some("doc-only") | Some("script") => match worktree_has_tracked_changes(&worktree_dir) {
             Ok(true) => {
                 let fail_event = event_log::Event {
                     id: None,
@@ -8875,6 +8983,7 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
             pipeline::NodeType::Loop => "loop".into(),
             pipeline::NodeType::ForEach => "for-each".into(),
             pipeline::NodeType::Merge => "merge".into(),
+            pipeline::NodeType::Script => "script".into(),
         },
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
@@ -8983,6 +9092,71 @@ async fn check_output_validation_with_retry(
     else {
         return None;
     };
+
+    // A `script` node (#248 / ADR-0017) has already exited by the time this runs
+    // — there is no live agent to nudge. So any validation failure is terminal:
+    // fail-fast (mirror the exhausted-retry branch) instead of the interactive
+    // corrective loop, which would `send-keys` into a dead session and strand the
+    // node behind a bare 409.
+    let is_script = parse_result
+        .pipeline
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .map(|n| n.node_type == pipeline::NodeType::Script)
+        .unwrap_or(false);
+    if is_script {
+        let detail = match &validation_error {
+            outputs_validator::ValidationError::MissingOutputs(missing) => {
+                serde_json::json!({ "kind": "missing_outputs", "missing": missing })
+            }
+            outputs_validator::ValidationError::FrontmatterMismatch(violations) => {
+                let details: Vec<serde_json::Value> = violations
+                    .iter()
+                    .map(|v| serde_json::json!({ "port": v.port, "field": v.field, "reason": v.reason }))
+                    .collect();
+                serde_json::json!({ "kind": "frontmatter_mismatch", "violations": details })
+            }
+        };
+        let fail_event = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeFailed,
+            node_id: Some(node_id.to_string()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({
+                "reason": "script output validation failed",
+                "detail": detail,
+            })),
+        };
+        let _ = append_event(state, &fail_event).await;
+
+        let run_failed = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunFailed,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "reason": format!("script node {node_id} failed output validation")
+            })),
+        };
+        let _ = append_event(state, &run_failed).await;
+
+        warn!("script node {node_id} failed output validation in run {run_id} — fail-fast");
+        return Some(
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "script_validation_failed",
+                    "detail": detail,
+                })),
+            )
+                .into_response(),
+        );
+    }
 
     match validation_error {
         outputs_validator::ValidationError::MissingOutputs(missing) => Some(

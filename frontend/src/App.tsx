@@ -285,6 +285,11 @@ export default function App() {
   function inspectorEditPane() {
     switch (editNodeType) {
       case "merge": return <MergeInspector />;
+      // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
+      // and hides the model field / doc-only↔code-mutating toggle for it.
+      // Without this case a script node would fall through and — before the
+      // in-inspector conditionals — render the wrong (agent) surface.
+      case "script":
       default: return (
         <NodeInspector
           libraryEntries={libraryEntries}

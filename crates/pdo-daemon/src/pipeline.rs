@@ -28,15 +28,26 @@ pub enum NodeType {
     Loop,
     ForEach,
     Merge,
+    /// A node that runs author-written bash deterministically instead of
+    /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
+    /// like any NodeRun) whose tail is `timeout N bash <body>`: exit 0 ⇒ node
+    /// completes, non-zero/timeout ⇒ node fails. v1 is doc-only-effect (no
+    /// sub-worktree; runs in the run's shared worktree).
+    Script,
 }
 
 impl NodeType {
-    /// A *regular* node (doc-only / code-mutating) declares no inputs: its inputs
-    /// are emergent, derived from incoming edges and named after the edge target
-    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/for-each/
-    /// merge) keep their required, declared input ports.
+    /// A *regular* node (doc-only / code-mutating / script) declares no inputs:
+    /// its inputs are emergent, derived from incoming edges and named after the
+    /// edge target port (#149 / ADR-0011). Structural nodes (start/end/switch/
+    /// loop/for-each/merge) keep their required, declared input ports. A `script`
+    /// node consumes whole artifacts by edge just like a work node, so its inputs
+    /// are emergent too (#248).
     pub fn has_emergent_inputs(&self) -> bool {
-        matches!(self, NodeType::DocOnly | NodeType::CodeMutating)
+        matches!(
+            self,
+            NodeType::DocOnly | NodeType::CodeMutating | NodeType::Script
+        )
     }
 }
 
@@ -385,6 +396,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         "loop",
         "for-each",
         "merge",
+        // #248: without this, a `type: script` node is silently rewritten to
+        // `doc-only` with only a diagnostic (see the layer-1 test).
+        "script",
     ];
 
     if let Some(nodes) = raw
@@ -2122,6 +2136,97 @@ nodes:
         assert!(mg.inputs[0].repeated);
         assert_eq!(mg.outputs.len(), 1);
         assert_eq!(mg.outputs[0].name, "merged");
+    }
+
+    // --- Script node tests (#248 / ADR-0017) ---
+
+    #[test]
+    fn parses_script_node() {
+        let yaml = with_start_end(
+            r#"
+name: script-test
+nodes:
+  - id: ab000001
+    name: notify
+    type: script
+    outputs:
+      - name: out
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node.node_type, NodeType::Script);
+        assert_eq!(node.outputs.len(), 1);
+        assert_eq!(node.outputs[0].name, "out");
+    }
+
+    #[test]
+    fn script_node_is_not_rewritten_to_doc_only() {
+        // ⚠️ silent-failure guard: `script` must be in `valid_types`, else
+        // `parse_pipeline` degrades the node to `doc-only` with a diagnostic.
+        let yaml = with_start_end(
+            r#"
+name: script-not-rewritten
+nodes:
+  - id: ab000001
+    name: notify
+    type: script
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node.node_type, NodeType::Script, "must not degrade to doc-only");
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("ab000001")),
+            "no rewrite diagnostic for a valid script node: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn script_node_has_emergent_inputs() {
+        assert!(NodeType::Script.has_emergent_inputs());
+    }
+
+    #[test]
+    fn script_node_roundtrips_via_serde() {
+        let node = NodeDef {
+            id: "s1".into(),
+            name: "notify".into(),
+            node_type: NodeType::Script,
+            inputs: vec![],
+            outputs: vec![Port {
+                name: "out".into(),
+                repeated: false,
+                side: None,
+                port_type: PortType::Markdown,
+                frontmatter: None,
+                when: None,
+                description: None,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            model: None,
+        };
+        let yaml = serde_yaml::to_string(&node).unwrap();
+        assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
+        let back: NodeDef = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.node_type, NodeType::Script);
     }
 
     #[test]

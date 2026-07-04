@@ -6073,14 +6073,17 @@ async fn get_run_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    let repo_root = match load_events(&state.db, &run_id).await {
-        Ok(events) => match event_log::project(&events) {
-            Some(run_state) => effective_repo_root(&state, &run_state),
-            None => state.repo_root.clone(),
-        },
-        Err(_) => state.repo_root.clone(),
+    // #315: resolve against the durable store when the run is archived (its
+    // repo-local worktree + pipeline.yaml are gone), against the live run dir
+    // otherwise. Everything downstream (parse, prompts, JSON shape) is unchanged.
+    let run_state = match load_events(&state.db, &run_id).await {
+        Ok(events) => event_log::project(&events),
+        Err(_) => None,
     };
-    let yaml_path = run_scoped_pipeline_path(&repo_root, &run_id);
+    let yaml_path = match &run_state {
+        Some(rs) => archived_or_live_pipeline_yaml(&state, rs, &run_id),
+        None => run_scoped_pipeline_path(&state.repo_root, &run_id),
+    };
     let yaml = match std::fs::read_to_string(&yaml_path) {
         Ok(y) => y,
         Err(_) => {
@@ -6099,7 +6102,10 @@ async fn get_run_pipeline(
         }
     };
 
-    let prompts_dir = run_scoped_prompts_dir(&repo_root, &run_id);
+    let prompts_dir = match &run_state {
+        Some(rs) => archived_or_live_prompts_dir(&state, rs, &run_id),
+        None => run_scoped_prompts_dir(&state.repo_root, &run_id),
+    };
     let mut prompts: HashMap<String, String> = HashMap::new();
     if prompts_dir.is_dir() {
         for entry in std::fs::read_dir(&prompts_dir)
@@ -6837,8 +6843,11 @@ async fn node_io(
         return (StatusCode::NOT_FOUND, "node not found in run").into_response();
     }
 
-    let repo_root = effective_repo_root(&state, &run_state);
-    let yaml_path = run_scoped_pipeline_path(&repo_root, &run_id);
+    // #315: an archived run reads its pipeline + artifacts from the durable
+    // store; a live run from its worktree. `node_io_resolver::resolve` is
+    // unchanged — it gets a real parsed PipelineDef (it needs port_type/repeated,
+    // which the event-log projection does not carry).
+    let yaml_path = archived_or_live_pipeline_yaml(&state, &run_state, &run_id);
     let pipeline = match std::fs::read_to_string(&yaml_path)
         .ok()
         .and_then(|y| pipeline::parse_pipeline(&y).ok())
@@ -6853,8 +6862,7 @@ async fn node_io(
         }
     };
 
-    let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
-    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+    let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
     let io = node_io_resolver::resolve(&pipeline, &artifacts_dir, &node_id, iter);
     Json(io).into_response()
@@ -6886,9 +6894,11 @@ async fn artifact(
         }
     };
 
-    let repo_root = effective_repo_root(&state, &run_state);
-    let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
-    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+    // #315: serve from the durable store for an archived run (worktree gone),
+    // from the live worktree otherwise. The `.canonicalize()` guard below still
+    // holds against whichever base we resolve — the durable dir physically
+    // exists when preservation succeeded.
+    let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
     let requested = Path::new(&query.path);
     let resolved = match artifacts_dir.join(requested).canonicalize() {
@@ -9306,6 +9316,13 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     let repo_root = effective_repo_root(state, &run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
 
+    // #315 / ADR-0020: copy the run's outputs to the durable global store BEFORE
+    // any worktree is destroyed below, so an archived run stays inspectable (its
+    // canvas + node outputs). Ordering is load-bearing: `git worktree remove`
+    // wipes `worktree/.pdo/artifacts` well before the `remove_dir_all(&run_dir)`
+    // at the end, so this must run first. Best-effort — never aborts archival.
+    preserve_run_outputs_on_archive(&repo_root, &run_dir, run_id);
+
     // Remove sub-worktrees (nodes/) before the main worktree
     let nodes_dir = run_dir.join("nodes");
     if nodes_dir.exists() {
@@ -9436,6 +9453,21 @@ async fn forget_run(
     {
         error!("failed to delete events for {run_id}: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
+    }
+
+    // #315 / ADR-0020: forget also reclaims the durable output store — without
+    // this, the outputs preserved on archive leak forever once a run is
+    // forgotten, contradicting forget's "the run vanishes entirely" contract.
+    // Best-effort: a missing dir (never archived, or already gone) is not an error.
+    if let Some(durable) = durable_run_dir(&run_id) {
+        if let Err(e) = std::fs::remove_dir_all(&durable) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    "#315: failed to remove durable dir {}: {e}",
+                    durable.display()
+                );
+            }
+        }
     }
 
     info!("Run {run_id} forgotten (event log purged)");
@@ -9621,6 +9653,154 @@ fn run_scoped_prompts_dir(repo_root: &std::path::Path, run_id: &str) -> PathBuf 
         .join("runs")
         .join(run_id)
         .join("pipeline.prompts")
+}
+
+/// Recursively copy `src` into `dst` (creating `dst` and parents). Plain files
+/// and subdirectories only — the artifacts tree the callers copy holds
+/// `output.md` files plus optional images, with no symlinks or nested `.git`
+/// (verified, #315/ADR-0020). Returns the first IO error encountered.
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// #315 / ADR-0020 — preserve a run's durable outputs (`artifacts/`,
+/// `pipeline.yaml`, `pipeline.prompts/`) from the soon-to-be-destroyed repo-local
+/// `run_dir` into the durable global store `~/.pdo/runs/<id>/`, so an archived
+/// run stays inspectable (its canvas + node outputs).
+///
+/// Best-effort throughout: a missing `$HOME`, the pathological `repo == $HOME`
+/// case, or any copy IO error is logged and swallowed — archival MUST still
+/// succeed and append `RunArchived`. Called from `cleanup_run` **before** the
+/// worktree is destroyed (that is the whole point — copy first, delete after).
+fn preserve_run_outputs_on_archive(
+    repo_root: &std::path::Path,
+    run_dir: &std::path::Path,
+    run_id: &str,
+) {
+    let Some(durable) = durable_run_dir(run_id) else {
+        warn!("#315: $HOME unset — skipping durable output preservation for run {run_id}");
+        return;
+    };
+
+    // Pathological guard: if the target repo *is* $HOME, then
+    // `run_dir == ~/.pdo/runs/<id> == durable` and the copy would sit inside the
+    // tree `remove_dir_all(run_dir)` is about to delete. Skip it. A repo merely
+    // *under* $HOME (`~/projects/foo`) is disjoint and fine.
+    let repo_is_home = match (
+        repo_root.canonicalize(),
+        dirs_next_home().and_then(|h| h.canonicalize().ok()),
+    ) {
+        (Ok(repo), Some(home)) => repo == home,
+        _ => false,
+    };
+    if repo_is_home {
+        warn!(
+            "#315: repo root == $HOME for run {run_id} — durable store overlaps run dir, skipping preservation"
+        );
+        return;
+    }
+
+    let src_artifacts = run_dir.join("worktree").join(".pdo").join("artifacts");
+    let src_yaml = run_dir.join("pipeline.yaml");
+    let src_prompts = run_dir.join("pipeline.prompts");
+
+    // Nothing on disk to preserve (e.g. an in-memory test run, or a worktree
+    // already gone). Return WITHOUT creating an empty durable dir — otherwise a
+    // no-op archive would litter `~/.pdo/runs/` with hollow directories.
+    if !src_artifacts.is_dir() && !src_yaml.is_file() && !src_prompts.is_dir() {
+        return;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&durable) {
+        warn!(
+            "#315: failed to create durable dir {}: {e}",
+            durable.display()
+        );
+        return;
+    }
+
+    // artifacts/ (the Blackboard) — recursive.
+    if src_artifacts.is_dir() {
+        if let Err(e) = copy_dir_all(&src_artifacts, &durable.join("artifacts")) {
+            warn!("#315: failed to preserve artifacts for run {run_id}: {e}");
+        }
+    }
+
+    // pipeline.yaml — single file.
+    if src_yaml.is_file() {
+        if let Err(e) = std::fs::copy(&src_yaml, durable.join("pipeline.yaml")) {
+            warn!("#315: failed to preserve pipeline.yaml for run {run_id}: {e}");
+        }
+    }
+
+    // pipeline.prompts/ — recursive, optional.
+    if src_prompts.is_dir() {
+        if let Err(e) = copy_dir_all(&src_prompts, &durable.join("pipeline.prompts")) {
+            warn!("#315: failed to preserve pipeline.prompts for run {run_id}: {e}");
+        }
+    }
+}
+
+/// #315 — resolve a run's artifacts dir: the durable global store when the run is
+/// `Archived` (its repo-local worktree is gone), the live worktree otherwise.
+fn archived_or_live_artifacts_dir(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    run_id: &str,
+) -> PathBuf {
+    if run_state.status == event_log::RunStatus::Archived {
+        if let Some(durable) = durable_run_dir(run_id) {
+            return durable.join("artifacts");
+        }
+    }
+    let repo_root = effective_repo_root(state, run_state);
+    worktree_dir_for_run(&repo_root, run_id)
+        .join(".pdo")
+        .join("artifacts")
+}
+
+/// #315 — resolve a run's `pipeline.yaml`: durable store when `Archived`, else the
+/// live run-scoped path.
+fn archived_or_live_pipeline_yaml(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    run_id: &str,
+) -> PathBuf {
+    if run_state.status == event_log::RunStatus::Archived {
+        if let Some(durable) = durable_run_dir(run_id) {
+            return durable.join("pipeline.yaml");
+        }
+    }
+    let repo_root = effective_repo_root(state, run_state);
+    run_scoped_pipeline_path(&repo_root, run_id)
+}
+
+/// #315 — resolve a run's prompts dir: durable store when `Archived`, else the
+/// live run-scoped path.
+fn archived_or_live_prompts_dir(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    run_id: &str,
+) -> PathBuf {
+    if run_state.status == event_log::RunStatus::Archived {
+        if let Some(durable) = durable_run_dir(run_id) {
+            return durable.join("pipeline.prompts");
+        }
+    }
+    let repo_root = effective_repo_root(state, run_state);
+    run_scoped_prompts_dir(&repo_root, run_id)
 }
 
 fn copy_pipeline_to_run(
@@ -10050,6 +10230,14 @@ async fn check_output_validation_with_retry(
 
 fn dirs_next_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Durable, repo-independent home for a run's preserved outputs (#315, ADR-0020).
+/// Under `$HOME`, so it survives `cleanup_run`'s
+/// `remove_dir_all(<repo>/.pdo/runs/<id>)`. `None` when `$HOME` is unset →
+/// callers skip best-effort, never fail teardown.
+fn durable_run_dir(run_id: &str) -> Option<PathBuf> {
+    dirs_next_home().map(|home| home.join(".pdo").join("runs").join(run_id))
 }
 
 // --- Git worktree ---
@@ -11752,6 +11940,226 @@ mod tests {
         assert!(!events.is_empty());
         let run_state = event_log::project(&events).unwrap();
         assert_eq!(run_state.status, event_log::RunStatus::Archived);
+    }
+
+    // ---- #315 / ADR-0020: archive preserves outputs to the durable store ----
+
+    /// Shared POST-cleanup helper for the #315 tests. Returns the HTTP status so
+    /// callers assert the archive succeeded.
+    async fn post_cleanup_run(state: &Arc<AppState>, run_id: &str) -> StatusCode {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        resp.status()
+    }
+
+    /// R1: archiving a run copies `worktree/.pdo/artifacts` + `pipeline.yaml` to
+    /// the durable global dir `$HOME/.pdo/runs/<id>/` BEFORE the worktree is
+    /// destroyed, and the run still projects `Archived`.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cleanup_run_preserves_artifacts_to_durable_dir() {
+        let home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "preserve-durable";
+        seed_io_test(tmp.path(), run_id);
+        let state = test_state_with_dir(tmp.path()).await;
+        seed_io_run_events(&state, run_id).await;
+
+        // Sanity: the live artifacts exist before archive; the durable copy does not.
+        let run_dir = tmp.path().join(".pdo").join("runs").join(run_id);
+        assert!(run_dir
+            .join("worktree/.pdo/artifacts/planner/iter-1/plan/output.md")
+            .exists());
+        let durable = home.path().join(".pdo").join("runs").join(run_id);
+        assert!(
+            !durable.exists(),
+            "durable dir must not exist before archive"
+        );
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+
+        // The repo-local run dir (worktree + artifacts) is gone …
+        assert!(
+            !run_dir.exists(),
+            "cleanup must remove the repo-local run dir"
+        );
+        // … but the durable copy holds the artifacts + pipeline.yaml.
+        let preserved_plan = durable.join("artifacts/planner/iter-1/plan/output.md");
+        assert!(
+            preserved_plan.exists(),
+            "planner output must be preserved to the durable dir"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&preserved_plan).unwrap(),
+            "# Plan\nDo stuff."
+        );
+        assert!(
+            durable
+                .join("artifacts/implementer/iter-1/summary/output.md")
+                .exists(),
+            "implementer output must be preserved"
+        );
+        assert!(
+            durable.join("pipeline.yaml").exists(),
+            "pipeline.yaml must be preserved to the durable dir"
+        );
+
+        // Events survive; run projects Archived.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Archived
+        );
+    }
+
+    /// R2: after archive (worktree gone), `GET /nodes/<n>/io` serves the correct
+    /// payload from the durable store — the shape matches the live-run contract.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn node_io_serves_archived_run_from_durable_dir() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "io-archived";
+        seed_io_test(tmp.path(), run_id);
+        let state = test_state_with_dir(tmp.path()).await;
+        seed_io_run_events(&state, run_id).await;
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+        // The live worktree is gone — the only source left is the durable dir.
+        assert!(!tmp
+            .path()
+            .join(".pdo/runs")
+            .join(run_id)
+            .join("worktree")
+            .exists());
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/nodes/implementer/io?iter=1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let io: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Input (planner's plan) resolves from the preserved tree.
+        let inputs = io["inputs"].as_array().unwrap();
+        assert_eq!(inputs[0]["port"], "plan");
+        assert_eq!(inputs[0]["files"][0]["exists"], true);
+        // Output (summary) with its frontmatter parsed from the preserved file.
+        let outputs = io["outputs"].as_array().unwrap();
+        assert_eq!(outputs[0]["port"], "summary");
+        assert_eq!(outputs[0]["files"][0]["exists"], true);
+        assert_eq!(outputs[0]["files"][0]["frontmatter"]["verdict"], "PASS");
+        assert_eq!(outputs[0]["files"][0]["frontmatter"]["score"], 9);
+    }
+
+    /// R3: after archive, `GET /artifact` serves the preserved bytes with the
+    /// right MIME, and the path-traversal guard still holds against the durable base.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn artifact_serves_archived_run_content() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "artifact-archived";
+        seed_io_test(tmp.path(), run_id);
+        let state = test_state_with_dir(tmp.path()).await;
+        seed_io_run_events(&state, run_id).await;
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/runs/{run_id}/artifact?path=planner/iter-1/plan/output.md"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("content-type").unwrap(), "text/markdown");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("# Plan"));
+
+        // Traversal is still rejected against the durable base.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/runs/{run_id}/artifact?path=../../../../../../etc/passwd"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::BAD_REQUEST || resp.status() == StatusCode::NOT_FOUND,
+            "traversal against durable base must be rejected, got {}",
+            resp.status()
+        );
+    }
+
+    /// R4: forgetting an archived run reclaims the durable store — no leak.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn forget_run_removes_durable_dir() {
+        let home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "forget-durable";
+        seed_io_test(tmp.path(), run_id);
+        let state = test_state_with_dir(tmp.path()).await;
+        seed_io_run_events(&state, run_id).await;
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+        let durable = home.path().join(".pdo").join("runs").join(run_id);
+        assert!(durable.exists(), "durable dir must exist after archive");
+
+        // Forget the run.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert!(
+            !durable.exists(),
+            "forget must reclaim the durable dir — no leak"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(events.is_empty(), "events must be purged after forget");
     }
 
     #[tokio::test]

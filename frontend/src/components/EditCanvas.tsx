@@ -293,6 +293,15 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const activeRunState =
     tab?.runId && runState && tab.runId === runState.run_id ? runState : null;
 
+  // #315 / ADR-0020: an archived run's canvas is READ-ONLY. Its worktree and
+  // pipeline.yaml are gone, so any edit would fire a PUT /runs/<id>/pipeline →
+  // 404 → the tab self-closes and the canvas vanishes. We keep
+  // selection/inspection (click a node to read its output) but disable every
+  // mutation: drag, connect, add-node/add-note, and the context-menu edit
+  // actions. Keyed on `archived` ONLY, so editing-during-run (ADR-0007) stays
+  // intact for running/completed runs.
+  const readOnly = activeRunState?.status === "archived";
+
   const pipelineSync = usePipelineLibraryState(
     pipeline ?? null,
     libraryPipelines,
@@ -619,6 +628,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         getDropPosition={computeDropPosition}
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
+        readOnly={readOnly}
       />
       {pipeline && tab && (
         <div
@@ -685,15 +695,18 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           onNodeMouseEnter={onNodeMouseEnter}
           onNodeMouseLeave={onNodeMouseLeave}
           onNodeDragStop={onNodeDragStop}
-          onNodeContextMenu={handleNodeContextMenu}
-          onEdgeContextMenu={handleEdgeContextMenu}
+          // #315: no context-menu edit actions (delete/duplicate) on a
+          // read-only archived canvas.
+          onNodeContextMenu={readOnly ? undefined : handleNodeContextMenu}
+          onEdgeContextMenu={readOnly ? undefined : handleEdgeContextMenu}
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
           proOptions={{ hideAttribution: true }}
           className="bg-bg-1"
-          nodesDraggable
-          nodesConnectable
+          // #315: drag + connect are off on an archived run; click-to-select stays on.
+          nodesDraggable={!readOnly}
+          nodesConnectable={!readOnly}
         >
           <Background color="var(--color-line-soft)" gap={20} size={1} />
         </ReactFlow>

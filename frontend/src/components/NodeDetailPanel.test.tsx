@@ -457,6 +457,40 @@ describe("NodeDetailPanel", () => {
       fireEvent.click(toggle);
       expect(screen.queryByText("Loading prompt...")).not.toBeInTheDocument();
     });
+
+    // #315: the per-iter rendered prompt lives in the node's working dir, which
+    // is destroyed on archive and is not preserved (ADR-0020). So for an
+    // archived run the button must not fire an always-404 fetch nor show a
+    // stuck "Loading prompt..." — it shows an honest "not preserved" note.
+    it("does not fetch the prompt for an archived run", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed" })}
+            runId="run-1"
+            isArchived
+          />
+        </TooltipProvider>,
+      );
+      expect(fetchPromptMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a not-preserved note (not a spinner) when archived", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed" })}
+            runId="run-1"
+            isArchived
+          />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("prompt-toggle"));
+      expect(
+        screen.getByText("Prompt not preserved for archived runs."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Loading prompt...")).not.toBeInTheDocument();
+    });
   });
 
   describe("polled preview removal", () => {

@@ -942,6 +942,58 @@ describe("save error storage", () => {
   });
 });
 
+describe("#315 archived run tab (read-only, ADR-0020)", () => {
+  // F1: after #315 the backend serves `/pipeline` for archived runs (no longer
+  // 404), so `openRunPipeline` opens a normal run tab — the same code path as a
+  // live run. The tab is clean (nothing to save) and becomes the read-only
+  // canvas the user clicks into.
+  it("openRunPipeline opens a clean run tab when the archived pipeline resolves", async () => {
+    await useEditStore.getState().openRunPipeline("arch-1");
+
+    const state = useEditStore.getState();
+    const tab = state.openTabs.find((t) => t.id === "__run__arch-1");
+    expect(tab).toBeDefined();
+    expect(tab?.scope).toBe("run");
+    expect(tab?.runId).toBe("arch-1");
+    expect(tab?.dirty).toBe(false);
+    expect(state.activeTabId).toBe("__run__arch-1");
+  });
+
+  // F2: the read-only guards (App hotkeys + EditCanvas) mean an archived run tab
+  // never becomes dirty. `flushPendingSaves` only touches dirty tabs, so it
+  // never PUTs — hence the tab never hits the 404 self-close path and stays
+  // open (the desired "the run I'm watching doesn't vanish" UX). This is the
+  // store-level half of the invariant; the App/EditCanvas gates are the other.
+  it("a clean archived run tab is never flushed, so it never self-closes", async () => {
+    const tabId = "__run__arch-2";
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: tabId,
+          scope: "run",
+          pipeline: { name: "test", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "arch-2",
+          libraryId: null,
+          libraryScope: null,
+        },
+      ],
+      activeTabId: tabId,
+      selection: { kind: "none", id: null },
+    });
+
+    await useEditStore.getState().flushPendingSaves();
+
+    expect(mockSaveRunPipeline).not.toHaveBeenCalled();
+    expect(
+      useEditStore.getState().openTabs.find((t) => t.id === tabId),
+    ).toBeDefined();
+  });
+});
+
 describe("mutations set dirty without auto-saving", () => {
   it("addNode sets dirty but does not trigger save", async () => {
     seedTab("p1", false);

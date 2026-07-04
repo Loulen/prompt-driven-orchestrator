@@ -119,7 +119,13 @@ export default function NodeDetailPanel({
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
   const showTerminal = node.status !== "pending";
 
-  const shouldFetchPrompt = node.status !== "pending" || isStaleIter;
+  // #315: the per-iter *rendered* prompt lives in the node's working dir, which
+  // is destroyed on archive and is not among the preserved set (ADR-0020 keeps
+  // artifacts + pipeline.yaml + pipeline.prompts/). So the fetch would always
+  // 404 for an archived run — skip it and show an honest note instead of a
+  // stuck "Loading prompt..." spinner.
+  const shouldFetchPrompt =
+    !isArchived && (node.status !== "pending" || isStaleIter);
 
   useEffect(() => {
     if (!shouldFetchPrompt) return;
@@ -525,7 +531,11 @@ export default function NodeDetailPanel({
             )}
 
             {/* Initial Prompt */}
-            <PromptSection promptText={promptText} status={node.status} />
+            <PromptSection
+              promptText={promptText}
+              status={node.status}
+              isArchived={isArchived}
+            />
           </div>
         );
 
@@ -688,9 +698,11 @@ function RetryPlayButton({
 function PromptSection({
   promptText,
   status,
+  isArchived,
 }: {
   promptText: string | null;
   status: NodeStatus;
+  isArchived?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -713,9 +725,11 @@ function PromptSection({
         >
           {promptText ?? (
             <span className="text-fg-4">
-              {status === "pending"
-                ? "Prompt available after node starts."
-                : "Loading prompt..."}
+              {isArchived
+                ? "Prompt not preserved for archived runs."
+                : status === "pending"
+                  ? "Prompt available after node starts."
+                  : "Loading prompt..."}
             </span>
           )}
         </pre>

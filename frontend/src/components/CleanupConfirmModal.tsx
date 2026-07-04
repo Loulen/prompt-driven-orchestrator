@@ -9,10 +9,13 @@ interface Props {
 
 // Spelled out so the consequences of archiving a *live* run are explicit. The
 // "hasn't finished" phrasing is asserted by the unit test — keep it literal.
+// #315/ADR-0020: completed outputs are now PRESERVED on archive (durable store),
+// so the copy no longer claims they are lost — only in-flight work is.
 const LIVE_BODY =
-  "This run hasn't finished. Archiving it now kills every active node session, " +
-  "removes the run's worktrees and artifacts from disk, and marks the run " +
-  "archived. Event history is kept, but in-flight prompts and outputs are lost.";
+  "This run hasn't finished. Archiving it now kills every active node session " +
+  "and removes the run's worktrees from disk. Completed outputs are kept — the " +
+  "run stays viewable (read-only) after archiving; only in-flight, uncommitted " +
+  "work is lost.";
 
 export default function CleanupConfirmModal({
   runId,
@@ -74,7 +77,8 @@ export default function CleanupConfirmModal({
               Cleanup Run
             </h3>
             <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
-              This will remove worktrees and artifacts. Event history is kept.
+              This removes the run's worktrees from disk. Its completed outputs
+              are kept — the run stays viewable (read-only) after archiving.
               Proceed?
             </p>
           </>

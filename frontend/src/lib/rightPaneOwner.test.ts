@@ -30,6 +30,15 @@ describe("rightPaneOwner", () => {
     ).toBe("trigger");
   });
 
+  // #320: clicking a trigger opens its pipeline in the canvas (hasEditTab
+  // becomes true) while the trigger detail must stay on the right. That is
+  // exactly `triggerSelected && hasEditTab → "trigger"` — pin it against drift.
+  it("keeps the trigger detail while its pipeline owns the canvas (#320)", () => {
+    expect(
+      rightPaneOwner({ triggerSelected: true, infoPanelOpen: false, hasEditTab: true }),
+    ).toBe("trigger");
+  });
+
   it("lets the info overlay win over a selected trigger", () => {
     expect(
       rightPaneOwner({ triggerSelected: true, infoPanelOpen: true, hasEditTab: false }),

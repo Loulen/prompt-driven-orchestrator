@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, renameRun } from "../api";
+import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -12,10 +12,16 @@ const mockFetchPipelines = vi.mocked(fetchPipelines);
 const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
 const mockDeleteLibraryPipeline = vi.mocked(deleteLibraryPipeline);
 const mockOpenRunShell = vi.mocked(openRunShell);
+const mockPauseRun = vi.mocked(pauseRun);
+const mockResumeRun = vi.mocked(resumeRun);
+const mockRetryAll = vi.mocked(retryAll);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
   forgetRun: vi.fn().mockResolvedValue(undefined),
+  pauseRun: vi.fn().mockResolvedValue(undefined),
+  resumeRun: vi.fn().mockResolvedValue(undefined),
+  retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
   renameRun: vi.fn().mockResolvedValue(undefined),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
@@ -804,5 +810,148 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     fireEvent.click(screen.getByTestId("open-session-button"));
     await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-2"));
     expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
+  });
+});
+
+// #110 — run rows expose status-gated lifecycle controls: Pause (live), Resume
+// (paused), Retry-all (terminal, non-archived → confirm → archive + fresh run).
+// Gating is on EXPLICIT statuses, never isLiveRun/isTerminalRun (which mis-include
+// paused/archived respectively). Archived rows sit in the collapsed Archived
+// section, so their row body is absent → queryByTestId is null (hidden), same as
+// the #316 archived assertion.
+describe("UnifiedLeftPanel — run-level controls (#110)", () => {
+  const runRow = (status: RunListEntry["status"]): RunListEntry => ({
+    run_id: "run-1",
+    pipeline_name: "p",
+    status,
+    started_at: null,
+    name: "R",
+  });
+
+  describe("Pause", () => {
+    const VISIBLE: RunListEntry["status"][] = ["running", "awaiting_user"];
+    const HIDDEN: RunListEntry["status"][] = [
+      "paused",
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the pause button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("pause-run-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the pause button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("pause-run-button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Resume", () => {
+    const VISIBLE: RunListEntry["status"][] = ["paused"];
+    const HIDDEN: RunListEntry["status"][] = [
+      "running",
+      "awaiting_user",
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the resume button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("resume-run-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the resume button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("resume-run-button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Retry-all", () => {
+    const VISIBLE: RunListEntry["status"][] = [
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+    ];
+    // NOT archived — the daemon 409s a retry_all on an archived run, and the row
+    // is collapsed away anyway.
+    const HIDDEN: RunListEntry["status"][] = [
+      "running",
+      "awaiting_user",
+      "paused",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the retry-all button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("retry-all-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the retry-all button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("retry-all-button")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clicking pause calls pauseRun with the run id", async () => {
+    renderPanel({ runs: [runRow("running")] });
+    fireEvent.click(screen.getByTestId("pause-run-button"));
+    await waitFor(() => expect(mockPauseRun).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("clicking resume calls resumeRun with the run id", async () => {
+    renderPanel({ runs: [runRow("paused")] });
+    fireEvent.click(screen.getByTestId("resume-run-button"));
+    await waitFor(() => expect(mockResumeRun).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("retry-all opens a confirm dialog without calling retryAll yet", () => {
+    renderPanel({ runs: [runRow("completed")] });
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+
+    expect(screen.getByTestId("retry-all-backdrop")).toBeInTheDocument();
+    expect(screen.getByTestId("retry-all-confirm-button")).toBeInTheDocument();
+    expect(mockRetryAll).not.toHaveBeenCalled();
+  });
+
+  it("confirming retry-all archives + creates a run and selects the offspring", async () => {
+    mockRetryAll.mockResolvedValueOnce({ run_id: "offspring-1" });
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[runRow("failed")]}
+        selectedRunId={null}
+        onSelectRun={onSelectRun}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+    fireEvent.click(screen.getByTestId("retry-all-confirm-button"));
+
+    await waitFor(() => expect(mockRetryAll).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith("offspring-1"));
+    // The modal closes once the flow resolves.
+    await waitFor(() =>
+      expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("cancelling retry-all never calls retryAll and closes the modal", () => {
+    renderPanel({ runs: [runRow("halted")] });
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(mockRetryAll).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument();
   });
 });

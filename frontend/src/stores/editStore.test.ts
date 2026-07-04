@@ -2185,3 +2185,52 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
     });
   });
 });
+
+// openPipeline is the action #320 wires to a Trigger click: it opens the
+// trigger's pipeline in the canvas. These pin the three behaviors App relies on
+// — fresh append + activate + selection reset, re-activate without duplicating,
+// and scope forwarding (library-first, matching the daemon's fire-time resolve).
+describe("openPipeline (#320 / #216 canvas-open)", () => {
+  it("appends a tab, activates it, and resets selection to none on a fresh open", async () => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "node", id: "some-node" },
+    });
+
+    await useEditStore.getState().openPipeline("pipe-a");
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.map((t) => t.id)).toEqual(["pipe-a"]);
+    expect(state.activeTabId).toBe("pipe-a");
+    expect(state.selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("re-activates an already-open tab without duplicating or re-fetching", async () => {
+    await useEditStore.getState().openPipeline("pipe-a");
+    // Simulate the user navigating away (another tab active, something selected).
+    useEditStore.setState({
+      activeTabId: null,
+      selection: { kind: "node", id: "n1" },
+    });
+
+    await useEditStore.getState().openPipeline("pipe-a");
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.filter((t) => t.id === "pipe-a")).toHaveLength(1);
+    expect(state.activeTabId).toBe("pipe-a");
+    expect(state.selection).toEqual({ kind: "none", id: null });
+    // The already-open branch short-circuits before re-fetching.
+    expect(mockFetchPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the scope arg to fetchPipeline for a library-scoped open", async () => {
+    await useEditStore.getState().openPipeline("pipe-lib", "library");
+    expect(mockFetchPipeline).toHaveBeenCalledWith("pipe-lib", "library");
+  });
+
+  it("passes scope undefined when omitted (repo/user resolution)", async () => {
+    await useEditStore.getState().openPipeline("pipe-repo");
+    expect(mockFetchPipeline).toHaveBeenCalledWith("pipe-repo", undefined);
+  });
+});

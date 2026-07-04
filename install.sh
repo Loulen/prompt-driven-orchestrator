@@ -42,7 +42,11 @@ download_and_verify() {
   local archive="pdo-${VERSION}-${PLATFORM}.tar.gz"
   local checksum_file="pdo-${VERSION}-SHA256SUMS.txt"
 
-  local tmpdir
+  # Deliberately NOT `local`: the EXIT trap below fires at script exit, long
+  # after this function has returned. A `local tmpdir` is out of scope by then,
+  # so under `set -u` the trap's `$tmpdir` is an unbound variable — which errors,
+  # skips the cleanup (leaking the temp dir), and makes the whole script exit 1
+  # even on a successful install. A script-global keeps it visible to the trap.
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' EXIT
 

@@ -8,6 +8,7 @@ import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
+import { shouldClearTriggerOnCanvasFocus } from "./lib/triggerCanvasReconcile";
 import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
 import { isLiveRun } from "./types";
 import SessionCounter from "./components/SessionCounter";
@@ -140,6 +141,14 @@ export default function App() {
   const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
+  // #320: the tab id (=== pipeline_id) that selecting a Trigger opened in the
+  // canvas. The reconciliation below reads it to tell the Trigger's OWN
+  // openPipeline focus change apart from a genuine user canvas interaction.
+  // State (not a ref) because the reconciliation reads it *during render*, and
+  // it's always set alongside `selectedTriggerId` (which re-renders anyway), so
+  // there's no extra render — while a ref read during render is a React
+  // anti-pattern the compiler lint (`react-hooks/refs`) rejects.
+  const [triggerOpenedTabId, setTriggerOpenedTabId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -155,6 +164,7 @@ export default function App() {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openRunPipeline = useEditStore((s) => s.openRunPipeline);
+  const openPipeline = useEditStore((s) => s.openPipeline);
   const selection = useEditStore((s) => s.selection);
   const setSelection = useEditStore((s) => s.setSelection);
   const openTabs = useEditStore((s) => s.openTabs);
@@ -225,8 +235,25 @@ export default function App() {
     lastCanvasFocus.selection !== selection ||
     lastCanvasFocus.tabId !== editActiveTabId
   ) {
+    // setLastCanvasFocus MUST stay unconditional — gating it would make this
+    // block re-fire every render (infinite loop).
     setLastCanvasFocus({ selection, tabId: editActiveTabId });
-    if (selectedTriggerId !== null) setSelectedTriggerId(null);
+    // #320: skip clearing the Trigger when this focus change is the Trigger's
+    // OWN openPipeline landing — i.e. the tab it opened is now active with
+    // nothing selected. A genuine canvas reclaim differs and STILL clears
+    // (preserving #247): a node/edge/region select makes selection.kind !==
+    // "none", and switching to another tab makes editActiveTabId !==
+    // triggerOpenedTabId.
+    if (
+      shouldClearTriggerOnCanvasFocus({
+        selectedTriggerId,
+        editActiveTabId,
+        selectionKind: selection.kind,
+        triggerOpenedTabId,
+      })
+    ) {
+      setSelectedTriggerId(null);
+    }
   }
 
   const selectedTrigger =
@@ -256,8 +283,18 @@ export default function App() {
       setSelectedRunId(null);
       setSelectedNodeId(null);
       selectRun(null);
+      // #320: also open the pipeline this Trigger would launch, in the canvas.
+      // Resolve scope the way the daemon resolves it at FIRE time (library-first,
+      // repo/user fallback): if the id is in the library store, open with scope
+      // "library"; otherwise let the daemon resolve a repo/user file (undefined).
+      const trig = triggers.find((t) => t.id === triggerId);
+      if (trig) {
+        const inLibrary = libraryPipelines.some((p) => p.id === trig.pipeline_id);
+        setTriggerOpenedTabId(trig.pipeline_id);
+        openPipeline(trig.pipeline_id, inLibrary ? "library" : undefined);
+      }
     },
-    [selectRun],
+    [selectRun, triggers, libraryPipelines, openPipeline],
   );
 
   const handleCloseNewRunModal = useCallback(() => {

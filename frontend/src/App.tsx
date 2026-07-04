@@ -14,6 +14,7 @@ import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
+import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal from "./components/NewRunModal";
 import SettingsModal from "./components/SettingsModal";
 import ConflictModal from "./components/ConflictModal";
@@ -755,22 +756,6 @@ function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         <Settings size={15} />
       </button>
     </header>
-  );
-}
-
-function RunInfoSidebar({ run }: { run: RunState }) {
-  return (
-    <aside className="flex h-full flex-col bg-bg-2" style={{ fontSize: "12px" }}>
-      <div className="border-b border-line px-3 py-3">
-        <div className="font-medium text-fg">{run.pipeline_name}</div>
-        <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
-          {run.run_id}
-        </div>
-        <div className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
-          Editing run-scoped pipeline &middot; changes sync to template
-        </div>
-      </div>
-    </aside>
   );
 }
 

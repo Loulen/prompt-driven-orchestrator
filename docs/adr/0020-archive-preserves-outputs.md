@@ -92,6 +92,15 @@ seuls la branche `pdo/run-<run-id>`, les worktrees et le `run_dir` repo-local so
 - **Si la copie échoue** (pas de `$HOME`), les handlers 404ent pour ce Run archivé : dégradation
   honnête, identique au comportement actuel (le canvas montre le placeholder).
 
+- **Le prompt *rendu* par itération n'est pas préservé.** À distinguer de l'inspecteur de
+  prompts *template* (`pipeline.prompts/`, servi par `/pipeline` — bien préservé) : le prompt
+  rendu (inputs substitués) que sert `/nodes/<n>/prompt` vit dans le working dir du node
+  (`.../worktree` ou sous-worktree `nodes/<n>/iter-N`), détruit à l'archivage, et **hors** du
+  set préservé. La section « Initial Prompt » du `NodeDetailPanel` dégrade proprement pour un
+  Run archivé (pas de fetch 404, message « Prompt not preserved for archived runs. » au lieu
+  d'un spinner figé). Le préserver imposerait de parcourir chaque sous-worktree *avant* la
+  boucle de suppression — coût disproportionné pour un accessoire ; différé.
+
 ## Relations
 
 - Révise CONTEXT.md §*Cleanup vs archive* et §*Blackboard* (« part au cleanup »).

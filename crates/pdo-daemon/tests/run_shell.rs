@@ -20,6 +20,7 @@ use std::sync::Once;
 use std::time::Duration;
 
 use common::TestDaemon;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 const FAIL_PIPELINE: &str = "shell-fail";
 const LIVE_PIPELINE: &str = "shell-live";
@@ -162,8 +163,15 @@ async fn start_run(daemon: &TestDaemon, pipeline: &str) -> String {
 }
 
 /// Poll `GET /runs` until the run reaches `expected` status, or time out.
+///
+/// The deadline is generous (60 s) on purpose: this suite spawns many real
+/// daemons — each with its own tmux server and `pdo` child processes — and runs
+/// them in parallel, so a run can legitimately take tens of seconds to reach a
+/// terminal status under that contention. A tight deadline flakes even though the
+/// run *did* transition (the failure message then paradoxically prints the
+/// expected status).
 async fn wait_for_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> bool {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while std::time::Instant::now() < deadline {
         if run_status(daemon, run_id).await.as_deref() == Some(expected) {
             return true;
@@ -586,4 +594,144 @@ async fn gate_returns_404_for_unknown_run() {
         .unwrap();
     let resp = post_shell(&daemon, "20200101-000000-nosuchr").await;
     assert_eq!(resp.status(), 404, "an unknown run must 404");
+}
+
+#[tokio::test]
+async fn shell_survives_pty_client_disconnect() {
+    // Integration smoke test for ADR-0021 #4 through the *real* PTY bridge:
+    // attach a WS client to `/sessions/<session>/pty` exactly as the browser
+    // modal does, close it cleanly, and assert the session is still alive.
+    //
+    // NB: whether a clean WS close actually delivers an EOF to the pane (and so
+    // kills a bare `bash -i`) is environment-dependent — the validation env
+    // reproduced it, this test env does not. So this test is NOT the regression
+    // discriminator; `shell_survives_eof_and_exit` is (it forces the exact death
+    // mechanism deterministically). This one guards that the end-to-end bridge
+    // cycle doesn't itself tear the session down.
+    ensure_pdo_on_path();
+    let daemon = TestDaemon::spawn(seed_script(
+        FAIL_YAML,
+        FAIL_PIPELINE,
+        "#!/usr/bin/env bash\nexit 1\n",
+    ))
+    .await
+    .unwrap();
+    let run_id = failed_run(&daemon).await;
+    let socket = daemon.tmux_socket();
+    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+
+    post_shell(&daemon, &run_id).await;
+    assert!(
+        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        "shell must exist right after opening"
+    );
+
+    // Attach a real PTY-bridge client, exactly as the browser modal does.
+    let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("PTY WS should connect");
+    // Drive one resize + a keystroke, then read whatever the pane emits so the
+    // bridge is genuinely live before we tear it down.
+    use futures_util::{SinkExt, StreamExt};
+    ws.send(WsMessage::Text(
+        r#"{"type":"resize","cols":100,"rows":30}"#.into(),
+    ))
+    .await
+    .unwrap();
+    ws.send(WsMessage::Binary(b"echo hi\n".to_vec().into()))
+        .await
+        .unwrap();
+    // Read a couple of output frames (best-effort, bounded).
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
+            Ok(Some(Ok(_))) => {}
+            _ => break,
+        }
+    }
+
+    // Close the WS cleanly — the "close the modal / tab" event.
+    ws.close(None).await.ok();
+    drop(ws);
+
+    // Give the daemon time to tear the bridge down.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(
+        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        "shell session must SURVIVE the PTY client disconnecting (ADR-0021 #4)"
+    );
+}
+
+#[tokio::test]
+async fn shell_survives_eof_and_exit() {
+    // The deterministic regression guard for iteration 1's persistence bug.
+    //
+    // Root cause (from validation): a bare `bash -i` exits on EOF — a stray
+    // Ctrl-D, an explicit `exit`, or the PTY bridge feeding EOF to the pane when
+    // the modal/tab closes. Being the session's ONLY window, that exit destroys
+    // the whole tmux session (ADR-0021 #4 violated). Feeding a raw Ctrl-D to the
+    // pane reproduces the exact failure independently of any environment-specific
+    // bridge timing: on the old tail the session is gone here; on the fixed
+    // respawn-loop tail it survives and stays usable.
+    ensure_pdo_on_path();
+    let daemon = TestDaemon::spawn(seed_script(
+        FAIL_YAML,
+        FAIL_PIPELINE,
+        "#!/usr/bin/env bash\nexit 1\n",
+    ))
+    .await
+    .unwrap();
+    let run_id = failed_run(&daemon).await;
+    let socket = daemon.tmux_socket();
+    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+
+    post_shell(&daemon, &run_id).await;
+    assert!(
+        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        "shell must exist right after opening"
+    );
+
+    // Hammer the pane with the exit triggers that killed iteration 1's shell:
+    // several EOFs (Ctrl-D) and an explicit `exit`.
+    let send_raw = |keys: &str| {
+        let _ = Command::new("tmux")
+            .args(["-L", &socket, "send-keys", "-t", &session, keys])
+            .output();
+    };
+    for _ in 0..3 {
+        send_raw("C-d");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    pdo_daemon::tmux_session_manager::send_keys(&socket, &session, "exit");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    assert!(
+        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        "shell session must SURVIVE EOF/exit — its interactive bash is respawned \
+         so the pane (and session) outlives any single shell (ADR-0021 #4)"
+    );
+
+    // ...and a fresh, usable bash must have taken its place: prove it by writing
+    // a marker from the respawned shell into the pipeline worktree.
+    pdo_daemon::tmux_session_manager::send_keys(
+        &socket,
+        &session,
+        "echo RESPAWN_OK > respawn-marker.txt",
+    );
+    let marker = worktree_path(&daemon, &run_id).join("respawn-marker.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if marker.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let got = std::fs::read_to_string(&marker).unwrap_or_else(|_| {
+        panic!(
+            "respawned shell must be usable — marker missing at {}",
+            marker.display()
+        )
+    });
+    assert!(got.contains("RESPAWN_OK"), "marker bytes: {got}");
 }

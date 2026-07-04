@@ -78,13 +78,18 @@ pub enum SessionTail<'a> {
         timeout_secs: u64,
         env: &'a [(String, String)],
     },
-    /// Ad-hoc run shell (#316 / ADR-0021). Launches an interactive `bash -i` in
-    /// the run's pipeline worktree — no LLM, no prompt file, no I/O catalogue.
-    /// Deterministic like [`SessionTail::Script`], so it **ignores**
-    /// `tmux_cmd_override` (the test seam must never swap the real bash for a
-    /// `sleep`). Still `wrap_with_env`-wrapped so a user-typed `claude` inherits
-    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and can't SIGKILL live
-    /// sibling sessions.
+    /// Ad-hoc run shell (#316 / ADR-0021). Runs an interactive `bash -i` inside a
+    /// `while true` respawn loop in the run's pipeline worktree — no LLM, no
+    /// prompt file, no I/O catalogue. The loop is load-bearing: a bare `bash -i`
+    /// exits on EOF (Ctrl-D / `exit` / PTY-bridge teardown) and, as the session's
+    /// only window, takes the whole session down with it — the persistence bug
+    /// caught in iteration 1's validation. Respawning keeps the pane (hence the
+    /// session) alive for its whole lifetime. Deterministic like
+    /// [`SessionTail::Script`], so it **ignores** `tmux_cmd_override` (the test
+    /// seam must never swap the real bash for a `sleep`). Still
+    /// `wrap_with_env`-wrapped so every respawned `bash -i` inherits
+    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and a user-typed `claude`
+    /// can't SIGKILL live sibling sessions.
     Shell,
 }
 
@@ -234,7 +239,26 @@ pub fn build_tmux_script(
             // #316: a deterministic interactive bash. Like `Script`, the test
             // seam must not clobber it (`sleep 600` instead of a real shell is
             // useless and untestable), so `tmux_cmd_override` is ignored here.
-            ("exec bash -i".to_string(), NO_ENV)
+            //
+            // Respawn loop, NOT a bare `exec bash -i` (iteration 1 shipped that
+            // and it failed the ADR-0021 #4 persistence check): an interactive
+            // bash exits on EOF — a stray Ctrl-D, an explicit `exit`, or the PTY
+            // bridge tearing the pane's input down when the modal/tab closes.
+            // Being the session's only window, that exit destroys the whole
+            // session, losing the long-running command (the `git bisect`) the
+            // feature exists to preserve. Keeping the interactive shell inside a
+            // `while true` loop makes the pane outlive any single bash: on exit a
+            // fresh `bash -i` takes its place in the *same* pane (scrollback
+            // preserved), so the session persists for its whole lifetime and is
+            // torn down only by cleanup / the reaper. The `sleep 0.2` bounds the
+            // loop if bash ever exits instantly (a pathological permanent-EOF
+            // stdin) instead of busy-spinning. The env exports from
+            // `wrap_with_env` sit before the loop, so every respawned bash
+            // inherits `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
+            (
+                "while true; do bash -i; sleep 0.2; done".to_string(),
+                NO_ENV,
+            )
         }
         SessionTail::Agent { model } => {
             let cmd = match tmux_cmd_override {
@@ -1044,9 +1068,11 @@ mod tests {
 
     #[test]
     fn build_script_tail_shell_runs_env_wrapped_bash() {
-        // #316: the run shell tail is `exec bash -i`, still env-wrapped so a
-        // user-typed `claude` inherits CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        // and never SIGKILLs live sibling sessions. No claude, no prompt cat.
+        // #316: the run shell tail is an interactive bash inside a respawn loop
+        // (a bare `exec bash -i` dies on EOF and takes the session with it —
+        // iteration 1's persistence bug). Still env-wrapped so every respawned
+        // bash inherits CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 and never
+        // SIGKILLs live sibling sessions. No claude, no prompt cat.
         let prompt_path = Path::new("/unused");
         let script = build_tmux_script(
             "run-abc",
@@ -1059,8 +1085,13 @@ mod tests {
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(
-            script.contains("exec bash -i"),
+            script.contains("bash -i"),
             "runs interactive bash: {script}"
+        );
+        assert!(
+            script.contains("while true; do bash -i; sleep 0.2; done"),
+            "interactive bash is wrapped in a respawn loop so an EOF/exit can't \
+             destroy the session (ADR-0021 #4): {script}"
         );
         assert!(
             !script.contains("claude"),
@@ -1092,8 +1123,8 @@ mod tests {
             "override ignored for the run shell: {script}"
         );
         assert!(
-            script.contains("exec bash -i"),
-            "shell tail preserved: {script}"
+            script.contains("while true; do bash -i; sleep 0.2; done"),
+            "shell tail (respawn loop) preserved: {script}"
         );
     }
 

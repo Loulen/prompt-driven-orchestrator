@@ -23,11 +23,24 @@ describe("RunShellModal", () => {
     expect(term.getAttribute("data-expanded")).toBe("true");
   });
 
-  it("closes on Escape", () => {
+  it("closes on Escape when focus is outside the terminal", () => {
     const onClose = vi.fn();
     render(<RunShellModal session="pdo-shell-x" onClose={onClose} />);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT steal Escape from a focused terminal (vim/less/readline)", () => {
+    const onClose = vi.fn();
+    render(<RunShellModal session="pdo-shell-x" onClose={onClose} />);
+    // Simulate xterm's focusable helper textarea being the active element.
+    const ta = document.createElement("textarea");
+    ta.className = "xterm-helper-textarea";
+    document.body.appendChild(ta);
+    ta.focus();
+    fireEvent.keyDown(ta, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    ta.remove();
   });
 
   it("closes on the close button", () => {

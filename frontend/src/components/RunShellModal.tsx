@@ -19,13 +19,26 @@ interface Props {
  * scrollback.
  */
 export default function RunShellModal({ session, onClose }: Props) {
-  // Escape-to-close parity with CleanupConfirmModal.
+  // Escape-to-close, but not at the terminal's expense. Unlike a plain
+  // confirm/markdown modal, this one wraps a live shell where Escape is a
+  // load-bearing key (vim, less, readline all consume it). So:
+  //   - listen in the CAPTURE phase, so we always see Escape *before* xterm can
+  //     stopPropagation it (iteration 1's bubble-phase listener silently lost
+  //     Escape whenever the terminal had focus — the non-blocking validation
+  //     finding);
+  //   - but bail when the xterm textarea is the active element, letting Escape
+  //     flow to the shell so interactive tools keep working.
+  // Focus anywhere else (the Close button, the backdrop, nothing) closes the
+  // modal; the X button and backdrop click are the always-on close affordances.
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      const active = document.activeElement;
+      if (active && active.classList.contains("xterm-helper-textarea")) return;
+      onClose();
     }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
+    document.addEventListener("keydown", handleKey, true);
+    return () => document.removeEventListener("keydown", handleKey, true);
   }, [onClose]);
 
   return (

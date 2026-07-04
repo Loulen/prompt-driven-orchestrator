@@ -119,6 +119,23 @@ export async function attachManager(runId: string): Promise<void> {
   if (!resp.ok) throw new Error(`manager attach failed: ${resp.status}`);
 }
 
+/**
+ * Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline
+ * worktree (#316 / ADR-0021). Create-if-absent; returns the tmux session name to
+ * attach to via the existing `WS /sessions/<session>/pty` bridge (no OS spawn).
+ * `created` distinguishes a fresh shell from a re-attach.
+ */
+export async function openRunShell(
+  runId: string,
+): Promise<{ session: string; created: boolean }> {
+  const resp = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(runId)}/shell`,
+    { method: "POST" },
+  );
+  if (!resp.ok) throw new Error(`open shell failed: ${resp.status}`);
+  return resp.json();
+}
+
 export interface PaneResponse {
   content: string;
   session_name: string;

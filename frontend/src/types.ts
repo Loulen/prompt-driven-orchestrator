@@ -6,6 +6,16 @@ export function isLiveRun(status: RunStatus): boolean {
 }
 
 /**
+ * Mirror of Rust `RunStatus::is_terminal()` (the total complement of `is_live`):
+ * `{completed, failed, skipped, halted, archived}`. NOTE this INCLUDES
+ * `archived` — callers that gate on "terminal AND not archived" (e.g. the
+ * "Open session" shell action, #316) must exclude `archived` explicitly.
+ */
+export function isTerminalRun(status: RunStatus): boolean {
+  return !isLiveRun(status);
+}
+
+/**
  * How the daemon process was launched + whether it is installed as a
  * persistent service (#156 / ADR-0019). Folded into `GET /sessions` (not a
  * new route) and computed once at daemon boot.

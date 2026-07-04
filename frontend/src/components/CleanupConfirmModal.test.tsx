@@ -20,6 +20,10 @@ describe("CleanupConfirmModal", () => {
       expect(screen.getByText(/hasn't finished/)).toBeInTheDocument();
       // The expected short id is shown inline so the friction is derivable on screen.
       expect(screen.getByText(SHORT_ID)).toBeInTheDocument();
+      // #315/ADR-0020: the copy must NOT claim completed outputs are lost — they
+      // are preserved and stay viewable read-only after archiving.
+      expect(screen.getByText(/completed outputs are kept/i)).toBeInTheDocument();
+      expect(screen.queryByText(/outputs are lost/i)).toBeNull();
     });
 
     it("disables the confirm button on mount and a stray click does not archive", () => {
@@ -93,7 +97,10 @@ describe("CleanupConfirmModal", () => {
           onCancel={vi.fn()}
         />,
       );
-      expect(screen.getByText(/remove worktrees and artifacts/)).toBeInTheDocument();
+      // #315/ADR-0020: the terminal-run copy states worktrees are removed but the
+      // run's completed outputs are kept (viewable read-only) — never "lost".
+      expect(screen.getByText(/completed outputs\s+are kept/i)).toBeInTheDocument();
+      expect(screen.queryByText(/artifacts.*lost|outputs.*lost/i)).toBeNull();
       // No typed-confirmation input on the terminal branch.
       expect(screen.queryByTestId("cleanup-confirm-input")).toBeNull();
 

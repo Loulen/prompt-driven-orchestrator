@@ -154,7 +154,6 @@ export default function App() {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openRunPipeline = useEditStore((s) => s.openRunPipeline);
-  const closeRunPipeline = useEditStore((s) => s.closeRunPipeline);
   const selection = useEditStore((s) => s.selection);
   const setSelection = useEditStore((s) => s.setSelection);
   const openTabs = useEditStore((s) => s.openTabs);
@@ -192,6 +191,16 @@ export default function App() {
 
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
+
+  // #315: an archived run is read-only — its worktree (and `pipeline.yaml`) is
+  // gone, so any save would PUT into a 404. `isArchived` tracks the *selected*
+  // run (drives the NodeDetailPanel + the archived aside below). The edit
+  // affordances (Ctrl+S / undo-redo / the canvas) gate on the stricter
+  // `isActiveRunArchived`: the ACTIVE tab must BE that archived run, so a
+  // template tab stays editable while an archived run is merely selected.
+  const isArchived = selectedRun?.status === "archived";
+  const isActiveRunArchived =
+    isEditingRun && editTab?.runId === selectedRun?.run_id && isArchived;
 
   // The Trigger backing the right-panel detail view (#162), shown whenever a
   // Trigger is selected and the info overlay is closed — even while a run-edit
@@ -392,7 +401,10 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!hasEditTab) return;
+    // #315: never fire a save for an archived run — the tab is read-only and a
+    // PUT would 404. `isActiveRunArchived` also removes this listener the moment
+    // the open run flips to archived (via refreshRun).
+    if (!hasEditTab || isActiveRunArchived) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
@@ -401,7 +413,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hasEditTab, editActiveTabId, editSave]);
+  }, [hasEditTab, isActiveRunArchived, editActiveTabId, editSave]);
 
   // Canvas undo/redo (ADR-0014 / #226): Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or
   // Ctrl/Cmd+Y redo. Sibling to the Ctrl+S effect above, but — unlike Save — it
@@ -409,11 +421,12 @@ export default function App() {
   // logic (and that input-focus guard) lives in `handleUndoRedoKeydown` so it's
   // unit-testable without rendering the canvas; this effect just wires it up.
   useEffect(() => {
-    if (!hasEditTab) return;
+    // #315: undo/redo are edit affordances — off for a read-only archived run.
+    if (!hasEditTab || isActiveRunArchived) return;
     const handler = (e: KeyboardEvent) => handleUndoRedoKeydown(e, editUndo, editRedo);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hasEditTab, editUndo, editRedo]);
+  }, [hasEditTab, isActiveRunArchived, editUndo, editRedo]);
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -434,19 +447,18 @@ export default function App() {
         if (msg.type === "trigger_fired") refreshRuns();
         return;
       }
-      // The run's on-disk worktree (and pipeline.yaml) is deleted on archive,
-      // so any open tab for that run is now backed by nothing. Prune it before
-      // the next flushPendingSaves tries to PUT into a 404.
-      if (msg.type === "event" && msg.event?.kind === "run_archived") {
-        closeRunPipeline(msg.event.run_id);
-      }
+      // #315: an archived run's outputs are now preserved (ADR-0020) and its
+      // `/pipeline` endpoint keeps serving, so we no longer prune the open tab
+      // on `run_archived`. `refreshRun` below flips the run's status to
+      // `archived`, which turns the open canvas read-only in place — the run the
+      // user is watching stays put instead of vanishing.
       refreshRuns();
       refreshRun();
       // Node start/complete/fail/waiting transitions change the live session
       // count (#159) — keep the status-bar counter current.
       refreshSessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, reloadPipeline, loadPipelines, closeRunPipeline]);
+  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, reloadPipeline, loadPipelines]);
 
   // Detect: active tab is a run whose library twin (matched by id, then name)
   // diverges from the run snapshot — pipeline or prompts, the same comparison
@@ -495,8 +507,6 @@ export default function App() {
   const selectedNodeType = selectedRun?.node_defs?.find(
     (d) => d.id === selectedNodeId,
   )?.node_type ?? null;
-
-  const isArchived = selectedRun?.status === "archived";
 
   const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
   const minSizePx = `${layout.minSizePx}px`;

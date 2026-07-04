@@ -1053,6 +1053,23 @@ impl DaemonHandle {
         boot_recovery::run_boot_recovery(&self.state).await;
     }
 
+    /// Run a single orphan-sweep (reaper) pass synchronously. Lets integration
+    /// tests drive session reaping deterministically instead of racing the
+    /// ~60 s background interval + process-global TTL env (#316). Resolves the
+    /// TTL exactly like the background loop (`stored → env → default`).
+    pub async fn run_orphan_sweep_tick(&self) {
+        let socket = self.state.tmux_socket();
+        let stored_ttl = instance_config::get(&self.state.db)
+            .await
+            .ok()
+            .and_then(|c| c.reaper_ttl_secs)
+            .map(|n| n as u64);
+        let ttl = tmux_session_manager::reaper_ttl_with(stored_ttl);
+        if let Err(e) = run_orphan_sweep(&self.state.db, &socket, ttl).await {
+            warn!("Reaper sweep (test seam) failed: {e}");
+        }
+    }
+
     /// Arm the one-shot stale-sweep poison (#251): the next [`run_stale_detection`]
     /// — driven by [`Self::run_stale_detection_tick`] or the background loop —
     /// panics, then disarms itself. Test seam only; lets a test arm the poison
@@ -2413,6 +2430,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/sessions/{session_id}/attach", post(session_attach))
         .route("/sessions/{run_id}/manager/attach", post(manager_attach))
+        .route("/sessions/{run_id}/shell", post(open_run_shell))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
         .route(
@@ -6572,6 +6590,22 @@ async fn run_orphan_sweep(db: &sqlx::SqlitePool, socket: &str, ttl: Duration) ->
                 });
             }
 
+            // #316: the run shell is not a projected node — resolve it against
+            // the run itself (mirror of `__manager__`). Without this branch,
+            // `run_state.nodes.get("__shell__")` is None → the sweep would kill
+            // the shell as "absent" on every pass. The Shell sweep arm ignores
+            // `completed_at` (no TTL), so only `is_archived` is load-bearing.
+            if node_id == "__shell__" {
+                return Some(tmux_session_manager::NodeRunInfo {
+                    completed_at: run_state
+                        .completed_at
+                        .as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc)),
+                    is_archived,
+                });
+            }
+
             let node = run_state.nodes.get(node_id)?;
             let completed_at = node
                 .completed_at
@@ -8398,6 +8432,15 @@ async fn run_command(
                 _ => {}
             }
 
+            // #316: a resumable run re-drives the git merge in its pipeline
+            // worktree; kill any open shell (best-effort) so its uncommitted
+            // edits can't race the merge. 409-refusing would deadlock — a shell
+            // only dies on archive, reachable only from a terminal state.
+            tmux_session_manager::kill(
+                &state.tmux_socket(),
+                &tmux_session_manager::shell_session_name(&run_id),
+            );
+
             re_evaluate_after_command(&state, &run_id).await;
 
             info!("resume_run: run {run_id}");
@@ -9182,6 +9225,118 @@ async fn manager_attach(
     }
 }
 
+/// Response of `POST /sessions/{run_id}/shell` (#316 / ADR-0021).
+///
+/// `created` distinguishes a freshly-spawned shell from a re-attach of the
+/// existing one (create-if-absent). The client attaches to `session` via the
+/// existing `WS /sessions/<session>/pty` bridge — this endpoint never spawns an
+/// OS terminal (ADR-0005: inline xterm.js is primary).
+#[derive(Serialize)]
+struct ShellResponse {
+    ok: bool,
+    session: String,
+    created: bool,
+}
+
+/// Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline
+/// worktree (#316 / ADR-0021).
+///
+/// Create-if-absent, one shell per Run (`pdo-shell-<run_id>`). The server is the
+/// source of truth for eligibility (the client can't see the worktree path):
+/// `409` unless the run is terminal, non-archived, and its pipeline worktree
+/// still exists on disk (the *Reapable run* predicate, tightened onto the
+/// precise `worktree/` dir); `404` if the run is unknown.
+async fn open_run_shell(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let events = match load_events(&state.db, &run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        }
+    };
+
+    // Server-side eligibility gate = "Reapable run" (terminal ∧ non-archived ∧
+    // pipeline worktree present). A live run is refused because a stray edit in
+    // its worktree would break the daemon's `git merge` on node completion; an
+    // archived run has no worktree left (ADR-0020).
+    let repo_root = effective_repo_root(&state, &run_state);
+    let worktree = worktree_dir_for_run(&repo_root, &run_id);
+    let eligible = run_state.status.is_terminal()
+        && run_state.status != event_log::RunStatus::Archived
+        && worktree.exists();
+    if !eligible {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "run is not shell-eligible (must be terminal, non-archived, worktree present)"
+            })),
+        )
+            .into_response();
+    }
+
+    let session = tmux_session_manager::shell_session_name(&run_id);
+    let socket = state.tmux_socket();
+
+    // Create-if-absent, race-free (create-then-verify-on-failure): a concurrent
+    // POST may win the `new-session` (tmux rejects the duplicate); on our spawn
+    // failure, re-test existence — if the session is now there, the other POST
+    // created it, so this is a benign re-attach.
+    if tmux_session_manager::session_exists(&socket, &session) {
+        return (
+            StatusCode::OK,
+            Json(ShellResponse {
+                ok: true,
+                session,
+                created: false,
+            }),
+        )
+            .into_response();
+    }
+
+    match tmux_session_manager::spawn_shell(&session, &worktree, &run_id, state.port) {
+        Ok(()) => {
+            info!("Opened run shell {session} in {}", worktree.display());
+            (
+                StatusCode::OK,
+                Json(ShellResponse {
+                    ok: true,
+                    session,
+                    created: true,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            if tmux_session_manager::session_exists(&socket, &session) {
+                // A concurrent POST won the race — re-attach, not an error.
+                (
+                    StatusCode::OK,
+                    Json(ShellResponse {
+                        ok: true,
+                        session,
+                        created: false,
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("failed to open shell: {e}") })),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
 fn detect_terminal() -> String {
     // PDO_TERMINAL env var overrides
     if let Ok(t) = std::env::var("PDO_TERMINAL") {
@@ -9312,6 +9467,9 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     }
     let mgr_session = tmux_session_manager::manager_session_name(run_id);
     tmux_session_manager::kill(&socket, &mgr_session);
+    // #316: kill any ad-hoc run shell before the worktree is torn down.
+    let shell_session = tmux_session_manager::shell_session_name(run_id);
+    tmux_session_manager::kill(&socket, &shell_session);
 
     let repo_root = effective_repo_root(state, &run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);

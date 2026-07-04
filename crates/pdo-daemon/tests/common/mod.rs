@@ -150,6 +150,13 @@ impl TestDaemon {
         }
     }
 
+    /// Run a single orphan-sweep (reaper) pass synchronously (test seam, #316).
+    pub async fn run_orphan_sweep_tick(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.run_orphan_sweep_tick().await;
+        }
+    }
+
     /// Arm the one-shot stale-sweep poison so the next stale-detection sweep
     /// panics, then disarms itself (#251 fault injection, test seam). Arm *after*
     /// boot so the immediate startup sweep doesn't consume it.

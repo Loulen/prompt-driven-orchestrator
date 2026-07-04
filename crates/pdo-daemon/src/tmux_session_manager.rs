@@ -78,6 +78,14 @@ pub enum SessionTail<'a> {
         timeout_secs: u64,
         env: &'a [(String, String)],
     },
+    /// Ad-hoc run shell (#316 / ADR-0021). Launches an interactive `bash -i` in
+    /// the run's pipeline worktree — no LLM, no prompt file, no I/O catalogue.
+    /// Deterministic like [`SessionTail::Script`], so it **ignores**
+    /// `tmux_cmd_override` (the test seam must never swap the real bash for a
+    /// `sleep`). Still `wrap_with_env`-wrapped so a user-typed `claude` inherits
+    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and can't SIGKILL live
+    /// sibling sessions.
+    Shell,
 }
 
 /// Env var that overrides the reaper TTL (seconds). Default: 3600 (1 h).
@@ -222,6 +230,12 @@ pub fn build_tmux_script(
         SessionTail::Script { timeout_secs, env } => {
             (build_script_tail(prompt_path, timeout_secs), env)
         }
+        SessionTail::Shell => {
+            // #316: a deterministic interactive bash. Like `Script`, the test
+            // seam must not clobber it (`sleep 600` instead of a real shell is
+            // useless and untestable), so `tmux_cmd_override` is ignored here.
+            ("exec bash -i".to_string(), NO_ENV)
+        }
         SessionTail::Agent { model } => {
             let cmd = match tmux_cmd_override {
                 Some(cmd) => cmd.to_string(),
@@ -271,6 +285,15 @@ pub fn node_session_name(run_id: &str, node_id: &str, iter: i64) -> String {
 /// Session naming convention for the Pipeline Manager.
 pub fn manager_session_name(run_id: &str) -> String {
     format!("pdo-mgr-{run_id}")
+}
+
+/// Session naming convention for an ad-hoc run shell (#316, ADR-0021).
+///
+/// One fixed name per Run so `POST /sessions/{run_id}/shell` is create-if-absent
+/// (a second click re-attaches the same session). Parsed back out by
+/// [`parse_session_name`] via the `shell-` prefix branch, mirroring `mgr-`.
+pub fn shell_session_name(run_id: &str) -> String {
+    format!("pdo-shell-{run_id}")
 }
 
 /// Spawn a detached tmux session for a NodeRun.
@@ -324,6 +347,49 @@ pub fn spawn(
     enable_mouse(&socket, session_name);
 
     info!("Spawned tmux session: {session_name}");
+    Ok(())
+}
+
+/// Spawn a detached tmux session running an interactive `bash -i` (#316 / ADR-0021).
+///
+/// Mirror of [`spawn`] minus the prompt file: an ad-hoc shell has no prompt, no
+/// node, and no I/O catalogue. The session is env-wrapped (`__shell__`, iter 0)
+/// so a user-typed `claude` inherits `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+/// and it **ignores** `tmux_cmd_override` (see [`SessionTail::Shell`]).
+pub fn spawn_shell(
+    session_name: &str,
+    working_dir: &Path,
+    run_id: &str,
+    daemon_port: u16,
+) -> Result<()> {
+    // prompt_path is unused for `SessionTail::Shell` (bash has no prompt);
+    // pass the working_dir as a harmless placeholder.
+    let script = build_tmux_script(
+        run_id,
+        "__shell__",
+        0,
+        daemon_port,
+        working_dir,
+        None,
+        SessionTail::Shell,
+    );
+    let socket = tmux_socket_name(daemon_port);
+
+    let output = tmux(&socket)
+        .args(["new-session", "-d", "-s", session_name, "-c"])
+        .arg(working_dir)
+        .arg(&script)
+        .output()
+        .context("failed to run tmux new-session (shell)")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("tmux new-session (shell) failed: {stderr}");
+    }
+
+    enable_mouse(&socket, session_name);
+
+    info!("Spawned run shell tmux session: {session_name}");
     Ok(())
 }
 
@@ -446,6 +512,10 @@ pub enum ParsedSession {
     Manager {
         run_id: String,
     },
+    /// Ad-hoc run shell `pdo-shell-<run_id>` (#316 / ADR-0021).
+    Shell {
+        run_id: String,
+    },
 }
 
 /// Parse a session name like `pdo-<run_id>-<node_id>-iter-<N>` or
@@ -456,6 +526,18 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
     if let Some(run_id) = rest.strip_prefix("mgr-") {
         if !run_id.is_empty() {
             return Some(ParsedSession::Manager {
+                run_id: run_id.to_string(),
+            });
+        }
+        return None;
+    }
+
+    // #316: `pdo-shell-<run_id>` — parsed BEFORE the `-iter-` split (a shell name
+    // has no `-iter-` suffix, so it would otherwise return None and be killed as
+    // "unrecognised" by the orphan sweep).
+    if let Some(run_id) = rest.strip_prefix("shell-") {
+        if !run_id.is_empty() {
+            return Some(ParsedSession::Shell {
                 run_id: run_id.to_string(),
             });
         }
@@ -593,6 +675,24 @@ where
                     _ => {}
                 }
             }
+            ParsedSession::Shell { ref run_id } => {
+                // #316: mirror the Manager arm — reap iff the run is absent or
+                // archived, NEVER on a TTL (an interactive shell must not be
+                // yanked from a user who stepped away). The `__shell__` lookup
+                // branch supplies the run's archived flag.
+                let info = lookup(run_id, "__shell__", 0);
+                match info {
+                    None => {
+                        info!("Orphan sweep: killing shell session for absent run {run_id}");
+                        kill(socket, session_name);
+                    }
+                    Some(info) if info.is_archived => {
+                        info!("Orphan sweep: killing shell session for archived run {run_id}");
+                        kill(socket, session_name);
+                    }
+                    _ => {}
+                }
+            }
             ParsedSession::NodeRun {
                 ref run_id,
                 ref node_id,
@@ -700,10 +800,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_shell_session() {
+        // #316: `pdo-shell-<run_id>` parses to a Shell variant, even though the
+        // run_id itself contains dashes and no `-iter-` suffix.
+        let name = "pdo-shell-20260506-143000-a3f1b2c";
+        let parsed = parse_session_name(name).unwrap();
+        assert_eq!(
+            parsed,
+            ParsedSession::Shell {
+                run_id: "20260506-143000-a3f1b2c".into(),
+            }
+        );
+    }
+
+    #[test]
     fn parse_garbage_returns_none() {
         assert!(parse_session_name("foo-bar").is_none());
         assert!(parse_session_name("pdo-").is_none());
         assert!(parse_session_name("pdo-mgr-").is_none());
+        assert!(parse_session_name("pdo-shell-").is_none());
     }
 
     #[test]
@@ -924,6 +1039,69 @@ mod tests {
         assert!(
             env_at < body_at,
             "env must be exported before the body runs: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_tail_shell_runs_env_wrapped_bash() {
+        // #316: the run shell tail is `exec bash -i`, still env-wrapped so a
+        // user-typed `claude` inherits CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+        // and never SIGKILLs live sibling sessions. No claude, no prompt cat.
+        let prompt_path = Path::new("/unused");
+        let script = build_tmux_script(
+            "run-abc",
+            "__shell__",
+            0,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Shell,
+        );
+        assert!(script.starts_with("exec bash -c "));
+        assert!(
+            script.contains("exec bash -i"),
+            "runs interactive bash: {script}"
+        );
+        assert!(
+            !script.contains("claude"),
+            "shell launches no claude: {script}"
+        );
+        assert!(script.contains("PDO_RUN_ID"));
+        assert!(
+            script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"),
+            "env-safety export present: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_tail_shell_bypasses_cmd_override() {
+        // #316: like a script node, the shell IS deterministic bash — the test
+        // seam (`tmux_cmd_override`) must NOT swap it for a `sleep`.
+        let prompt_path = Path::new("/unused");
+        let script = build_tmux_script(
+            "run-abc",
+            "__shell__",
+            0,
+            5172,
+            prompt_path,
+            Some("exec sleep 600"),
+            SessionTail::Shell,
+        );
+        assert!(
+            !script.contains("sleep 600"),
+            "override ignored for the run shell: {script}"
+        );
+        assert!(
+            script.contains("exec bash -i"),
+            "shell tail preserved: {script}"
+        );
+    }
+
+    #[test]
+    fn shell_session_name_format() {
+        assert_eq!(
+            shell_session_name("20260506-143000-a3f1b2c"),
+            "pdo-shell-20260506-143000-a3f1b2c"
         );
     }
 

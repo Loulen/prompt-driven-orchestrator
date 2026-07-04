@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, Pencil, Plus, Star, Trash2, Zap } from "lucide-react";
-import { isLiveRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pencil, Plus, SquareTerminal, Star, Trash2, Zap } from "lucide-react";
+import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, renameRun } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
+import RunShellModal from "./RunShellModal";
 import TriggersListPanel from "./TriggersListPanel";
 
 type LeftTab = "runs" | "triggers" | "library";
@@ -67,6 +68,9 @@ export default function UnifiedLeftPanel({
     { runId: string; status: RunStatus } | null
   >(null);
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
+  // Ad-hoc bash shell opened on a terminal run (#316). Holds the tmux session
+  // name to attach the inline terminal to.
+  const [shellRun, setShellRun] = useState<{ runId: string; session: string } | null>(null);
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -243,6 +247,26 @@ export default function UnifiedLeftPanel({
             data-testid="rename-button"
           >
             <Pencil size={12} />
+          </span>
+        )}
+        {isTerminalRun(run.status) && !isArchived && (
+          <span
+            role="button"
+            title="Open a bash shell in this run's worktree"
+            data-testid="open-session-button"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={async (e) => {
+              e.stopPropagation();
+              try {
+                const { session } = await openRunShell(run.run_id);
+                setShellRun({ runId: run.run_id, session });
+              } catch {
+                // Silent, like handleCleanup — the server gate may 409 if the
+                // worktree vanished out-of-band; nothing actionable in the row.
+              }
+            }}
+          >
+            <SquareTerminal size={12} />
           </span>
         )}
         {canCleanup && (
@@ -637,6 +661,13 @@ export default function UnifiedLeftPanel({
         <ForgetRunModal
           onConfirm={() => handleForget(confirmForget)}
           onCancel={() => setConfirmForget(null)}
+        />
+      )}
+
+      {shellRun && (
+        <RunShellModal
+          session={shellRun.session}
+          onClose={() => setShellRun(null)}
         />
       )}
 

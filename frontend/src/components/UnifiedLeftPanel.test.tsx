@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, renameRun } from "../api";
+import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, renameRun } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -11,6 +11,7 @@ const mockDeletePipeline = vi.mocked(deletePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
 const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
 const mockDeleteLibraryPipeline = vi.mocked(deleteLibraryPipeline);
+const mockOpenRunShell = vi.mocked(openRunShell);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -23,6 +24,9 @@ vi.mock("../api", () => ({
     .mockResolvedValue({ id: "x-copy", scope: "user", entry: null }),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   deleteTrigger: vi.fn().mockResolvedValue(undefined),
+  openRunShell: vi
+    .fn()
+    .mockResolvedValue({ session: "pdo-shell-run-term-1", created: true }),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   fetchPipeline: vi.fn().mockResolvedValue({
     scope: "library",
@@ -30,6 +34,14 @@ vi.mock("../api", () => ({
     prompts: {},
     diagnostics: [],
   }),
+}));
+
+// Stub the shell modal so a click that mounts it doesn't drag in xterm.js / a
+// real PTY WebSocket. It echoes the `session` prop for assertions (#316).
+vi.mock("./RunShellModal", () => ({
+  default: ({ session }: { session: string }) => (
+    <div data-testid="run-shell-modal" data-session={session} />
+  ),
 }));
 
 const noop = () => {};
@@ -731,5 +743,66 @@ describe("UnifiedLeftPanel delete cascades to library copy (#227)", () => {
     );
     expect(screen.queryByTestId("confirm-delete-backdrop")).not.toBeInTheDocument();
     expect(mockDeletePipeline).not.toHaveBeenCalled();
+  });
+});
+
+describe("UnifiedLeftPanel — Open session (#316)", () => {
+  const TERMINAL_NON_ARCHIVED: RunListEntry["status"][] = [
+    "completed",
+    "failed",
+    "skipped",
+    "halted",
+  ];
+  const HIDDEN: RunListEntry["status"][] = [
+    "running",
+    "awaiting_user",
+    "paused",
+    "archived",
+  ];
+
+  it.each(TERMINAL_NON_ARCHIVED)(
+    "renders the open-session button for a %s run",
+    (status) => {
+      const runs: RunListEntry[] = [
+        { run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
+      ];
+      renderPanel({ runs });
+      expect(screen.getByTestId("open-session-button")).toBeInTheDocument();
+    },
+  );
+
+  it.each(HIDDEN)("hides the open-session button for a %s run", (status) => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
+    ];
+    renderPanel({ runs });
+    expect(screen.queryByTestId("open-session-button")).not.toBeInTheDocument();
+  });
+
+  it("clicking open-session calls openRunShell and mounts the shell modal", async () => {
+    mockOpenRunShell.mockResolvedValueOnce({ session: "pdo-shell-run-term-1", created: true });
+    const runs: RunListEntry[] = [
+      { run_id: "run-term-1", pipeline_name: "p", status: "failed", started_at: null, name: "R" },
+    ];
+    renderPanel({ runs });
+
+    expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("open-session-button"));
+
+    await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-1"));
+    const modal = await screen.findByTestId("run-shell-modal");
+    expect(modal.getAttribute("data-session")).toBe("pdo-shell-run-term-1");
+  });
+
+  it("does not mount the shell modal when openRunShell rejects (silent, like cleanup)", async () => {
+    mockOpenRunShell.mockRejectedValueOnce(new Error("409"));
+    const runs: RunListEntry[] = [
+      { run_id: "run-term-2", pipeline_name: "p", status: "completed", started_at: null, name: "R" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.click(screen.getByTestId("open-session-button"));
+    await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-2"));
+    expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
   });
 });

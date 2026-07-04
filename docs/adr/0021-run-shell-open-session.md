@@ -1,6 +1,6 @@
 # Shell de run — « Open session » (bash ad-hoc dans le worktree pipeline)
 
-> Statut : **proposed** (#316). À passer `accepted` quand le code atterrit sur `main`.
+> Statut : **accepted** (#316). Implémenté : endpoint `POST /sessions/{run_id}/shell`, session `pdo-shell-<run-id>` (variant `SessionTail::Shell` + `ParsedSession::Shell`), 4 sites reaper coordonnés, kill `cleanup_run` + interlock `resume_run`, bouton « Open session » + `RunShellModal` (terminal inline).
 
 L'inspection post-mortem d'un Run terminal (Completed/Failed/Skipped/Halted) se fait aujourd'hui à l'aveugle : le worktree pipeline `<repo>/.pdo/runs/<run-id>/worktree/` existe encore sur disque tant que le Run n'est pas archivé (cf. *Reapable run*, ADR-0020), mais l'utilisateur n'a aucun moyen depuis l'app d'ouvrir un vrai shell dedans pour lire les fichiers, faire un `git log`/`git diff`, relancer un test, comprendre pourquoi un merge a échoué. Le Pipeline Manager offre un `bash` complet mais c'est une **REPL Claude Code** attachée au Run (conversationnelle, prompt augmenté, coûteuse) — pas un terminal brut, et son cwd n'est pas nécessairement là où l'utilisateur veut fouiller.
 

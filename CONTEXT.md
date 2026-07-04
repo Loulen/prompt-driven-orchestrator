@@ -192,10 +192,12 @@ _Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou un commentaire
 
 Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipeline Run. Toutes les sorties documentaires de tous les NodeRuns y sont persistées et adressées par chemin.
 
-- **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run, part au cleanup.
+- **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run. Part au cleanup **du worktree** — mais est d'abord copié vers le *Blackboard archivé* global (`~/.pdo/runs/<run-id>/artifacts/`, lecture seule, survit au cleanup ; cf. §*Cleanup vs archive* et ADR-0020).
 - **Format** : markdown brut (`.md`) avec **YAML frontmatter** pour les métadonnées structurées (verdict, statut, références, etc.). Le corps reste lisible humainement, le frontmatter est parsable par le runtime.
 - **Wires** : dans l'éditeur, un wire de `Node A → Node B` n'est pas un transport ; c'est une **déclaration de dépendance**. Le runtime traduit en : *"avant de lancer B, attendre que A ait posé son artefact ; l'input port de B le lit depuis le Blackboard"*.
 - **Cycles + accumulation** : chaque tour de cycle écrit dans un sous-dossier `iter-<N>/`. Les ports d'entrée qui veulent accumuler (ex. `reviews_bloquantes`) lisent un glob `iter-*/review.md` → liste naturellement ordonnée.
+
+**Blackboard archivé** *(terme)* : copie **durable et lecture seule** du Blackboard d'un Run (plus son `pipeline.yaml` + `pipeline.prompts/`), écrite sous `~/.pdo/runs/<run-id>/` (store **global**, hors du `run_dir` repo-local) au moment de l'archivage, **avant** la suppression du worktree. Contrairement au Blackboard vif (qui *part au cleanup*), il **survit** au cleanup — c'est ce qui permet de rouvrir un Run `archived` et d'accéder à ses outputs (canvas réhydraté en lecture seule via `GET /runs/<id>/pipeline`). **N'est pas** récupéré par `cleanup_run` (repo-local) ; sa suppression relève du `forget` (cf. §*Cleanup vs archive*, ADR-0020).
 
 ### Schéma d'adressage
 
@@ -732,7 +734,7 @@ PDO est un **atelier de production de code** ; la conception de pipelines est un
 ### Layout 3 panneaux
 
 - **Gauche — Liste, à trois onglets** `Runs | Triggers | Library` (l'ancien empilement de sections collapsibles devient une barre d'onglets, cf. mockup `lp-tabs`). Triggers est au milieu : il *produit* des Runs (gauche) et *consomme* des pipelines de la Library (droite).
-  - **Runs** : les Runs **actifs** en haut (regroupés par repo cible si ≥ 2 repos distincts, sinon liste plate — cf. *Repo cible*), puis une section **« Archived »** repliable et **plate** regroupant les Runs `archived` (repliée par défaut ; s'ouvre d'office quand le Run sélectionné vient d'être archivé, pour ne pas le faire disparaître sous les yeux). La section Archived est un **regroupement de vue** — jamais un dossier disque, jamais un delete (cf. *Cleanup vs archive*). Un Run créé par un Trigger porte un badge de provenance (icône + nom du Trigger, cliquable vers celui-ci).
+  - **Runs** : les Runs **actifs** en haut (regroupés par repo cible si ≥ 2 repos distincts, sinon liste plate — cf. *Repo cible*), puis une section **« Archived »** repliable et **plate** regroupant les Runs `archived` (repliée par défaut ; s'ouvre d'office quand le Run sélectionné vient d'être archivé, pour ne pas le faire disparaître sous les yeux). La section Archived (dans la liste de gauche) est un **regroupement de vue** — pas ce dossier de la liste qui serait un répertoire disque, et jamais un delete (cf. *Cleanup vs archive*). À ne pas confondre avec le *Blackboard archivé* (`~/.pdo/runs/<id>/`), qui est bien un dossier disque durable mais côté store, pas côté UI. Un Run créé par un Trigger porte un badge de provenance (icône + nom du Trigger, cliquable vers celui-ci).
   - **Triggers** : liste des Triggers (cf. *Trigger*), toggle enable/disable, « + New Trigger ».
   - **Library** : pipelines templates avec badge favorite.
   - Click → bascule l'affichage middle/droite. Le contexte d'édition (run-snapshot ou template) est inféré du clic, pas d'un toggle global.
@@ -780,15 +782,15 @@ Chaque entrée de la liste de gauche porte un icône coloré indiquant son statu
 
 ### Cleanup vs archive
 
-Pas de "permanent delete" v1. Le bouton "Cleanup" sur un Run terminé :
+Pas de "permanent delete" v1 (mais cf. `forget` ci-dessous). Le bouton "Cleanup" sur un Run terminé :
 
 - supprime la branche `pdo/run-<run-id>`,
 - supprime le worktree pipeline et tous les sous-worktrees,
-- supprime le dossier des artefacts (Blackboard) du Run.
+- **copie** les sorties du Run vers le *Blackboard archivé* global (`~/.pdo/runs/<run-id>/` : `artifacts/` + `pipeline.yaml` + `pipeline.prompts/`, lecture seule) **avant** de supprimer la copie repo-local. Les outputs ne partent donc plus au cleanup — c'est ce qui rend un Run `archived` consultable (canvas + outputs) ; cf. **ADR-0020**.
 
-**Mais ne touche pas à l'event log** : les événements en SQLite restent. Le Run passe en status `archived`, reste dans la liste de gauche avec un icône gris, et reste **interrogeable post-mortem** (history, manager peut encore répondre à *"qu'est-ce qui s'est passé sur ce Run ?"* en lisant les events). Pas d'auto-cleanup, jamais.
+**Mais ne touche pas à l'event log** : les événements en SQLite restent. Le Run passe en status `archived`, reste dans la liste de gauche avec un icône gris, et reste **interrogeable post-mortem** — via les events *et* via le Blackboard archivé (rouvrir le canvas en lecture seule, relire les outputs des nodes). Pas d'auto-cleanup, jamais.
 
-L'event log peut grossir indéfiniment ; on évalue la taille avant de décider d'une politique de purge. Pas de v1.
+L'event log **et** le Blackboard archivé peuvent grossir indéfiniment ; on évalue la taille avant de décider d'une politique de purge. Pas de v1. Le seul reclaim v1 du Blackboard archivé est le **`forget`** (`DELETE /runs/<id>`, autorisé sur un Run déjà `archived`) : il purge les events *et* `~/.pdo/runs/<id>`.
 
 ### Notifications
 

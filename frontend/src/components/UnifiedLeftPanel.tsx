@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, Pencil, Plus, SquareTerminal, Star, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Star, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, renameRun } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
@@ -68,6 +68,8 @@ export default function UnifiedLeftPanel({
     { runId: string; status: RunStatus } | null
   >(null);
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
+  // #110 — run id awaiting Retry-all confirmation (the one destructive control).
+  const [confirmRetryAll, setConfirmRetryAll] = useState<string | null>(null);
   // Ad-hoc bash shell opened on a terminal run (#316). Holds the tmux session
   // name to attach the inline terminal to.
   const [shellRun, setShellRun] = useState<{ runId: string; session: string } | null>(null);
@@ -107,6 +109,38 @@ export default function UnifiedLeftPanel({
       // event-driven refresh will pick up state change
     }
     setConfirmForget(null);
+  }
+
+  // #110 — Pause/Resume are cheap, reversible, fire-and-forget (silent catch like
+  // handleCleanup); the daemon's WS events re-drive the list state.
+  async function handlePause(runId: string) {
+    try {
+      await pauseRun(runId);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+  }
+
+  async function handleResume(runId: string) {
+    try {
+      await resumeRun(runId);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+  }
+
+  // #110 — Retry-all is destructive (archives the original), so it's confirm-gated.
+  // The daemon replies 201 with the offspring run_id; selecting it fires an
+  // independent fetch-by-id (App's handleSelectRun) — safe before the WS refresh
+  // lands the new row in `runs`.
+  async function handleRetryAll(runId: string) {
+    try {
+      const { run_id } = await retryAll(runId);
+      onSelectRun(run_id);
+    } catch {
+      // event-driven refresh will pick up state change
+    }
+    setConfirmRetryAll(null);
   }
 
   function startRename(run: RunListEntry) {
@@ -171,6 +205,17 @@ export default function UnifiedLeftPanel({
     const isArchived = run.status === "archived";
     const canCleanup = !isArchived;
     const isRenaming = renamingRunId === run.run_id;
+    // #110 — gate on EXPLICIT statuses, never isLiveRun/isTerminalRun: the former
+    // includes `paused` (would wrongly show Pause on a paused run → 409); the
+    // latter includes `archived` (would wrongly show Retry-all on archived → 409).
+    // Each set is a subset of its daemon guard's accepted statuses.
+    const canPause = run.status === "running" || run.status === "awaiting_user";
+    const canResume = run.status === "paused";
+    const canRetryAll =
+      run.status === "completed" ||
+      run.status === "failed" ||
+      run.status === "halted" ||
+      run.status === "skipped";
 
     return (
       <button
@@ -247,6 +292,48 @@ export default function UnifiedLeftPanel({
             data-testid="rename-button"
           >
             <Pencil size={12} />
+          </span>
+        )}
+        {canPause && (
+          <span
+            role="button"
+            title="Pause run"
+            data-testid="pause-run-button"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePause(run.run_id);
+            }}
+          >
+            <Pause size={12} />
+          </span>
+        )}
+        {canResume && (
+          <span
+            role="button"
+            title="Resume run"
+            data-testid="resume-run-button"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResume(run.run_id);
+            }}
+          >
+            <Play size={12} />
+          </span>
+        )}
+        {canRetryAll && (
+          <span
+            role="button"
+            title="Retry all — archive this run and start a fresh one"
+            data-testid="retry-all-button"
+            className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmRetryAll(run.run_id);
+            }}
+          >
+            <RotateCcw size={12} />
           </span>
         )}
         {isTerminalRun(run.status) && !isArchived && (
@@ -671,6 +758,13 @@ export default function UnifiedLeftPanel({
         />
       )}
 
+      {confirmRetryAll && (
+        <RetryAllConfirmModal
+          onConfirm={() => handleRetryAll(confirmRetryAll)}
+          onCancel={() => setConfirmRetryAll(null)}
+        />
+      )}
+
       {(() => {
         // Show the cascade checkbox only when the target has exactly one
         // same-name Library copy and isn't itself the library row (#227).
@@ -900,6 +994,52 @@ function ImportWorkflowModal({
               {submitting ? "Importing…" : "Import"}
             </button>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/// #110 — confirm dialog for the one destructive run-level control. Retry-all
+/// archives the current run and starts a fresh run of the same pipeline, so it
+/// gets a confirm gate (Pause/Resume don't — they're cheap and reversible).
+function RetryAllConfirmModal({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      data-testid="retry-all-backdrop"
+      onClick={onCancel}
+    >
+      <div
+        className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
+        style={{ fontSize: "12px" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 font-medium text-fg">Retry all nodes?</div>
+        <p className="mb-4 text-fg-3" style={{ fontSize: "11px" }}>
+          This archives the current run and starts a fresh run of the same pipeline
+          from the beginning. The archived run stays viewable (read-only).
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            data-testid="retry-all-confirm-button"
+            className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim"
+          >
+            Retry all
+          </button>
         </div>
       </div>
     </div>

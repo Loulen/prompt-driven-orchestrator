@@ -5,6 +5,7 @@ import type { NodeDef, NodeType, PortDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
+import ModelPicker from "./ModelPicker";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
@@ -186,25 +187,16 @@ export default function NodeInspector({
           </div>
         </Tooltip>
 
-        {/* Model (#296): free-text pass-through to `claude --model <x>`; the
-            datalist offers the common aliases but any full id is accepted.
-            Empty ⇒ null ⇒ never serialized ⇒ account default. Hidden for a
-            script node (#248): it launches no agent, so it has no model. */}
+        {/* Model (#296/#324): dropdown + Custom… escape hatch (see ModelPicker).
+            Hidden for a script node (#248): it launches no agent, so it has no
+            model. */}
         {!isScript && (
           <Field label="Model">
-            <input
-              list="pdo-model-aliases"
-              data-testid="node-model-input"
-              placeholder="default model"
-              value={node.model ?? ""}
-              onChange={(e) => handleField("model", e.target.value || null)}
-              className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+            <ModelPicker
+              value={node.model ?? null}
+              onChange={(v) => handleField("model", v)}
+              testid="node-model"
             />
-            <datalist id="pdo-model-aliases">
-              {["sonnet", "opus", "haiku", "opusplan", "fable"].map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
           </Field>
         )}
 

@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach } from "vitest";
 import MergeInspector from "./MergeInspector";
 import { useEditStore } from "../stores/editStore";
@@ -100,19 +101,20 @@ describe("MergeInspector", () => {
     expect(screen.getByText(/Merge nodes wait for all upstream/)).toBeInTheDocument();
   });
 
-  // #296: a merge node spawns an agent, so its model is settable here too.
-  it("writes the typed model onto the merge node", () => {
+  // #296/#324: a merge node spawns an agent, so its model is settable here too.
+  it("writes the picked model onto the merge node", async () => {
+    const user = userEvent.setup();
     setStoreState(makeMergeNode());
     render(<MergeInspector />);
-    const input = screen.getByTestId("merge-model-input");
-    fireEvent.change(input, { target: { value: "opus" } });
+    await user.click(screen.getByTestId("merge-model-trigger"));
+    await user.click(await screen.findByTestId("merge-model-option-opus"));
     const node = useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "mg1");
     expect(node?.model).toBe("opus");
   });
 
-  it("renders a seeded model as the input value", () => {
+  it("renders a seeded model on the trigger", () => {
     setStoreState(makeMergeNode({ model: "sonnet" }));
     render(<MergeInspector />);
-    expect((screen.getByTestId("merge-model-input") as HTMLInputElement).value).toBe("sonnet");
+    expect(screen.getByTestId("merge-model-trigger")).toHaveTextContent("sonnet");
   });
 });

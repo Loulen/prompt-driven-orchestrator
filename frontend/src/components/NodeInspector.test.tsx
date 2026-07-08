@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary } from "../api";
@@ -175,7 +176,7 @@ describe("NodeInspector — script node surface (#248)", () => {
     expect(screen.getByTestId("script-body")).toBeInTheDocument();
     expect(screen.getByTestId("script-help")).toBeInTheDocument();
     // A script launches no agent — the model field must be absent.
-    expect(screen.queryByTestId("node-model-input")).toBeNull();
+    expect(screen.queryByTestId("node-model-trigger")).toBeNull();
   });
 
   it("shows a static script type label, not the doc-only/code-mutating toggle", () => {
@@ -223,37 +224,46 @@ describe("NodeInspector — pooled emergent inputs (#153)", () => {
   });
 });
 
-describe("NodeInspector — per-node model field (#296)", () => {
-  it("writes the typed model onto the node and marks the tab dirty", () => {
+describe("NodeInspector — per-node model field (#296/#324)", () => {
+  it("writes the picked model onto the node and marks the tab dirty", async () => {
+    const user = userEvent.setup();
     seedTabWithReviewer(false, "Review this code.");
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    const input = screen.getByTestId("node-model-input");
-    fireEvent.change(input, { target: { value: "opus" } });
+    await user.click(screen.getByTestId("node-model-trigger"));
+    await user.click(await screen.findByTestId("node-model-option-opus"));
 
     const tab = useEditStore.getState().openTabs[0];
     expect(tab.pipeline.nodes[0].model).toBe("opus");
     expect(tab.dirty).toBe(true);
   });
 
-  it("clears the model to null when emptied (stays unset, never serialized)", () => {
+  it("clears the model to null via Default (stays unset, never serialized)", async () => {
+    const user = userEvent.setup();
     seedTabWithReviewer(false, "Review this code.");
     // Seed a model so we can watch it clear.
     useEditStore.getState().updateNode("rv1", { model: "opus" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    const input = screen.getByTestId("node-model-input");
-    expect((input as HTMLInputElement).value).toBe("opus");
+    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("opus");
 
-    fireEvent.change(input, { target: { value: "" } });
+    await user.click(screen.getByTestId("node-model-trigger"));
+    await user.click(await screen.findByTestId("node-model-option-default"));
     expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].model).toBeNull();
   });
 
-  it("renders a seeded model as the input value", () => {
+  it("renders a seeded alias on the trigger", () => {
     seedTabWithReviewer(false, "Review this code.");
     useEditStore.getState().updateNode("rv1", { model: "haiku" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    expect((screen.getByTestId("node-model-input") as HTMLInputElement).value).toBe("haiku");
+    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("haiku");
+  });
+
+  it("renders a seeded arbitrary full id on the trigger (free text survives)", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "claude-opus-4-8" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("claude-opus-4-8");
   });
 });
 

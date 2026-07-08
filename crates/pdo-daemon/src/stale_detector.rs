@@ -107,6 +107,16 @@ pub fn decide(probe: &NodeProbe) -> Detection {
 /// projects directory.
 ///
 /// Example: `/home/user/project` → `home-user-project`
+///
+/// KNOWN BUG (do not fix here in a cost slice): this strips the leading `/` and
+/// does not map `.`, so a PDO node dir like `/home/u/.pdo/runs/X/worktree`
+/// encodes to `home-u--pdo-runs-X-worktree` **without** the leading `-` CC
+/// actually uses — [`find_session_jsonl`] then returns `None` for every PDO
+/// node, leaving the mtime-based stale/auto-complete probe effectively dead.
+/// Fixing it re-activates that probe (a real behavioral change, #251-adjacent),
+/// so it needs its own tests/validation. Cost estimation (#272) needs the
+/// correct dir name and therefore uses its own [`crate::run_cost::cc_project_dirname`]
+/// to stay isolated from this fix.
 pub fn encode_working_dir(dir: &Path) -> String {
     let s = dir.to_string_lossy();
     let stripped = s.strip_prefix('/').unwrap_or(&s);

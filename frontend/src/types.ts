@@ -288,6 +288,13 @@ export interface RunState {
    * UI renders "—" in that case, never "0" (#100).
    */
   loc?: { insertions: number; deletions: number; files_changed: number } | null;
+  /**
+   * Estimated USD cost (#272) — local Claude Code token usage × public list
+   * prices, an estimate, not an invoice. Null/absent when no transcripts are
+   * found (UI "—"). `partial` = an unpriced model was seen → the number is a
+   * lower bound.
+   */
+  cost?: { usd: number; partial: boolean } | null;
 }
 
 export interface DaemonEvent {

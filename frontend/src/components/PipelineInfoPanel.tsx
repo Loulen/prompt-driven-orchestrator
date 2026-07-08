@@ -255,6 +255,24 @@ function InfoTab({
                 "—"
               )}
             </StatRow>
+            <StatRow label="Est. cost" testid="stat-cost">
+              {run.cost ? (
+                <span
+                  className="flex items-center gap-1"
+                  title={
+                    "Estimate from local Claude Code token usage × public list prices — not an invoice." +
+                    (run.cost.partial
+                      ? " Lower bound: an unpriced model was excluded."
+                      : "")
+                  }
+                >
+                  ~${run.cost.usd.toFixed(run.cost.usd < 1 ? 4 : 2)}
+                  {run.cost.partial && <span className="text-st-await">†</span>}
+                </span>
+              ) : (
+                "—"
+              )}
+            </StatRow>
           </div>
         </div>
       )}

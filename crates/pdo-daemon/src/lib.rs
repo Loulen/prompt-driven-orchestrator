@@ -29,6 +29,7 @@ mod pipeline_watcher;
 mod prompt_augmenter;
 mod pty_bridge;
 mod run_advance;
+mod run_cost;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
@@ -10071,6 +10072,9 @@ fn augment_run_state_from_disk(run_state: &mut event_log::RunState, repo_root: &
     // not the run dir, so a missing/unparseable YAML must not suppress an
     // otherwise-valid LOC. Compute it before the YAML early-return below.
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
+    // Estimated cost (#272), likewise independent of the run YAML: it reads the
+    // Claude Code transcripts under `~/.claude/projects/`, not the run dir.
+    run_state.cost = run_cost::compute_run_cost(repo_root, &run_state.run_id);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -11542,10 +11546,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_run_payload_carries_sessions_spawned_and_omits_cost() {
-        // #100 AC#1/#5: GET /runs/:id exposes `sessions_spawned` (a number) and
-        // never a cost/token/price field (cost is out of scope). `loc` is
-        // omitted here because the seeded run has no `pdo/run-<id>` branch.
+    async fn get_run_payload_carries_sessions_spawned_and_cost() {
+        // #100/#272: GET /runs/:id exposes `sessions_spawned` (a number). Both
+        // `loc` and `cost` are derived-on-read and omitted here — the seeded run
+        // has no `pdo/run-<id>` branch and no `~/.claude` transcript dir, so each
+        // renders "—" in the UI (absent, not `Some(0)`). The positive-path cost
+        // aggregation is covered by `run_cost::tests::compute_run_cost_*`.
         let state = test_state().await;
         let run_id = "stats-payload";
         seed_completed_run(&state, run_id).await; // exactly one NodeStarted
@@ -11571,14 +11577,8 @@ mod tests {
         assert_eq!(body["sessions_spawned"], 1);
         // No run branch for this seeded run → `loc` is omitted (None), not Some(0).
         assert!(body.get("loc").is_none() || body["loc"].is_null());
-        // Cost is out of scope: assert no cost/token/price key leaked onto the payload.
-        for key in body.as_object().unwrap().keys() {
-            let lk = key.to_lowercase();
-            assert!(
-                !lk.contains("cost") && !lk.contains("token") && !lk.contains("price"),
-                "unexpected cost-like field on /runs payload: {key}"
-            );
-        }
+        // No transcript dir for this seeded run → `cost` is omitted (None) → "—".
+        assert!(body.get("cost").is_none() || body["cost"].is_null());
     }
 
     #[tokio::test]

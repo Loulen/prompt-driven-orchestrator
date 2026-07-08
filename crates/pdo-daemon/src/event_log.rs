@@ -299,6 +299,23 @@ pub struct LocStat {
     pub files_changed: u64,
 }
 
+/// Estimated USD cost of a Run (#272), aggregated from the per-message token
+/// `usage` in each session's Claude Code transcript × a public price table (see
+/// [`crate::run_cost`]). An **estimate**, not an invoice: public list prices,
+/// unpriced/new models contribute $0. Derived on read, never persisted — mirrors
+/// [`LocStat`]. `None` when no transcript dir is found (UI shows "—");
+/// `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
+///
+/// `PartialEq` (not `Eq`) because `usd` is `f64` — compare with a tolerance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CostStat {
+    pub usd: f64,
+    /// True when ≥1 session used a model absent from the price table: its tokens
+    /// are excluded, so `usd` is a **lower bound**. Drives the UI "(lower bound)"
+    /// affordance.
+    pub partial: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
@@ -346,6 +363,12 @@ pub struct RunState {
     /// Derived on read, never persisted; see [`LocStat`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loc: Option<LocStat>,
+    /// Estimated USD cost for the Run (issue #272). `None` when no Claude Code
+    /// transcript dir is found (UI renders "—"). Derived on read, never
+    /// persisted; see [`CostStat`]. More durable than `loc`: archival leaves
+    /// `~/.claude/projects/` intact, so an archived Run keeps its cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<CostStat>,
 }
 
 impl RunState {
@@ -372,6 +395,7 @@ impl RunState {
             triggered_by: None,
             sessions_spawned: 0,
             loc: None,
+            cost: None,
         }
     }
 

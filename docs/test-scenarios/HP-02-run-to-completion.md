@@ -29,7 +29,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - **Artifact rendering**: an output artifact opens in the markdown modal; a ` ```mermaid ` block
   renders as inline SVG and invalid mermaid degrades gracefully to raw source (#240 / ADR-0013).
 - **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Node sessions started
-  (manager excluded), Lines changed / LOC — and **no cost** (#100).
+  (manager excluded), Lines changed / LOC — and an **estimated cost** (labelled "est.", #100 / #272).
 - **Runs / Triggers grouped by repo** when ≥ 2 distinct repos are present; flat otherwise (#258).
 - **Daemon version** displayed live in the footer (#139).
 
@@ -55,8 +55,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 6. The Run reaches **Completed** (the happy ending): nodes read completed, the End inspector shows the
    `result` port **received**.
 7. Open an output artifact → the **markdown modal** renders it (including a mermaid diagram as SVG).
-8. Open the Run **Info panel** → the **Stats** block shows Duration, Node sessions started, and Lines
-   changed / LOC; **no cost**.
+8. Open the Run **Info panel** → the **Stats** block shows Duration, Node sessions started, Lines
+   changed / LOC, and an **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
 9. Find the run in the **Runs list** (grouped by repo when ≥ 2 repos exist).
 
 ## Checks
@@ -69,7 +69,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - The Run settles to **Completed**; the End `result` port shows **received**.
 - The artifact modal shows the content; a valid mermaid block is an SVG, an invalid one falls back to
   `<pre><code>` (never a blank pane, never a thrown error).
-- Stats: Duration ticks on a live run, freezes on a terminal one; cost is **absent**.
+- Stats: Duration ticks on a live run, freezes on a terminal one; an **estimated cost** ("Est. cost",
+  framed as an estimate) is shown, "—" when uncomputable.
 
 ### Backing store
 

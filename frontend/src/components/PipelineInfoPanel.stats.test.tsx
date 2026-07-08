@@ -31,6 +31,7 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     foreach_states: {},
     sessions_spawned: 1234,
     loc: { insertions: 10, deletions: 3, files_changed: 2 },
+    cost: { usd: 1.2345, partial: false },
     ...overrides,
   };
 }
@@ -163,8 +164,38 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     expect(screen.queryByTestId("run-stats")).toBeNull();
   });
 
-  it("does not render any cost/token/price field (out of scope)", () => {
-    const { container } = renderPanel(makeRun());
-    expect(container.textContent ?? "").not.toMatch(/cost|token|price|\$\d/i);
+  it("renders Est. cost as a labelled estimate (#272)", () => {
+    renderPanel(makeRun());
+    const cost = screen.getByTestId("stat-cost");
+    // ≥ $1 → 2 decimals, with a "~$" estimate prefix.
+    expect(cost).toHaveTextContent("~$1.23");
+    // The row is honestly labelled and the tooltip frames it as an estimate.
+    expect(cost).toHaveTextContent("Est. cost");
+    const value = cost.querySelector("[title]");
+    expect(value?.getAttribute("title")).toMatch(/estimate/i);
+    // No lower-bound dagger when the estimate is complete.
+    expect(cost).not.toHaveTextContent("†");
+  });
+
+  it("uses 4 decimals for sub-dollar estimates", () => {
+    renderPanel(makeRun({ cost: { usd: 0.0525, partial: false } }));
+    expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$0.0525");
+  });
+
+  it("marks a partial estimate as a lower bound with a dagger", () => {
+    renderPanel(makeRun({ cost: { usd: 2.5, partial: true } }));
+    const cost = screen.getByTestId("stat-cost");
+    expect(cost).toHaveTextContent("~$2.50");
+    expect(cost).toHaveTextContent("†");
+    expect(cost.querySelector("[title]")?.getAttribute("title")).toMatch(
+      /lower bound/i,
+    );
+  });
+
+  it("renders '—' for Est. cost when cost is null (no transcripts), not '$0'", () => {
+    renderPanel(makeRun({ status: "archived", cost: null }));
+    const cost = screen.getByTestId("stat-cost");
+    expect(cost).toHaveTextContent("—");
+    expect(cost).not.toHaveTextContent("$");
   });
 });

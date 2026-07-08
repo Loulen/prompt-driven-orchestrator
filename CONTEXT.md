@@ -496,6 +496,7 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **Absent ⇒ `repo_root` du daemon.** Un Run/Trigger sans `target_repo` explicite s'exécute contre le dépôt racine du daemon. La résolution est **côté serveur** (`effective_repo_root`) : tout point de lecture qui a besoin d'un chemin concret (détail de Run, et désormais les listes Runs/Triggers) substitue `repo_root`. Conséquence : **pas de bucket « Unassigned »** — un Run sans cible et un Run ciblant explicitement le `repo_root` sont le *même* projet (≈ 46/101 runs de dev n'ont pas de `target_repo`).
 - **Clé de regroupement des listes (« par projet »).** Les listes Runs et Triggers se regroupent par repo cible résolu. Regroupement **conditionnel** : un en-tête par repo n'apparaît que si la liste contient **≥ 2 repos distincts** ; sinon (cas mono-repo courant) la liste reste **plate, identique à avant** — aucun en-tête, aucun badge ajouté. Seuil calculé **par liste** (l'onglet Runs et l'onglet Triggers sont indépendants) et sur les **lignes actives** de chaque liste. Côté Runs, les Runs `archived` sont **exclus du seuil** : ils sont extraits vers une section « Archived » repliable et plate, sous les groupes actifs (#136) — le regroupement par repo ne s'applique donc qu'aux Runs actifs. Côté Triggers, il n'existe pas de notion d'archive : toutes les lignes comptent. Clé = chemin complet (deux repos de même basename ⇒ deux groupes distincts) ; libellé = basename, chemin complet au survol, **suffixe discriminant minimal** en cas de collision de basename (`/a/foo` + `/b/foo` ⇒ « a/foo » + « b/foo »). Tri des groupes : alphabétique par chemin complet (déterministe) ; ordre intra-groupe = ordre serveur préservé (Runs `run_id DESC`, Triggers `created_at DESC`).
 - **`effective_repo` (résolu) ≠ `target_repo` (brut).** Le champ brut `target_repo` (nullable) reste la valeur saisie par l'utilisateur — il pilote le badge repo de la ligne Trigger, le panneau détail, le pré-remplissage Run-now. Le champ résolu `effective_repo` (toujours concret, exposé par les *endpoints de liste* uniquement) ne sert qu'à la clé de regroupement. **On ne réécrit jamais `target_repo` côté serveur** : sinon badge/détail/pré-remplissage afficheraient un repo jamais saisi en mono-repo (régression). Le regroupement vit **côté client** (UI réversible) ; le serveur se contente de résoudre la clé.
+- **Repos récents (`GET /repos/recent`).** Projection *à la lecture* des `target_repo` portés par les événements `RunStarted` : jusqu'à 5 chemins distincts, plus récent d'abord. Comparaison **verbatim** (cohérent avec la règle jamais-canonicaliser ci-dessus : `/a/repo` et `/a/repo/` comptent comme deux entrées). Les Runs lancés sans `target_repo` explicite ne contribuent pas aux récents.
 
 ---
 
@@ -656,6 +657,11 @@ GET    /runs/<id>/events?subscribe         — WebSocket push des nouveaux event
 GET    /runs/<id>/nodes                    — état de tous les NodeRuns
 GET    /runs/<id>/nodes/<node-id>          — détail d'un NodeRun (statut, iter, session tmux, artefacts)
 POST   /runs/<id>/commands                 — émet une commande (body: { kind, payload })
+
+GET    /repos/validate?path=               — valide un repo cible (chemin absolu + is_dir + `git rev-parse`)
+GET    /repos/branches?path=               — liste les branches locales du repo donné
+GET    /repos/recent                       — jusqu'à 5 `target_repo` distincts, projetés des événements `run_started`, plus récent d'abord
+GET    /repos/browse?path=                 — listing filesystem à un niveau (explorateur du New-Run modal, #131 ; durcissement d'exposition fs différé à #260)
 ```
 
 ### Conséquence pour la prompt augmentation

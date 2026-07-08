@@ -176,6 +176,23 @@ impl TestDaemon {
         }
     }
 
+    /// Arm the terminal-tail gate (#304 fault injection, test seam): the
+    /// detached tail of the next `node_done`/`node_fail`/`node_skip` parks at
+    /// its head until [`Self::release_node_done_gate`], holding the run-advance
+    /// window open so the test can drop the client connection inside it.
+    pub fn arm_node_done_gate(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.arm_node_done_gate();
+        }
+    }
+
+    /// Release the terminal-tail gate (#304): disarm and wake parked tails.
+    pub fn release_node_done_gate(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.release_node_done_gate();
+        }
+    }
+
     /// Force a Trigger's next fire into the past so the next tick treats it as
     /// due (test seam).
     pub async fn force_trigger_due(&self, trigger_id: &str) {

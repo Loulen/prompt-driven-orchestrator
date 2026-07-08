@@ -271,6 +271,10 @@ Quand un NodeRun signale `pdo complete`, le runtime parse la frontmatter de chaq
 
 Ce mécanisme évite de fail loud sur une erreur que l'agent peut typiquement corriger seul, tout en bornant la dérive (un agent qui boucle dans le mismatch finit failé en deux tours).
 
+### Avance détachée après transition terminale (#304, ADR-0023)
+
+Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal est durablement enregistré et l'avance est planifiée », **pas** « le run a avancé ». Après l'append de l'événement terminal (`NodeCompleted`/`NodeFailed`/marqueur skip), la queue du handler — reap de la session tmux + avance du run (spawn du successeur, finalisation du port `end`, `RunFailed`/`RunSkipped`, `retry_waiting_nodes`) — s'exécute sur une tâche `tokio::spawn` **détachée** de la requête HTTP. Raison : le reap tue la session tmux du client `pdo` lui-même ; inline, hyper annulait la future de la requête à la fermeture de la socket et l'avance était silencieusement perdue (run coincé `running`). Les erreurs de validation (guard, merge conflict, outputs) restent renvoyées in-request ; les erreurs d'avance surfacent via `RunFailed` + logs, jamais via la réponse HTTP. Un panic dans la queue détachée est isolé (`catch_unwind`) et émet un `RunFailed` explicite.
+
 ---
 
 ## Variables pipeline

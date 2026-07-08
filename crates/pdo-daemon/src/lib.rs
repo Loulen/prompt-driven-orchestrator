@@ -232,6 +232,18 @@ struct AppState {
     /// spawn can be targeted deterministically. An `Arc<AtomicBool>` (not
     /// process-global env) so parallel test daemons never race (#181).
     panic_on_spawn: Arc<std::sync::atomic::AtomicBool>,
+    /// Test-only gate (#304): when armed, the detached terminal tail (reap +
+    /// run-advance spawned by `node_done`/`node_fail`/`node_skip`) parks at its
+    /// head until [`DaemonHandle::release_node_done_gate`] fires. Sits as the
+    /// FIRST instruction of the detached future, so it encodes the DETACH-vs-
+    /// inline divergence the regression test discriminates on: inline (pre-fix)
+    /// the wait lives in the request future and a client disconnect cancels it —
+    /// the advance is lost; detached it survives the drop and resumes on
+    /// release. Unarmed (production): a pure no-op. Sibling of `panic_on_spawn`
+    /// (#279) — per-daemon, never process-global env (#181).
+    node_done_tail_gate: Arc<tokio::sync::Notify>,
+    /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
+    node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
     /// Persistent-service health (#156, D5), computed once at boot and cached
     /// here so the polled `GET /sessions` pays zero subprocess cost per request.
     /// Surfaced as the `service` object on `/sessions`; drives the status bar's
@@ -1096,6 +1108,27 @@ impl DaemonHandle {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Arm the terminal-tail gate (#304): the detached tail spawned by the next
+    /// `node_done`/`node_fail`/`node_skip` parks at its head until
+    /// [`Self::release_node_done_gate`]. Test seam only — lets a test hold the
+    /// run-advance open while it drops the client connection mid-window, then
+    /// prove the advance still happens (DETACH) instead of being cancelled
+    /// (inline / reorder-only). No-op in production (never armed).
+    pub fn arm_node_done_gate(&self) {
+        self.state
+            .node_done_tail_gate_armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Release the terminal-tail gate (#304): disarm, then wake every tail
+    /// parked at the gate. See [`Self::arm_node_done_gate`].
+    pub fn release_node_done_gate(&self) {
+        self.state
+            .node_done_tail_gate_armed
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.state.node_done_tail_gate.notify_waiters();
+    }
+
     /// Force a Trigger's next fire into the past so the next
     /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
     /// next-fire times come from the cron schedule.
@@ -1405,6 +1438,8 @@ pub async fn serve_with_config(
             config.panic_on_stale_sweep,
         )),
         panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
+        node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+        node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
     });
 
@@ -2898,6 +2933,77 @@ async fn run_stale_detection_supervised(state: &Arc<AppState>) {
     .await;
 }
 
+/// Park until the terminal-tail gate is released (#304, test seam). Unarmed
+/// (production): returns immediately. The re-check between creating the
+/// `Notified` and awaiting it closes the release-vs-register race.
+async fn wait_node_done_tail_gate(state: &AppState) {
+    while state
+        .node_done_tail_gate_armed
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        let notified = state.node_done_tail_gate.notified();
+        if !state
+            .node_done_tail_gate_armed
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            break;
+        }
+        notified.await;
+    }
+}
+
+/// Detach the post-terminal-event tail of a CLI terminal handler
+/// (`node_done` / `node_fail` / `node_skip`) onto its own task (#304,
+/// ADR-0023). The `pdo` CLI runs *inside the node's own tmux session*, and the
+/// tail's first act is to reap that session — killing the HTTP client of the
+/// in-flight request. hyper then cancels the request future at its next
+/// `.await`, silently dropping the successor spawn / end-port finalization /
+/// `RunFailed`/`RunSkipped` append. Spawning the tail decouples it from the
+/// request future, so no client disconnect (self-inflicted or otherwise) can
+/// cancel the advance.
+///
+/// The tail carries its own panic isolation: a panic after the successor's
+/// `NodeStarted` or inside the completion gate escapes the #279 reconciler, and
+/// a bare `tokio::spawn` would swallow it into a never-awaited `JoinError`. So
+/// a panic is logged AND surfaced as `RunFailed` — never a silent stall
+/// (ADR-0004). `run_isolated` is not reused here: it only logs.
+fn detach_terminal_tail<F>(
+    label: &'static str,
+    state: Arc<AppState>,
+    run_id: String,
+    node_id: String,
+    fut: F,
+) where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        // Test gate (#304): MUST be the first instruction of the detached task
+        // — inline (pre-fix) this wait sat in the request future and the client
+        // disconnect cancelled it; here it survives the drop. No-op unarmed.
+        wait_node_done_tail_gate(&state).await;
+        let outcome =
+            futures_util::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await;
+        if let Err(panic) = outcome {
+            let msg = panic_payload_message(panic.as_ref());
+            let reason =
+                format!("run advance panicked after terminal event ({label}) for {node_id}: {msg}");
+            error!("Run {run_id}: {reason}");
+            let run_failed = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "reason": reason })),
+            };
+            if let Err(e) = append_event(&state, &run_failed).await {
+                error!("Run {run_id}: failed to append RunFailed after detached-tail panic: {e}");
+            }
+        }
+    });
+}
+
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
 async fn run_trigger_scheduler_tick(state: &AppState) {
@@ -4102,7 +4208,10 @@ async fn spawn_node(
     // panic becomes a LOUD failure (reap the orphan, fail the run) instead of a
     // silent stall (ADR-0004 « jamais de stall silencieux »). A dropped
     // (cancelled) future can't be caught here; the periodic detector in
-    // `run_stall_reason` (#279 Layer 2) is the backstop for that path.
+    // `run_stall_reason` (#279 Layer 2) is the backstop for that path — and
+    // since #304 (ADR-0023) the `node_done` tail runs DETACHED from the request
+    // future, so the completing client's disconnect can no longer cancel this
+    // window in the first place.
     // `tokio::sync::Mutex` doesn't poison, so the DB / admission state stay
     // usable after a caught panic (the property `run_isolated` relies on too).
     let span = std::panic::AssertUnwindSafe(async {
@@ -7382,27 +7491,38 @@ async fn node_done(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Reap on terminal state (#205): snapshot the pane then kill the session,
-    // so a completed node never holds a live session toward the tmux-collapse
-    // point (#77/#78). Post-mortem inspection survives via the snapshot.
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+    // Detached tail (#304, ADR-0023): the reap below kills the very tmux
+    // session `pdo complete` runs in, closing this request's client socket —
+    // inline, hyper would cancel this future at its next `.await` and silently
+    // drop the advance (successor spawn / end-port finalization). Everything
+    // past the durable `NodeCompleted` append runs on its own task; the 2xx
+    // means "terminal event recorded, advance scheduled", not "advanced".
+    let tail_state = state.clone();
+    let tail_run = run_id.clone();
+    let tail_node = node_id.clone();
+    detach_terminal_tail("node_done", state.clone(), run_id, node_id, async move {
+        // Reap on terminal state (#205): snapshot the pane then kill the session,
+        // so a completed node never holds a live session toward the tmux-collapse
+        // point (#77/#78). Post-mortem inspection survives via the snapshot.
+        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
 
-    // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
-    // run, re-drive throttled waiters, then the single completion gate. Everything
-    // above — guard, node-type merge / cleanliness check, output validation, the
-    // `NodeCompleted` append, and the reap — is this caller's head, untouched.
-    match run_advance::complete_node(
-        &state,
-        &run_id,
-        &node_id,
-        run_advance::CompletionOrder::CompletionFirst,
-        false,
-    )
-    .await
-    {
-        run_advance::CompletionOutcome::Halted => info!("Run {run_id} halted"),
-        _ => info!("Node {node_id} completed in run {run_id}"),
-    }
+        // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
+        // run, re-drive throttled waiters, then the single completion gate. Everything
+        // above — guard, node-type merge / cleanliness check, output validation, the
+        // `NodeCompleted` append — is the in-request head, untouched.
+        match run_advance::complete_node(
+            &tail_state,
+            &tail_run,
+            &tail_node,
+            run_advance::CompletionOrder::CompletionFirst,
+            false,
+        )
+        .await
+        {
+            run_advance::CompletionOutcome::Halted => info!("Run {tail_run} halted"),
+            _ => info!("Node {tail_node} completed in run {tail_run}"),
+        }
+    });
     (StatusCode::OK, "ok").into_response()
 }
 
@@ -7427,35 +7547,45 @@ async fn node_fail(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Reap on terminal state (#205): snapshot the pane then kill the session.
-    // Post-mortem inspection of the failed node survives via the snapshot.
-    let repo_root = match load_events(&state.db, &run_id).await {
-        Ok(evs) => event_log::project(&evs)
-            .map(|s| effective_repo_root(&state, &s))
-            .unwrap_or_else(|| state.repo_root.clone()),
-        Err(_) => state.repo_root.clone(),
-    };
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+    // Detached tail (#304, ADR-0023): same self-cancellation window as
+    // `node_done` — the reap kills `pdo fail`'s own session; inline, the
+    // `RunFailed` append below could be silently dropped, leaving the run
+    // `running` forever with a Failed node.
+    let tail_state = state.clone();
+    let tail_run = run_id.clone();
+    let tail_node = node_id.clone();
+    let reason = req.reason.clone();
+    detach_terminal_tail("node_fail", state.clone(), run_id, node_id, async move {
+        // Reap on terminal state (#205): snapshot the pane then kill the session.
+        // Post-mortem inspection of the failed node survives via the snapshot.
+        let repo_root = match load_events(&tail_state.db, &tail_run).await {
+            Ok(evs) => event_log::project(&evs)
+                .map(|s| effective_repo_root(&tail_state, &s))
+                .unwrap_or_else(|| tail_state.repo_root.clone()),
+            Err(_) => tail_state.repo_root.clone(),
+        };
+        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
 
-    // Mark the run as failed
-    let run_failed = event_log::Event {
-        id: None,
-        run_id: run_id.clone(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunFailed,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({ "reason": req.reason })),
-    };
-    if let Err(e) = append_event(&state, &run_failed).await {
-        error!("failed to append run_failed: {e}");
-    }
+        // Mark the run as failed
+        let run_failed = event_log::Event {
+            id: None,
+            run_id: tail_run.clone(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunFailed,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "reason": reason })),
+        };
+        if let Err(e) = append_event(&tail_state, &run_failed).await {
+            error!("failed to append run_failed: {e}");
+        }
 
-    // The run failed: its other NodeRun sessions will be reaped, freeing slots.
-    // Re-drive throttled `waiting` nodes in other runs (#159).
-    retry_waiting_nodes(&state).await;
+        // The run failed: its other NodeRun sessions will be reaped, freeing slots.
+        // Re-drive throttled `waiting` nodes in other runs (#159).
+        retry_waiting_nodes(&tail_state).await;
 
-    info!("Node {node_id} failed in run {run_id}");
+        info!("Node {tail_node} failed in run {tail_run}");
+    });
     (StatusCode::OK, "ok").into_response()
 }
 
@@ -7536,35 +7666,42 @@ async fn node_skip(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Reap on terminal state (#205): snapshot the pane then kill the session.
+    // Detached tail (#304, ADR-0023): same self-cancellation window as
+    // `node_done` — the reap kills `pdo skip`'s own session; inline, the
+    // `RunSkipped` append below could be silently dropped, leaving the run
+    // `running` forever.
     let repo_root = effective_repo_root(&state, &pre_run_state);
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+    let tail_state = state.clone();
+    let tail_run = run_id.clone();
+    let tail_node = node_id.clone();
+    let reason = req.reason.clone();
+    detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
+        // Reap on terminal state (#205): snapshot the pane then kill the session.
+        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
 
-    // End the run as a graceful no-op (#245) — distinct from RunFailed. This
-    // short-circuits downstream: `spawn_ready_after_event` only spawns for a
-    // Running/AwaitingUser run, so no downstream node is dispatched on a
-    // now-`Skipped` run.
-    let run_skipped = event_log::Event {
-        id: None,
-        run_id: run_id.clone(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunSkipped,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({ "reason": req.reason })),
-    };
-    if let Err(e) = append_event(&state, &run_skipped).await {
-        error!("failed to append run_skipped: {e}");
-    }
+        // End the run as a graceful no-op (#245) — distinct from RunFailed. This
+        // short-circuits downstream: `spawn_ready_after_event` only spawns for a
+        // Running/AwaitingUser run, so no downstream node is dispatched on a
+        // now-`Skipped` run.
+        let run_skipped = event_log::Event {
+            id: None,
+            run_id: tail_run.clone(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunSkipped,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "reason": reason })),
+        };
+        if let Err(e) = append_event(&tail_state, &run_skipped).await {
+            error!("failed to append run_skipped: {e}");
+        }
 
-    // The run ended: its other NodeRun sessions (if any) will be reaped, freeing
-    // slots. Re-drive throttled `waiting` nodes in other runs (#159).
-    retry_waiting_nodes(&state).await;
+        // The run ended: its other NodeRun sessions (if any) will be reaped, freeing
+        // slots. Re-drive throttled `waiting` nodes in other runs (#159).
+        retry_waiting_nodes(&tail_state).await;
 
-    info!(
-        "Node {node_id} skipped (graceful no-op) in run {run_id}: {}",
-        req.reason
-    );
+        info!("Node {tail_node} skipped (graceful no-op) in run {tail_run}: {reason}");
+    });
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "skipped": true, "reason": req.reason })),
@@ -10570,6 +10707,8 @@ mod tests {
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -10608,6 +10747,8 @@ mod tests {
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
         })
     }
@@ -11261,6 +11402,31 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// The terminal tails of `node_done`/`node_fail`/`node_skip` are DETACHED
+    /// (#304, ADR-0023): the response returns before the run has advanced.
+    /// Tests that drive those handlers must poll to quiescence instead of
+    /// asserting synchronously after the response.
+    async fn wait_run_status(
+        state: &Arc<AppState>,
+        run_id: &str,
+        want: event_log::RunStatus,
+    ) -> event_log::RunState {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let events = load_events(&state.db, run_id).await.unwrap();
+            if let Some(rs) = event_log::project(&events) {
+                if rs.status == want {
+                    return rs;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for run {run_id} to reach {want:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     #[tokio::test]
     async fn node_done_and_run_lifecycle() {
         let state = test_state().await;
@@ -11305,10 +11471,8 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Check the run is now completed
-        let events = load_events(&state.db, run_id).await.unwrap();
-        let run_state = event_log::project(&events).unwrap();
-        assert_eq!(run_state.status, event_log::RunStatus::Completed);
+        // Check the run reaches completed (detached tail, #304 — poll).
+        let run_state = wait_run_status(&state, run_id, event_log::RunStatus::Completed).await;
         assert_eq!(
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Completed
@@ -11357,9 +11521,8 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let events = load_events(&state.db, run_id).await.unwrap();
-        let run_state = event_log::project(&events).unwrap();
-        assert_eq!(run_state.status, event_log::RunStatus::Failed);
+        // The RunFailed append lives in the detached tail (#304) — poll.
+        let run_state = wait_run_status(&state, run_id, event_log::RunStatus::Failed).await;
         assert_eq!(
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Failed
@@ -11410,9 +11573,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
+        // The RunSkipped append lives in the detached tail (#304) — poll.
+        let run_state = wait_run_status(&state, run_id, event_log::RunStatus::Skipped).await;
         let events = load_events(&state.db, run_id).await.unwrap();
-        let run_state = event_log::project(&events).unwrap();
-        assert_eq!(run_state.status, event_log::RunStatus::Skipped);
         assert_ne!(run_state.status, event_log::RunStatus::Failed);
         // The selector itself is honestly terminal-Completed, not Failed.
         assert_eq!(
@@ -11479,6 +11642,9 @@ mod tests {
         };
 
         assert_eq!(skip().await.unwrap().status(), StatusCode::OK);
+        // The RunSkipped append lives in the detached tail (#304): wait for the
+        // run to actually turn terminal before probing the duplicate.
+        wait_run_status(&state, run_id, event_log::RunStatus::Skipped).await;
         // Second skip: rejected because the run is already terminal (Skipped).
         assert_eq!(skip().await.unwrap().status(), StatusCode::CONFLICT);
 
@@ -12513,15 +12679,14 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
+        // The completion gate runs in the detached tail (#304) — poll to
+        // terminal, then assert the exactly-once invariant on the final log.
+        wait_run_status(&state, run_id, event_log::RunStatus::Completed).await;
         let events = load_events(&state.db, run_id).await.unwrap();
         assert_eq!(
             count_run_completed(&events),
             1,
             "node_done must emit exactly one RunCompleted"
-        );
-        assert_eq!(
-            event_log::project(&events).unwrap().status,
-            event_log::RunStatus::Completed
         );
     }
 
@@ -13902,6 +14067,8 @@ mod tests {
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -18171,6 +18338,8 @@ edges: []
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -18356,6 +18525,8 @@ edges: []
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // Neutral default (#156): tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {

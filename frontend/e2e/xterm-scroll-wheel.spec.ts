@@ -116,7 +116,7 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   const { run_id } = await resp.json();
   createdRunIds.push(run_id);
 
-  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   const workerNode = page.getByText("scroller", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });

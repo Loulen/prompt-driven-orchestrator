@@ -102,7 +102,7 @@ test("Start button force-spawns a pending downstream node", async ({
   }).toPass({ timeout: 10_000 });
 
   // Select the run, then the pending downstream node.
-  await page.getByText(runId!.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(runId!.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   await page
     .locator('.react-flow__node[data-id="worker-b"]')

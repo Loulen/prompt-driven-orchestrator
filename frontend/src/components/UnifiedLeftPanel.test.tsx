@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
-import type { PipelineListEntry, RunListEntry } from "../types";
+import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
@@ -65,10 +66,12 @@ function renderPanel({
   runs = [],
   libraryPipelines = [],
   selectedRunId = null,
+  triggers,
 }: {
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
   selectedRunId?: string | null;
+  triggers?: Trigger[];
 } = {}) {
   return render(
     <UnifiedLeftPanel
@@ -78,6 +81,7 @@ function renderPanel({
       onNewRun={noop}
       libraryPipelines={libraryPipelines}
       onLibraryPipelinesChanged={noop}
+      triggers={triggers}
     />,
   );
 }
@@ -953,5 +957,182 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
 
     expect(mockRetryAll).not.toHaveBeenCalled();
     expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument();
+  });
+});
+
+// #336 — client-side run filters (Project / Pipeline / Trigger) above the Runs
+// list. AND semantics, "All" default, session-only state. Options derive from
+// the runs themselves (deleted pipelines/triggers stay filterable); the filter
+// applies BEFORE the active/archived split so grouping and the Archived count
+// both reflect it.
+describe("UnifiedLeftPanel run filters (#336)", () => {
+  const trig: Trigger = {
+    id: "trg-1",
+    name: "Nightly audit",
+    pipeline_id: "auditor",
+    pipeline_name: "auditor",
+    input_template: "",
+    variables: {},
+    cron: "0 9 * * *",
+    overlap_policy: "skip",
+    enabled: true,
+  };
+
+  const runs: RunListEntry[] = [
+    { run_id: "r1", pipeline_name: "auditor", status: "running", started_at: null, name: "Alpha auditor", effective_repo: "/repos/alpha", triggered_by: "trg-1" },
+    { run_id: "r2", pipeline_name: "deploy", status: "completed", started_at: null, name: "Alpha deploy", effective_repo: "/repos/alpha" },
+    { run_id: "r3", pipeline_name: "auditor", status: "running", started_at: null, name: "Zebra auditor", effective_repo: "/repos/zebra", triggered_by: "trg-gone" },
+    { run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
+  ];
+
+  it("hides the filter row entirely when there are no runs", () => {
+    renderPanel({ runs: [] });
+    expect(screen.queryByTestId("run-filter-project")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-filter-pipeline")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-filter-trigger")).not.toBeInTheDocument();
+  });
+
+  it("renders the three dropdowns defaulting to All (placeholder labels)", () => {
+    renderPanel({ runs, triggers: [trig] });
+    expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Project");
+    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
+    expect(screen.getByTestId("run-filter-trigger")).toHaveTextContent("Trigger");
+    // No clear control while everything is on "All".
+    expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+  });
+
+  it("filters by pipeline name", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha deploy"]);
+    // Selected value shows on the dropdown trigger; clear control appears.
+    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("deploy");
+    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
+  });
+
+  it("filtering to a single repo flips the grouped list back to flat", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    // Two active repos ⇒ grouped before filtering.
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+
+    await user.click(screen.getByTestId("run-filter-project"));
+    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+
+    // One repo left ⇒ groupByRepo's ≥2 threshold fails ⇒ flat list.
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor", "Alpha deploy"]);
+  });
+
+  it("filters by trigger, labelling options by trigger name with raw-id fallback", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-trigger"));
+    // Known trigger resolves to its name; deleted trigger falls back to the id.
+    expect(await screen.findByTestId("run-filter-option-trg-1")).toHaveTextContent("Nightly audit");
+    expect(screen.getByTestId("run-filter-option-trg-gone")).toHaveTextContent("trg-gone");
+
+    await user.click(screen.getByTestId("run-filter-option-trg-1"));
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor"]);
+  });
+
+  it("offers a Manual option matching runs with no trigger", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-trigger"));
+    await user.click(await screen.findByTestId("run-filter-option-__manual__"));
+
+    // r2 (active manual) visible; r4 (archived manual) counted in Archived.
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha deploy"]);
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+  });
+
+  it("combines the three axes with AND semantics", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-project"));
+    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-auditor"));
+
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor"]);
+
+    // A trigger choice contradicting the rest empties the list.
+    await user.click(screen.getByTestId("run-filter-trigger"));
+    await user.click(await screen.findByTestId("run-filter-option-trg-gone"));
+    expect(screen.queryAllByTestId("run-display-label")).toHaveLength(0);
+    expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
+  });
+
+  it("applies the filter to the Archived section and its count", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+
+    // The archived run is a zebra deploy; filter to alpha ⇒ section disappears.
+    await user.click(screen.getByTestId("run-filter-project"));
+    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
+
+    // Filter to zebra ⇒ the section is back with the filtered count.
+    await user.click(screen.getByTestId("run-filter-project"));
+    await user.click(await screen.findByTestId("run-filter-option-/repos/zebra"));
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+  });
+
+  it("clears every axis via the clear control", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
+
+    await user.click(screen.getByTestId("run-filter-clear"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
+    expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+  });
+
+  it("shows the empty state with a working Clear-filters control on zero matches", async () => {
+    const user = userEvent.setup();
+    // Single-pipeline list plus a second pipeline elsewhere so both options exist.
+    renderPanel({ runs, triggers: [trig] });
+
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    await user.click(screen.getByTestId("run-filter-trigger"));
+    await user.click(await screen.findByTestId("run-filter-option-trg-1"));
+
+    expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
+    await user.click(screen.getByTestId("run-filter-empty-clear"));
+    expect(screen.queryByTestId("run-filter-empty")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+  });
+
+  it("buckets an empty pipeline_name without crashing", async () => {
+    const user = userEvent.setup();
+    const weird: RunListEntry[] = [
+      { run_id: "w1", pipeline_name: "", status: "running", started_at: null, name: "Nameless", effective_repo: "/repos/a" },
+      { run_id: "w2", pipeline_name: "real", status: "running", started_at: null, name: "Named", effective_repo: "/repos/a" },
+    ];
+    renderPanel({ runs: weird });
+
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-__none__"));
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Nameless"]);
   });
 });

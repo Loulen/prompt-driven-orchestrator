@@ -642,8 +642,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     })
 }
 
-/// Dangling edge references in a pipeline: an edge endpoint naming a node that
-/// does not exist, or a port not declared on its node. Emergent inputs are
+/// Dangling references in a pipeline: an edge endpoint naming a node that
+/// does not exist, a port not declared on its node, or a loop-region member
+/// naming a non-existent node (#269). Emergent inputs are
 /// exempt — the target port of an edge landing on a *regular* node names the
 /// emergent input and is valid by construction (#149 / ADR-0011).
 ///
@@ -695,6 +696,21 @@ pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
         }
         if let Some(e) = check(edge, &edge.target, "target", |n| &n.inputs) {
             errors.push(e);
+        }
+    }
+
+    // A loop-region member naming a non-existent node is the same class of
+    // dangling reference: the region silently no-ops at runtime (its gates
+    // never match any node). Seen in the wild when `pdo migrate` re-idified
+    // nodes without remapping `loops[].members` (#269).
+    for region in &pipeline.loops {
+        for member in &region.members {
+            if !node_ids.contains(member.as_str()) {
+                errors.push(format!(
+                    "loop region '{}': member references non-existent node '{}'",
+                    region.id, member
+                ));
+            }
         }
     }
     errors
@@ -1408,6 +1424,56 @@ edges:
 "#;
         let pipeline = parse_pipeline(yaml).unwrap().pipeline;
         assert!(dangling_edge_references(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn dangling_references_flag_unknown_loop_member() {
+        // #269: a loop-region member naming a non-existent node makes the
+        // region silently no-op at runtime — same class as a dangling edge.
+        // Parse-time warning, launch-time refusal (both call this fn).
+        let yaml = r#"
+name: orphan-region
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: worker
+    type: doc-only
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: per-item
+    kind: collection
+    over: items
+    members: [worker]
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let errors = dangling_edge_references(&result.pipeline);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("loop region 'per-item'")
+                && errors[0].contains("non-existent node 'worker'"),
+            "unexpected message: {}",
+            errors[0]
+        );
+        // And it surfaces as a parse-time warning too.
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("loop region 'per-item'")));
     }
 
     #[test]

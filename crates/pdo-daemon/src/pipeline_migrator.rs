@@ -233,6 +233,13 @@ pub fn migrate_pipeline_yaml(
         }
     }
 
+    // The dissolve passes above run *before* id-rewriting, so the `loops:`
+    // regions they emit (and any pre-existing region) reference original node
+    // ids. Remap `members` like the edges — a stale member id orphans the
+    // region, which then silently no-ops at runtime (the exact failure #269
+    // eliminates).
+    rewrite_loop_members(&mut doc, &id_map);
+
     // Inputs are emergent (#149): strip declared inputs from regular nodes,
     // migrating any `repeated: true` flag onto the matching incoming edge so the
     // accumulate-across-iterations behavior is preserved. Run before side
@@ -764,6 +771,25 @@ fn inject_start_end_nodes(doc: &mut serde_yaml::Value) {
             serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(input_port)]),
         );
         nodes.push(serde_yaml::Value::Mapping(end));
+    }
+}
+
+/// Remaps node references inside the `loops:` block (`members` entries) through
+/// `id_map`, mirroring [`rewrite_edge_endpoint`] for edges. Region `id`s are
+/// free text, not node references, and are left alone.
+fn rewrite_loop_members(doc: &mut serde_yaml::Value, id_map: &HashMap<String, String>) {
+    let Some(regions) = doc.get_mut("loops").and_then(|l| l.as_sequence_mut()) else {
+        return;
+    };
+    for region in regions.iter_mut() {
+        let Some(members) = region.get_mut("members").and_then(|m| m.as_sequence_mut()) else {
+            continue;
+        };
+        for member in members.iter_mut() {
+            if let Some(new_id) = member.as_str().and_then(|old| id_map.get(old)) {
+                *member = serde_yaml::Value::String(new_id.clone());
+            }
+        }
     }
 }
 
@@ -2724,6 +2750,126 @@ edges:
         let parsed = migrate_str_and_parse(yaml);
         let region = &parsed.loops[0];
         assert_eq!(region.over.as_deref(), Some("tasks"));
+    }
+
+    #[test]
+    fn foreach_dissolution_remaps_members_when_body_has_human_id() {
+        // #269 regression: the dissolve passes run before id-rewriting, so the
+        // emitted region references the body's *original* id. When that id is
+        // human-readable (the common legacy case) it gets re-idified to a
+        // nanoid — `loops[].members` must follow, like the edges, or the
+        // migrated region is orphaned and silently no-ops at runtime.
+        let yaml = r#"
+name: foreach-human-id
+version: "1.0"
+nodes:
+  - id: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
+    name: per-item
+    type: for-each
+    over: items
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: worker
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+edges:
+  - source: { node: lister, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: worker, port: in }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        assert_eq!(parsed.loops.len(), 1);
+        let region = &parsed.loops[0];
+        let new_worker_id = deterministic_id("worker");
+        assert_eq!(
+            region.members,
+            vec![new_worker_id.clone()],
+            "members must be remapped to the re-idified node"
+        );
+        // Cross-check: every member names an existing node (the launch-time
+        // dangling-reference gate would otherwise refuse this pipeline).
+        assert!(
+            pipeline::dangling_edge_references(&parsed).is_empty(),
+            "migrated pipeline must carry no dangling references"
+        );
+    }
+
+    #[test]
+    fn loop_dissolution_remaps_members_when_body_has_human_id() {
+        // Same bug class as the ForEach variant, for `bounded` regions emitted
+        // by dissolve_loops: a human-id body node is re-idified, members must
+        // follow.
+        let yaml = r#"
+name: loop-human-id
+version: "1.0"
+nodes:
+  - id: feeder
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: lpNODE01
+    name: retry
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: fixer
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+edges:
+  - source: { node: feeder, port: plan }
+    target: { node: lpNODE01, port: in }
+  - source: { node: lpNODE01, port: body }
+    target: { node: fixer, port: in }
+  - source: { node: fixer, port: out }
+    target: { node: lpNODE01, port: break }
+    when:
+      verdict: { eq: PASS }
+  - source: { node: lpNODE01, port: done }
+    target: { node: end, port: result }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        assert_eq!(parsed.loops.len(), 1);
+        let region = &parsed.loops[0];
+        assert_eq!(region.kind, pipeline::LoopKind::Bounded);
+        assert_eq!(
+            region.members,
+            vec![deterministic_id("fixer")],
+            "bounded-region members must be remapped to the re-idified node"
+        );
+        assert!(
+            pipeline::dangling_edge_references(&parsed).is_empty(),
+            "migrated pipeline must carry no dangling references"
+        );
     }
 
     // --- Real fixtures: Switch → guarded edges (issue #144) ---

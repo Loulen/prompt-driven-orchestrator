@@ -2352,6 +2352,42 @@ mod tests {
     }
 
     #[test]
+    fn replayed_junk_extend_cycle_leaves_projection_identical() {
+        // ADR-0025 / #327 replay safety: validate-before-append means NEW logs
+        // never gain an extend_cycle for an unknown node, but OLD logs may
+        // already contain one. Its consumers are inert for unknown keys, so the
+        // projection must be identical with or without the junk command.
+        let base = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        ];
+        let mut with_junk = base.clone();
+        with_junk.insert(
+            2,
+            Event {
+                kind: EventKind::CommandIssued,
+                payload: Some(serde_json::json!({
+                    "command": "extend_cycle",
+                    "node_id": "no-such-node",
+                    "additional_iter": 3,
+                })),
+                ..make_event(EventKind::CommandIssued, None, None)
+            },
+        );
+        let clean = project(&base).unwrap();
+        let junked = project(&with_junk).unwrap();
+        assert_eq!(clean.status, junked.status);
+        assert_eq!(clean.nodes.len(), junked.nodes.len());
+        assert_eq!(clean.nodes["worker"].status, junked.nodes["worker"].status);
+        assert_eq!(clean.loop_states.len(), junked.loop_states.len());
+    }
+
+    #[test]
     fn command_issued_unknown_command_is_noop() {
         let events = vec![
             make_event_with_payload(

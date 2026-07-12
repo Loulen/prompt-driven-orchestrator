@@ -823,6 +823,16 @@ Pas de "permanent delete" v1 (mais cf. `forget` ci-dessous). Le bouton "Cleanup"
 
 L'event log **et** le Blackboard archivé peuvent grossir indéfiniment ; on évalue la taille avant de décider d'une politique de purge. Pas de v1. Le seul reclaim v1 du Blackboard archivé est le **`forget`** (`DELETE /runs/<id>`, autorisé sur un Run déjà `archived`) : il purge les events *et* `~/.pdo/runs/<id>`.
 
+### Forget durable
+
+Le `forget` (`DELETE /runs/<id>`) est **durable** (ADR-0024) : il pose un *tombstone* dans la table `forgotten_runs` et purge les events dans une même transaction. Conséquences :
+
+- `append_event` refuse **tout** kind d'événement pour un run_id tombstoné (garde `INSERT … WHERE NOT EXISTS`, sans fenêtre TOCTOU) — un écrivain tardif (session `pdo-mgr` orpheline, tail détaché post-#304/ADR-0023) ne peut plus ressusciter le run ; il logge l'erreur et continue.
+- `POST /runs/<id>/commands` et `POST …/nodes/<n>/done` répondent **410 Gone** pour un run oublié, avant tout side-effect.
+- `forget` tue en best-effort les sessions `pdo-mgr-<id>` / `pdo-shell-<id>` (un run oublié n'a plus rien à récupérer).
+- Un run_id oublié n'est **jamais réutilisable** (le tombstone bloque aussi `RunStarted`) ; les run_id sont horodatés, la collision est impraticable.
+- `project()` ne projette jamais un log sans `RunStarted` : un fragment événementiel orphelin rend `None` au lieu d'un fantôme `running` sans nom.
+
 ### Notifications
 
 Pas de notifications système v1. Le status icon dans la liste de gauche suffit. Si plus tard ça manque, on rajoute optionnellement (desktop notification API, opt-in). Pas avant.

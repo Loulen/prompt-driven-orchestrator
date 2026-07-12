@@ -548,6 +548,10 @@ pub fn project(events: &[Event]) -> Option<RunState> {
         }
     }
 
+    // #328: a log with no RunStarted is an invalid fragment (e.g. a late event
+    // appended after a forget) — never surface it as a phantom Running run.
+    state.started_at.as_ref()?;
+
     finalize(&mut state);
 
     Some(state)
@@ -1361,6 +1365,25 @@ mod tests {
     #[test]
     fn projects_empty_events_to_none() {
         assert!(project(&[]).is_none());
+    }
+
+    #[test]
+    fn lone_command_issued_projects_none() {
+        // #328: a log fragment with no RunStarted (e.g. a late event that
+        // slipped in around a forget) must never project as a phantom run.
+        let events = vec![make_event_with_payload(
+            EventKind::CommandIssued,
+            None,
+            serde_json::json!({ "kind": "extend_cycle" }),
+        )];
+        assert!(project(&events).is_none());
+    }
+
+    #[test]
+    fn lone_node_event_projects_none() {
+        // #328: same for node events — the exact ghost shape from the issue.
+        let events = vec![make_event(EventKind::NodeStopped, Some("n1"), Some(1))];
+        assert!(project(&events).is_none());
     }
 
     #[test]

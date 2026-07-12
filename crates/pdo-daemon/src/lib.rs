@@ -2541,6 +2541,18 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     .await
     .context("failed to create events table")?;
 
+    // #328 / ADR-0024: tombstones for forgotten runs — a run_id present here
+    // can never receive events again (guard in `append_event`).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS forgotten_runs (
+            run_id TEXT PRIMARY KEY,
+            forgotten_at TEXT NOT NULL
+        )",
+    )
+    .execute(db)
+    .await
+    .context("failed to create forgotten_runs table")?;
+
     trigger_store::init(db)
         .await
         .context("failed to create trigger tables")?;
@@ -2587,8 +2599,12 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
         .to_string();
     let payload_str = event.payload.as_ref().map(|p| p.to_string());
 
-    sqlx::query(
-        "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES (?, ?, ?, ?, ?, ?)",
+    // #328 / ADR-0024: refuse ALL kinds for a tombstoned run in the same
+    // statement as the insert (no TOCTOU window against a concurrent forget).
+    let result = sqlx::query(
+        "INSERT INTO events (run_id, ts, kind, node_id, iter, payload)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM forgotten_runs WHERE run_id = ?)",
     )
     .bind(&event.run_id)
     .bind(&event.ts)
@@ -2596,13 +2612,28 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
     .bind(&event.node_id)
     .bind(event.iter)
     .bind(&payload_str)
+    .bind(&event.run_id)
     .execute(&state.db)
     .await
     .context("failed to append event")?;
+    if result.rows_affected() == 0 {
+        anyhow::bail!("run {} has been forgotten", event.run_id);
+    }
 
     let _ = state.event_tx.send(event.clone());
 
     Ok(())
+}
+
+/// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
+async fn run_is_forgotten(db: &sqlx::SqlitePool, run_id: &str) -> Result<bool> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM forgotten_runs WHERE run_id = ? LIMIT 1")
+            .bind(run_id)
+            .fetch_optional(db)
+            .await
+            .context("failed to query forgotten_runs")?;
+    Ok(row.is_some())
 }
 
 async fn emit_run_event(
@@ -7273,6 +7304,22 @@ async fn node_done(
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
 
+    // #328 / ADR-0024: refuse completions for a forgotten run BEFORE any side
+    // effect (sub-worktree merge in particular).
+    match run_is_forgotten(&state.db, &run_id).await {
+        Ok(true) => {
+            return (
+                StatusCode::GONE,
+                Json(serde_json::json!({ "error": format!("run {run_id} has been forgotten") })),
+            )
+                .into_response();
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    }
+
     // Post-#205: a node's tmux session is snapshot-then-killed *immediately* at
     // its terminal transition (see the "#205" reaps below), so post-mortem
     // preview survives via the persisted pane snapshot, not a lingering session.
@@ -8177,6 +8224,23 @@ async fn run_command(
     AxumPath(run_id): AxumPath<String>,
     Json(req): Json<RunCommandRequest>,
 ) -> Response {
+    // #328 / ADR-0024: a forgotten run accepts no commands — reject before any
+    // arm can append (extend_cycle appends CommandIssued before its own
+    // existence check) or trigger side effects.
+    match run_is_forgotten(&state.db, &run_id).await {
+        Ok(true) => {
+            return (
+                StatusCode::GONE,
+                Json(serde_json::json!({ "error": format!("run {run_id} has been forgotten") })),
+            )
+                .into_response();
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    }
+
     match req.kind.as_str() {
         "mark_node_done" => {
             let Some(node_id) = req.node_id else {
@@ -9742,13 +9806,35 @@ async fn forget_run(
             .into_response();
     }
 
-    if let Err(e) = sqlx::query("DELETE FROM events WHERE run_id = ?")
-        .bind(&run_id)
-        .execute(&state.db)
-        .await
-    {
+    // #328 / ADR-0024: tombstone + purge in one transaction — a late writer
+    // must never observe "events gone, no tombstone yet" and resurrect the run.
+    let purge = async {
+        let mut tx = state.db.begin().await?;
+        sqlx::query("INSERT OR IGNORE INTO forgotten_runs (run_id, forgotten_at) VALUES (?, ?)")
+            .bind(&run_id)
+            .bind(event_log::now_iso())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM events WHERE run_id = ?")
+            .bind(&run_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        anyhow::Ok(())
+    };
+    if let Err(e) = purge.await {
         error!("failed to delete events for {run_id}: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
+    }
+
+    // A forgotten run has nothing left to recover: reap its manager/shell
+    // sessions so they can't keep POSTing commands. Best-effort.
+    let socket = state.tmux_socket();
+    for session in [
+        tmux_session_manager::manager_session_name(&run_id),
+        tmux_session_manager::shell_session_name(&run_id),
+    ] {
+        tmux_session_manager::kill(&socket, &session);
     }
 
     // #315 / ADR-0020: forget also reclaims the durable output store — without
@@ -11871,6 +11957,142 @@ mod tests {
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(events.is_empty(), "event log must be empty after forget");
         assert!(event_log::project(&events).is_none());
+
+        // #328: forget is durable — a late writer cannot resurrect the run.
+        let late = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStopped,
+            node_id: Some("n1".into()),
+            iter: Some(1),
+            payload: None,
+        };
+        let err = append_event(&state, &late).await.unwrap_err();
+        assert!(
+            err.to_string().contains("has been forgotten"),
+            "unexpected error: {err}"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(events.is_empty(), "late append must not write any event");
+
+        // GET /runs never re-lists the forgotten run.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !body.to_string().contains(run_id),
+            "forgotten run must not reappear in GET /runs: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn command_on_forgotten_run_returns_410() {
+        let state = test_state().await;
+        let run_id = "forget-410";
+        seed_completed_run(&state, run_id).await;
+        post_cleanup_run(&state, run_id).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // extend_cycle used to append CommandIssued before any existence check
+        // — the exact resurrection vector of #328.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind": "extend_cycle", "node_id": "n1", "additional_iter": 1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::GONE);
+
+        // node_done is also rejected before any side effect.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/n1/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"iter": 1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::GONE);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(events.is_empty(), "log must stay empty: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn forget_is_atomic_tombstone() {
+        let state = test_state().await;
+        let run_id = "forget-tombstone";
+        seed_completed_run(&state, run_id).await;
+        post_cleanup_run(&state, run_id).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert!(run_is_forgotten(&state.db, run_id).await.unwrap());
+
+        // Re-forgetting a forgotten run: the log is gone, so it 404s (unchanged).
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

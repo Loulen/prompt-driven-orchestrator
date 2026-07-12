@@ -119,6 +119,21 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
+    /// Migrate legacy pipeline YAMLs on disk (#269, ADR-0011): dissolve
+    /// `type: for-each` (and other retired control nodes) into `loops:`
+    /// regions, rewiring edges. An explicit one-shot — never auto-run at load,
+    /// so a migration is always a deliberate, reviewable act. A real run
+    /// writes a `.bak` backup beside each migrated file; `--dry-run` only
+    /// reports what would change.
+    Migrate {
+        /// Migrate only this directory of pipeline YAMLs. Default: the repo's
+        /// `.pdo/pipelines`, `~/.pdo/pipelines`, and the library store.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+        /// Report what would be migrated without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Manage the persistent OS service unit for the daemon (#156, ADR-0019).
     ///
     /// Installs the daemon as a `systemd --user` unit (Linux) or a launchd
@@ -497,6 +512,110 @@ pub fn run_skip(reason: String) -> Result<()> {
         let status = resp.status();
         let body = resp.text().unwrap_or_default();
         anyhow::bail!("daemon returned {status}: {body}");
+    }
+    Ok(())
+}
+
+/// One-shot `pdo migrate` (#269, ADR-0011): walks the pipeline stores and
+/// dissolves legacy control-node YAML (Switch/Loop/ForEach) into the
+/// edge-conditional + `loops:` region model via
+/// [`pipeline_migrator::migrate_pipeline_yaml`]. Blocking, no tokio (mirrors
+/// `run_complete`). Backups: a real migration first copies the original to
+/// `<file>.bak` so the change is trivially reversible.
+pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()> {
+    let dirs: Vec<PathBuf> = match dir {
+        Some(d) => vec![d],
+        None => {
+            let mut v = Vec::new();
+            if let Ok(cwd) = std::env::current_dir() {
+                v.push(cwd.join(".pdo").join("pipelines"));
+            }
+            if let Some(home) = dirs_next_home() {
+                v.push(home.join(".pdo").join("pipelines"));
+            }
+            if let Some(lib) = library_store::pipelines::user_pipelines_dir() {
+                v.push(lib);
+            }
+            v.retain(|d| d.is_dir());
+            v
+        }
+    };
+
+    if dirs.is_empty() {
+        println!("no pipeline directory found — nothing to migrate");
+        return Ok(());
+    }
+
+    let mut migrated = 0usize;
+    let mut up_to_date = 0usize;
+    let mut errors = 0usize;
+
+    for d in &dirs {
+        let entries = match std::fs::read_dir(d) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("skip {}: {e}", d.display());
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_yaml = path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml");
+            if !is_yaml {
+                continue;
+            }
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error   {}: {e}", path.display());
+                    errors += 1;
+                    continue;
+                }
+            };
+            match pipeline_migrator::migrate_pipeline_yaml(&text, &path) {
+                Ok(res) if res.migrated => {
+                    if dry_run {
+                        println!("would migrate {}", path.display());
+                        migrated += 1;
+                    } else {
+                        let backup =
+                            path.with_file_name(format!("{}.bak", entry.file_name().display()));
+                        if let Err(e) = std::fs::copy(&path, &backup) {
+                            eprintln!("error   {}: backup failed: {e}", path.display());
+                            errors += 1;
+                            continue;
+                        }
+                        match pipeline_migrator::migrate_pipeline_file(&path) {
+                            Ok(_) => {
+                                println!(
+                                    "migrated {} (backup: {})",
+                                    path.display(),
+                                    backup.display()
+                                );
+                                migrated += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("error   {}: {e}", path.display());
+                                errors += 1;
+                            }
+                        }
+                    }
+                }
+                Ok(_) => up_to_date += 1,
+                Err(e) => {
+                    eprintln!("error   {}: {e}", path.display());
+                    errors += 1;
+                }
+            }
+        }
+    }
+
+    let verb = if dry_run { "would migrate" } else { "migrated" };
+    println!("{verb} {migrated} pipeline(s); {up_to_date} already up to date; {errors} error(s)");
+    if errors > 0 {
+        anyhow::bail!("{errors} pipeline(s) failed to migrate");
     }
     Ok(())
 }
@@ -2716,53 +2835,48 @@ async fn emit_loop_action(state: &AppState, run_id: &str, action: &scheduler::Sc
     }
 }
 
-async fn emit_foreach_action(state: &AppState, run_id: &str, action: &scheduler::SchedulerAction) {
+async fn emit_collection_action(
+    state: &AppState,
+    run_id: &str,
+    action: &scheduler::SchedulerAction,
+) {
     match action {
-        scheduler::SchedulerAction::ForEachStarted {
-            foreach_node_id,
+        scheduler::SchedulerAction::CollectionStarted {
+            region_id,
+            entry,
             total_items,
             ..
         } => {
             emit_run_event(
                 state,
                 run_id,
-                event_log::EventKind::ForEachStarted,
+                event_log::EventKind::CollectionStarted,
                 Some(serde_json::json!({
-                    "foreach_node_id": foreach_node_id,
+                    "region_id": region_id,
+                    "entry": entry,
                     "total_items": total_items,
                 })),
             )
             .await;
         }
-        scheduler::SchedulerAction::ForEachEmpty { foreach_node_id } => {
+        scheduler::SchedulerAction::CollectionEmpty { region_id } => {
             emit_run_event(
                 state,
                 run_id,
-                event_log::EventKind::ForEachEmpty,
+                event_log::EventKind::CollectionEmpty,
                 Some(serde_json::json!({
-                    "foreach_node_id": foreach_node_id,
+                    "region_id": region_id,
                 })),
             )
             .await;
         }
-        scheduler::SchedulerAction::ForEachBreakReceived { foreach_node_id } => {
+        scheduler::SchedulerAction::CollectionDone { region_id } => {
             emit_run_event(
                 state,
                 run_id,
-                event_log::EventKind::ForEachBreakReceived,
+                event_log::EventKind::CollectionDone,
                 Some(serde_json::json!({
-                    "foreach_node_id": foreach_node_id,
-                })),
-            )
-            .await;
-        }
-        scheduler::SchedulerAction::ForEachDone { foreach_node_id } => {
-            emit_run_event(
-                state,
-                run_id,
-                event_log::EventKind::ForEachDone,
-                Some(serde_json::json!({
-                    "foreach_node_id": foreach_node_id,
+                    "region_id": region_id,
                 })),
             )
             .await;
@@ -4037,15 +4151,18 @@ struct SpawnContext<'a> {
     repo_root: &'a std::path::Path,
 }
 
-fn deposit_foreach_items(
+/// Deposits one `_item.md` per lap under the collection entry's artifact dir
+/// (ADR-0011 / #269): `<artifacts>/<entry>/iter-N/_item.md` with `item / iter /
+/// total` frontmatter, so each spawned lap reads its own item.
+fn deposit_collection_items(
     artifacts_dir: &std::path::Path,
-    foreach_node_id: &str,
+    entry_node_id: &str,
     items: &[serde_yaml::Value],
 ) {
     for (i, item) in items.iter().enumerate() {
         let iter_num = (i + 1) as i64;
         let item_dir = artifacts_dir
-            .join(foreach_node_id)
+            .join(entry_node_id)
             .join(format!("iter-{iter_num}"));
         let _ = std::fs::create_dir_all(&item_dir);
         let item_str = serde_yaml::to_string(item).unwrap_or_else(|_| format!("{item:?}"));
@@ -4060,51 +4177,39 @@ fn deposit_foreach_items(
     }
 }
 
-fn find_foreach_context(
+/// A collection-region member (ADR-0011 / #269) reads its OWN deposited item:
+/// the fan-out deposits `_item.md` under the entry's artifact dir, one per
+/// lap — there is no separate driver node like the retired ForEach.
+fn find_collection_context(
     spawn_ctx: &SpawnContext<'_>,
     node_id: &str,
     iter: i64,
 ) -> Option<prompt_augmenter::ForEachContext> {
-    for edge in &spawn_ctx.pipeline.edges {
-        if edge.target.node != *node_id || edge.source.port != "body" {
-            continue;
-        }
-        let source = &edge.source.node;
-        let is_foreach = spawn_ctx
-            .pipeline
-            .nodes
-            .iter()
-            .any(|n| n.id == *source && n.node_type == pipeline::NodeType::ForEach);
-        if !is_foreach {
-            continue;
-        }
-        let item_path = spawn_ctx
-            .artifacts_dir
-            .join(source.as_str())
-            .join(format!("iter-{iter}"))
-            .join("_item.md");
-        let item_content = std::fs::read_to_string(&item_path).unwrap_or_default();
-        let total_path = spawn_ctx.artifacts_dir.join(source.as_str());
-        let total = std::fs::read_dir(&total_path)
-            .map(|entries| {
-                entries
-                    .filter(|e| e.as_ref().is_ok_and(|e| e.path().is_dir()))
-                    .count()
-            })
-            .unwrap_or(0) as i64;
-        let current_item = item_content
-            .split("---")
-            .nth(2)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        return Some(prompt_augmenter::ForEachContext {
-            current_item,
-            current_iter: iter,
-            total,
-        });
-    }
-    None
+    crate::loop_region::collection_region_for_member(spawn_ctx.pipeline, node_id)?;
+    let item_path = spawn_ctx
+        .artifacts_dir
+        .join(node_id)
+        .join(format!("iter-{iter}"))
+        .join("_item.md");
+    let item_content = std::fs::read_to_string(&item_path).ok()?;
+    let total = std::fs::read_dir(spawn_ctx.artifacts_dir.join(node_id))
+        .map(|entries| {
+            entries
+                .filter(|e| e.as_ref().is_ok_and(|e| e.path().is_dir()))
+                .count()
+        })
+        .unwrap_or(0) as i64;
+    let current_item = item_content
+        .split("---")
+        .nth(2)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Some(prompt_augmenter::ForEachContext {
+        current_item,
+        current_iter: iter,
+        total,
+    })
 }
 
 /// What actually happened in a `spawn_node` call (ADR-0025 / #327). Every exit
@@ -4211,7 +4316,7 @@ async fn spawn_node(
     let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
 
-    let foreach_context = find_foreach_context(spawn_ctx, &node.id, iter);
+    let foreach_context = find_collection_context(spawn_ctx, &node.id, iter);
 
     let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
         || node.node_type == pipeline::NodeType::Merge;
@@ -4367,7 +4472,6 @@ async fn spawn_node(
                     pipeline::NodeType::End => "end",
                     pipeline::NodeType::Switch => "switch",
                     pipeline::NodeType::Loop => "loop",
-                    pipeline::NodeType::ForEach => "for-each",
                     pipeline::NodeType::Merge => "merge",
                     pipeline::NodeType::Script => "script",
                 },
@@ -4629,18 +4733,13 @@ pub(crate) async fn handle_node_completion(
             | scheduler::SchedulerAction::LoopDone { .. } => {
                 emit_loop_action(state, run_id, action).await;
             }
-            scheduler::SchedulerAction::ForEachStarted {
-                foreach_node_id,
-                items,
-                ..
-            } => {
-                emit_foreach_action(state, run_id, action).await;
-                deposit_foreach_items(&artifacts_dir, foreach_node_id, items);
+            scheduler::SchedulerAction::CollectionStarted { entry, items, .. } => {
+                emit_collection_action(state, run_id, action).await;
+                deposit_collection_items(&artifacts_dir, entry, items);
             }
-            scheduler::SchedulerAction::ForEachEmpty { .. }
-            | scheduler::SchedulerAction::ForEachBreakReceived { .. }
-            | scheduler::SchedulerAction::ForEachDone { .. } => {
-                emit_foreach_action(state, run_id, action).await;
+            scheduler::SchedulerAction::CollectionEmpty { .. }
+            | scheduler::SchedulerAction::CollectionDone { .. } => {
+                emit_collection_action(state, run_id, action).await;
             }
         }
     }
@@ -4691,18 +4790,15 @@ pub(crate) async fn handle_node_completion(
         }
     }
 
-    // Check foreach body completion for all foreach nodes
-    for foreach_node in pipeline
-        .nodes
+    // Check the barrier of every collection region (ADR-0011 / #269)
+    for region in pipeline
+        .loops
         .iter()
-        .filter(|n| n.node_type == pipeline::NodeType::ForEach)
+        .filter(|r| r.kind == pipeline::LoopKind::Collection)
     {
-        let foreach_actions = scheduler::evaluate_foreach_body_completion(
-            &pipeline,
-            &fresh_run_state,
-            &foreach_node.id,
-        );
-        for action in &foreach_actions {
+        let collection_actions =
+            scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+        for action in &collection_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
@@ -4713,7 +4809,7 @@ pub(crate) async fn handle_node_completion(
                     emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
                     return;
                 }
-                _ => emit_foreach_action(state, run_id, action).await,
+                _ => emit_collection_action(state, run_id, action).await,
             }
         }
     }
@@ -9354,18 +9450,13 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
                 | scheduler::SchedulerAction::LoopDone { .. } => {
                     emit_loop_action(state, run_id, action).await;
                 }
-                scheduler::SchedulerAction::ForEachStarted {
-                    foreach_node_id,
-                    items,
-                    ..
-                } => {
-                    emit_foreach_action(state, run_id, action).await;
-                    deposit_foreach_items(&artifacts_dir, foreach_node_id, items);
+                scheduler::SchedulerAction::CollectionStarted { entry, items, .. } => {
+                    emit_collection_action(state, run_id, action).await;
+                    deposit_collection_items(&artifacts_dir, entry, items);
                 }
-                scheduler::SchedulerAction::ForEachEmpty { .. }
-                | scheduler::SchedulerAction::ForEachBreakReceived { .. }
-                | scheduler::SchedulerAction::ForEachDone { .. } => {
-                    emit_foreach_action(state, run_id, action).await;
+                scheduler::SchedulerAction::CollectionEmpty { .. }
+                | scheduler::SchedulerAction::CollectionDone { .. } => {
+                    emit_collection_action(state, run_id, action).await;
                 }
             }
         }
@@ -9433,25 +9524,22 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
         }
     }
 
-    // Check foreach body completion for all foreach nodes
-    for foreach_node in pipeline
-        .nodes
+    // Check the barrier of every collection region (ADR-0011 / #269)
+    for region in pipeline
+        .loops
         .iter()
-        .filter(|n| n.node_type == pipeline::NodeType::ForEach)
+        .filter(|r| r.kind == pipeline::LoopKind::Collection)
     {
-        let foreach_actions = scheduler::evaluate_foreach_body_completion(
-            &pipeline,
-            &fresh_run_state,
-            &foreach_node.id,
-        );
-        for action in &foreach_actions {
+        let collection_actions =
+            scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+        for action in &collection_actions {
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     // Transition guard (#212): schedule only missing work.
                     if let Some(reason) =
                         transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
                     {
-                        info!("re_evaluate_after_command(foreach): skip spawn — {reason}");
+                        info!("re_evaluate_after_command(collection): skip spawn — {reason}");
                         summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
                         let outcome = spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
@@ -9463,7 +9551,7 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
                     summary.terminal = Some(ReEvalTerminal::Completed);
                     return summary;
                 }
-                _ => emit_foreach_action(state, run_id, action).await,
+                _ => emit_collection_action(state, run_id, action).await,
             }
         }
     }
@@ -10502,7 +10590,6 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
             pipeline::NodeType::End => "end".into(),
             pipeline::NodeType::Switch => "switch".into(),
             pipeline::NodeType::Loop => "loop".into(),
-            pipeline::NodeType::ForEach => "for-each".into(),
             pipeline::NodeType::Merge => "merge".into(),
             pipeline::NodeType::Script => "script".into(),
         },

@@ -20,7 +20,7 @@ import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import { collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
+import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
 import PortRow from "./PortRow";
 import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
@@ -255,6 +255,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
   const duplicateNode = useEditStore((s) => s.duplicateNode);
+  const createCollectionRegion = useEditStore((s) => s.createCollectionRegion);
   const deleteEdge = useEditStore((s) => s.deleteEdge);
   const updateEdge = useEditStore((s) => s.updateEdge);
   const addNodeToStore = useEditStore((s) => s.addNode);
@@ -267,6 +268,12 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     type: "node" | "edge" | "note";
     id: string;
     edgeIndex?: number;
+    // "Fan out over a collection" gesture (#151 / #269): the member set the
+    // gesture would wrap (clicked node + xyflow multi-selection, start/end
+    // excluded) and the eligible `list` field names, one menu entry each.
+    // Empty/absent when the selection isn't eligible.
+    fanoutMembers?: string[];
+    fanoutFields?: string[];
   } | null>(null);
   // Pending destroy-loop confirmation (#150): set when a Delete-edge action would
   // remove a bounded region's last cycle. Holds the edge to delete and the loops
@@ -425,14 +432,39 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       }
       const nodeDef = pipeline?.nodes.find((n) => n.id === node.id);
       if (nodeDef?.type === "start" || nodeDef?.type === "end") return;
+      // "Fan out over a collection" (#151 / #269): members = the clicked node
+      // plus any other xyflow-selected pipeline nodes (a right-click on one
+      // node of a multi-selection fans out the whole group). Start/end are
+      // structural markers, never members. The gesture is offered only when
+      // some incoming edge from a non-member carries a `list` field AND no
+      // member already lives in a region (a node is in at most one).
+      let fanoutMembers: string[] = [];
+      let fanoutFields: string[] = [];
+      if (pipeline) {
+        const memberIds = new Set([node.id]);
+        for (const n of nodes) {
+          if (n.selected) memberIds.add(n.id);
+        }
+        fanoutMembers = pipeline.nodes
+          .filter((n) => memberIds.has(n.id) && n.type !== "start" && n.type !== "end")
+          .map((n) => n.id);
+        const inRegion = new Set(
+          (pipeline.loops ?? []).flatMap((r) => r.members),
+        );
+        fanoutFields = fanoutMembers.some((m) => inRegion.has(m))
+          ? []
+          : collectionFanoutFields(pipeline, fanoutMembers);
+      }
       setContextMenu({
         x: event.clientX,
         y: event.clientY,
         type: "node",
         id: node.id,
+        fanoutMembers,
+        fanoutFields,
       });
     },
-    [pipeline],
+    [pipeline, nodes],
   );
 
   const handleEdgeContextMenu = useCallback(
@@ -727,6 +759,12 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
             duplicateNode(contextMenu.id);
             setContextMenu(null);
           }}
+          onFanOut={(field) => {
+            if (contextMenu.fanoutMembers && contextMenu.fanoutMembers.length > 0) {
+              createCollectionRegion(contextMenu.fanoutMembers, field);
+            }
+            setContextMenu(null);
+          }}
           onDeleteEdge={() => {
             const idx = contextMenu.edgeIndex;
             setContextMenu(null);
@@ -765,18 +803,22 @@ function ContextMenu({
   x,
   y,
   type,
+  fanoutFields,
   onDeleteNode,
   onDeleteNote,
   onDuplicateNode,
+  onFanOut,
   onDeleteEdge,
   onClose,
 }: {
   x: number;
   y: number;
   type: "node" | "edge" | "note";
+  fanoutFields?: string[];
   onDeleteNode: () => void;
   onDeleteNote: () => void;
   onDuplicateNode: () => void;
+  onFanOut: (field: string) => void;
   onDeleteEdge: () => void;
   onClose: () => void;
 }) {
@@ -795,6 +837,20 @@ function ContextMenu({
             >
               Duplicate
             </button>
+            {/* "Fan out over a collection" (#151 / #269): one entry per
+                eligible `list` field flowing into the selection. Absent when
+                nothing is eligible — the gesture stays discoverable via the
+                lint-banner nudge. */}
+            {(fanoutFields ?? []).map((field) => (
+              <button
+                key={field}
+                data-testid={`ctx-fanout-${field}`}
+                onClick={() => onFanOut(field)}
+                className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
+              >
+                Fan out over "{field}"
+              </button>
+            ))}
             <button
               onClick={onDeleteNode}
               className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"

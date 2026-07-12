@@ -8,7 +8,7 @@ Glossaire vivant. Mis à jour au fil des décisions, lazy.
 
 Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décrit l'enchaînement de rôles d'agents pour accomplir une tâche d'ingénierie.
 
-- **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par `Switch` et `Loop` (ADR-0002). Aucun LLM ne décide à l'exécution quel nœud activer.
+- **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par les edges conditionnelles (`when:`/`else`) et les régions de boucle du bloc `loops:` (ADR-0011, qui supplante le placement `Switch`/`Loop` d'ADR-0002). Aucun LLM ne décide à l'exécution quel nœud activer.
 - **Pas de routage probabiliste** : le déterminisme porte sur la *structure d'orchestration* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
 - **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) — ajouter un nœud, créer une edge, etc. — et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run* ci-dessous).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
@@ -129,7 +129,7 @@ loops:
 ### Deux drivers
 
 - **`bounded`** — driver = compteur `max_iter`. **Naît par auto-détection** : câbler une edge qui ferme un cycle (self-edge incluse) matérialise une boucle (id généré + `max_iter` par défaut), pour qu'un cycle ne soit jamais accidentellement non-borné.
-- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (sélection du/des membre(s) → « fan out sur une collection » → choix du champ) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer.
+- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (clic droit sur le(s) membre(s) → « Fan out over \"<field>\" », un item de menu par champ frontmatter `type: list` entrant) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer. Câblé live depuis #269 / ADR-0026 — **v1 mono-membre** : un body multi-nœuds (itération composite) est différé derrière un nouvel ADR.
 
 ### Compteur d'itération
 

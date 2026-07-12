@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use pdo_daemon::{run_complete, run_daemon, run_fail, run_service, run_skip, Cli, Commands};
+use pdo_daemon::{
+    run_complete, run_daemon, run_fail, run_migrate, run_service, run_skip, Cli, Commands,
+};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -27,5 +29,7 @@ fn main() -> Result<()> {
         Commands::Skip { reason } => run_skip(reason),
         // A blocking one-shot like Complete/Fail/Skip — no tokio runtime (#156).
         Commands::Service { action } => run_service(action),
+        // Blocking one-shot as well (#269): pure fs + YAML rewriting.
+        Commands::Migrate { dir, dry_run } => run_migrate(dir, dry_run),
     }
 }

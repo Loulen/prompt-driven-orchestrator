@@ -185,7 +185,13 @@ pub(crate) fn should_complete_run(
 ) -> bool {
     let status_permits = run_state.status == event_log::RunStatus::Running
         || (complete_when_awaiting_user && run_state.status == event_log::RunStatus::AwaitingUser);
-    status_permits && run_state.all_nodes_completed(expected_node_ids)
+    // A collection region mid-fan-out (ADR-0011 / #269) is unfinished work even
+    // when every node projects `Completed`: node-level status reflects the
+    // LATEST event, so a member whose lap 1 finished while laps 2..N are still
+    // running can transiently project Completed. The barrier (CollectionDone)
+    // is the only truthful "region finished" signal.
+    let collections_done = run_state.collection_states.values().all(|cs| cs.done);
+    status_permits && collections_done && run_state.all_nodes_completed(expected_node_ids)
 }
 
 /// Emit exactly one `RunCompleted` if [`should_complete_run`] says so; returns
@@ -547,6 +553,27 @@ mod tests {
         let s = state_with(RunStatus::AwaitingUser, &[("a", completed_node("a"))]);
         let expected = vec!["a".to_string()];
         assert!(should_complete_run(&s, &expected, true));
+    }
+
+    #[test]
+    fn undone_collection_region_blocks_completion() {
+        // ADR-0011 / #269: node status is the LATEST event, so a collection
+        // member can transiently project Completed mid-fan-out. Only the
+        // barrier (`done`) unblocks run completion.
+        let mut s = state_with(RunStatus::Running, &[("a", completed_node("a"))]);
+        s.collection_states.insert(
+            "fan".into(),
+            event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                done: false,
+            },
+        );
+        let expected = vec!["a".to_string()];
+        assert!(!should_complete_run(&s, &expected, false));
+
+        s.collection_states.get_mut("fan").unwrap().done = true;
+        assert!(should_complete_run(&s, &expected, false));
     }
 
     #[test]

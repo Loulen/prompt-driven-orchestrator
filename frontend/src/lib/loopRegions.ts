@@ -230,6 +230,43 @@ export interface FanoutNudge {
 }
 
 /**
+ * The `list`-typed frontmatter field names a "fan out over a collection"
+ * gesture on `nodeIds` could iterate (#151 / #269). A field is eligible when an
+ * edge from a NON-member source into a member carries it: the source node's
+ * output port matching `edge.source.port` declares a frontmatter field with
+ * `type === "list"`. Edges among the members themselves don't count (fanning
+ * out over your own intra-region output is meaningless), and the result is
+ * deduplicated by field name.
+ *
+ * Pure field discovery: the "member already belongs to a region" guard is NOT
+ * applied here — it lives at the gesture level (context menu) and in the store
+ * (`createCollectionRegion` no-ops), where the region set is authoritative.
+ */
+export function collectionFanoutFields(
+  pipeline: PipelineDef,
+  nodeIds: string[],
+): string[] {
+  const members = new Set(nodeIds);
+  const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
+  const fields: string[] = [];
+  const seen = new Set<string>();
+  for (const edge of pipeline.edges) {
+    if (!members.has(edge.target.node)) continue;
+    if (members.has(edge.source.node)) continue; // intra-member edge
+    const src = byId.get(edge.source.node);
+    if (!src) continue;
+    const port = src.outputs.find((p) => p.name === edge.source.port);
+    for (const [name, decl] of Object.entries(port?.frontmatter ?? {})) {
+      if (decl.type === "list" && !seen.has(name)) {
+        seen.add(name);
+        fields.push(name);
+      }
+    }
+  }
+  return fields;
+}
+
+/**
  * Info-only nudges (ADR-0001 sharp tool, never auto-wraps) suggesting a
  * collection fan-out (#151): when a `list`-typed output port feeds a downstream
  * node that is NOT already a member of a collection region, offer the explicit

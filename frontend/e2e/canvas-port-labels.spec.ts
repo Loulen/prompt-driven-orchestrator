@@ -14,8 +14,10 @@ import { fileURLToPath } from "node:url";
 // than an always-visible pill. Dragging an edge out of an output dot shows a
 // dynamic `out/<port>` label on the connection line.
 //
-// This spec seeds one node of each kind (legacy `switch`/`loop`/`for-each`
-// types migrate to generic agent nodes) and asserts: every output port renders
+// This spec seeds one node of each kind that still parses (legacy `switch`/
+// `loop` types migrate to generic agent nodes; `type: for-each` is hard-refused
+// since ADR-0011 — its slot here is a plain doc-only node with the same body/
+// done port shape) and asserts: every output port renders
 // a dot, the merge input pill is present, hovering an output dot reveals its
 // label, and dragging from an output dot shows the dynamic edge label.
 
@@ -77,7 +79,7 @@ nodes:
     view: { x: 500, y: 300 }
   - id: fe1
     name: per-item
-    type: for-each
+    type: doc-only
     inputs:
       - name: in
         side: left
@@ -148,9 +150,9 @@ test("every output port renders a dot and the merge input keeps its pill", async
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Output ports render as dots (`port-output-<name>`). The seed declares 9
+  // Output ports render as dots (`port-output-<name>`). The seed declares 10
   // output ports across the node types: user_prompt, plan, pass, default,
-  // body, done (loop), body, done (foreach), merged, out.
+  // body, done (loop), body, done (per-item doc-only), merged, out.
   const outputDots = page.locator('[data-testid^="port-output-"]');
   await expect(outputDots).toHaveCount(10, { timeout: 5_000 });
 

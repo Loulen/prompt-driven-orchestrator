@@ -75,6 +75,15 @@ pub enum EventKind {
     ForEachEmpty,
     ForEachBreakReceived,
     ForEachDone,
+    /// A `kind: collection` loop region resolved its `over` list and fanned its
+    /// entry out, one lap per item (ADR-0011 / #269). Keyed by region id.
+    CollectionStarted,
+    /// The region's `over` list resolved empty: the barrier fires immediately
+    /// with zero item laps (ADR-0011 / #269).
+    CollectionEmpty,
+    /// Every item lap of the collection region completed — the barrier fired
+    /// (ADR-0011 / #269).
+    CollectionDone,
     NodeStopped,
     NodeAutoCompleted,
     NodeStale,
@@ -281,6 +290,16 @@ pub struct ForEachState {
     pub done: bool,
 }
 
+/// Barrier accounting for a `kind: collection` loop region (ADR-0011 / #269),
+/// keyed by region id — the region twin of [`ForEachState`]. Tracks the
+/// resolved collection size and whether the barrier has fired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionState {
+    pub region_id: String,
+    pub total_items: i64,
+    pub done: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwitchState {
     pub switch_node_id: String,
@@ -342,6 +361,8 @@ pub struct RunState {
     #[serde(default)]
     pub foreach_states: HashMap<String, ForEachState>,
     #[serde(default)]
+    pub collection_states: HashMap<String, CollectionState>,
+    #[serde(default)]
     pub switch_states: HashMap<String, SwitchState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
@@ -389,6 +410,7 @@ impl RunState {
             merge_resolver: None,
             loop_states: HashMap::new(),
             foreach_states: HashMap::new(),
+            collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             target_repo: None,
             source_branch: None,
@@ -534,6 +556,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::ForEachEmpty
             | EventKind::ForEachBreakReceived
             | EventKind::ForEachDone => apply_foreach_event(&mut state, event),
+            EventKind::CollectionStarted
+            | EventKind::CollectionEmpty
+            | EventKind::CollectionDone => apply_collection_event(&mut state, event),
 
             EventKind::PipelineLint | EventKind::PipelineModified => {
                 apply_pipeline_event(&mut state, event)
@@ -1050,6 +1075,58 @@ fn apply_foreach_event(state: &mut RunState, event: &Event) {
                 {
                     if let Some(fs) = state.foreach_states.get_mut(foreach_node_id) {
                         fs.done = true;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collection-region barrier accounting (ADR-0011 / #269): track the resolved
+/// collection size and the done flag, keyed by region id. The region twin of
+/// [`apply_foreach_event`]; an empty collection short-circuits straight to
+/// done. Panic-free on malformed payloads (missing keys are ignored).
+fn apply_collection_event(state: &mut RunState, event: &Event) {
+    match event.kind {
+        EventKind::CollectionStarted => {
+            if let Some(ref payload) = event.payload {
+                if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                    let total_items = payload
+                        .get("total_items")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    state
+                        .collection_states
+                        .entry(region_id.to_string())
+                        .or_insert_with(|| CollectionState {
+                            region_id: region_id.to_string(),
+                            total_items,
+                            done: false,
+                        });
+                }
+            }
+        }
+        EventKind::CollectionEmpty => {
+            if let Some(ref payload) = event.payload {
+                if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                    let cs = state
+                        .collection_states
+                        .entry(region_id.to_string())
+                        .or_insert_with(|| CollectionState {
+                            region_id: region_id.to_string(),
+                            total_items: 0,
+                            done: false,
+                        });
+                    cs.done = true;
+                }
+            }
+        }
+        EventKind::CollectionDone => {
+            if let Some(ref payload) = event.payload {
+                if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                    if let Some(cs) = state.collection_states.get_mut(region_id) {
+                        cs.done = true;
                     }
                 }
             }
@@ -2757,6 +2834,87 @@ mod tests {
         assert!(!fe_state.done);
     }
 
+    // --- Collection region projection (ADR-0011 / #269) ---
+
+    #[test]
+    fn collection_full_lifecycle_3_items() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "collection" }),
+            ),
+            make_event_with_payload(
+                EventKind::CollectionStarted,
+                None,
+                serde_json::json!({ "region_id": "fan", "entry": "worker", "total_items": 3 }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(2)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(3)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(2)),
+            make_event(EventKind::NodeCompleted, Some("worker"), Some(3)),
+            make_event_with_payload(
+                EventKind::CollectionDone,
+                None,
+                serde_json::json!({ "region_id": "fan" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        let cs = &state.collection_states["fan"];
+        assert_eq!(cs.total_items, 3);
+        assert!(cs.done);
+        assert_eq!(state.nodes["worker"].iterations.len(), 3);
+    }
+
+    #[test]
+    fn collection_empty_projects_done_with_zero_items() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "collection-empty" }),
+            ),
+            make_event_with_payload(
+                EventKind::CollectionEmpty,
+                None,
+                serde_json::json!({ "region_id": "fan" }),
+            ),
+            make_event_with_payload(
+                EventKind::CollectionDone,
+                None,
+                serde_json::json!({ "region_id": "fan" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        let cs = &state.collection_states["fan"];
+        assert_eq!(cs.total_items, 0);
+        assert!(cs.done);
+    }
+
+    #[test]
+    fn collection_events_with_malformed_payload_are_ignored() {
+        // Panic-free projection: missing region_id / no payload are no-ops.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "collection-bad" }),
+            ),
+            make_event(EventKind::CollectionStarted, None, None),
+            make_event_with_payload(
+                EventKind::CollectionDone,
+                None,
+                serde_json::json!({ "totally": "unrelated" }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert!(state.collection_states.is_empty());
+    }
+
     // --- Run display labels (issue #115) ---
 
     #[test]
@@ -3839,6 +3997,31 @@ mod tests {
                 "2026-02-01T00:00:08.000Z",
                 Some(serde_json::json!({ "foreach_node_id": "fe2" })),
             ),
+            // Collection region fan1: started -> done (ADR-0011 / #269), and
+            // fan2: empty list short-circuits to done.
+            ev(
+                EventKind::CollectionStarted,
+                None,
+                None,
+                "2026-02-01T00:00:09.000Z",
+                Some(
+                    serde_json::json!({ "region_id": "fan1", "entry": "worker", "total_items": 2 }),
+                ),
+            ),
+            ev(
+                EventKind::CollectionDone,
+                None,
+                None,
+                "2026-02-01T00:00:10.000Z",
+                Some(serde_json::json!({ "region_id": "fan1" })),
+            ),
+            ev(
+                EventKind::CollectionEmpty,
+                None,
+                None,
+                "2026-02-01T00:00:11.000Z",
+                Some(serde_json::json!({ "region_id": "fan2" })),
+            ),
             // planner: waiting -> started -> completed, plus a frontmatter retry.
             ev(
                 EventKind::NodeWaiting,
@@ -4118,6 +4301,10 @@ mod tests {
             "foreach_states": {
                 "fe1": { "break_received": true, "done": true, "foreach_node_id": "fe1", "total_items": 2 },
                 "fe2": { "break_received": false, "done": true, "foreach_node_id": "fe2", "total_items": 0 }
+            },
+            "collection_states": {
+                "fan1": { "done": true, "region_id": "fan1", "total_items": 2 },
+                "fan2": { "done": true, "region_id": "fan2", "total_items": 0 }
             },
             "input": "exercise every concern",
             "loop_states": {

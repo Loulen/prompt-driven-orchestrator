@@ -24,8 +24,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
   `else` edge catches the unmatched case; pills are always visible (#144).
 - **Loop region**: a bounded review loop exits early on its PASS edge and, if the verdict never
   passes, halts explicitly **"exhausted — unrouted"** (never a silent stall) (#148).
-- **Collection fan-out / Merge**: a `kind: collection` region fans members out in parallel, the
-  barrier fires once when all finish, an empty collection fires the barrier immediately (#151, ADR-0006).
+- **Collection fan-out / Merge**: a `kind: collection` region fans its (single-member, #269 /
+  ADR-0026) body out in parallel — one lap per item — the barrier fires once when all laps finish,
+  and an empty collection fires the barrier immediately (#151, ADR-0006).
 - **Artifact rendering**: an output artifact opens in the markdown modal; a ` ```mermaid ` block
   renders as inline SVG and invalid mermaid degrades gracefully to raw source (#240 / ADR-0013).
 - **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Node sessions started

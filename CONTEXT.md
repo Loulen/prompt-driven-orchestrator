@@ -598,7 +598,9 @@ Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
 
 | Commande | Effet |
 |---|---|
-| `extend_cycle` | Augmente le `max_iter` d'un cycle bloqué de N et relance |
+| `bump_region` | Accorde N itérations supplémentaires à une région de boucle bornée (`region_id` = id de la région `loops:`) et relance |
+| `end_region` | Déclenche la complétion d'une région de boucle bornée sans itération supplémentaire |
+| `extend_cycle` | (Legacy, cycles `$var` hors région) Augmente le `max_iter` d'un cycle bloqué de N et relance. Cible = le nœud porteur de l'arête de cycle sortante (nœud de condition de sortie), jamais la tête. Refusé (`409`) si le nœud est membre d'une région `loops:` bornée — utiliser `bump_region` |
 | `resume_run` | Relance le Run depuis l'état actuel (utile post-conflit résolu manuellement) |
 | `kill_node` | Tue un NodeRun en cours |
 | `restart_node` | Re-spawn un NodeRun (perd l'état tmux courant) |
@@ -609,6 +611,15 @@ Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
 | `start_node` | Spawne un NodeRun immédiatement, sans attendre la complétion amont (force-spawn) ; inputs résolus best-effort ; refusé (`409`) si le Run n'accepte pas de spawn ou si le cap de sessions est atteint |
 
 L'effet de chaque commande est l'**append d'un événement** dans l'event log. Le runtime consomme ces événements et agit en conséquence.
+
+### Contrat de réponse des commandes (ADR-0025)
+
+Les commandes de pilotage de boucle (`extend_cycle`, `bump_region`, `end_region`, `resume_run`) disent la vérité sur leur effet :
+
+- **Cible inconnue** (`node_id` ou `region_id` absent du pipeline du Run — snapshot du Run, pas la bibliothèque) → `400` `{"error":"node '<id>' not found in pipeline"}` (resp. `region '<id>'`). La validation précède l'append du `CommandIssued` **et** la levée du `Halted` : une commande rejetée ne modifie pas l'event log.
+- **Mauvais mécanisme** (`extend_cycle` sur un membre de région bornée) → `409` `{"error":"node '<id>' is a member of loop region '<region>'; use bump_region with region_id '<region>'"}`.
+- **Valide mais sans effet immédiat** (itération encore vivante, région déjà complétée, throttle d'admission) → `200` `{"ok":true,"noop":true,"reason":"..."}` (même convention que `mark_node_done`).
+- **Effet réel** → `200` `{"ok":true,"spawned":[{"node_id":...,"iter":...}]}`.
 
 ### Ce que le manager ne peut **pas** faire
 

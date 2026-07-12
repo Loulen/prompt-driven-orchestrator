@@ -562,9 +562,7 @@ fn forward_spawn_iter(
         }
     };
 
-    let member_region = pipeline.loops.iter().find(|r| {
-        r.kind == crate::pipeline::LoopKind::Bounded && r.members.iter().any(|m| m == target_id)
-    });
+    let member_region = crate::loop_region::bounded_region_for_member(pipeline, target_id);
     if let Some(region) = member_region {
         let max = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
         if proposed > max {

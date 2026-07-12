@@ -4076,12 +4076,32 @@ fn find_foreach_context(
     None
 }
 
+/// What actually happened in a `spawn_node` call (ADR-0025 / #327). Every exit
+/// path is distinguishable so callers that must tell the truth about a
+/// re-scheduling (`re_evaluate_after_command`) can report the real effect
+/// instead of assuming success. Callers on fire-and-forget paths simply drop it
+/// (intentionally not `#[must_use]`).
+#[derive(Debug, Clone)]
+enum SpawnOutcome {
+    /// A tmux session was launched and `NodeStarted` recorded.
+    Spawned,
+    /// Admission cap reached: the node entered `waiting` (`NodeWaiting`
+    /// appended); `retry_waiting_nodes` re-drives it later.
+    Throttled,
+    /// The transition guard refused the spawn before any side effect
+    /// (already live / already completed iteration).
+    Refused { reason: String },
+    /// The spawn aborted (empty script body, worktree creation failure,
+    /// panic/error in the isolated span) — a failure was recorded.
+    Failed { reason: String },
+}
+
 async fn spawn_node(
     state: &AppState,
     spawn_ctx: &SpawnContext<'_>,
     node: &pipeline::NodeDef,
     iter: i64,
-) {
+) -> SpawnOutcome {
     let run_id = spawn_ctx.run_id;
 
     // Transition guard (#212): refuse an illegal NodeStarted BEFORE any side
@@ -4103,7 +4123,7 @@ async fn spawn_node(
         transition_guard::Verdict::NoOp { reason }
         | transition_guard::Verdict::Reject { reason } => {
             warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
-            return;
+            return SpawnOutcome::Refused { reason };
         }
     }
 
@@ -4119,16 +4139,10 @@ async fn spawn_node(
             .map(|s| s.trim().is_empty())
             .unwrap_or(true);
         if body_empty {
-            fail_spawn_before_start(
-                state,
-                spawn_ctx.repo_root,
-                run_id,
-                &node.id,
-                None,
-                &format!("script node {} has an empty body", node.id),
-            )
-            .await;
-            return;
+            let reason = format!("script node {} has an empty body", node.id);
+            fail_spawn_before_start(state, spawn_ctx.repo_root, run_id, &node.id, None, &reason)
+                .await;
+            return SpawnOutcome::Failed { reason };
         }
     }
 
@@ -4160,7 +4174,7 @@ async fn spawn_node(
             "node {} throttled into waiting ({live}/{cap} sessions live)",
             node.id
         );
-        return;
+        return SpawnOutcome::Throttled;
     }
 
     let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
@@ -4187,7 +4201,9 @@ async fn spawn_node(
             &pipeline_branch,
         ) {
             error!("failed to create sub-worktree for {}: {e:#}", node.id);
-            return;
+            return SpawnOutcome::Failed {
+                reason: format!("failed to create sub-worktree for {}: {e:#}", node.id),
+            };
         }
         orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
         sub_wt_dir
@@ -4346,32 +4362,34 @@ async fn spawn_node(
     let (full_prompt, script_env) = match span_outcome {
         Ok(Ok(pair)) => pair,
         Ok(Err(e)) => {
+            let reason = format!("spawn of node {} aborted before start: {e}", node.id);
             fail_spawn_before_start(
                 state,
                 spawn_ctx.repo_root,
                 run_id,
                 &node.id,
                 orphan_to_reap.as_ref(),
-                &format!("spawn of node {} aborted before start: {e}", node.id),
+                &reason,
             )
             .await;
-            return;
+            return SpawnOutcome::Failed { reason };
         }
         Err(panic) => {
+            let reason = format!(
+                "spawn of node {} panicked before start: {}",
+                node.id,
+                panic_payload_message(panic.as_ref())
+            );
             fail_spawn_before_start(
                 state,
                 spawn_ctx.repo_root,
                 run_id,
                 &node.id,
                 orphan_to_reap.as_ref(),
-                &format!(
-                    "spawn of node {} panicked before start: {}",
-                    node.id,
-                    panic_payload_message(panic.as_ref())
-                ),
+                &reason,
             )
             .await;
-            return;
+            return SpawnOutcome::Failed { reason };
         }
     };
 
@@ -4422,6 +4440,8 @@ async fn spawn_node(
             error!("failed to append node_awaiting_user: {e}");
         }
     }
+
+    SpawnOutcome::Spawned
 }
 
 /// Extract a human-readable message from a caught panic payload.
@@ -8328,6 +8348,59 @@ async fn run_command(
                     .into_response();
             }
 
+            // ADR-0025 / #327: validate the target against the run's pipeline
+            // SNAPSHOT before any event is appended — a rejected command must
+            // leave no trace in the log. Snapshot-first (`resolve_run_pipeline_path`)
+            // so a library edit after launch can't affect an in-flight run.
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = match event_log::project(&events) {
+                Some(s) => s,
+                None => {
+                    return (StatusCode::NOT_FOUND, "run not found").into_response();
+                }
+            };
+            let repo_root = effective_repo_root(&state, &run_state);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+            if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                if !pipeline.nodes.iter().any(|n| n.id == node_id) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("node '{node_id}' not found in pipeline")
+                        })),
+                    )
+                        .into_response();
+                }
+                if let Some(region) = loop_region::bounded_region_for_member(&pipeline, &node_id) {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "node '{node_id}' is a member of loop region '{}'; \
+                                 use bump_region with region_id '{}'",
+                                region.id, region.id
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+            } else {
+                // An unreadable/unparsable snapshot can't be validated against;
+                // stay permissive (legacy behavior) rather than reject blind.
+                warn!("extend_cycle: pipeline snapshot unreadable for run {run_id}; skipping target validation");
+            }
+
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -8344,20 +8417,6 @@ async fn run_command(
             if let Err(e) = append_event(&state, &cmd_event).await {
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
-
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
-            };
 
             if run_state.status == event_log::RunStatus::Halted
                 || run_state.status == event_log::RunStatus::Failed
@@ -8377,10 +8436,10 @@ async fn run_command(
             }
 
             // Re-evaluate outgoing edges with the extended cycle
-            re_evaluate_after_command(&state, &run_id).await;
+            let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("extend_cycle: node {node_id} +{additional_iter} in run {run_id}");
-            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         // The Pipeline Manager routes a loop region BY ID (ADR-0011 / #152):
         // `bump_region` runs N more iterations; `end_region` fires its
@@ -8427,6 +8486,46 @@ async fn run_command(
                 })
             };
 
+            // ADR-0025 / #327: validate the region against the run's pipeline
+            // SNAPSHOT before any event is appended — an unknown region_id must
+            // leave no trace in the log.
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = match event_log::project(&events) {
+                Some(s) => s,
+                None => {
+                    return (StatusCode::NOT_FOUND, "run not found").into_response();
+                }
+            };
+            let repo_root = effective_repo_root(&state, &run_state);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+            if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                if !pipeline.loops.iter().any(|r| r.id == region_id) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("region '{region_id}' not found in pipeline")
+                        })),
+                    )
+                        .into_response();
+                }
+            } else {
+                warn!(
+                    "{}: pipeline snapshot unreadable for run {run_id}; skipping region validation",
+                    req.kind
+                );
+            }
+
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -8442,19 +8541,6 @@ async fn run_command(
 
             // Continue the run: an exhausted-unrouted region halts the run, so
             // lift the Halt/Failed back to Running before re-evaluating.
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
-            };
             if run_state.status == event_log::RunStatus::Halted
                 || run_state.status == event_log::RunStatus::Failed
             {
@@ -8472,10 +8558,10 @@ async fn run_command(
                 }
             }
 
-            re_evaluate_after_command(&state, &run_id).await;
+            let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("{}: region {region_id} in run {run_id}", req.kind);
-            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         "pause_run" => {
             let events = match load_events(&state.db, &run_id).await {
@@ -8579,10 +8665,10 @@ async fn run_command(
                 &tmux_session_manager::shell_session_name(&run_id),
             );
 
-            re_evaluate_after_command(&state, &run_id).await;
+            let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("resume_run: run {run_id}");
-            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         "kill_node" => {
             let Some(node_id) = req.node_id else {
@@ -8964,20 +9050,88 @@ async fn run_command(
     }
 }
 
+/// The run reached a terminal state during a post-command re-evaluation
+/// (ADR-0025 / #327).
+#[derive(Debug, Clone)]
+enum ReEvalTerminal {
+    Completed,
+    Halted(String),
+}
+
+/// The real effect of a post-command re-evaluation (ADR-0025 / #327): which
+/// nodes were actually spawned, which candidate spawns were skipped (and why),
+/// and whether the run went terminal. Command handlers surface this in their
+/// response body instead of an unconditional `{ok:true}`.
+#[derive(Debug, Default)]
+struct ReEvalSummary {
+    /// `(node_id, iter)` pairs whose spawn genuinely launched a session.
+    spawned: Vec<(String, i64)>,
+    /// Human-readable reasons for candidate spawns that did NOT launch
+    /// (guard skips, throttling, spawn failures).
+    skipped: Vec<String>,
+    terminal: Option<ReEvalTerminal>,
+}
+
+impl ReEvalSummary {
+    fn record_spawn(&mut self, node_id: &str, iter: i64, outcome: SpawnOutcome) {
+        match outcome {
+            SpawnOutcome::Spawned => self.spawned.push((node_id.to_string(), iter)),
+            SpawnOutcome::Throttled => self.skipped.push(format!(
+                "node '{node_id}' iter {iter} throttled into waiting (session cap)"
+            )),
+            SpawnOutcome::Refused { reason } | SpawnOutcome::Failed { reason } => {
+                self.skipped.push(reason)
+            }
+        }
+    }
+
+    /// The truthful command-response body (ADR-0025). Spawns happened →
+    /// `{ok, spawned}`; nothing launched → `{ok, noop, reason}`.
+    fn into_response_body(self) -> serde_json::Value {
+        if !self.spawned.is_empty() {
+            let spawned: Vec<serde_json::Value> = self
+                .spawned
+                .into_iter()
+                .map(|(node_id, iter)| serde_json::json!({ "node_id": node_id, "iter": iter }))
+                .collect();
+            return serde_json::json!({ "ok": true, "spawned": spawned });
+        }
+        let reason = match &self.terminal {
+            Some(ReEvalTerminal::Completed) => "run completed".to_string(),
+            Some(ReEvalTerminal::Halted(msg)) => format!("run halted: {msg}"),
+            None => {
+                if self.skipped.is_empty() {
+                    "no eligible spawn".to_string()
+                } else {
+                    self.skipped.join("; ")
+                }
+            }
+        };
+        serde_json::json!({ "ok": true, "noop": true, "reason": reason })
+    }
+}
+
 /// Re-evaluate the scheduler after a command (resume_run, extend_cycle).
 /// Loads the pipeline and run state, resolves variables (including cycle extensions),
 /// then re-evaluates outgoing edges of all completed nodes to find newly ready spawns.
-async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
+/// Returns what actually happened so command handlers can tell the truth
+/// (ADR-0025 / #327).
+async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSummary {
+    let mut summary = ReEvalSummary::default();
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
             error!("re_evaluate_after_command: failed to load events: {e}");
-            return;
+            summary.skipped.push(format!("failed to load events: {e}"));
+            return summary;
         }
     };
     let run_state = match event_log::project(&events) {
         Some(s) => s,
-        None => return,
+        None => {
+            summary.skipped.push("run not found".to_string());
+            return summary;
+        }
     };
 
     let repo_root = effective_repo_root(state, &run_state);
@@ -8990,10 +9144,12 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
         }
     };
     let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-        return;
+        summary.skipped.push("pipeline file unreadable".to_string());
+        return summary;
     };
     let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-        return;
+        summary.skipped.push("pipeline failed to parse".to_string());
+        return summary;
     };
 
     let pipeline = parse_result.pipeline;
@@ -9090,8 +9246,10 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                         transition_guard::spawn_superfluous(&run_state, node_id, *iter)
                     {
                         info!("re_evaluate_after_command: skip spawn — {reason}");
+                        summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &spawn_ctx, node, *iter).await;
+                        let outcome = spawn_node(state, &spawn_ctx, node, *iter).await;
+                        summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
                 scheduler::SchedulerAction::Halt { message } => {
@@ -9102,11 +9260,13 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                         Some(serde_json::json!({ "message": message })),
                     )
                     .await;
-                    return;
+                    summary.terminal = Some(ReEvalTerminal::Halted(message.clone()));
+                    return summary;
                 }
                 scheduler::SchedulerAction::Complete => {
                     emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                    return;
+                    summary.terminal = Some(ReEvalTerminal::Completed);
+                    return summary;
                 }
                 scheduler::SchedulerAction::SwitchRouted {
                     node_id,
@@ -9150,7 +9310,7 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
     // Pass 1 may have appended events; re-project so pass 2 sees fresh state
     // (same race fix as handle_node_completion).
     let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
-        return;
+        return summary;
     };
     let mut fresh_resolved_vars = resolve_run_variables(&pipeline, &fresh_events);
     for (ext_node_id, additional) in &extensions {
@@ -9193,13 +9353,16 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                         transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
                     {
                         info!("re_evaluate_after_command(loop): skip spawn — {reason}");
+                        summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        let outcome = spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
                     emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                    return;
+                    summary.terminal = Some(ReEvalTerminal::Completed);
+                    return summary;
                 }
                 _ => emit_loop_action(state, run_id, action).await,
             }
@@ -9225,18 +9388,23 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) {
                         transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
                     {
                         info!("re_evaluate_after_command(foreach): skip spawn — {reason}");
+                        summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        let outcome = spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
                     emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                    return;
+                    summary.terminal = Some(ReEvalTerminal::Completed);
+                    return summary;
                 }
                 _ => emit_foreach_action(state, run_id, action).await,
             }
         }
     }
+
+    summary
 }
 
 /// Extract variable references ($name) from when clauses on Switch output ports

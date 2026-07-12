@@ -180,6 +180,21 @@ pub fn resolve_region_max_iter(
     }
 }
 
+/// The bounded region `node_id` is a member of, if any (ADR-0025 / #327).
+/// Membership means the node's iteration is governed by the region engine —
+/// `bump_region` is the right lever for it, never `extend_cycle`. The head /
+/// entry node of a region is a member like any other. Returns the first
+/// matching `bounded` region.
+pub fn bounded_region_for_member<'a>(
+    pipeline: &'a PipelineDef,
+    node_id: &str,
+) -> Option<&'a LoopRegion> {
+    pipeline
+        .loops
+        .iter()
+        .find(|r| r.kind == LoopKind::Bounded && r.members.iter().any(|m| m == node_id))
+}
+
 /// The bounded region a `node_id` is an entry of, *and* the given edge re-enters
 /// (ADR-0011 / #148). Used by the scheduler to recognise that a fired edge into
 /// `target` is a region re-entry (back-edge) rather than a plain forward edge, so

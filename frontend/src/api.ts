@@ -470,13 +470,24 @@ export async function pauseRun(runId: string): Promise<void> {
   if (!resp.ok) throw new Error(`pause_run failed: ${resp.status}`);
 }
 
+/** Extract the daemon's `{"error": "..."}` body message, if any (ADR-0025). */
+async function errorBodyMessage(resp: Response): Promise<string> {
+  try {
+    const body = await resp.json();
+    if (body && typeof body.error === "string") return `: ${body.error}`;
+  } catch {
+    // non-JSON body — fall through to the status-only message
+  }
+  return "";
+}
+
 export async function resumeRun(runId: string): Promise<void> {
   const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind: "resume_run" }),
   });
-  if (!resp.ok) throw new Error(`resume_run failed: ${resp.status}`);
+  if (!resp.ok) throw new Error(`resume_run failed: ${resp.status}${await errorBodyMessage(resp)}`);
 }
 
 /**
@@ -490,7 +501,7 @@ export async function endRegion(runId: string, regionId: string): Promise<void> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind: "end_region", region_id: regionId }),
   });
-  if (!resp.ok) throw new Error(`end_region failed: ${resp.status}`);
+  if (!resp.ok) throw new Error(`end_region failed: ${resp.status}${await errorBodyMessage(resp)}`);
 }
 
 /**
@@ -512,7 +523,7 @@ export async function bumpRegion(
       additional_iter: additionalIter,
     }),
   });
-  if (!resp.ok) throw new Error(`bump_region failed: ${resp.status}`);
+  if (!resp.ok) throw new Error(`bump_region failed: ${resp.status}${await errorBodyMessage(resp)}`);
 }
 
 export async function retryAll(runId: string): Promise<CreateRunResponse> {

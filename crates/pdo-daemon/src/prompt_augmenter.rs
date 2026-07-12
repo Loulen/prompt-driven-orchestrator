@@ -566,17 +566,31 @@ You manage **run `{run_id}`**.
 
 All commands are issued via `POST {daemon_url}/runs/{run_id}/commands` with a JSON body.
 
-### 1. extend_cycle
+### 1. bump_region
 
-Increment the iteration ceiling for a cycle and re-evaluate outgoing conditions.
+Grant a bounded loop region N more iterations and re-evaluate. This is THE lever for any node that belongs to a loop region — never `extend_cycle`.
 
 ```bash
 curl -X POST {daemon_url}/runs/{run_id}/commands \
   -H 'Content-Type: application/json' \
-  -d '{{"kind":"extend_cycle","node_id":"<node-id>","additional_iter":<N>}}'
+  -d '{{"kind":"bump_region","region_id":"<region-id>","additional_iter":<N>}}'
 ```
 
-### 2. resume_run
+**Finding the `region_id`:** it is a key of `loop_states` in `curl {daemon_url}/runs/{run_id}` (the `loop_node_id` of `loop_iter_started` events). Caveat: a region still on its first lap has **no** `loop_states` entry yet — read the pipeline definition's `loops:` block in that case. An unknown `region_id` is rejected with 400 before anything is recorded.
+
+The response tells you what actually happened: `{{"ok":true,"spawned":[…]}}` when nodes were re-launched, or `{{"ok":true,"noop":true,"reason":"…"}}` when nothing was eligible yet (e.g. the region's current iteration is still running — the extra laps then apply when it finishes).
+
+### 2. end_region
+
+Fire a bounded loop region's completion now (route its exit) instead of running more laps. Same `region_id` discovery and same truthful response body as `bump_region`.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"end_region","region_id":"<region-id>"}}'
+```
+
+### 3. resume_run
 
 Re-run the scheduler from the current state. Use after a manual conflict resolution or after extending a cycle on a halted run.
 
@@ -586,7 +600,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"resume_run"}}'
 ```
 
-### 3. kill_node
+### 4. kill_node
 
 Kill a running NodeRun's tmux session and emit `node_failed`.
 
@@ -596,7 +610,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"kill_node","node_id":"<node-id>","iter":<N>}}'
 ```
 
-### 4. restart_node
+### 5. restart_node
 
 Kill a NodeRun and re-spawn it fresh (same iter, new session).
 
@@ -606,7 +620,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"restart_node","node_id":"<node-id>","iter":<N>}}'
 ```
 
-### 5. mark_node_done
+### 6. mark_node_done
 
 Force-complete a NodeRun (typically an interactive node the user has finished with).
 
@@ -616,7 +630,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"mark_node_done","node_id":"<node-id>","iter":<N>}}'
 ```
 
-### 6. inject_artifact
+### 7. inject_artifact
 
 Write an artifact directly into the Blackboard.
 
@@ -626,7 +640,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>/output.md","content":"<markdown content>"}}'
 ```
 
-### 7. cleanup_run
+### 8. cleanup_run
 
 Archive the run: remove worktrees, branches, and artifacts from disk. Events are preserved.
 
@@ -638,7 +652,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 **Never call `cleanup_run` on your own initiative.** It is destructive and irreversible: it kills every active node session and removes the run's worktrees, branches, and artifacts from disk. Always check with the user first and wait for explicit confirmation before issuing it — even if you believe the run is stuck or finished.
 
-### 8. rename_run
+### 9. rename_run
 
 Set or update the display name of this run.
 
@@ -648,7 +662,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"rename_run","name":"<display name>"}}'
 ```
 
-### 9. start_node
+### 10. start_node
 
 Force-spawn a node now, without waiting for its upstream producers to complete. Use when you deliberately want to start a node ahead of its dependencies. Inputs resolve best-effort: any not-yet-produced upstream artifact resolves to the path where it *will* appear, so the node may run against missing or stale inputs. This is reversible — `restart_node` or `kill_node` it if it ran too early.
 
@@ -656,6 +670,16 @@ Force-spawn a node now, without waiting for its upstream producers to complete. 
 curl -X POST {daemon_url}/runs/{run_id}/commands \
   -H 'Content-Type: application/json' \
   -d '{{"kind":"start_node","node_id":"<node-id>"}}'
+```
+
+### 11. extend_cycle (legacy)
+
+Increment the iteration ceiling of a *legacy drawn cycle* (a pipeline without a `loops:` block) and re-evaluate. `node_id` is the node whose **outgoing exit condition** references the `$max_iter`-style variable to bump — never the cycle's head/entry node. For any node that belongs to a bounded loop region this command is rejected with 409 — use `bump_region` instead. An unknown `node_id` is rejected with 400. Same truthful response body as `bump_region`.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"extend_cycle","node_id":"<node-id>","additional_iter":<N>}}'
 ```
 
 ---
@@ -1437,10 +1461,12 @@ mod tests {
     }
 
     #[test]
-    fn manager_preamble_contains_all_eight_commands() {
+    fn manager_preamble_contains_all_commands() {
         let preamble =
             build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         for cmd in [
+            "bump_region",
+            "end_region",
             "extend_cycle",
             "resume_run",
             "kill_node",
@@ -1449,6 +1475,7 @@ mod tests {
             "inject_artifact",
             "cleanup_run",
             "rename_run",
+            "start_node",
         ] {
             assert!(
                 preamble.contains(cmd),
@@ -1512,17 +1539,46 @@ mod tests {
     fn manager_preamble_cleanup_run_has_self_initiative_guardrail() {
         let preamble =
             build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
-        let section7 = preamble
-            .split("### 7. cleanup_run")
+        let section = preamble
+            .split("### 8. cleanup_run")
             .nth(1)
             .expect("preamble should contain the cleanup_run section")
-            .split("### 8.")
+            .split("### 9.")
             .next()
-            .expect("cleanup_run section should be delimited by section 8");
+            .expect("cleanup_run section should be delimited by section 9");
         assert!(
-            section7.contains("Never call `cleanup_run` on your own initiative"),
-            "section 7 should carry the self-initiative guardrail, got: {section7}"
+            preamble.contains("### 9. rename_run"),
+            "renumbering drifted: section 9 should be rename_run"
         );
+        assert!(
+            section.contains("Never call `cleanup_run` on your own initiative"),
+            "cleanup_run section should carry the self-initiative guardrail, got: {section}"
+        );
+    }
+
+    #[test]
+    fn manager_preamble_region_commands_lead_and_extend_cycle_is_legacy() {
+        // ADR-0025 / #327: bump_region/end_region are the primary loop levers
+        // (sections 1-2, with the region_id discovery recipe + lap-1 caveat);
+        // extend_cycle is demoted to a legacy section with explicit target
+        // semantics.
+        let preamble =
+            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
+        assert!(preamble.contains("### 1. bump_region"));
+        assert!(preamble.contains("### 2. end_region"));
+        assert!(preamble.contains("extend_cycle (legacy)"));
+        let bump = preamble.find("### 1. bump_region").unwrap();
+        let legacy = preamble.find("extend_cycle (legacy)").unwrap();
+        assert!(bump < legacy, "bump_region must come before extend_cycle");
+        // region_id discovery recipe + first-lap caveat
+        assert!(preamble.contains("loop_states"));
+        assert!(preamble.contains("first lap"));
+        // legacy target semantics: exit-condition node, never the head
+        assert!(preamble.contains("never the cycle's head/entry node"));
+        assert!(preamble.contains("rejected with 409"));
+        // truthful response contract (ADR-0025) is documented
+        assert!(preamble.contains("\"noop\":true"));
+        assert!(preamble.contains("\"spawned\""));
     }
 
     // --- image port type preamble tests ---

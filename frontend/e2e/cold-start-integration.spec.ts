@@ -125,7 +125,7 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
   );
 
   // 3. Click the run from the list
-  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
 
   // 4. Assert .react-flow has non-zero bounding box (canvas-height-0 guard)
   const reactFlow = page.locator(".react-flow");

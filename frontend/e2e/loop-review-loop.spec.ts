@@ -167,7 +167,7 @@ test("loop run mode: region counter advances 1/5 → 2/5 over one lap", async ({
   await waitForNodeStatus(page, baseURL!, runId, "impl1", "running", 1);
 
   // Select the run; the canvas renders the loop region with the live counter.
-  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   const region = page.getByTestId("loop-region");
   await expect(region).toBeVisible({ timeout: 5_000 });
   const header = page.getByTestId("loop-region-header");

@@ -101,7 +101,7 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   const { run_id } = await resp.json();
 
   // Select the run in the left panel
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
 
   // Click the toolbar info button
@@ -246,7 +246,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
 
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
 
   // Sanity — open info panel on the run tab and confirm run metadata is shown.

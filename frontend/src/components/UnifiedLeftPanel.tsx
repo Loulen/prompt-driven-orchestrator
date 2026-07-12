@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Star, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
@@ -8,6 +8,7 @@ import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
+import RunFilters, { EMPTY_RUN_FILTER, runMatchesFilter } from "./RunFilters";
 import RunShellModal from "./RunShellModal";
 import TriggersListPanel from "./TriggersListPanel";
 
@@ -390,10 +391,22 @@ export default function UnifiedLeftPanel({
     );
   }
 
+  // #336 — client-side run filters (project / pipeline / trigger), AND
+  // semantics, session-only state. Applied to `runs` BEFORE the active/archived
+  // split so grouping, the Archived section and its count all see the same
+  // filtered view.
+  const [runFilter, setRunFilter] = useState(EMPTY_RUN_FILTER);
+  const filteredRuns = useMemo(
+    () => runs.filter((r) => runMatchesFilter(r, runFilter)),
+    [runs, runFilter],
+  );
+  const filterActive =
+    runFilter.repo !== null || runFilter.pipeline !== null || runFilter.trigger !== null;
+
   // #136 — archived runs live in their own flat, collapsible section below the
   // active list; the active list keeps the #258 per-repo grouping.
-  const activeRuns = runs.filter((r) => r.status !== "archived");
-  const archivedRuns = runs.filter((r) => r.status === "archived");
+  const activeRuns = filteredRuns.filter((r) => r.status !== "archived");
+  const archivedRuns = filteredRuns.filter((r) => r.status === "archived");
 
   // Identity of the selected run *iff* it currently sits in the archived set,
   // else null — the signal that must reveal the section.
@@ -467,6 +480,14 @@ export default function UnifiedLeftPanel({
               New Run
             </button>
           </div>
+        {runs.length > 0 && (
+          <RunFilters
+            runs={runs}
+            triggers={triggers}
+            value={runFilter}
+            onChange={setRunFilter}
+          />
+        )}
         <div className="flex-1 overflow-y-auto">
           {runs.length === 0 && (
             <div
@@ -474,6 +495,22 @@ export default function UnifiedLeftPanel({
               style={{ fontSize: "11px" }}
             >
               No runs yet
+            </div>
+          )}
+          {runs.length > 0 && filterActive && filteredRuns.length === 0 && (
+            <div
+              className="px-3 py-4 text-center text-fg-4"
+              style={{ fontSize: "11px" }}
+              data-testid="run-filter-empty"
+            >
+              No runs match filters
+              <button
+                data-testid="run-filter-empty-clear"
+                className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+                onClick={() => setRunFilter(EMPTY_RUN_FILTER)}
+              >
+                Clear filters
+              </button>
             </div>
           )}
           {runGroups === null

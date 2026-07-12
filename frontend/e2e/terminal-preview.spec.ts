@@ -82,7 +82,7 @@ test("selecting a running node shows inline xterm terminal", async ({
   const { run_id } = await resp.json();
   createdRunIds.push(run_id);
 
-  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   const workerNode = page.getByText("echoer", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });
@@ -144,7 +144,7 @@ test("terminal toolbar shows expand and detach buttons", async ({
   const { run_id } = await resp.json();
   createdRunIds.push(run_id);
 
-  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   const workerNode = page.getByText("echoer", { exact: true }).first();
   await expect(workerNode).toBeVisible({ timeout: 3_000 });

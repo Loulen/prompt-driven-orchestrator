@@ -81,7 +81,7 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
   const { run_id } = await resp.json();
 
   // Wait for the run to appear in the list and click it
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(run_id.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
 
   const reactFlow = page.locator(".react-flow");
   await expect(reactFlow).toBeVisible({ timeout: 5_000 });

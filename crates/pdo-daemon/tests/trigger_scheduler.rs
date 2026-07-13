@@ -964,6 +964,182 @@ edges:
     Ok(())
 }
 
+// --- #341: manual "Run now" fire (`POST /triggers/{id}/fire`, ADR-0027) ---
+
+async fn fire_trigger(daemon: &TestDaemon, trigger_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn manual_fire_creates_a_run_with_provenance_and_manual_source() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Not due: next_fire_at is in the future — a manual fire must not care.
+    let trigger = create_trigger(&daemon, "manual", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let next_before = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(true));
+    let run_id = body["run_id"].as_str().expect("fire must return run_id");
+
+    // The Run carries triggered_by, exactly like a cron fire.
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["run_id"].as_str(), Some(run_id));
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(trigger_id.as_str()));
+
+    // A `fired` audit row, stamped manual, linking the run.
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+    assert_eq!(fires[0]["run_id"].as_str(), Some(run_id));
+
+    // The cron schedule is untouched: a 14:32 click must not shift the 15:00 slot.
+    let next_after = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        next_after, next_before,
+        "a manual fire must never recompute next_fire_at"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn manual_fire_runs_the_guard_and_reports_a_truthful_skip() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Guard exits non-zero: no work to do.
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "guarded-manual",
+        "* * * * *",
+        "echo 'nothing to do' >&2; exit 3",
+    )
+    .await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a guard skip is an honest 200, not an error"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(false));
+    assert_eq!(body["outcome"].as_str(), Some("guard-exit-nonzero"));
+
+    // No run created; the skip is audited with source=manual.
+    assert!(list_runs(&daemon).await.is_empty());
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+    assert_eq!(fires[0]["guard_exit_code"].as_i64(), Some(3));
+}
+
+#[tokio::test]
+async fn manual_fire_honours_the_overlap_gate() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "overlap-manual", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // First manual fire creates a Run that stays live.
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["fired"].as_bool(), Some(true));
+
+    // Second manual fire skips on overlap — truthfully.
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(false));
+    assert_eq!(body["outcome"].as_str(), Some("skipped-overlap"));
+    assert_eq!(list_runs(&daemon).await.len(), 1);
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("skipped-overlap"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn manual_fire_on_a_disabled_trigger_is_409_with_no_audit_row() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "paused", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "disabled trigger must refuse explicitly"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("disabled"),
+        "the 409 must name the cause, got {:?}",
+        body["error"]
+    );
+
+    // No effect: no run, no audit row.
+    assert!(list_runs(&daemon).await.is_empty());
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "a 409 must leave no audit row"
+    );
+}
+
+#[tokio::test]
+async fn manual_fire_on_an_unknown_trigger_is_404() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = fire_trigger(&daemon, "trg-nope").await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn cron_fires_are_stamped_source_cron() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "cron-stamped", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(fires[0]["source"].as_str(), Some("cron"));
+
+    cleanup_runs(&daemon).await;
+}
+
 /// Best-effort: kill any tmux sessions the runs spawned so a `sleep 60` doesn't
 /// leak past the test.
 async fn cleanup_runs(daemon: &TestDaemon) {

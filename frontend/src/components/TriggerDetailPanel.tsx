@@ -18,6 +18,12 @@ interface Props {
   trigger: Trigger;
   /** Jump to the Run a "fired" history entry created. */
   onSelectRun: (runId: string) => void;
+  /**
+   * Bumped by the parent on every `trigger_fired` WS message (#341) so the
+   * fire history refetches while the panel stays open — a manual "Run now"
+   * (or a cron fire landing mid-view) appears without reselecting.
+   */
+  refreshKey?: number;
 }
 
 /**
@@ -26,14 +32,15 @@ interface Props {
  * fire history: the answer to "why didn't it fire last night?". Each "fired"
  * entry links to the Run it created.
  */
-export default function TriggerDetailPanel({ trigger, onSelectRun }: Props) {
+export default function TriggerDetailPanel({ trigger, onSelectRun, refreshKey }: Props) {
   const [fires, setFires] = useState<TriggerFire[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    // Bounded cascade: this effect only re-runs when `trigger.id` changes, so
-    // resetting the loading flag here does not loop.
+    // Bounded cascade: this effect only re-runs when `trigger.id` (or the
+    // parent's fire counter, #341) changes, so resetting the loading flag here
+    // does not loop.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- see note above.
     setLoading(true);
     fetchTriggerFires(trigger.id)
@@ -49,7 +56,7 @@ export default function TriggerDetailPanel({ trigger, onSelectRun }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [trigger.id]);
+  }, [trigger.id, refreshKey]);
 
   return (
     <aside className="flex h-full flex-col overflow-y-auto bg-bg-2" data-testid="trigger-detail-panel">
@@ -247,6 +254,15 @@ function FireEntry({
       <div className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${outcomeDot(fire.outcome)}`} />
         <span className="font-medium text-fg-2">{fire.outcome}</span>
+        {fire.source === "manual" && (
+          <span
+            className="rounded border border-line-strong px-1 py-px text-fg-3"
+            style={{ fontSize: "9px" }}
+            data-testid="fire-source-manual"
+          >
+            manual
+          </span>
+        )}
         <span className="ml-auto font-mono text-fg-4" style={{ fontSize: "10px" }}>
           {formatTs(fire.ts)}
         </span>

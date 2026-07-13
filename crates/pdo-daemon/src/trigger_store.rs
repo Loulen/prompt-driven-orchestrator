@@ -96,6 +96,10 @@ pub struct TriggerFire {
     pub guard_stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_exit_code: Option<i32>,
+    /// Fire origin (#341): `"manual"` for a Run-now click, `"cron"` for a
+    /// scheduler tick. NULL on legacy rows ≈ cron.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// What happened on a tick, persisted to the audit table.
@@ -108,6 +112,8 @@ pub struct FireRecord {
     pub guard_stdout: Option<String>,
     pub guard_stderr: Option<String>,
     pub guard_exit_code: Option<i32>,
+    /// Fire origin (#341): `"manual"` / `"cron"`; `None` writes NULL (≈ cron).
+    pub source: Option<String>,
 }
 
 /// Create the `triggers` and `trigger_fires` tables if they do not exist.
@@ -146,7 +152,8 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             run_id TEXT,
             guard_stdout TEXT,
             guard_stderr TEXT,
-            guard_exit_code INTEGER
+            guard_exit_code INTEGER,
+            source TEXT
         )",
     )
     .execute(db)
@@ -188,6 +195,8 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             "guard_exit_code",
             "ALTER TABLE trigger_fires ADD COLUMN guard_exit_code INTEGER",
         ),
+        // #341: fire origin (`manual` / `cron`); NULL on legacy rows ≈ cron.
+        ("source", "ALTER TABLE trigger_fires ADD COLUMN source TEXT"),
     ] {
         let exists = sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = ?")
             .bind(col)
@@ -326,8 +335,8 @@ pub async fn record_fire(
     sqlx::query(
         "INSERT INTO trigger_fires
             (trigger_id, ts, outcome, reason, run_id,
-             guard_stdout, guard_stderr, guard_exit_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             guard_stdout, guard_stderr, guard_exit_code, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(trigger_id)
     .bind(&ts)
@@ -337,6 +346,7 @@ pub async fn record_fire(
     .bind(&record.guard_stdout)
     .bind(&record.guard_stderr)
     .bind(record.guard_exit_code)
+    .bind(&record.source)
     .execute(db)
     .await?;
 
@@ -367,7 +377,7 @@ pub async fn fire_history(
     // shows the recent tail. Newest-first, bounded to the latest 200.
     let rows = sqlx::query(
         "SELECT id, trigger_id, ts, outcome, reason, run_id,
-                guard_stdout, guard_stderr, guard_exit_code
+                guard_stdout, guard_stderr, guard_exit_code, source
          FROM trigger_fires WHERE trigger_id = ? ORDER BY id DESC LIMIT 200",
     )
     .bind(trigger_id)
@@ -385,6 +395,7 @@ pub async fn fire_history(
             guard_stdout: row.get("guard_stdout"),
             guard_stderr: row.get("guard_stderr"),
             guard_exit_code: row.get("guard_exit_code"),
+            source: row.get("source"),
         })
         .collect())
 }
@@ -710,6 +721,7 @@ mod tests {
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: None,
             },
         )
         .await
@@ -724,6 +736,7 @@ mod tests {
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: None,
             },
         )
         .await
@@ -758,6 +771,7 @@ mod tests {
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: None,
             },
         )
         .await
@@ -1112,6 +1126,7 @@ mod tests {
                 guard_stdout: Some("checked 0 issues".to_string()),
                 guard_stderr: Some("gh: no work to do\n".to_string()),
                 guard_exit_code: Some(7),
+                source: None,
             },
         )
         .await
@@ -1143,6 +1158,7 @@ mod tests {
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: None,
             },
         )
         .await
@@ -1152,6 +1168,136 @@ mod tests {
         assert!(history[0].guard_stdout.is_none());
         assert!(history[0].guard_stderr.is_none());
         assert!(history[0].guard_exit_code.is_none());
+    }
+
+    // --- #341: fire origin (`source` column) ---
+
+    #[tokio::test]
+    async fn source_round_trips_and_rollup_still_advances_on_a_manual_fire() {
+        let db = test_db().await;
+        let t = create(&db, sample("sourced", "* * * * *")).await.unwrap();
+
+        record_fire(
+            &db,
+            &t.id,
+            &FireRecord {
+                outcome: "fired".to_string(),
+                reason: None,
+                run_id: Some("20260713-080000-abc1234".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: Some("manual".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        record_fire(
+            &db,
+            &t.id,
+            &FireRecord {
+                outcome: "fired".to_string(),
+                reason: None,
+                run_id: Some("20260713-090000-def5678".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: Some("cron".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        // A record with no source stores NULL (≈ cron for legacy readers).
+        record_fire(
+            &db,
+            &t.id,
+            &FireRecord {
+                outcome: "skipped-overlap".to_string(),
+                reason: Some("previous run still active".to_string()),
+                run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let history = fire_history(&db, &t.id).await.unwrap();
+        assert_eq!(history.len(), 3);
+        // Newest first.
+        assert!(history[0].source.is_none());
+        assert_eq!(history[1].source.as_deref(), Some("cron"));
+        assert_eq!(history[2].source.as_deref(), Some("manual"));
+
+        // The rollup advanced on the manual fire (a manual fire IS a fire).
+        let after = get(&db, &t.id).await.unwrap().unwrap();
+        assert_eq!(after.last_outcome.as_deref(), Some("skipped-overlap"));
+        assert!(after.last_fired_at.is_some());
+    }
+
+    /// #341 migration: a `trigger_fires` table predating the `source` column
+    /// must pick it up on the next `init`, idempotently — mirror of the #244
+    /// guard-output migration test below.
+    #[tokio::test]
+    async fn init_adds_source_column_to_legacy_trigger_fires_table() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Pre-#341 schema: `trigger_fires` WITHOUT `source` (but with #244 cols).
+        sqlx::query(
+            "CREATE TABLE trigger_fires (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger_id TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                run_id TEXT,
+                guard_stdout TEXT,
+                guard_stderr TEXT,
+                guard_exit_code INTEGER
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO trigger_fires (trigger_id, ts, outcome, reason, run_id)
+             VALUES ('trg-legacy', '2026-01-01T00:00:00.000Z', 'fired', NULL, 'run-1')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let before =
+            sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = 'source'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(before.is_none(), "precondition: legacy table lacks source");
+
+        init(&db).await.unwrap();
+
+        let after =
+            sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = 'source'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(after.is_some(), "init must add the source column");
+
+        // The legacy row reads back with a NULL source (≈ cron).
+        let history = fire_history(&db, "trg-legacy").await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].source.is_none());
+
+        // A second init is a no-op.
+        init(&db).await.unwrap();
+        assert_eq!(fire_history(&db, "trg-legacy").await.unwrap().len(), 1);
     }
 
     /// #244 migration: a `~/.pdo/pdo.db` whose `trigger_fires` predates the

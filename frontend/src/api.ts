@@ -364,6 +364,28 @@ export async function deleteTrigger(triggerId: string): Promise<void> {
   }
 }
 
+/** Response of `POST /triggers/{id}/fire` (#341, ADR-0027). A guard/overlap
+ * skip is an honest 200 with `fired: false`; disabled/dangling is a thrown 409. */
+export interface FireTriggerResponse {
+  ok: boolean;
+  fired: boolean;
+  run_id?: string | null;
+  outcome?: string | null;
+  reason?: string | null;
+}
+
+/** Manually fire a Trigger — a first-class fire (guard + overlap + history). */
+export async function fireTrigger(triggerId: string): Promise<FireTriggerResponse> {
+  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}/fire`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `POST /triggers/${triggerId}/fire failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export async function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
   const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}/fires`);
   if (!resp.ok) throw new Error(`GET /triggers/${triggerId}/fires failed: ${resp.status}`);

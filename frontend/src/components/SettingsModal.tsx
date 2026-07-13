@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
+import { useEditStore } from "../stores/editStore";
 import type { InstanceSettings, SettingField, UpdateSettingsRequest } from "../types";
 import SessionCounter from "./SessionCounter";
 
@@ -60,6 +61,12 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
           </button>
         </div>
 
+        {/* Interface (#342): a per-client UI pref, NOT a daemon knob. It lives in
+            the OUTER modal (always rendered when open), so it stays reachable
+            even if `GET /settings` fails and the numeric form never mounts
+            (Trap A). */}
+        <InterfaceSection />
+
         {settings ? (
           <SettingsForm
             // Re-seed if the loaded config changes (refetch / restart).
@@ -80,6 +87,53 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Per-client UI preferences (#342). Currently just the single-tab toggle. The
+ * value persists to localStorage AT THE CHANGE via `setSingleTabMode` (Trap B) —
+ * NOT batched behind the numeric form's Save button (which PUTs to the daemon).
+ */
+function InterfaceSection() {
+  const singleTabMode = useEditStore((s) => s.singleTabMode);
+  const setSingleTabMode = useEditStore((s) => s.setSingleTabMode);
+
+  return (
+    <div className="border-b border-line px-4 py-4">
+      <h3 className="font-medium text-fg-2" style={{ fontSize: "12px" }}>
+        Interface
+      </h3>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={singleTabMode}
+        data-testid="setting-tabs-disabled"
+        onClick={() => setSingleTabMode(!singleTabMode)}
+        className="mt-3 flex w-full items-center justify-between gap-3 rounded-md border border-line-strong bg-bg-3 px-3 py-2 text-left transition-colors hover:border-acc"
+      >
+        <span className="flex flex-col gap-0.5">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Single-tab mode
+          </span>
+          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Opening a pipeline or run replaces the current tab instead of stacking a
+            new one. Enabling it closes the other open tabs.
+          </span>
+        </span>
+        <span
+          className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+            singleTabMode ? "bg-acc" : "bg-fg-5"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+              singleTabMode ? "left-3" : "left-0.5"
+            }`}
+          />
+        </span>
+      </button>
     </div>
   );
 }

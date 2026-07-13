@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
+import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
 import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
@@ -104,6 +105,7 @@ function seedTab(id = "test-pipeline", dirty = true) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   useEditStore.setState({
     pipelines: [],
     openTabs: [],
@@ -111,6 +113,8 @@ beforeEach(() => {
     selection: { kind: "none", id: null },
     lastSavedAt: {},
     history: {},
+    singleTabMode: false,
+    pendingSingleTab: null,
   });
   vi.clearAllMocks();
 });
@@ -2356,5 +2360,268 @@ describe("openPipeline (#320 / #216 canvas-open)", () => {
   it("passes scope undefined when omitted (repo/user resolution)", async () => {
     await useEditStore.getState().openPipeline("pipe-repo");
     expect(mockFetchPipeline).toHaveBeenCalledWith("pipe-repo", undefined);
+  });
+});
+
+// #342 — mass-close primitive + single-tab mode.
+describe("closeTabs (#342 atomic mass-close)", () => {
+  function mkTab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
+    return {
+      id,
+      scope: "repo",
+      pipeline: { name: id, version: "1.0", variables: {}, nodes: [], edges: [] },
+      prompts: {},
+      diagnostics: [],
+      dirty: false,
+      externalDirty: false,
+      ...over,
+    };
+  }
+  function seedTabs(tabs: OpenPipeline[], activeTabId: string, selection: Selection = { kind: "none", id: null }) {
+    useEditStore.setState({ openTabs: tabs, activeTabId, selection });
+  }
+
+  it("recomputes activeTabId to the rightmost survivor when the active tab closes", () => {
+    seedTabs([mkTab("a"), mkTab("b"), mkTab("c")], "b");
+    useEditStore.getState().closeTabs(["b"]);
+    const s = useEditStore.getState();
+    expect(s.openTabs.map((t) => t.id)).toEqual(["a", "c"]);
+    expect(s.activeTabId).toBe("c");
+    expect(s.selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("leaves activeTabId unchanged when only background tabs close", () => {
+    seedTabs([mkTab("a"), mkTab("b"), mkTab("c")], "b");
+    useEditStore.getState().closeTabs(["a"]);
+    const s = useEditStore.getState();
+    expect(s.openTabs.map((t) => t.id)).toEqual(["b", "c"]);
+    expect(s.activeTabId).toBe("b");
+  });
+
+  it("never points activeTabId at a tab that was just closed", () => {
+    // Close both non-active tabs surrounding the active one.
+    seedTabs([mkTab("a"), mkTab("b"), mkTab("c")], "b");
+    useEditStore.getState().closeTabs(["a", "c"]);
+    const s = useEditStore.getState();
+    expect(s.activeTabId).toBe("b");
+  });
+
+  it("preserves the selection reference when a background tab closes (unlike closeTab)", () => {
+    const sel = { kind: "node" as const, id: "n1" };
+    seedTabs([mkTab("a"), mkTab("b")], "a", sel);
+    useEditStore.getState().closeTabs(["b"]);
+    // Same reference — no needless reconciliation churn.
+    expect(useEditStore.getState().selection).toBe(sel);
+  });
+
+  it("resets selection when the active tab is among those closed", () => {
+    const sel = { kind: "node" as const, id: "n1" };
+    seedTabs([mkTab("a"), mkTab("b")], "a", sel);
+    useEditStore.getState().closeTabs(["a"]);
+    const s = useEditStore.getState();
+    expect(s.activeTabId).toBe("b");
+    expect(s.selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("drops each closed tab's history slot by id, keeping survivors", () => {
+    seedTabs([mkTab("a"), mkTab("b"), mkTab("c")], "a");
+    const h = () => ({ past: [], future: [], lastKey: null, lastAt: 0 });
+    useEditStore.setState({ history: { a: h(), b: h(), c: h() } });
+    useEditStore.getState().closeTabs(["a", "c"]);
+    const hist = useEditStore.getState().history;
+    expect(hist.a).toBeUndefined();
+    expect(hist.c).toBeUndefined();
+    expect(hist.b).toBeDefined();
+  });
+
+  it("closing every tab empties openTabs and nulls activeTabId (Close all)", () => {
+    seedTabs([mkTab("a"), mkTab("b")], "a");
+    useEditStore.getState().closeTabs(["a", "b"]);
+    const s = useEditStore.getState();
+    expect(s.openTabs).toEqual([]);
+    expect(s.activeTabId).toBeNull();
+  });
+
+  it("is a clean no-op on an empty id list (Close-to-the-right of the last tab)", () => {
+    seedTabs([mkTab("a"), mkTab("b")], "b");
+    useEditStore.getState().closeTabs([]);
+    const s = useEditStore.getState();
+    expect(s.openTabs.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(s.activeTabId).toBe("b");
+  });
+});
+
+describe("single-tab mode (#342)", () => {
+  function mkTab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
+    return {
+      id,
+      scope: "repo",
+      pipeline: { name: id, version: "1.0", variables: {}, nodes: [], edges: [] },
+      prompts: {},
+      diagnostics: [],
+      dirty: false,
+      externalDirty: false,
+      ...over,
+    };
+  }
+
+  describe("seam: openPipeline / openRunPipeline replace instead of append", () => {
+    it("openPipeline replaces the current tab when singleTabMode is on and nothing is dirty", async () => {
+      useEditStore.setState({ singleTabMode: true, openTabs: [mkTab("a")], activeTabId: "a" });
+      await useEditStore.getState().openPipeline("pipe-b");
+      const s = useEditStore.getState();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["pipe-b"]);
+      expect(s.activeTabId).toBe("pipe-b");
+      expect(s.pendingSingleTab).toBeNull();
+    });
+
+    it("openRunPipeline replaces the current tab when singleTabMode is on", async () => {
+      useEditStore.setState({ singleTabMode: true, openTabs: [mkTab("a")], activeTabId: "a" });
+      await useEditStore.getState().openRunPipeline("run-1");
+      const s = useEditStore.getState();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["__run__run-1"]);
+      expect(s.openTabs[0].runId).toBe("run-1");
+    });
+
+    it("drops the evicted tab's undo history on replace", async () => {
+      const h = { past: [makePipeline([makeNode()])], future: [], lastKey: null, lastAt: 0 };
+      useEditStore.setState({
+        singleTabMode: true,
+        openTabs: [mkTab("a")],
+        activeTabId: "a",
+        history: { a: h },
+      });
+      await useEditStore.getState().openPipeline("pipe-b");
+      expect(useEditStore.getState().history["a"]).toBeUndefined();
+    });
+
+    it("still appends (never replaces) when singleTabMode is off", async () => {
+      useEditStore.setState({ singleTabMode: false, openTabs: [mkTab("a")], activeTabId: "a" });
+      await useEditStore.getState().openPipeline("pipe-b");
+      expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["a", "pipe-b"]);
+    });
+
+    it("re-activates an already-open tab without replacing or re-fetching", async () => {
+      useEditStore.setState({ singleTabMode: true, openTabs: [mkTab("a"), mkTab("pipe-b")], activeTabId: "a" });
+      mockFetchPipeline.mockClear();
+      await useEditStore.getState().openPipeline("pipe-b");
+      const s = useEditStore.getState();
+      // Already open → the early return activates it; no fetch, no eviction.
+      expect(mockFetchPipeline).not.toHaveBeenCalled();
+      expect(s.activeTabId).toBe("pipe-b");
+      expect(s.openTabs.map((t) => t.id)).toEqual(["a", "pipe-b"]);
+    });
+
+    it("parks (does NOT replace) when the evicted tab is dirty, then confirm applies it", async () => {
+      useEditStore.setState({
+        singleTabMode: true,
+        openTabs: [mkTab("a", { dirty: true })],
+        activeTabId: "a",
+      });
+      await useEditStore.getState().openPipeline("pipe-b");
+      // Parked — the dirty tab is untouched until the user decides.
+      let s = useEditStore.getState();
+      expect(s.pendingSingleTab).not.toBeNull();
+      expect(s.pendingSingleTab!.tab!.id).toBe("pipe-b");
+      expect(s.pendingSingleTab!.victims.map((t) => t.id)).toEqual(["a"]);
+      expect(s.openTabs.map((t) => t.id)).toEqual(["a"]);
+
+      useEditStore.getState().confirmPendingSingleTab();
+      s = useEditStore.getState();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["pipe-b"]);
+      expect(s.activeTabId).toBe("pipe-b");
+      expect(s.pendingSingleTab).toBeNull();
+    });
+
+    it("cancel keeps the dirty tab and drops the parked open", async () => {
+      useEditStore.setState({
+        singleTabMode: true,
+        openTabs: [mkTab("a", { dirty: true })],
+        activeTabId: "a",
+      });
+      await useEditStore.getState().openPipeline("pipe-b");
+      useEditStore.getState().cancelPendingSingleTab();
+      const s = useEditStore.getState();
+      expect(s.pendingSingleTab).toBeNull();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["a"]);
+      expect(s.openTabs[0].dirty).toBe(true);
+    });
+
+    it("parks when the evicted tab carries an unresolved conflict (implies dirty)", async () => {
+      useEditStore.setState({
+        singleTabMode: true,
+        openTabs: [mkTab("a", { dirty: true, conflict: { pipeline: makePipeline(), prompts: {}, diagnostics: [] } })],
+        activeTabId: "a",
+      });
+      await useEditStore.getState().openPipeline("pipe-b");
+      expect(useEditStore.getState().pendingSingleTab).not.toBeNull();
+    });
+
+    it("ignores externalDirty (a hot-reload flash is not unsaved work)", async () => {
+      useEditStore.setState({
+        singleTabMode: true,
+        openTabs: [mkTab("a", { externalDirty: true })],
+        activeTabId: "a",
+      });
+      await useEditStore.getState().openPipeline("pipe-b");
+      // Replaced directly — no confirmation for a transient external flag.
+      expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["pipe-b"]);
+      expect(useEditStore.getState().pendingSingleTab).toBeNull();
+    });
+  });
+
+  describe("setSingleTabMode", () => {
+    it("persists to localStorage immediately at the change (Trap B)", () => {
+      useEditStore.getState().setSingleTabMode(true);
+      expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
+      expect(useEditStore.getState().singleTabMode).toBe(true);
+      useEditStore.getState().setSingleTabMode(false);
+      expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("false");
+    });
+
+    it("collapses to the active tab when enabling with several clean tabs", () => {
+      useEditStore.setState({ openTabs: [mkTab("a"), mkTab("b"), mkTab("c")], activeTabId: "b" });
+      useEditStore.getState().setSingleTabMode(true);
+      const s = useEditStore.getState();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["b"]);
+      expect(s.activeTabId).toBe("b");
+      expect(s.pendingSingleTab).toBeNull();
+    });
+
+    it("parks the collapse when a non-active tab is dirty, keeping the active one on confirm", () => {
+      useEditStore.setState({
+        openTabs: [mkTab("a", { dirty: true }), mkTab("b"), mkTab("c")],
+        activeTabId: "b",
+      });
+      useEditStore.getState().setSingleTabMode(true);
+      let s = useEditStore.getState();
+      // Nothing closed yet; the collapse is parked (tab === null).
+      expect(s.pendingSingleTab).not.toBeNull();
+      expect(s.pendingSingleTab!.tab).toBeNull();
+      expect(s.openTabs).toHaveLength(3);
+      // ...but the pref persisted immediately regardless of the confirmation.
+      expect(s.singleTabMode).toBe(true);
+      expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
+
+      useEditStore.getState().confirmPendingSingleTab();
+      s = useEditStore.getState();
+      expect(s.openTabs.map((t) => t.id)).toEqual(["b"]);
+      expect(s.activeTabId).toBe("b");
+      expect(s.pendingSingleTab).toBeNull();
+    });
+
+    it("does nothing to tabs when disabling (accumulation resumes)", () => {
+      useEditStore.setState({ singleTabMode: true, openTabs: [mkTab("a")], activeTabId: "a" });
+      useEditStore.getState().setSingleTabMode(false);
+      expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["a"]);
+      expect(useEditStore.getState().singleTabMode).toBe(false);
+    });
+
+    it("is a no-op collapse when only one tab is open", () => {
+      useEditStore.setState({ openTabs: [mkTab("a")], activeTabId: "a" });
+      useEditStore.getState().setSingleTabMode(true);
+      expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["a"]);
+      expect(useEditStore.getState().pendingSingleTab).toBeNull();
+    });
   });
 });

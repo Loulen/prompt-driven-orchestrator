@@ -21,6 +21,7 @@ import SettingsModal from "./components/SettingsModal";
 import ConflictModal from "./components/ConflictModal";
 import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
+import ConfirmCloseTabsModal from "./components/ConfirmCloseTabsModal";
 import { shouldPromptLibraryUpdate } from "./hooks/useLibraryPipelines";
 import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
@@ -181,6 +182,11 @@ export default function App() {
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
+  // #342: a single-tab open/replace parked because it would discard unsaved
+  // work — resolved by the global confirm modal below.
+  const pendingSingleTab = useEditStore((s) => s.pendingSingleTab);
+  const confirmPendingSingleTab = useEditStore((s) => s.confirmPendingSingleTab);
+  const cancelPendingSingleTab = useEditStore((s) => s.cancelPendingSingleTab);
 
   // Track which library-YAML version we've already prompted about for a given
   // run-scoped tab. Re-prompting only when the library changes again avoids
@@ -788,6 +794,14 @@ export default function App() {
         error={saveErrorTab?.saveError ?? null}
         onDismiss={handleDismissSaveError}
         onViewYaml={handleViewYaml}
+      />
+      {/* #342: single-tab open/replace (and enable-collapse) that would discard
+          unsaved work parks here for a global confirmation. */}
+      <ConfirmCloseTabsModal
+        open={pendingSingleTab != null}
+        tabs={pendingSingleTab?.victims ?? []}
+        onCancel={cancelPendingSingleTab}
+        onConfirm={confirmPendingSingleTab}
       />
       {runNowError && (
         <div

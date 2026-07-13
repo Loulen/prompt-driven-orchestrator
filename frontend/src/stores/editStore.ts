@@ -18,6 +18,7 @@ import {
   saveLibraryPipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
+import { loadTabsDisabled, saveTabsDisabled } from "../lib/uiPrefs";
 import {
   generatedRegionId,
   materializeMissingRegions,
@@ -82,6 +83,34 @@ export interface OpenPipeline {
 }
 
 /**
+ * A tab holds unsaved work that a close/replace would silently discard (#342).
+ * `conflict`/`saveError` both imply `dirty` (a conflict is only recorded inside
+ * `if (tab.dirty)`, a save-error follows a failed save that leaves `dirty`), but
+ * we spell them out so the guard reads as "would we lose anything the user can't
+ * get back". `externalDirty` is intentionally excluded — it's the transient
+ * 2 s hot-reload flash, not user work.
+ */
+export function hasUnsavedWork(t: OpenPipeline): boolean {
+  return t.dirty || t.conflict != null || t.saveError != null;
+}
+
+/**
+ * A single-tab-mode gesture (#342) parked because confirming it would discard
+ * unsaved work. Resolved by a global confirm modal: `confirmPendingSingleTab`
+ * performs it, `cancelPendingSingleTab` drops it (keeping the tabs).
+ *
+ * - `tab` set → an open-replace: `tab` becomes the sole tab, every current tab
+ *   is discarded.
+ * - `tab` null → the enable-toggle collapse: the active tab is kept, the others
+ *   (`victims`) are closed.
+ */
+export interface PendingSingleTab {
+  tab: OpenPipeline | null;
+  /** Tabs that will be discarded; the modal names the unsaved ones. */
+  victims: OpenPipeline[];
+}
+
+/**
  * Per-tab undo/redo history (ADR-0014 / #226). Entries are whole `PipelineDef`
  * object references captured *before* a structural mutation — NOT deep clones.
  * This is safe only because every store mutation is copy-on-write (it rebuilds
@@ -113,11 +142,32 @@ interface EditState {
   // with a selector, never stored.
   history: Record<string, TabHistory>;
 
+  // Single-tab mode (#342): at most one pipeline/run tab. A per-client UI pref
+  // (localStorage, NOT instance_config) seeded once at store creation. When on,
+  // opening a pipeline/run REPLACES the current tab instead of appending.
+  singleTabMode: boolean;
+  // A parked single-tab gesture awaiting confirmation (would discard unsaved
+  // work). Null when nothing is pending.
+  pendingSingleTab: PendingSingleTab | null;
+
   loadPipelines: () => Promise<void>;
   openPipeline: (id: string, scope?: PipelineScope) => Promise<void>;
   openRunPipeline: (runId: string) => Promise<void>;
   closeRunPipeline: (runId: string) => void;
   closeTab: (id: string) => void;
+  // Atomic mass-close (#342): removes every id in ONE `set()`. Never loop
+  // `closeTab` — the App reconciliation (#247/#320) runs at render on a
+  // reference change of `selection`/`activeTabId`, so intermediate states where
+  // `activeTabId` points at a closing tab flash the center panel and can
+  // self-close the Trigger detail.
+  closeTabs: (ids: string[]) => void;
+  // Single-tab pref (#342). Persists to localStorage immediately (at the toggle
+  // change, not on a Save button) and, when enabling with several tabs open,
+  // collapses to the active tab (parking for confirmation if any other is
+  // unsaved).
+  setSingleTabMode: (v: boolean) => void;
+  confirmPendingSingleTab: () => void;
+  cancelPendingSingleTab: () => void;
   setActiveTab: (id: string) => void;
   setSelection: (sel: Selection) => void;
   setScrollToPort: (port: string | null) => void;
@@ -481,6 +531,45 @@ function droppedHistory(
   return next;
 }
 
+// Single-tab replace (#342): `tab` becomes the sole open tab, every `victims`
+// tab is discarded (its undo stack dropped per id — a reused `__run__<runId>`
+// must not inherit a stale stack, ADR-0014). One `set()` patch, no loop.
+function replaceWithTab(
+  state: EditState,
+  tab: OpenPipeline,
+  victims: OpenPipeline[],
+): Partial<EditState> {
+  const history = victims.reduce((h, v) => droppedHistory(h, v.id), state.history);
+  return {
+    openTabs: [tab],
+    activeTabId: tab.id,
+    selection: { kind: "none", id: null },
+    history,
+    pendingSingleTab: null,
+  };
+}
+
+// Compute the store patch for placing a freshly-opened tab (#342). Multi-tab:
+// append + activate. Single-tab: replace the current tab — but if the replace
+// would discard unsaved work, PARK it for confirmation instead of destroying it
+// (the caller has already fetched, so the tab object is ready to apply on
+// confirm). Callers pass a tab whose id is NOT already open (the early-return in
+// openPipeline/openRunPipeline handles the already-open case).
+function placeOpenedTab(state: EditState, tab: OpenPipeline): Partial<EditState> {
+  if (!state.singleTabMode) {
+    return {
+      openTabs: [...state.openTabs, tab],
+      activeTabId: tab.id,
+      selection: { kind: "none", id: null },
+    };
+  }
+  const victims = state.openTabs.filter((t) => t.id !== tab.id);
+  if (victims.some(hasUnsavedWork)) {
+    return { pendingSingleTab: { tab, victims } };
+  }
+  return replaceWithTab(state, tab, victims);
+}
+
 function edgeReferencesNode(edge: EdgeDef, nodeId: string): boolean {
   if (edge.source.node === nodeId) return true;
   return "node" in edge.target && (edge.target as { node: string }).node === nodeId;
@@ -531,6 +620,8 @@ export const useEditStore = create<EditState>((set, get) => ({
   scrollToPort: null,
   lastSavedAt: {},
   history: {},
+  singleTabMode: loadTabsDisabled(),
+  pendingSingleTab: null,
 
   loadPipelines: async () => {
     try {
@@ -562,11 +653,9 @@ export const useEditStore = create<EditState>((set, get) => ({
         libraryId: null,
         libraryScope: null,
       };
-      set((s) => ({
-        openTabs: [...s.openTabs, tab],
-        activeTabId: id,
-        selection: { kind: "none", id: null },
-      }));
+      // Single-tab mode replaces the current tab (or parks for confirmation);
+      // multi-tab appends (#342).
+      set((s) => placeOpenedTab(s, tab));
     } catch {
       // ignore
     }
@@ -593,11 +682,9 @@ export const useEditStore = create<EditState>((set, get) => ({
         libraryId: null,
         libraryScope: null,
       };
-      set((s) => ({
-        openTabs: [...s.openTabs, tab],
-        activeTabId: tabId,
-        selection: { kind: "none", id: null },
-      }));
+      // Single-tab mode replaces the current tab (or parks for confirmation);
+      // multi-tab appends (#342).
+      set((s) => placeOpenedTab(s, tab));
     } catch {
       // ignore
     }
@@ -625,6 +712,64 @@ export const useEditStore = create<EditState>((set, get) => ({
       };
     });
   },
+
+  closeTabs: (ids: string[]) => {
+    set((s) => {
+      const drop = new Set(ids);
+      const tabs = s.openTabs.filter((t) => !drop.has(t.id));
+      const activeClosed = s.activeTabId != null && drop.has(s.activeTabId);
+      // Recompute the active tab ONCE, and only when the active one closed —
+      // never point it at a tab in `drop`. Rightmost survivor (mirror
+      // `closeTab`/`removePipeline`), or null when everything closed.
+      const activeTabId = activeClosed
+        ? (tabs.length > 0 ? tabs[tabs.length - 1].id : null)
+        : s.activeTabId;
+      // Only reset `selection` when the active tab was closed — the
+      // `removePipeline` semantics, NOT the unconditional reset of `closeTab`.
+      // Keeping the reference stable when a background tab closes avoids a
+      // needless render-phase reconciliation pass (#247/#320).
+      const selection = activeClosed ? { kind: "none" as const, id: null } : s.selection;
+      // DROP each closed tab's undo history by id (ADR-0014). Missing an id
+      // would leak its stack and let a reused id inherit a stale one.
+      const history = ids.reduce((h, id) => droppedHistory(h, id), s.history);
+      return { openTabs: tabs, activeTabId, selection, history };
+    });
+  },
+
+  setSingleTabMode: (v: boolean) => {
+    // Persist AT THE CHANGE (Trap B): the pref is per-client, independent of the
+    // daemon and of the numeric Save button. Update the store so the seams read
+    // the mode hot without touching localStorage.
+    saveTabsDisabled(v);
+    set({ singleTabMode: v });
+    if (!v) return; // disabling never closes anything — accumulation resumes.
+    const s = get();
+    if (s.openTabs.length <= 1) return; // already at most one tab
+    const victims = s.openTabs.filter((t) => t.id !== s.activeTabId);
+    if (victims.length === 0) return;
+    if (victims.some(hasUnsavedWork)) {
+      // Park (tab === null ⇒ collapse: keep the active tab, close the rest).
+      set({ pendingSingleTab: { tab: null, victims } });
+    } else {
+      get().closeTabs(victims.map((t) => t.id));
+    }
+  },
+
+  confirmPendingSingleTab: () => {
+    const p = get().pendingSingleTab;
+    if (!p) return;
+    if (p.tab) {
+      // Open-replace: apply the parked tab as the sole tab.
+      set((s) => replaceWithTab(s, p.tab!, p.victims));
+    } else {
+      // Enable-collapse: close the others, keep the active tab. `closeTabs`
+      // already drops their history and leaves the active selection intact.
+      get().closeTabs(p.victims.map((t) => t.id));
+      set({ pendingSingleTab: null });
+    }
+  },
+
+  cancelPendingSingleTab: () => set({ pendingSingleTab: null }),
 
   setActiveTab: (id: string) => {
     set({ activeTabId: id, selection: { kind: "none", id: null } });

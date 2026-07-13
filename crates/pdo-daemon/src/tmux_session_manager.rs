@@ -174,15 +174,19 @@ fn wrap_with_env(
     format!("exec bash -c {}", sh_single_quote(&inner))
 }
 
-/// Build the `exec claude …` tail for an agent node. `model` `Some(m)` inserts
-/// `--model '<m>'`; `None` reproduces the legacy command byte-for-byte.
+/// Build the `exec claude …` tail for an agent node. A non-empty `model`
+/// inserts `--model '<m>'`; `None` *or* an empty string reproduces the legacy
+/// command byte-for-byte.
 fn build_agent_tail(prompt_path: &Path, model: Option<&str>) -> String {
-    // `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing space;
-    // `None` ⇒ empty string, so the command collapses to the exact legacy
-    // literal (one space before the `"$(cat …)"`).
+    // A non-empty `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing
+    // space; `None` OR `Some("")` ⇒ empty string, so the command collapses to
+    // the exact legacy literal (one space before the `"$(cat …)"`). The
+    // empty-string arm is the last-resort guard (#347): every upstream tier
+    // already filters "", but a missed source would otherwise emit `--model ''`
+    // and crash `claude` — keeping the guard here covers them all at once.
     let model_flag = match model {
-        Some(m) => format!("--model {} ", sh_single_quote(m)),
-        None => String::new(),
+        Some(m) if !m.is_empty() => format!("--model {} ", sh_single_quote(m)),
+        _ => String::new(),
     };
     format!(
         "exec claude --dangerously-skip-permissions {}\"$(cat {})\"",
@@ -648,6 +652,55 @@ pub fn env_reaper_ttl_secs() -> Option<u64> {
         .and_then(|v| v.parse::<u64>().ok())
 }
 
+/// Env var that supplies the instance-wide `default_model` at bootstrap (#347,
+/// ADR-0015). No baked-in default: `None` ⇒ the account default (no `--model`),
+/// byte-identical to the legacy launch.
+pub const DEFAULT_MODEL_ENV: &str = "PDO_DEFAULT_MODEL";
+
+/// The `default_model` contributed by [`DEFAULT_MODEL_ENV`] alone, or `None`
+/// when the var is unset or empty.
+///
+/// Unlike the numeric knobs, a String has no `parse()` that rejects the empty
+/// value for free — so the empty string is filtered explicitly. Without it,
+/// `PDO_DEFAULT_MODEL=""` would resolve to `Some("")` and emit `--model ''`.
+/// Exposed so `GET /settings` can disclose a shadowed env var and compute the
+/// winning tier identically to [`default_model_with`].
+pub fn env_default_model() -> Option<String> {
+    std::env::var(DEFAULT_MODEL_ENV)
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve the instance-wide default model, `stored → env → None` (#347,
+/// ADR-0015). A non-empty stored value (the settings page) wins; otherwise the
+/// env var; otherwise `None` (the account default — no baked-in const, unlike
+/// the reaper TTL).
+///
+/// **Load-bearing (ADR-0015):** every spawn seam reads this *fresh* (via the
+/// instance-config store), so a `PUT /settings` takes effect on the next node
+/// without a daemon restart.
+pub fn default_model_with(stored: Option<String>) -> Option<String> {
+    stored.filter(|s| !s.is_empty()).or_else(env_default_model)
+}
+
+/// Resolve the model a work node launches with: the node's own `model:`
+/// override wins, else the instance `default_effective` (#296/#347). An empty
+/// string on *either* side collapses to the next tier — "" means "unset"
+/// everywhere, so a hand-authored `model: ""` in YAML falls through to the
+/// default instead of reaching the tail as an empty `--model`.
+///
+/// This is the single precedence point both spawn seams (`spawn_node` and
+/// `start_node`) call, so the `node → instance` merge is defined and tested in
+/// exactly one place.
+pub fn resolve_node_model<'a>(
+    node_model: Option<&'a str>,
+    default_effective: Option<&'a str>,
+) -> Option<&'a str> {
+    node_model
+        .filter(|s| !s.is_empty())
+        .or(default_effective.filter(|s| !s.is_empty()))
+}
+
 /// Read the reaper interval from the env or use the default.
 pub fn reaper_interval() -> Duration {
     std::env::var(REAPER_INTERVAL_SECS_ENV)
@@ -942,6 +995,97 @@ mod tests {
         assert!(
             model_at < cat_at,
             "model flag must precede the prompt cat: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_omits_model_when_empty() {
+        // #347: an empty-string model must behave exactly like `None` — no
+        // `--model` flag, byte-identical to the legacy launch. This is the
+        // last-resort crash guard: `Some("")` would otherwise emit `--model ''`
+        // and make `claude` exit non-zero at launch.
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Agent { model: Some("") },
+        );
+        assert!(
+            !script.contains("--model"),
+            "empty model must emit no flag (identical to None): {script}"
+        );
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail must be byte-identical for an empty model: {script}"
+        );
+    }
+
+    #[test]
+    fn default_model_env_and_stored_precedence() {
+        // Single test on purpose: `DEFAULT_MODEL_ENV` is process-global, so a
+        // second test mutating it concurrently would flake (mirrors
+        // `reaper_ttl_default_and_from_env`).
+        std::env::remove_var(DEFAULT_MODEL_ENV);
+        assert_eq!(env_default_model(), None);
+        assert_eq!(default_model_with(None), None, "no stored, no env → None");
+
+        std::env::set_var(DEFAULT_MODEL_ENV, "sonnet");
+        assert_eq!(env_default_model(), Some("sonnet".to_string()));
+        // Stored wins over env.
+        assert_eq!(
+            default_model_with(Some("opus".to_string())),
+            Some("opus".to_string())
+        );
+        // Empty stored → falls through to env.
+        assert_eq!(
+            default_model_with(Some(String::new())),
+            Some("sonnet".to_string())
+        );
+        // No stored → env applies.
+        assert_eq!(default_model_with(None), Some("sonnet".to_string()));
+
+        // An empty env var is treated as unset (a String has no parse that
+        // rejects "" for free).
+        std::env::set_var(DEFAULT_MODEL_ENV, "");
+        assert_eq!(env_default_model(), None);
+        assert_eq!(default_model_with(None), None);
+
+        std::env::remove_var(DEFAULT_MODEL_ENV);
+    }
+
+    #[test]
+    fn resolve_node_model_precedence() {
+        // Pure (no env): the node override wins; an empty string on either side
+        // collapses to the next tier; both empty/absent → None (account default).
+        assert_eq!(
+            resolve_node_model(Some("haiku"), Some("opus")),
+            Some("haiku"),
+            "node override wins over the instance default"
+        );
+        assert_eq!(
+            resolve_node_model(None, Some("opus")),
+            Some("opus"),
+            "no node override → instance default"
+        );
+        assert_eq!(
+            resolve_node_model(Some(""), Some("opus")),
+            Some("opus"),
+            "empty node override falls through to the default"
+        );
+        assert_eq!(
+            resolve_node_model(Some("haiku"), None),
+            Some("haiku"),
+            "node override with no default"
+        );
+        assert_eq!(resolve_node_model(None, None), None, "nothing set → None");
+        assert_eq!(
+            resolve_node_model(Some(""), Some("")),
+            None,
+            "empty on both sides → None (byte-identity floor)"
         );
     }
 

@@ -64,19 +64,40 @@ export interface SettingField {
   default: number;
 }
 
-/** The full `GET /settings` view (#129, ADR-0015). */
+/**
+ * String sibling of {@link SettingField} for the instance `default_model`
+ * (#347). Every tier is a string-or-null: there is no baked-in default model,
+ * so `default` is always `null` (the account default = no `--model`).
+ */
+export interface StringSettingField {
+  effective: string | null;
+  source: SettingSource;
+  stored: string | null;
+  env: string | null;
+  default: string | null;
+}
+
+/** The full `GET /settings` view (#129, ADR-0015; default_model #347). */
 export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
+  default_model: StringSettingField;
   updated_at: string;
 }
 
-/** A partial `PUT /settings` edit; omitted fields are left unchanged. */
+/**
+ * A partial `PUT /settings` edit; omitted fields are left unchanged.
+ *
+ * `default_model` uses `""` as the clear sentinel (the backend normalises it to
+ * NULL): sending `null` would deserialise to `None` server-side and be a silent
+ * no-op, so the modal sends `""` to reset to the account default.
+ */
 export interface UpdateSettingsRequest {
   session_cap?: number;
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
+  default_model?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

@@ -3036,6 +3036,19 @@ async fn stored_session_cap(db: &sqlx::SqlitePool) -> Option<usize> {
         .map(|n| n as usize)
 }
 
+/// The instance-wide default model, resolved `stored → env → None` from a
+/// *fresh* read of `instance_config` (#347, ADR-0015). Feeds
+/// [`tmux_session_manager::resolve_node_model`] at every spawn seam so a
+/// `PUT /settings` takes effect on the next node with no restart. A DB read
+/// error falls back to `None` (env/account default) rather than failing spawn.
+async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
+    let stored = instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.default_model);
+    tmux_session_manager::default_model_with(stored)
+}
+
 // --- Trigger scheduler ---
 
 /// How many of the Trigger's *own* Runs are still live (#239). Scans projected
@@ -4644,6 +4657,11 @@ async fn spawn_node(
 
     let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
     let is_script = node.node_type == pipeline::NodeType::Script;
+    // #347: resolve the instance default fresh (stored → env → None), then let
+    // the node's own `model:` override win over it. `__manager__` /
+    // `__merge_resolver__` are infra sessions with no NodeDef and stay at the
+    // account default — they don't route through `spawn_node` (#296).
+    let default_effective = stored_default_model(&state.db).await;
     let tail = if is_script {
         tmux_session_manager::SessionTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
@@ -4651,7 +4669,10 @@ async fn spawn_node(
         }
     } else {
         tmux_session_manager::SessionTail::Agent {
-            model: node.model.as_deref(),
+            model: tmux_session_manager::resolve_node_model(
+                node.model.as_deref(),
+                default_effective.as_deref(),
+            ),
         }
     };
     // A script node executes the RAW bash body (`role_prompt`), never the
@@ -5930,6 +5951,26 @@ fn settings_field(
     })
 }
 
+/// String sibling of [`settings_field`] for the `default_model` knob (#347).
+/// Same `{effective, source, stored, env, default}` shape, but every tier is a
+/// string-or-null: there is no baked-in default model, so `default` is always
+/// `null` (the account default = no `--model`) and `source` is `"default"` when
+/// neither stored nor env is set.
+fn settings_field_str(
+    effective: Option<&str>,
+    source: &str,
+    stored: Option<&str>,
+    env: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": serde_json::Value::Null,
+    })
+}
+
 /// Build the `GET /settings` view: per knob, the effective value, the winning
 /// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
 /// computed by each knob's own resolver, so it can never drift from what the
@@ -5978,10 +6019,26 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
         "default"
     };
 
+    // --- default model (string; no baked-in default) (#347) ---
+    // The empty-string filter mirrors the resolver: a `""` stored/env value is
+    // treated as unset, so it never wins the tier or discloses a bogus value.
+    let dm_stored = cfg.default_model.as_deref().filter(|s| !s.is_empty());
+    let dm_env = tmux_session_manager::env_default_model();
+    let dm_effective = tmux_session_manager::default_model_with(cfg.default_model.clone());
+    let dm_source = if dm_stored.is_some() {
+        "stored"
+    } else if dm_env.is_some() {
+        "env"
+    } else {
+        // effective=null, default=null ⇒ the account default (no --model).
+        "default"
+    };
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
+        "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -8114,6 +8171,10 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        // #347: resolve fresh so a force-spawn honours the instance default too
+        // (wiring only one seam would leave this path at the account default —
+        // a silent bug visible only on a manual force-spawn).
+        default_model: stored_default_model(&state.db).await,
     };
 
     // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
@@ -8360,6 +8421,8 @@ async fn node_retry(
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        // #347: retry honours the instance default like the live scheduler path.
+        default_model: stored_default_model(&state.db).await,
     };
 
     let start_result = node_primitives::start_node(&start_params);
@@ -21196,6 +21259,28 @@ edges:
             view["updated_at"].is_string(),
             "updated_at must be surfaced"
         );
+
+        // default_model (#347): string knob with no baked-in default. On a fresh
+        // row (and no PDO_DEFAULT_MODEL) stored/effective/default are all null and
+        // the source is "default" (= the account default, no --model).
+        let dm = &view["default_model"];
+        assert!(
+            dm["stored"].is_null(),
+            "default_model.stored must be null: {dm}"
+        );
+        assert!(
+            dm["default"].is_null(),
+            "default_model.default is always null: {dm}"
+        );
+        assert!(
+            dm.get("effective").is_some(),
+            "default_model.effective missing"
+        );
+        assert!(dm.get("source").is_some(), "default_model.source missing");
+        assert!(dm.get("env").is_some(), "default_model.env key missing");
+        // `env` reads the process-global PDO_DEFAULT_MODEL; a concurrent
+        // env-mutating unit test could transiently shadow it, so we assert the
+        // effective/source pairing only in the stored-wins tests below.
     }
 
     #[tokio::test]
@@ -21224,6 +21309,44 @@ edges:
         let reget = get_settings_json(&state).await;
         assert_eq!(reget["session_cap"]["stored"], 4);
         assert_eq!(reget["session_cap"]["effective"], 4);
+    }
+
+    #[tokio::test]
+    async fn put_settings_persists_default_model() {
+        // Stored always wins over env/default, so the effective/source assertions
+        // are race-free even with a concurrent env-mutating test.
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_model": "opus"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["default_model"]["stored"], "opus");
+        assert_eq!(view["default_model"]["source"], "stored");
+        assert_eq!(view["default_model"]["effective"], "opus");
+        assert!(view["default_model"]["default"].is_null());
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["default_model"]["stored"], "opus");
+        assert_eq!(reget["default_model"]["effective"], "opus");
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_default_model_on_empty_string() {
+        // "" is the clear sentinel (D): it must NOT be rejected, and it must reset
+        // the stored tier to null so the resolver falls through to env/account.
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"default_model": "opus"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_model": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["default_model"]["stored"].is_null(),
+            "empty string clears the stored model: {}",
+            view["default_model"]
+        );
+        assert_eq!(view["default_model"]["source"], "default");
     }
 
     #[tokio::test]

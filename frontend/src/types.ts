@@ -153,6 +153,11 @@ export interface TriggerFire {
   guard_stdout?: string | null;
   guard_stderr?: string | null;
   guard_exit_code?: number | null;
+  /**
+   * Fire origin (#341): "manual" for a Run-now click, "cron" for a scheduler
+   * tick. Absent/null on legacy rows ≈ cron.
+   */
+  source?: "manual" | "cron" | null;
 }
 
 export interface IterationInfo {

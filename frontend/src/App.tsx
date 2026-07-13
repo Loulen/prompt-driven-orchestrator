@@ -157,6 +157,12 @@ export default function App() {
   // When the New Run modal is opened from a Trigger (run-now / edit), this holds
   // the source Trigger and the intended mode (#162).
   const [triggerPrefill, setTriggerPrefill] = useState<TriggerPrefill | null>(null);
+  // #341: manual "Run now" — a refused fire (409: disabled / broken reference)
+  // surfaces here as a dismissible banner.
+  const [runNowError, setRunNowError] = useState<string | null>(null);
+  // #341: bumped on every `trigger_fired` WS message so an open TriggerDetail
+  // panel refetches its fire history (it otherwise only fetches on trigger.id).
+  const [firesRefreshKey, setFiresRefreshKey] = useState(0);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
   const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
   const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
@@ -295,6 +301,25 @@ export default function App() {
       }
     },
     [selectRun, triggers, libraryPipelines, openPipeline],
+  );
+
+  // #341: "Run now" is a real fire (guard + overlap + audit row), not a
+  // prefilled New Run modal. Fire, then open the trigger detail (via
+  // handleSelectTrigger — the only path that survives the #320 reconciliation)
+  // where the new history row appears. A 409 (disabled / broken reference)
+  // surfaces as a banner.
+  const handleRunNowTrigger = useCallback(
+    async (t: Trigger) => {
+      try {
+        const { fireTrigger } = await import("./api");
+        await fireTrigger(t.id);
+        setRunNowError(null);
+      } catch (e) {
+        setRunNowError(e instanceof Error ? e.message : String(e));
+      }
+      handleSelectTrigger(t.id);
+    },
+    [handleSelectTrigger],
   );
 
   const handleCloseNewRunModal = useCallback(() => {
@@ -482,7 +507,11 @@ export default function App() {
         msg.type === "trigger_fired"
       ) {
         refreshTriggers();
-        if (msg.type === "trigger_fired") refreshRuns();
+        if (msg.type === "trigger_fired") {
+          refreshRuns();
+          // #341: an open TriggerDetail panel refetches its fire history.
+          setFiresRefreshKey((v) => v + 1);
+        }
         return;
       }
       // #315: an archived run's outputs are now preserved (ADR-0020) and its
@@ -586,7 +615,7 @@ export default function App() {
               onSelectTrigger={handleSelectTrigger}
               onNewTrigger={() => openTriggerModal(null)}
               onTriggersChanged={refreshTriggers}
-              onRunNowTrigger={(t) => openTriggerModal({ trigger: t, mode: "run" })}
+              onRunNowTrigger={handleRunNowTrigger}
               onEditTrigger={(t) => openTriggerModal({ trigger: t, mode: "edit" })}
             />
           </ResizablePanel>
@@ -627,6 +656,7 @@ export default function App() {
                 key={selectedTrigger.id}
                 trigger={selectedTrigger}
                 onSelectRun={handleSelectRun}
+                refreshKey={firesRefreshKey}
               />
             ) : paneOwner === "info" ? (
               <PipelineInfoPanel
@@ -757,6 +787,22 @@ export default function App() {
         onDismiss={handleDismissSaveError}
         onViewYaml={handleViewYaml}
       />
+      {runNowError && (
+        <div
+          className="fixed bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded border border-st-failed bg-bg-2 px-3 py-2 text-fg"
+          style={{ fontSize: "11.5px" }}
+          data-testid="run-now-error"
+        >
+          <span>{runNowError}</span>
+          <button
+            onClick={() => setRunNowError(null)}
+            className="text-fg-3 hover:text-fg"
+            data-testid="run-now-error-dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
     </TooltipProvider>
   );

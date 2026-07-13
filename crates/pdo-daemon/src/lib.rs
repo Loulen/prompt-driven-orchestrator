@@ -2539,6 +2539,94 @@ async fn list_trigger_fires(
     }
 }
 
+/// `POST /triggers/{id}/fire` — a manual "Run now" fire (#341, ADR-0027). A
+/// first-class fire: same guard, same overlap gate, same `trigger_fires` audit
+/// row (`source = "manual"`), same `triggered_by` provenance — but
+/// `next_fire_at` is left untouched (the cron heartbeat owns the schedule).
+///
+/// Truthful contract (ADR-0025): 404 unknown trigger; 409 when disabled or on
+/// a broken pipeline/repo reference (before any effect, no audit row);
+/// otherwise `200 {ok, fired, run_id?, outcome?, reason?}` — a guard/overlap
+/// skip is an honest 200, not an error.
+async fn fire_trigger_now(
+    State(state): State<Arc<AppState>>,
+    AxumPath(trigger_id): AxumPath<String>,
+) -> Response {
+    let trigger = match trigger_store::get(&state.db, &trigger_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("trigger not found: {trigger_id}") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("failed to load trigger {trigger_id}: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to load trigger" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Disabled ⇒ explicit 409 before any effect — no fire, no audit row. A
+    // human click on a paused trigger deserves a truthful refusal, not a
+    // silent skip (ADR-0025); `decide()`'s silent no-op stays cron-only.
+    if !trigger.enabled {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("trigger '{trigger_id}' is disabled — enable it first"),
+            })),
+        )
+            .into_response();
+    }
+
+    // A dangling pipeline/repo reference: refuse explicitly rather than record
+    // an error outcome — the cron path keeps its own (audited) treatment.
+    if let Some(reason) = trigger_dangling_reason(&state, &trigger) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("broken reference: {reason}") })),
+        )
+            .into_response();
+    }
+
+    // Serialize with the cron tick so a manual fire and a tick can't race the
+    // same overlap window.
+    let _tick = state.trigger_tick_lock.lock().await;
+    let now = chrono::Utc::now();
+    let record =
+        fire_one_trigger(&state, &trigger, now, trigger_scheduler::FireSource::Manual).await;
+
+    match record {
+        Some(r) if r.outcome == "fired" => Json(serde_json::json!({
+            "ok": true,
+            "fired": true,
+            "run_id": r.run_id,
+        }))
+        .into_response(),
+        Some(r) => Json(serde_json::json!({
+            "ok": true,
+            "fired": false,
+            "outcome": r.outcome,
+            "reason": r.reason,
+        }))
+        .into_response(),
+        // Unreachable for a manual fire (due is forced, enabled was checked),
+        // but stay truthful rather than panic if the decision core evolves.
+        None => Json(serde_json::json!({
+            "ok": true,
+            "fired": false,
+            "outcome": "skipped",
+            "reason": "no action taken",
+        }))
+        .into_response(),
+    }
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
@@ -2640,6 +2728,9 @@ fn build_router(state: Arc<AppState>) -> Router {
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
         )
         .route("/triggers/{trigger_id}/fires", get(list_trigger_fires))
+        // #341: manual "Run now" = a first-class fire. Static segment under the
+        // `/triggers` proxy prefix — no vite proxy edit.
+        .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -3190,49 +3281,70 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: Some(trigger_scheduler::FireSource::Cron.as_str().to_string()),
             };
             record_and_broadcast_fire(state, &trigger.id, &record).await;
             continue;
         }
 
-        let live_count = trigger_live_run_count(&state.db, &trigger.id).await;
-        let prompt_required = trigger_prompt_required(state, &trigger);
+        fire_one_trigger(state, &trigger, now, trigger_scheduler::FireSource::Cron).await;
+    }
+}
 
-        // Run the guard (if any) off the tick, bounded by a hard timeout, but
-        // only when overlap wouldn't already skip — never spend a guard run on a
-        // tick we'd skip anyway. Route this through the same `overlap_ceiling`
-        // the decision core uses (#239) so the guard-gate can never drift from
-        // the fire decision (fire past the cap, or waste a guard run at it).
-        let overlap = if trigger.overlap_policy == "allow" {
-            fire_decision::OverlapPolicy::Allow
-        } else {
-            fire_decision::OverlapPolicy::Skip
-        };
-        let overlap_skips = fire_decision::overlap_ceiling(
-            overlap,
-            trigger.max_concurrent.map(|m| m.max(0) as usize),
-        )
-        .is_some_and(|ceiling| live_count >= ceiling);
-        let guard = match (&trigger.guard_command, overlap_skips) {
-            (Some(cmd), false) if !cmd.trim().is_empty() => {
-                let cwd = trigger_guard_cwd(state, &trigger);
-                // Resolve the timeout fresh each tick, `stored → env → default`
-                // (#129, ADR-0015): a settings change takes effect on the next
-                // tick without a restart. Stored is seconds; the env seam is ms.
-                let stored_secs = instance_config::get(&state.db)
-                    .await
-                    .ok()
-                    .and_then(|c| c.guard_timeout_secs)
-                    .map(|n| n as u64);
-                let timeout = guard_runner::guard_timeout_with(stored_secs);
-                Some(guard_runner::run_guard(cmd, &cwd, timeout).await)
-            }
-            _ => None,
-        };
+/// Evaluate and (maybe) fire one Trigger — the shared spine of the cron tick
+/// and the manual "Run now" endpoint (#341, ADR-0027). Runs the guard, honours
+/// the overlap gate, creates the Run with `triggered_by` provenance, and
+/// persists + broadcasts the audit row. On `Cron` the next fire is recomputed
+/// (forward-only); on `Manual` `next_fire_at` is left untouched — the cron
+/// heartbeat owns the schedule, a 14:32 click must not shift the 15:00 slot.
+///
+/// Returns the persisted audit record (with `run_id` filled on a fire), or
+/// `None` when the evaluation was a silent no-op.
+async fn fire_one_trigger(
+    state: &AppState,
+    trigger: &trigger_store::Trigger,
+    now: chrono::DateTime<chrono::Utc>,
+    source: trigger_scheduler::FireSource,
+) -> Option<trigger_store::FireRecord> {
+    let live_count = trigger_live_run_count(&state.db, &trigger.id).await;
+    let prompt_required = trigger_prompt_required(state, trigger);
 
-        let plan = trigger_scheduler::plan_tick(&trigger, now, live_count, guard, prompt_required);
+    // Run the guard (if any) off the tick, bounded by a hard timeout, but
+    // only when overlap wouldn't already skip — never spend a guard run on a
+    // tick we'd skip anyway. Route this through the same `overlap_ceiling`
+    // the decision core uses (#239) so the guard-gate can never drift from
+    // the fire decision (fire past the cap, or waste a guard run at it).
+    let overlap = if trigger.overlap_policy == "allow" {
+        fire_decision::OverlapPolicy::Allow
+    } else {
+        fire_decision::OverlapPolicy::Skip
+    };
+    let overlap_skips =
+        fire_decision::overlap_ceiling(overlap, trigger.max_concurrent.map(|m| m.max(0) as usize))
+            .is_some_and(|ceiling| live_count >= ceiling);
+    let guard = match (&trigger.guard_command, overlap_skips) {
+        (Some(cmd), false) if !cmd.trim().is_empty() => {
+            let cwd = trigger_guard_cwd(state, trigger);
+            // Resolve the timeout fresh each tick, `stored → env → default`
+            // (#129, ADR-0015): a settings change takes effect on the next
+            // tick without a restart. Stored is seconds; the env seam is ms.
+            let stored_secs = instance_config::get(&state.db)
+                .await
+                .ok()
+                .and_then(|c| c.guard_timeout_secs)
+                .map(|n| n as u64);
+            let timeout = guard_runner::guard_timeout_with(stored_secs);
+            Some(guard_runner::run_guard(cmd, &cwd, timeout).await)
+        }
+        _ => None,
+    };
 
-        // Recompute the next fire (forward-only).
+    let plan =
+        trigger_scheduler::plan_tick(trigger, now, live_count, guard, prompt_required, source);
+
+    // Recompute the next fire (forward-only) — cron only. A manual fire never
+    // recales the schedule (#341): `next_fire_at` belongs to the cron heartbeat.
+    if source == trigger_scheduler::FireSource::Cron {
         if let Err(e) =
             trigger_store::set_next_fire(&state.db, &trigger.id, plan.next_fire_at.as_deref()).await
         {
@@ -3241,54 +3353,56 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
                 trigger.id
             );
         }
+    }
 
-        match plan.decision {
-            fire_decision::FireDecision::Fire { input } => {
-                let req = CreateRunRequest {
-                    pipeline: trigger.pipeline_id.clone(),
-                    input,
-                    variables: trigger_variables(&trigger),
-                    pipeline_id: Some(trigger.pipeline_id.clone()),
-                    target_repo: trigger.target_repo.clone(),
-                    source_branch: trigger.source_branch.clone(),
-                    name: None,
-                    triggered_by: Some(trigger.id.clone()),
-                };
-                match create_run_inner(state, req, Vec::new()).await {
-                    Ok(run_id) => {
-                        let record = trigger_store::FireRecord {
-                            outcome: "fired".to_string(),
-                            reason: None,
-                            run_id: Some(run_id),
-                            guard_stdout: None,
-                            guard_stderr: None,
-                            guard_exit_code: None,
-                        };
-                        record_and_broadcast_fire(state, &trigger.id, &record).await;
-                    }
-                    Err((_, body)) => {
-                        let reason = body
-                            .get("error")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("run creation failed")
-                            .to_string();
-                        let record = trigger_store::FireRecord {
-                            outcome: "error".to_string(),
-                            reason: Some(reason),
-                            run_id: None,
-                            guard_stdout: None,
-                            guard_stderr: None,
-                            guard_exit_code: None,
-                        };
-                        record_and_broadcast_fire(state, &trigger.id, &record).await;
+    match plan.decision {
+        fire_decision::FireDecision::Fire { input } => {
+            let req = CreateRunRequest {
+                pipeline: trigger.pipeline_id.clone(),
+                input,
+                variables: trigger_variables(trigger),
+                pipeline_id: Some(trigger.pipeline_id.clone()),
+                target_repo: trigger.target_repo.clone(),
+                source_branch: trigger.source_branch.clone(),
+                name: None,
+                triggered_by: Some(trigger.id.clone()),
+            };
+            let record = match create_run_inner(state, req, Vec::new()).await {
+                Ok(run_id) => trigger_store::FireRecord {
+                    outcome: "fired".to_string(),
+                    reason: None,
+                    run_id: Some(run_id),
+                    guard_stdout: None,
+                    guard_stderr: None,
+                    guard_exit_code: None,
+                    source: Some(source.as_str().to_string()),
+                },
+                Err((_, body)) => {
+                    let reason = body
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("run creation failed")
+                        .to_string();
+                    trigger_store::FireRecord {
+                        outcome: "error".to_string(),
+                        reason: Some(reason),
+                        run_id: None,
+                        guard_stdout: None,
+                        guard_stderr: None,
+                        guard_exit_code: None,
+                        source: Some(source.as_str().to_string()),
                     }
                 }
-            }
-            fire_decision::FireDecision::Skip { .. }
-            | fire_decision::FireDecision::Reject { .. } => {
-                if let Some(record) = plan.record {
-                    record_and_broadcast_fire(state, &trigger.id, &record).await;
-                }
+            };
+            record_and_broadcast_fire(state, &trigger.id, &record).await;
+            Some(record)
+        }
+        fire_decision::FireDecision::Skip { .. } | fire_decision::FireDecision::Reject { .. } => {
+            if let Some(record) = plan.record {
+                record_and_broadcast_fire(state, &trigger.id, &record).await;
+                Some(record)
+            } else {
+                None
             }
         }
     }

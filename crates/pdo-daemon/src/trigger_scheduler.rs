@@ -17,6 +17,28 @@ use crate::trigger_store::{FireRecord, Trigger};
 /// guarantees every slot is seen.
 pub const TICK_INTERVAL_SECS: u64 = 30;
 
+/// Where a fire evaluation comes from (#341, ADR-0027). `Cron` is the ~30 s
+/// scheduler tick; `Manual` is a user clicking "Run now" (`POST
+/// /triggers/{id}/fire`). A manual fire is a first-class fire — same guard,
+/// same overlap gate, same audit trail — but is *always due* (the user's click
+/// is the schedule) and never touches `next_fire_at` (the cron heartbeat owns
+/// it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FireSource {
+    Cron,
+    Manual,
+}
+
+impl FireSource {
+    /// The `trigger_fires.source` column value for this origin.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FireSource::Cron => "cron",
+            FireSource::Manual => "manual",
+        }
+    }
+}
+
 /// The plan for one Trigger on one tick: what to do, what to audit, and the
 /// recomputed next fire.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +67,7 @@ pub fn plan_tick(
     live_run_count: usize,
     guard: Option<GuardResult>,
     prompt_required: bool,
+    source: FireSource,
 ) -> TickPlan {
     let schedule = CronSchedule::parse(&trigger.cron);
 
@@ -55,12 +78,17 @@ pub fn plan_tick(
         Err(_) => (None, true),
     };
 
-    let due = trigger
-        .next_fire_at
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|nf| nf.with_timezone(&Utc) <= now)
-        .unwrap_or(false);
+    // A manual fire is always due (#341): the user's click *is* the schedule.
+    // `decide()`'s silent `!enabled || !due` no-op stays cron-only — the manual
+    // route rejects a disabled trigger with an explicit 409 before reaching
+    // this path.
+    let due = source == FireSource::Manual
+        || trigger
+            .next_fire_at
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|nf| nf.with_timezone(&Utc) <= now)
+            .unwrap_or(false);
 
     let overlap = if trigger.overlap_policy == "allow" {
         OverlapPolicy::Allow
@@ -89,6 +117,7 @@ pub fn plan_tick(
                 guard_stdout: None,
                 guard_stderr: None,
                 guard_exit_code: None,
+                source: Some(source.as_str().to_string()),
             }),
             next_fire_at: None,
             cron_invalid: true,
@@ -109,7 +138,7 @@ pub fn plan_tick(
         prompt_required,
     });
 
-    let record = record_for(&decision);
+    let record = record_for(&decision, source);
 
     TickPlan {
         decision,
@@ -119,8 +148,9 @@ pub fn plan_tick(
     }
 }
 
-/// Map a decision to the audit record (if any) to persist this tick.
-fn record_for(decision: &FireDecision) -> Option<FireRecord> {
+/// Map a decision to the audit record (if any) to persist this tick, stamped
+/// with its origin (`cron` / `manual`, #341).
+fn record_for(decision: &FireDecision, source: FireSource) -> Option<FireRecord> {
     use crate::fire_decision::SkipReason;
     match decision {
         FireDecision::Fire { .. } => Some(FireRecord {
@@ -131,6 +161,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: None,
             guard_stderr: None,
             guard_exit_code: None,
+            source: Some(source.as_str().to_string()),
         }),
         FireDecision::Skip { reason: None } => None,
         FireDecision::Skip {
@@ -142,6 +173,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: None,
             guard_stderr: None,
             guard_exit_code: None,
+            source: Some(source.as_str().to_string()),
         }),
         // A bounded-`allow` skip keeps the `skipped-overlap` outcome (#239) — no
         // new status-dot to teach the UI — but carries the cap in its reason so
@@ -155,6 +187,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: None,
             guard_stderr: None,
             guard_exit_code: None,
+            source: Some(source.as_str().to_string()),
         }),
         // #244: carry the guard's captured stdout/stderr/exit code onto the audit
         // row so the fire history can explain *why* the guard skipped.
@@ -172,6 +205,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: Some(stdout.clone()),
             guard_stderr: Some(stderr.clone()),
             guard_exit_code: *exit_code,
+            source: Some(source.as_str().to_string()),
         }),
         FireDecision::Skip {
             reason: Some(SkipReason::GuardError { detail }),
@@ -182,6 +216,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: None,
             guard_stderr: None,
             guard_exit_code: None,
+            source: Some(source.as_str().to_string()),
         }),
         FireDecision::Reject { reason } => Some(FireRecord {
             outcome: "error".to_string(),
@@ -190,6 +225,7 @@ fn record_for(decision: &FireDecision) -> Option<FireRecord> {
             guard_stdout: None,
             guard_stderr: None,
             guard_exit_code: None,
+            source: Some(source.as_str().to_string()),
         }),
     }
 }
@@ -228,7 +264,7 @@ mod tests {
     fn due_cron_only_trigger_plans_a_fire_and_recomputes_next() {
         let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         assert_eq!(
             plan.decision,
             FireDecision::Fire {
@@ -247,7 +283,7 @@ mod tests {
     fn overlap_skip_while_own_run_is_live_records_skip_and_still_recomputes() {
         let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 1, None, false);
+        let plan = plan_tick(&t, now, 1, None, false, FireSource::Cron);
         assert!(matches!(
             plan.decision,
             FireDecision::Skip { reason: Some(_) }
@@ -270,7 +306,7 @@ mod tests {
         t.overlap_policy = "allow".to_string();
         t.max_concurrent = Some(2);
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 2, None, false);
+        let plan = plan_tick(&t, now, 2, None, false, FireSource::Cron);
         assert!(matches!(
             plan.decision,
             FireDecision::Skip { reason: Some(_) }
@@ -294,7 +330,7 @@ mod tests {
         t.overlap_policy = "allow".to_string();
         t.max_concurrent = Some(2);
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 1, None, false);
+        let plan = plan_tick(&t, now, 1, None, false, FireSource::Cron);
         assert!(matches!(plan.decision, FireDecision::Fire { .. }));
         assert_eq!(plan.record.as_ref().unwrap().outcome, "fired");
     }
@@ -303,7 +339,7 @@ mod tests {
     fn not_due_trigger_is_a_silent_noop_with_no_audit_row() {
         let t = trigger("* * * * *", Some("2999-01-01T00:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         assert_eq!(plan.decision, FireDecision::Skip { reason: None });
         assert!(plan.record.is_none());
     }
@@ -314,7 +350,7 @@ mod tests {
         // jumps forward from `now`, never replaying the missed slots.
         let t = trigger("0 * * * *", Some("2026-06-01T09:00:00.000Z"));
         let now = at("2026-06-06T10:30:00.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         assert!(matches!(plan.decision, FireDecision::Fire { .. }));
         // The single next fire is the *next* hourly slot after now, not a
         // backfill of June 1.
@@ -328,7 +364,7 @@ mod tests {
     fn invalid_cron_yields_error_outcome_and_stops_firing() {
         let t = trigger("not a cron", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         assert!(matches!(plan.decision, FireDecision::Reject { .. }));
         assert_eq!(plan.record.as_ref().unwrap().outcome, "error");
         // No next fire: the broken trigger stops firing until edited.
@@ -341,9 +377,69 @@ mod tests {
         let mut t = trigger("* * * * *", Some("2020-01-01T00:00:00.000Z"));
         t.enabled = false;
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         assert_eq!(plan.decision, FireDecision::Skip { reason: None });
         assert!(plan.record.is_none());
+    }
+
+    // --- #341: manual fires (FireSource::Manual) ---
+
+    #[test]
+    fn manual_fire_is_due_even_when_next_fire_is_in_the_future() {
+        // "Run now" at 14:32 with the next cron slot at 15:00: the manual fire
+        // proceeds (the click is the schedule) — no waiting for the slot.
+        let t = trigger("* * * * *", Some("2999-01-01T00:00:00.000Z"));
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Manual);
+        assert!(matches!(plan.decision, FireDecision::Fire { .. }));
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "fired");
+        assert_eq!(record.source.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn manual_fire_still_honours_the_overlap_gate() {
+        // A manual fire is a first-class fire: the overlap ceiling applies to
+        // it exactly as to a cron fire.
+        let t = trigger("* * * * *", Some("2999-01-01T00:00:00.000Z"));
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 1, None, false, FireSource::Manual);
+        assert!(matches!(
+            plan.decision,
+            FireDecision::Skip { reason: Some(_) }
+        ));
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "skipped-overlap");
+        assert_eq!(record.source.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn manual_fire_still_honours_the_guard() {
+        // A guard exiting non-zero skips a manual fire too — same contract as
+        // cron, audited with source=manual.
+        let mut t = trigger("* * * * *", Some("2999-01-01T00:00:00.000Z"));
+        t.guard_command = Some("exit 7".to_string());
+        let now = at("2026-06-06T10:00:30.000Z");
+        let guard = Some(GuardResult::Skip {
+            stdout: String::new(),
+            stderr: "no work".to_string(),
+            exit_code: Some(7),
+        });
+        let plan = plan_tick(&t, now, 0, guard, false, FireSource::Manual);
+        let record = plan.record.as_ref().unwrap();
+        assert_eq!(record.outcome, "guard-exit-nonzero");
+        assert_eq!(record.source.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn cron_records_are_stamped_source_cron() {
+        let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
+        let now = at("2026-06-06T10:00:30.000Z");
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
+        assert_eq!(
+            plan.record.as_ref().unwrap().source.as_deref(),
+            Some("cron")
+        );
     }
 
     #[test]
@@ -359,7 +455,7 @@ mod tests {
             stderr: "gh: no work to do".to_string(),
             exit_code: Some(7),
         });
-        let plan = plan_tick(&t, now, 0, guard, false);
+        let plan = plan_tick(&t, now, 0, guard, false, FireSource::Cron);
 
         assert!(matches!(
             plan.decision,
@@ -377,7 +473,7 @@ mod tests {
         // A plain `fired` record must keep the three guard fields NULL (D2).
         let t = trigger("* * * * *", Some("2026-06-06T10:00:00.000Z"));
         let now = at("2026-06-06T10:00:30.000Z");
-        let plan = plan_tick(&t, now, 0, None, false);
+        let plan = plan_tick(&t, now, 0, None, false, FireSource::Cron);
         let record = plan.record.as_ref().unwrap();
         assert_eq!(record.outcome, "fired");
         assert!(record.guard_stdout.is_none());

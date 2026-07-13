@@ -908,6 +908,14 @@ Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas
 - **Historique d'édition (undo/redo)** (#226) : pile **par onglet** des états d'édition successifs du canvas (Ctrl/Cmd+Z annuler, Ctrl/Cmd+Shift+Z ou Ctrl+Y rétablir, plus deux boutons toolbar), scopée à l'**édition** (positions, nœuds, edges, loops, métadonnées) — **exclut l'état de Run** (statuts/overlay) et les prompts. In-memory (vidée au reload, pas de persistance cross-session), plafonnée. Vidée sur reload-propre / "Take theirs" / "Reload changes" ; conservée à travers un Save. À distinguer de l'**historique** d'un Run (events SQLite) et des fires d'un Trigger. Cf. ADR-0014.
 - **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
 
+### Onglets de pipeline (canvas)
+
+Un **onglet de pipeline** (ou *onglet canvas*) = un document ouvert dans la zone centrale : un `PipelineDef` + ses prompts + son historique d'undo, matérialisé par une entrée de `openTabs` et un onglet de la `TabBar`. À **ne pas confondre** avec les **onglets de liste** du panneau gauche (`Runs | Triggers | Library`) ni l'**onglet info** de la toolbar — ceux-là basculent une vue, ne se ferment ni ne se « désactivent » jamais.
+
+- **Onglet de run** — onglet dont le contexte est un Run (id `__run__<run-id>`, `scope: "run"`), ouvert au clic sur un Run ; édite le snapshot run-scope (cf. *Édition pendant un Run*). Un onglet **de template** (scope `repo`/`library`/`user`) édite la template en bibliothèque.
+- **Onglet actif** — l'unique onglet affiché (`activeTabId`). Fermer l'actif réactive le dernier onglet restant.
+- **Mode mono-onglet** *(préférence UI, #342)* — comportement optionnel : ouvrir une pipeline **remplace** l'onglet courant au lieu d'en empiler un nouveau (au plus un onglet à la fois). Préférence **purement UI, par-poste**, persistée en `localStorage` (`pdo.ui.tabsDisabled`) au même titre que la taille des panneaux et les bannières masquées — **hors `instance_config`** : ADR-0015 ne couvre que les réglages runtime daemon-wide, pas une préférence de présentation locale. Basculer en mono-onglet avec plusieurs onglets ouverts referme les autres (confirmation si l'un est *dirty*). _Éviter_ « mode document » (collision avec *document* = artefact du Blackboard) et « onglets désactivés » comme nom d'état (verbe du toggle, évoque à tort les onglets de liste de gauche).
+
 ### Création d'un nouveau nœud
 
 - **From scratch** : "+ Add node" → nœud vide à remplir.

@@ -28,7 +28,13 @@ pub struct NodeIO {
     pub outputs: Vec<PortIO>,
 }
 
-pub fn resolve(pipeline: &PipelineDef, artifacts_dir: &Path, node_id: &str, iter: i64) -> NodeIO {
+pub fn resolve(
+    pipeline: &PipelineDef,
+    run_state: &crate::event_log::RunState,
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+) -> NodeIO {
     let node = pipeline.nodes.iter().find(|n| n.id == node_id);
     let node = match node {
         Some(n) => n,
@@ -56,7 +62,13 @@ pub fn resolve(pipeline: &PipelineDef, artifacts_dir: &Path, node_id: &str, iter
         let mut files = Vec::new();
         if edge.repeated {
             let source_dir = artifacts_dir.join(&edge.source.node);
-            files.extend(glob_repeated(&source_dir, &edge.source.port));
+            // #353: pool only the source's COMPLETED iterations — the event
+            // projection is the authority, not a raw `iter-*` disk enumeration
+            // (which would surface a failed iteration's leftover artifact). This
+            // is the same rule the spawn-time preamble uses, kept in one home
+            // (`RunState::completed_iters`).
+            let blessed = run_state.completed_iters(&edge.source.node);
+            files.extend(glob_repeated(&source_dir, &edge.source.port, &blessed));
         } else {
             let path = crate::blackboard::artifact_path(
                 artifacts_dir,
@@ -241,7 +253,7 @@ fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
     files
 }
 
-fn glob_repeated(source_dir: &Path, port_name: &str) -> Vec<FileInfo> {
+fn glob_repeated(source_dir: &Path, port_name: &str, blessed_iters: &[i64]) -> Vec<FileInfo> {
     let mut results = Vec::new();
 
     let Ok(entries) = std::fs::read_dir(source_dir) else {
@@ -254,7 +266,10 @@ fn glob_repeated(source_dir: &Path, port_name: &str) -> Vec<FileInfo> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             let n = name.strip_prefix("iter-")?.parse::<i64>().ok()?;
-            Some((n, e.path()))
+            // #353: keep only iterations the projection blessed as Completed. A
+            // failed iteration's dir is still on disk (forensics) but must never
+            // be pooled as an input.
+            blessed_iters.contains(&n).then_some((n, e.path()))
         })
         .collect();
 
@@ -286,9 +301,47 @@ fn glob_repeated(source_dir: &Path, port_name: &str) -> Vec<FileInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_log::{IterationInfo, NodeState, NodeStatus, RunState};
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::fs;
+
+    /// A projection where no node is known: the non-`repeated` branch (which
+    /// resolves positionally by consumer `iter`) is unaffected by it, so most
+    /// tests pass this.
+    fn empty_state() -> RunState {
+        RunState::new("run-1".into(), "test".into())
+    }
+
+    /// A projection carrying one node's per-iteration statuses — drives the
+    /// `repeated` branch's completed-iter filter (#353).
+    fn state_with(node_id: &str, iters: &[(i64, NodeStatus)]) -> RunState {
+        let head = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
+        let mut s = RunState::new("run-1".into(), "test".into());
+        s.nodes.insert(
+            node_id.to_string(),
+            NodeState {
+                node_id: node_id.to_string(),
+                status: head.1,
+                iter: head.0,
+                started_at: None,
+                completed_at: None,
+                failure_reason: None,
+                iterations: iters
+                    .iter()
+                    .map(|(i, st)| IterationInfo {
+                        iter: *i,
+                        status: st.clone(),
+                        started_at: None,
+                        completed_at: None,
+                    })
+                    .collect(),
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+        s
+    }
 
     fn simple_pipeline() -> PipelineDef {
         PipelineDef {
@@ -381,7 +434,7 @@ mod tests {
         fs::create_dir_all(&artifacts).unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "implementer", 1);
 
         assert_eq!(io.inputs.len(), 1);
         assert_eq!(io.inputs[0].port, "plan");
@@ -400,7 +453,7 @@ mod tests {
         fs::write(dir.join("output.md"), "# My plan\nDo stuff.").unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "implementer", 1);
 
         assert!(io.inputs[0].files[0].exists);
         assert!(io.inputs[0].files[0].size.unwrap() > 0);
@@ -419,7 +472,7 @@ mod tests {
         .unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "implementer", 1);
 
         assert_eq!(io.outputs.len(), 1);
         assert_eq!(io.outputs[0].port, "summary");
@@ -436,7 +489,7 @@ mod tests {
         fs::create_dir_all(&artifacts).unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "implementer", 1);
 
         assert_eq!(io.outputs.len(), 1);
         assert!(!io.outputs[0].files[0].exists);
@@ -445,6 +498,8 @@ mod tests {
 
     #[test]
     fn repeated_port_glob_expansion() {
+        // A pooled input accumulates every COMPLETED source iteration (#353).
+        // Here reviewer completed all three laps, so all three are pooled.
         let tmp = tempfile::tempdir().unwrap();
         let artifacts = tmp.path().join("artifacts");
 
@@ -453,7 +508,7 @@ mod tests {
             fs::create_dir_all(&dir).unwrap();
             fs::write(
                 dir.join("output.md"),
-                format!("---\nverdict: FAIL\n---\n\nIter {i} review"),
+                format!("---\nverdict: PASS\n---\n\nIter {i} review"),
             )
             .unwrap();
         }
@@ -533,7 +588,15 @@ mod tests {
             prompt_required: true,
         };
 
-        let io = resolve(&pipeline, &artifacts, "implementer", 4);
+        let state = state_with(
+            "reviewer",
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Completed),
+                (3, NodeStatus::Completed),
+            ],
+        );
+        let io = resolve(&pipeline, &state, &artifacts, "implementer", 4);
 
         assert_eq!(io.inputs.len(), 1);
         assert!(io.inputs[0].repeated);
@@ -553,6 +616,94 @@ mod tests {
     }
 
     #[test]
+    fn repeated_pool_excludes_a_failed_source_iteration() {
+        // #353 regression: reviewer's iter-1 FAILED (its artifact is on disk for
+        // forensics) and iter-2 COMPLETED. The pooled input must contain ONLY
+        // iter-2 — the projection quarantines the failed iteration, and the raw
+        // `iter-*` disk enumeration is no longer the authority.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for i in 1..=2 {
+            let dir = artifacts.join(format!("reviewer/iter-{i}/review"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("iter {i}")).unwrap();
+        }
+
+        let pipeline = PipelineDef {
+            name: "cycle".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    id: "reviewer".into(),
+                    name: "reviewer".into(),
+                    node_type: NodeType::DocOnly,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "review".into(),
+                        repeated: false,
+                        side: None,
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    model: None,
+                },
+                NodeDef {
+                    id: "implementer".into(),
+                    name: "implementer".into(),
+                    node_type: NodeType::CodeMutating,
+                    inputs: vec![],
+                    outputs: vec![],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    model: None,
+                },
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeEndpoint {
+                    node: "reviewer".into(),
+                    port: "review".into(),
+                },
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "reviews".into(),
+                },
+                repeated: true,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+
+        let state = state_with(
+            "reviewer",
+            &[(1, NodeStatus::Failed), (2, NodeStatus::Completed)],
+        );
+        let io = resolve(&pipeline, &state, &artifacts, "implementer", 3);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert!(io.inputs[0].repeated);
+        assert_eq!(
+            io.inputs[0].files.len(),
+            1,
+            "the failed iter-1 must be quarantined from the pool"
+        );
+        assert_eq!(
+            io.inputs[0].files[0].path,
+            "reviewer/iter-2/review/output.md"
+        );
+    }
+
+    #[test]
     fn entry_node_with_no_edges_gets_input_md() {
         let tmp = tempfile::tempdir().unwrap();
         let artifacts = tmp.path().join("artifacts");
@@ -561,7 +712,7 @@ mod tests {
         fs::write(input_dir.join("output.md"), "Do the thing").unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "planner", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "planner", 1);
 
         assert_eq!(io.inputs.len(), 1);
         assert_eq!(io.inputs[0].port, "task");
@@ -684,7 +835,7 @@ mod tests {
             fs::write(dir.join("output.md"), format!("from {dir_name}")).unwrap();
         }
 
-        let io = resolve(&pipeline, &artifacts, "merger", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "merger", 1);
 
         assert_eq!(io.inputs.len(), 1);
         assert_eq!(io.inputs[0].port, "docs");
@@ -762,7 +913,7 @@ mod tests {
             prompt_required: true,
         };
 
-        let io = resolve(&pipeline, &artifacts, "implementer", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "implementer", 1);
 
         assert_eq!(io.inputs.len(), 1);
         assert_eq!(io.inputs[0].port, "plan");
@@ -839,7 +990,7 @@ mod tests {
             prompt_required: true,
         };
 
-        let io = resolve(&pipeline, &artifacts, "sink", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "sink", 1);
 
         // One logical input, pooled into a list of both source files.
         assert_eq!(io.inputs.len(), 1);
@@ -919,7 +1070,7 @@ mod tests {
             prompt_required: true,
         };
 
-        let io = resolve(&pipeline, &artifacts, "sink", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "sink", 1);
 
         assert_eq!(io.inputs.len(), 2);
         assert_eq!(io.inputs[0].port, "plan");
@@ -937,7 +1088,7 @@ mod tests {
         fs::create_dir_all(&artifacts).unwrap();
 
         let pipeline = simple_pipeline();
-        let io = resolve(&pipeline, &artifacts, "nonexistent", 1);
+        let io = resolve(&pipeline, &empty_state(), &artifacts, "nonexistent", 1);
 
         assert!(io.inputs.is_empty());
         assert!(io.outputs.is_empty());

@@ -185,8 +185,10 @@ pub struct EdgeDef {
     #[serde(default, rename = "else", skip_serializing_if = "is_false")]
     pub is_else: bool,
     /// `repeated: true` marks an edge whose source artifact accumulates across
-    /// iterations: the resolver globs `iter-*` and pools every match into the
-    /// emergent input. Loop accumulation ("read all laps") lives on the edge,
+    /// iterations: the resolver pools the source's COMPLETED iterations into the
+    /// emergent input — failed iterations are quarantined, so it is the
+    /// projection-blessed set (`RunState::completed_iters`), never a raw `iter-*`
+    /// disk glob (#353). Loop accumulation ("read all laps") lives on the edge,
     /// not on a declared input port (ADR-0011 / #149).
     #[serde(default, skip_serializing_if = "is_false")]
     pub repeated: bool,
@@ -1772,8 +1774,9 @@ edges:
     #[test]
     fn parses_repeated_flag_on_edge() {
         // `repeated` is an edge property (ADR-0011 / #149): it marks an edge whose
-        // source artifact accumulates across iterations (glob `iter-*`). It lives
-        // on the edge, not on a declared input port.
+        // source artifact accumulates across iterations (the source's COMPLETED
+        // iters — failed ones quarantined, not a raw `iter-*` glob, #353). It
+        // lives on the edge, not on a declared input port.
         let yaml = with_start_end(
             r#"
 name: repeated-edge

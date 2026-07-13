@@ -55,6 +55,33 @@ pub fn resolved_source_iters(
         .collect()
 }
 
+/// Resolves, for one consumer node, the full set of COMPLETED source
+/// iterations of every incoming edge: a map `source node id -> blessed iters`
+/// (#353). The `repeated`/pooled twin of [`resolved_source_iters`] — where that
+/// picks the single latest-completed iter per source, this returns *every*
+/// completed iter, because a `repeated` input accumulates across all of them.
+/// Failed iterations are excluded ([`RunState::completed_iters`] is the single
+/// home for the rule), so the raw `iter-*` disk glob is never the authority. No
+/// positional `consumer_iter` fallback: a source with nothing completed yet
+/// contributes an empty pool (there is genuinely nothing blessed to read).
+pub fn resolved_source_completed_iters(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    node_id: &str,
+) -> HashMap<String, Vec<i64>> {
+    pipeline
+        .edges
+        .iter()
+        .filter(|e| e.target.node == node_id)
+        .map(|e| {
+            (
+                e.source.node.clone(),
+                run_state.completed_iters(&e.source.node),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +215,65 @@ mod tests {
         let resolved = resolved_source_iters(&pipeline, &state, "tester", 1);
         assert_eq!(resolved.get("griller"), Some(&2));
         assert_eq!(resolved.get("impl"), Some(&1));
+    }
+
+    #[test]
+    fn resolved_source_completed_iters_pools_completed_only_per_source() {
+        // #353: the set-valued twin. `griller` failed iter 1 then completed
+        // iters 2 and 3; `impl` completed iter 1. A pooled consumer resolves
+        // each source to its FULL completed set (griller → {2,3}, not just 3),
+        // with the failed iter 1 quarantined.
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        let pipeline = PipelineDef {
+            name: "pool".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![
+                EdgeDef {
+                    source: EdgeEndpoint {
+                        node: "griller".into(),
+                        port: "review".into(),
+                    },
+                    target: EdgeEndpoint {
+                        node: "impl".into(),
+                        port: "reviews".into(),
+                    },
+                    repeated: true,
+                    ..Default::default()
+                },
+                EdgeDef {
+                    source: EdgeEndpoint {
+                        node: "impl".into(),
+                        port: "out".into(),
+                    },
+                    target: EdgeEndpoint {
+                        node: "sink".into(),
+                        port: "code".into(),
+                    },
+                    ..Default::default()
+                },
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let state = state_with(vec![
+            node_with_iterations(
+                "griller",
+                &[
+                    (1, NodeStatus::Failed),
+                    (2, NodeStatus::Completed),
+                    (3, NodeStatus::Completed),
+                ],
+            ),
+            node_with_iterations("impl", &[(1, NodeStatus::Completed)]),
+        ]);
+
+        let for_impl = resolved_source_completed_iters(&pipeline, &state, "impl");
+        assert_eq!(for_impl.get("griller"), Some(&vec![2, 3]));
+
+        let for_sink = resolved_source_completed_iters(&pipeline, &state, "sink");
+        assert_eq!(for_sink.get("impl"), Some(&vec![1]));
     }
 }

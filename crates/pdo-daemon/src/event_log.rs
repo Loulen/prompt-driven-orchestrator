@@ -448,6 +448,37 @@ impl RunState {
         from_history.or_else(|| (node.status == NodeStatus::Completed).then_some(node.iter))
     }
 
+    /// Every `Completed` iteration of `node_id`, ascending and de-duplicated
+    /// (#353).
+    ///
+    /// The full set of iterations whose artifacts are resolvable as inputs —
+    /// failed/stopped iterations are quarantined (their artifacts stay on disk
+    /// for forensics but never resolve). A `repeated`/pooled input accumulates
+    /// across exactly this set, so a raw `iter-*` disk enumeration (which cannot
+    /// tell a failed iteration from a completed one) is never the authority.
+    /// Falls back to the head `iter` when the head status is `Completed` but no
+    /// per-iteration history exists (legacy states), mirroring
+    /// [`latest_completed_iter`] — of which this is the set-valued twin
+    /// (`latest_completed_iter` == `completed_iters().last()`). Empty when the
+    /// node has no completed iteration (or does not exist).
+    pub fn completed_iters(&self, node_id: &str) -> Vec<i64> {
+        let Some(node) = self.nodes.get(node_id) else {
+            return Vec::new();
+        };
+        let mut iters: Vec<i64> = node
+            .iterations
+            .iter()
+            .filter(|it| it.status == NodeStatus::Completed)
+            .map(|it| it.iter)
+            .collect();
+        if iters.is_empty() && node.status == NodeStatus::Completed {
+            iters.push(node.iter);
+        }
+        iters.sort_unstable();
+        iters.dedup();
+        iters
+    }
+
     /// True iff `node_ids` is non-empty AND every id resolves to a node whose
     /// status is `Completed`.
     ///
@@ -3655,6 +3686,65 @@ mod tests {
     fn latest_completed_iter_is_none_for_an_absent_node() {
         let s = run_with(vec![]);
         assert_eq!(s.latest_completed_iter("ghost"), None);
+    }
+
+    #[test]
+    fn completed_iters_quarantines_failed_and_returns_all_completed() {
+        // #353: reviewer failed iter 1, completed iters 2 and 3. A repeated
+        // input pools ONLY the completed set — iter 1 is quarantined.
+        let s = run_with(vec![node_state(
+            "reviewer",
+            NodeStatus::Completed,
+            3,
+            &[
+                (1, NodeStatus::Failed),
+                (2, NodeStatus::Completed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        assert_eq!(s.completed_iters("reviewer"), vec![2, 3]);
+        // The set-valued twin agrees with the scalar rule on its max.
+        assert_eq!(
+            s.completed_iters("reviewer").last().copied(),
+            s.latest_completed_iter("reviewer")
+        );
+    }
+
+    #[test]
+    fn completed_iters_keeps_a_completed_iter_before_a_later_failure() {
+        // A hole in the middle: completed 1, failed 2, completed 3 → {1, 3}.
+        // Proves the set is genuinely discrete, not a contiguous range an
+        // `iter-*` glob could stand in for.
+        let s = run_with(vec![node_state(
+            "reviewer",
+            NodeStatus::Completed,
+            3,
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        assert_eq!(s.completed_iters("reviewer"), vec![1, 3]);
+    }
+
+    #[test]
+    fn completed_iters_falls_back_to_head_when_history_is_empty() {
+        // Legacy state: head Completed, no per-iteration history recorded.
+        let s = run_with(vec![node_state("a", NodeStatus::Completed, 4, &[])]);
+        assert_eq!(s.completed_iters("a"), vec![4]);
+    }
+
+    #[test]
+    fn completed_iters_is_empty_when_nothing_completed_or_node_absent() {
+        let running = run_with(vec![node_state(
+            "a",
+            NodeStatus::Running,
+            1,
+            &[(1, NodeStatus::Running)],
+        )]);
+        assert!(running.completed_iters("a").is_empty());
+        assert!(run_with(vec![]).completed_iters("ghost").is_empty());
     }
 
     #[test]

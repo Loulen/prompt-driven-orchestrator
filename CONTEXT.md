@@ -26,7 +26,7 @@ Un Node se définit par :
 - **Nom** — identifiant lisible affiché dans le canvas.
 - **Prompt système** — le rôle, écrit dans la zone de texte qui s'ouvre à l'édition.
 - **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté (le Debugger sort `repro_steps` + `screenshots`). Rendu : **un dot vert par document**, drag-source des edges, librement placé.
-- **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps` (le nom suit le document amont). Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches : chaque flèche atterrit où le designer veut sur le Node, **sans dot d'entrée**. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations (glob `iter-*`) est un flag `repeated` porté par l'**edge**, pas par l'entrée.
+- **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps` (le nom suit le document amont). Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches : chaque flèche atterrit où le designer veut sur le Node, **sans dot d'entrée**. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations (les itérations *completed* de la source, cf. #353 — pas un glob `iter-*` brut) est un flag `repeated` porté par l'**edge**, pas par l'entrée.
 
 Asymétrie assumée (et déjà présente dans le typage : output = contrat vérifié, input = best-effort) : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
 
@@ -136,7 +136,7 @@ loops:
 - **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant. Un nœud hors boucle garde l'`iter` de ses propres runs (1 s'il n'a couru qu'une fois) : il n'est **jamais re-spawné par un lap** (#195/#199 — seul un vrai cycle émergent ou le moteur de région peut re-lancer un nœud déjà complété ; un membre n'est jamais spawné au-delà de `max_iter`).
 - **Résolution d'inputs** (canonique, #194/#210 — module `input_resolution`) : un input se résout vers **la dernière itération complétée** du nœud source — jamais l'artefact d'une itération échouée, jamais un alignement positionnel sur l'`iter` du consommateur. Un feeder externe à une boucle continue de servir son artefact complété à n'importe quel lap.
 - `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées — absorbe le double-spawn iter+1 de #108). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure, pas une machinerie dédiée.
-- Adressage et accumulation inchangés : `reviewer/iter-2/review/output.md` ; un input `repeated: true` glob `iter-*/<port>` → un artefact par lap, ordonné.
+- Adressage et accumulation inchangés : `reviewer/iter-2/review/output.md` ; un input `repeated: true` accumule **les itérations COMPLETED de la source** (`iter-<N>/<port>`, une par lap, ordonnées par N) — même quarantaine que la résolution simple : une itération échouée reste sur disque mais n'est jamais poolée (#194/#210/#353), donc jamais un glob `iter-*` disque brut.
 
 ### Sortie de boucle
 
@@ -195,7 +195,7 @@ Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipel
 - **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run. Part au cleanup **du worktree** — mais est d'abord copié vers le *Blackboard archivé* global (`~/.pdo/runs/<run-id>/artifacts/`, lecture seule, survit au cleanup ; cf. §*Cleanup vs archive* et ADR-0020).
 - **Format** : markdown brut (`.md`) avec **YAML frontmatter** pour les métadonnées structurées (verdict, statut, références, etc.). Le corps reste lisible humainement, le frontmatter est parsable par le runtime.
 - **Wires** : dans l'éditeur, un wire de `Node A → Node B` n'est pas un transport ; c'est une **déclaration de dépendance**. Le runtime traduit en : *"avant de lancer B, attendre que A ait posé son artefact ; l'input port de B le lit depuis le Blackboard"*.
-- **Cycles + accumulation** : chaque tour de cycle écrit dans un sous-dossier `iter-<N>/`. Les ports d'entrée qui veulent accumuler (ex. `reviews_bloquantes`) lisent un glob `iter-*/review.md` → liste naturellement ordonnée.
+- **Cycles + accumulation** : chaque tour de cycle écrit dans un sous-dossier `iter-<N>/`. Les ports d'entrée qui veulent accumuler (ex. `reviews_bloquantes`) lisent **les itérations COMPLETED de la source** (`iter-<N>/review.md`, ordonnées par N) — une itération échouée reste sur disque (forensique) mais est **exclue** de la résolution (#194/#210/#353), donc jamais un glob `iter-*` brut.
 
 **Blackboard archivé** *(terme)* : copie **durable et lecture seule** du Blackboard d'un Run (plus son `pipeline.yaml` + `pipeline.prompts/`), écrite sous `~/.pdo/runs/<run-id>/` (store **global**, hors du `run_dir` repo-local) au moment de l'archivage, **avant** la suppression du worktree. Contrairement au Blackboard vif (qui *part au cleanup*), il **survit** au cleanup — c'est ce qui permet de rouvrir un Run `archived` et d'accéder à ses outputs (canvas réhydraté en lecture seule via `GET /runs/<id>/pipeline`). **N'est pas** récupéré par `cleanup_run` (repo-local) ; sa suppression relève du `forget` (cf. §*Cleanup vs archive*, ADR-0020).
 
@@ -213,7 +213,7 @@ Chaque artefact produit par un NodeRun a un chemin canonique :
 
 **Résolution des inputs** :
 - Wire simple → input port lit `<artifacts>/<source-node>/iter-<latest>/<port>.md`.
-- Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit le glob `<artifacts>/<source>/iter-*/<port>.md`, ordonné par N.
+- Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit **les itérations COMPLETED de la source** (`<artifacts>/<source>/iter-<N>/<port>.md`, ordonné par N ; les itérations échouées sont en quarantaine, #194/#210/#353), **jamais** un glob `iter-*` disque brut. L'autorité est la projection (`RunState::completed_iters`), pas l'énumération du répertoire — sinon deux autorités divergeraient sur « quelle itération compte ».
 
 ### Frontmatter — minimal
 
@@ -305,7 +305,7 @@ Le préambule contient au minimum :
 
 - **Inputs disponibles** :
   - Pour chaque port d'entrée : nom du port + chemin absolu sur disque + (optionnel) inline du contenu si court.
-  - Ex. *"Tu as accès à : `plan` (lis `<artifacts>/planner-1/iter-1/plan.md`), `task` (lis `<artifacts>/planner-1/iter-1/task.md`), `reviews_bloquantes` (lis tous les fichiers `<artifacts>/reviewer-1/iter-*/review.md`)."*
+  - Ex. *"Tu as accès à : `plan` (lis `<artifacts>/planner-1/iter-1/plan.md`), `task` (lis `<artifacts>/planner-1/iter-1/task.md`), `reviews_bloquantes` (lis chaque fichier des itérations *completed* de la source, énumérées explicitement — ex. `<artifacts>/reviewer-1/iter-2/review.md`)."*
 - **Outputs attendus** :
   - Pour chaque port de sortie : chemin où écrire + schéma de frontmatter requis.
   - Ex. *"Tu dois produire à `<artifacts>/reviewer-1/iter-2/review.md` un fichier markdown avec frontmatter YAML contenant le champ `verdict: PASS | FAIL`. Le contenu détaillé (blocking issues, justifications) va dans le corps."*

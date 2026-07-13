@@ -145,6 +145,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.node_id,
             params.iter,
         ),
+        source_completed_iters: crate::input_resolution::resolved_source_completed_iters(
+            params.pipeline,
+            params.run_state,
+            params.node_id,
+        ),
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -292,12 +297,28 @@ fn resolve_inputs(
 
         if let Some(edge) = matching_edge {
             let resolved = if input_port.repeated {
-                let source_dir = params.artifacts_dir.join(&edge.source.node);
-                format!(
-                    "{}/iter-*/{}/output.md",
-                    source_dir.to_string_lossy(),
-                    edge.source.port
-                )
+                // #353: enumerate the source's COMPLETED-iteration artifact
+                // paths (newline-separated), never an `iter-*` glob. This
+                // forensic `node_started.input_paths` record must reflect the
+                // same projection-blessed set the preamble/env hand the node —
+                // a raw disk glob would advertise a failed iteration's leftover
+                // artifact as a resolvable input.
+                params
+                    .run_state
+                    .completed_iters(&edge.source.node)
+                    .into_iter()
+                    .map(|it| {
+                        blackboard::artifact_path(
+                            params.artifacts_dir,
+                            &edge.source.node,
+                            it,
+                            &edge.source.port,
+                        )
+                        .to_string_lossy()
+                        .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 // Canonical resolution (#194 / #210): the source's latest
                 // COMPLETED iteration, never a failed iteration's artifact.
@@ -959,7 +980,12 @@ mod tests {
     }
 
     #[test]
-    fn start_node_resolves_repeated_port_with_glob() {
+    fn start_node_resolves_repeated_port_to_completed_iter_paths() {
+        // #353: a repeated port resolves to the newline-separated set of the
+        // source's COMPLETED iterations — NOT an `iter-*` glob. Here reviewer
+        // failed iter-1 and completed iter-2 and iter-3, so the forensic
+        // `input_paths` record lists iter-2 and iter-3 only; the quarantined
+        // iter-1 never appears, and no glob leaks through.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -974,7 +1000,41 @@ mod tests {
             prompt_required: true,
         };
 
-        let run_state = empty_run_state();
+        let mut run_state = empty_run_state();
+        run_state.nodes.insert(
+            "reviewer".into(),
+            NodeState {
+                node_id: "reviewer".into(),
+                status: NodeStatus::Completed,
+                iter: 3,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+                failure_reason: None,
+                iterations: vec![
+                    IterationInfo {
+                        iter: 1,
+                        status: NodeStatus::Failed,
+                        started_at: Some("t0".into()),
+                        completed_at: None,
+                    },
+                    IterationInfo {
+                        iter: 2,
+                        status: NodeStatus::Completed,
+                        started_at: Some("t0".into()),
+                        completed_at: Some("t1".into()),
+                    },
+                    IterationInfo {
+                        iter: 3,
+                        status: NodeStatus::Completed,
+                        started_at: Some("t0".into()),
+                        completed_at: Some("t1".into()),
+                    },
+                ],
+                frontmatter_retries: 0,
+                frontmatter_violations: Vec::new(),
+            },
+        );
+
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
         std::fs::create_dir_all(&artifacts_dir).unwrap();
@@ -987,7 +1047,7 @@ mod tests {
         let params = StartNodeParams {
             run_id: "run-1",
             node_id: "implementer",
-            iter: 1,
+            iter: 4,
             overrides: None,
             pipeline: &pipeline,
             run_state: &run_state,
@@ -1003,8 +1063,22 @@ mod tests {
 
         let input_paths = resolve_inputs(&params, node);
         let reviews_path = input_paths.get("reviews").unwrap();
-        assert!(reviews_path.contains("iter-*"));
-        assert!(reviews_path.contains("review"));
+        let lines: Vec<&str> = reviews_path.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "only completed iters 2 and 3: {reviews_path}"
+        );
+        assert!(lines[0].ends_with("reviewer/iter-2/review/output.md"));
+        assert!(lines[1].ends_with("reviewer/iter-3/review/output.md"));
+        assert!(
+            !reviews_path.contains("iter-*"),
+            "must not be a glob (#353): {reviews_path}"
+        );
+        assert!(
+            !reviews_path.contains("iter-1"),
+            "the failed iteration must be quarantined: {reviews_path}"
+        );
     }
 
     #[test]

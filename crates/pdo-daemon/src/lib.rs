@@ -4519,18 +4519,28 @@ async fn spawn_node(
             Vec::new()
         };
 
-        // Canonical input resolution (#194 / #210): re-project the run state at
-        // spawn time so each input path follows its source's latest COMPLETED
-        // iteration — a failed iteration's artifacts are never consumed, and an
-        // external feeder keeps serving its completed iter at any lap.
-        let source_iters = match reload_run_state(state, run_id).await {
-            Some((_, fresh_state)) => input_resolution::resolved_source_iters(
-                spawn_ctx.pipeline,
-                &fresh_state,
-                &node.id,
-                iter,
+        // Canonical input resolution (#194 / #210 / #353): re-project the run
+        // state at spawn time so each input path follows its source's COMPLETED
+        // iteration(s) — a failed iteration's artifacts are never consumed. For
+        // single-file inputs that is the latest completed iter (`source_iters`);
+        // for `repeated`/pooled inputs it is the full completed set
+        // (`source_completed_iters`), so a raw `iter-*` glob never re-includes a
+        // quarantined iteration.
+        let (source_iters, source_completed_iters) = match reload_run_state(state, run_id).await {
+            Some((_, fresh_state)) => (
+                input_resolution::resolved_source_iters(
+                    spawn_ctx.pipeline,
+                    &fresh_state,
+                    &node.id,
+                    iter,
+                ),
+                input_resolution::resolved_source_completed_iters(
+                    spawn_ctx.pipeline,
+                    &fresh_state,
+                    &node.id,
+                ),
             ),
-            None => HashMap::new(),
+            None => (HashMap::new(), HashMap::new()),
         };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
@@ -4568,6 +4578,7 @@ async fn spawn_node(
             input_images,
             start_prompt_present,
             source_iters,
+            source_completed_iters,
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -7326,7 +7337,10 @@ async fn node_io(
 
     let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
-    let io = node_io_resolver::resolve(&pipeline, &artifacts_dir, &node_id, iter);
+    // #353: the resolver consults the projection for `repeated`/pooled inputs
+    // (failed iterations are quarantined from the pool), so it needs the run
+    // state, not just the parsed pipeline + disk.
+    let io = node_io_resolver::resolve(&pipeline, &run_state, &artifacts_dir, &node_id, iter);
     Json(io).into_response()
 }
 

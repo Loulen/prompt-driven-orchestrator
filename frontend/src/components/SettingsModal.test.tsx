@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const fetchSettingsMock = vi.fn();
@@ -19,6 +20,8 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     session_cap: { effective: 9, source: "env", stored: null, env: 9, default: 20 },
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    // Unset by default (account default): effective/stored/env/default all null.
+    default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -123,6 +126,61 @@ describe("SettingsModal", () => {
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "40" } });
     expect(await screen.findByTestId("settings-cap-advisory")).toBeInTheDocument();
+  });
+
+  it("saves the picked default model (#347)", async () => {
+    const user = userEvent.setup();
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+      }),
+    );
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    await user.click(await screen.findByTestId("default-model-trigger"));
+    await user.click(await screen.findByTestId("default-model-option-opus"));
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    // Only the model changed; the numeric knobs were left at their effective values.
+    expect(updateSettingsMock).toHaveBeenCalledWith({ default_model: "opus" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("clears the default model via the '' sentinel when set back to Default (#347)", async () => {
+    const user = userEvent.setup();
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+      }),
+    );
+    updateSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+
+    // Trigger shows the stored model, then pick "Default" to clear it.
+    const trigger = await screen.findByTestId("default-model-trigger");
+    expect(trigger).toHaveTextContent("opus");
+    await user.click(trigger);
+    await user.click(await screen.findByTestId("default-model-option-default"));
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    // `null` (Default) is sent as "" — the backend clear sentinel, not `null`.
+    expect(updateSettingsMock).toHaveBeenCalledWith({ default_model: "" });
+  });
+
+  it("discloses a shadowed env source for the default model (#347)", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_model: { effective: "opus", source: "stored", stored: "opus", env: "sonnet", default: null },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-source-default-model");
+    expect(note).toHaveTextContent("PDO_DEFAULT_MODEL=sonnet");
+    expect(note).toHaveTextContent(/overridden/i);
   });
 });
 

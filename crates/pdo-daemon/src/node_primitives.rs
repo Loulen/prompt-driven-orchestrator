@@ -40,6 +40,11 @@ pub struct StartNodeParams<'a> {
     /// Per-daemon override for the `claude …` tail of the spawned tmux script.
     /// Threaded from `AppState.tmux_cmd_override`; `None` → real claude (#181).
     pub tmux_cmd_override: Option<&'a str>,
+    /// Instance-wide default model, already resolved `stored → env → None` by the
+    /// caller (#347). `start_node` is sync and DB-less, so the async force-spawn
+    /// / retry callers resolve it and pass it in; the node's own `model:` still
+    /// wins over it via [`tmux_session_manager::resolve_node_model`].
+    pub default_model: Option<String>,
 }
 
 pub struct StartNodeResult {
@@ -182,7 +187,10 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     } else {
         tmux_session_manager::SessionTail::Agent {
-            model: node.model.as_deref(),
+            model: tmux_session_manager::resolve_node_model(
+                node.model.as_deref(),
+                params.default_model.as_deref(),
+            ),
         }
     };
 
@@ -679,6 +687,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let result = start_node(&params);
@@ -716,6 +725,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let result = start_node(&params);
@@ -773,6 +783,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -829,6 +840,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -871,6 +883,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -937,6 +950,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -984,6 +998,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1036,6 +1051,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1290,6 +1306,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            default_model: None,
         };
 
         let result = start_node(&params);

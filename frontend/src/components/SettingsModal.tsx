@@ -2,7 +2,13 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
 import { useEditStore } from "../stores/editStore";
-import type { InstanceSettings, SettingField, UpdateSettingsRequest } from "../types";
+import type {
+  InstanceSettings,
+  SettingField,
+  StringSettingField,
+  UpdateSettingsRequest,
+} from "../types";
+import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 
 interface Props {
@@ -155,6 +161,9 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
   const [capStr, setCapStr] = useState(() => String(settings.session_cap.effective));
   const [ttlStr, setTtlStr] = useState(() => String(settings.reaper_ttl_secs.effective));
   const [guardStr, setGuardStr] = useState(() => String(settings.guard_timeout_secs.effective));
+  // Model is `null` when unset (account default); ModelPicker speaks the same
+  // `string | null` contract as the per-node inspector (#296/#324/#347).
+  const [model, setModel] = useState<string | null>(() => settings.default_model.effective);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,6 +201,12 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
         return;
       }
       if (guard !== settings.guard_timeout_secs.effective) patch.guard_timeout_secs = guard;
+    }
+
+    // Model: `null` (Default) clears via the "" sentinel; a string sets it. Only
+    // sent when it actually changed (avoids a needless clear/no-op PUT).
+    if (model !== settings.default_model.effective) {
+      patch.default_model = model ?? "";
     }
 
     // Nothing changed → close without a round-trip.
@@ -271,6 +286,27 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
           unit=" ms"
           envIsMs
         />
+
+        {/* Default model (#347): the instance-wide model a work node uses when it
+            has no `model:` override. Precedence: node → instance → account
+            default. Reuses the per-node ModelPicker verbatim. */}
+        <div className="flex flex-col gap-1.5">
+          <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Default model
+          </label>
+          <ModelPicker value={model} onChange={setModel} testid="default-model" />
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            The model every work node launches with unless it sets its own. "Default"
+            leaves it to your Claude account (no <span className="font-mono">--model</span>).
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-default-model"
+          >
+            {modelSourceNote(settings.default_model)}
+          </div>
+        </div>
 
         {error && (
           <div
@@ -381,4 +417,20 @@ function sourceNote(
     return envIsMs ? `${note} (Saving stores it in seconds.)` : note;
   }
   return `Source: built-in default (${field.default}${unit === " ms" ? " s" : unit}).`;
+}
+
+/** Which tier the instance default_model comes from (#347). Unlike the numeric
+ *  knobs there is no built-in default, so the "default" tier is the account
+ *  default (no `--model`). Discloses a shadowed env var too. */
+function modelSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_DEFAULT_MODEL=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
+      : `Source: stored value (overrides env and account default).`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_DEFAULT_MODEL"}.`;
+  }
+  return `Source: your Claude account default (no --model).`;
 }

@@ -6,7 +6,9 @@ import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
 import ModelPicker from "./ModelPicker";
+import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
+import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
@@ -21,20 +23,32 @@ const TYPE_TOOLTIPS: Record<string, string> = {
 export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
+  readOnly,
 }: {
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
+  /** #339: hides the per-source input × — set for archived runs only
+   * (mirrors the canvas readOnly, #315/ADR-0020). Scoped to the × alone;
+   * the rest of the inspector's archived story is the #315 gap. */
+  readOnly?: boolean;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const selection = useEditStore((s) => s.selection);
   const updateNode = useEditStore((s) => s.updateNode);
   const updatePrompt = useEditStore((s) => s.updatePrompt);
+  const deleteEdge = useEditStore((s) => s.deleteEdge);
   const scrollToPort = useEditStore((s) => s.scrollToPort);
   const setScrollToPort = useEditStore((s) => s.setScrollToPort);
 
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
+  // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
+  // deleting an input source would remove a bounded region's last cycle.
+  const [pendingDestroy, setPendingDestroy] = useState<{
+    edgeIndex: number;
+    loopIds: string[];
+  } | null>(null);
 
   useEffect(() => {
     if (!scrollToPort) return;
@@ -67,6 +81,19 @@ export default function NodeInspector({
   // fixed (no doc-only↔code-mutating toggle), it has no model, and its "prompt"
   // is a bash body whose I/O arrives as PDO_* env vars, not a prose preamble.
   const isScript = node.type === "script";
+
+  // #339: delete one contributing edge of a pooled input — the canonical
+  // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
+  // deletions go through the same destroy-loop confirmation as the canvas;
+  // `keepSelection` keeps the inspector open on this node.
+  function handleDeleteSource(edgeIndex: number) {
+    const destroyed = regionsDestroyedByEdgeRemoval(tab!.pipeline, edgeIndex);
+    if (destroyed.length > 0) {
+      setPendingDestroy({ edgeIndex, loopIds: destroyed });
+    } else {
+      deleteEdge(edgeIndex, { keepSelection: true });
+    }
+  }
 
   function handleField(field: keyof NodeDef, value: unknown) {
     updateNode(node!.id, { [field]: value } as Partial<NodeDef>);
@@ -244,6 +271,7 @@ export default function NodeInspector({
                 input={input}
                 highlighted={highlightedPort === input.name}
                 isLast={i === pooledInputs.length - 1}
+                onDeleteSource={readOnly ? undefined : handleDeleteSource}
               />
             ))}
           </div>
@@ -265,6 +293,16 @@ export default function NodeInspector({
           ))}
         </div>
       </div>
+
+      <DestroyLoopModal
+        open={pendingDestroy != null}
+        loopIds={pendingDestroy?.loopIds ?? []}
+        onClose={() => setPendingDestroy(null)}
+        onConfirm={() => {
+          if (pendingDestroy) deleteEdge(pendingDestroy.edgeIndex, { keepSelection: true });
+          setPendingDestroy(null);
+        }}
+      />
     </aside>
   );
 }

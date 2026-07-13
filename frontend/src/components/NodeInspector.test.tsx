@@ -267,6 +267,116 @@ describe("NodeInspector — per-node model field (#296/#324)", () => {
   });
 });
 
+// #339: self-feeding node — the self-edge pools as an input source even though
+// no edge is clickable on the canvas; its auto-materialized bounded region makes
+// the × go through the destroy-loop confirmation.
+function seedSelfFeedPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "cc1",
+              name: "cycler",
+              type: "doc-only",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "in", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+          ],
+          edges: [
+            { source: { node: "cc1", port: "in" }, target: { node: "cc1", port: "in" } },
+          ],
+          loops: [{ id: "self_loop", kind: "bounded", members: ["cc1"], max_iter: 3 }],
+        },
+        prompts: { cc1: "Loop." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "cc1" },
+  });
+}
+
+describe("NodeInspector — per-source input delete (#339)", () => {
+  it("deletes a non-cycle edge immediately and keeps the panel open on the node", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-sec"));
+
+    const state = useEditStore.getState();
+    // The sec → impl edge is gone; perf → impl survives.
+    expect(state.openTabs[0].pipeline.edges).toEqual([
+      { source: { node: "perf", port: "review" }, target: { node: "impl", port: "review" } },
+    ]);
+    // Selection kept → the inspector does not self-close.
+    expect(state.selection).toEqual({ kind: "node", id: "impl" });
+    expect(screen.getByTestId("pooled-input-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("indices stay correct after a prior delete (re-derived each render)", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-sec"));
+    // After the first delete the perf edge shifted to index 0 — the re-derived
+    // × must delete IT, not a stale index.
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-perf"));
+
+    expect(useEditStore.getState().openTabs[0].pipeline.edges).toHaveLength(0);
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "impl" });
+  });
+
+  it("self-edge (last cycle): × opens DestroyLoopModal; cancel leaves edge and loop", () => {
+    seedSelfFeedPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-in-delete-cc1"));
+
+    expect(screen.getByTestId("destroy-loop-confirm")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("destroy-loop-cancel"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("self-edge (last cycle): confirm deletes the edge AND the loops: entry, panel stays open", () => {
+    seedSelfFeedPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-in-delete-cc1"));
+    fireEvent.click(screen.getByTestId("destroy-loop-confirm"));
+
+    const state = useEditStore.getState();
+    expect(state.openTabs[0].pipeline.edges).toHaveLength(0);
+    expect(state.openTabs[0].pipeline.loops ?? []).toHaveLength(0);
+    expect(state.selection).toEqual({ kind: "node", id: "cc1" });
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("readOnly hides every × (archived gate) while rows still render", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {}, readOnly: true });
+
+    expect(screen.getByTestId("pooled-input-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("pooled-input-review-delete-sec")).toBeNull();
+    expect(screen.queryByTestId("pooled-input-review-delete-perf")).toBeNull();
+  });
+});
+
 describe("NodeInspector StarButton — library save is independent of pipeline save", () => {
   it("Save to library works when pipeline is dirty (no longer requires save first)", () => {
     seedTabWithReviewer(true, "Review this code.");

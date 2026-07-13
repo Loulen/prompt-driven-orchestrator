@@ -6,6 +6,10 @@ export interface PooledInputSource {
   nodeId: string;
   /** Display label for the source node (its name, falling back to its id). */
   label: string;
+  /** Index of the contributing edge in `pipeline.edges` — the handle for
+   * per-source deletion (#339). Re-derived every render, so it never goes
+   * stale across mutations. */
+  edgeIndex: number;
 }
 
 /**
@@ -35,7 +39,7 @@ export function derivePooledInputs(pipeline: PipelineDef, nodeId: string): Poole
   };
 
   const byName = new Map<string, PooledInput>();
-  for (const edge of pipeline.edges) {
+  for (const [edgeIndex, edge] of pipeline.edges.entries()) {
     if (edge.target.node !== nodeId) continue;
     const name = edge.target.port;
     let input = byName.get(name);
@@ -43,7 +47,7 @@ export function derivePooledInputs(pipeline: PipelineDef, nodeId: string): Poole
       input = { name, repeated: false, sources: [] };
       byName.set(name, input);
     }
-    input.sources.push({ nodeId: edge.source.node, label: labelOf(edge.source.node) });
+    input.sources.push({ nodeId: edge.source.node, label: labelOf(edge.source.node), edgeIndex });
     if (edge.repeated) input.repeated = true;
   }
 

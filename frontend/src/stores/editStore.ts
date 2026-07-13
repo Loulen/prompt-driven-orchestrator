@@ -138,7 +138,10 @@ interface EditState {
   // draw-edge arrival-side stamp (#168) so a single edge-draw gesture folds into
   // ONE undo step instead of two (the `addEdge` push + a separate stamp push).
   updateEdge: (index: number, updates: Partial<EdgeDef>, opts?: { track?: boolean }) => void;
-  deleteEdge: (index: number) => void;
+  // `opts.keepSelection` keeps the current selection instead of clearing it —
+  // used by the inspector's per-source × (#339) so the panel stays open on the
+  // node whose input was just deleted. Canvas deletions keep the default clear.
+  deleteEdge: (index: number, opts?: { keepSelection?: boolean }) => void;
 
   // Region mutations (ADR-0011 / #150) — edit a bounded region's bound live.
   updateRegion: (regionId: string, updates: Partial<LoopRegion>) => void;
@@ -744,7 +747,7 @@ export const useEditStore = create<EditState>((set, get) => ({
     }));
   },
 
-  deleteEdge: (index: number) => {
+  deleteEdge: (index: number, opts?: { keepSelection?: boolean }) => {
     set((s) => ({
       ...mutateActiveTabWithHistory(s, (tab) => {
         // Destroy-loop on last-cycle removal (ADR-0011 / #150): if this edge was
@@ -760,7 +763,7 @@ export const useEditStore = create<EditState>((set, get) => ({
           tab.pipeline.loops = tab.pipeline.loops.filter((r) => !destroyed.has(r.id));
         }
       }),
-      selection: { kind: "none" as const, id: null },
+      selection: opts?.keepSelection ? s.selection : { kind: "none" as const, id: null },
     }));
   },
 

@@ -28,7 +28,7 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "implementer");
 
     expect(inputs).toEqual([
-      { name: "review", repeated: false, sources: [{ nodeId: "reviewer", label: "reviewer" }] },
+      { name: "review", repeated: false, sources: [{ nodeId: "reviewer", label: "reviewer", edgeIndex: 0 }] },
     ]);
   });
 
@@ -48,8 +48,8 @@ describe("derivePooledInputs", () => {
         name: "review",
         repeated: false,
         sources: [
-          { nodeId: "security-reviewer", label: "security-reviewer" },
-          { nodeId: "perf-reviewer", label: "perf-reviewer" },
+          { nodeId: "security-reviewer", label: "security-reviewer", edgeIndex: 0 },
+          { nodeId: "perf-reviewer", label: "perf-reviewer", edgeIndex: 1 },
         ],
       },
     ]);
@@ -81,7 +81,7 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "loop-body");
 
     expect(inputs).toEqual([
-      { name: "lap", repeated: true, sources: [{ nodeId: "worker", label: "worker" }] },
+      { name: "lap", repeated: true, sources: [{ nodeId: "worker", label: "worker", edgeIndex: 0 }] },
     ]);
   });
 
@@ -93,11 +93,54 @@ describe("derivePooledInputs", () => {
 
     const inputs = derivePooledInputs(p, "implementer");
 
-    expect(inputs[0].sources).toEqual([{ nodeId: "rv-7", label: "rv-7" }]);
+    expect(inputs[0].sources).toEqual([{ nodeId: "rv-7", label: "rv-7", edgeIndex: 0 }]);
   });
 
   it("returns an empty list for a node with no incoming edges", () => {
     const p = pipeline([node("orphan")], []);
     expect(derivePooledInputs(p, "orphan")).toEqual([]);
+  });
+
+  it("carries the pipeline.edges index on each source, skipping unrelated edges (#339)", () => {
+    const p = pipeline(
+      [node("a"), node("b"), node("c")],
+      [
+        { source: { node: "a", port: "out" }, target: { node: "b", port: "out" } }, // unrelated
+        { source: { node: "a", port: "in" }, target: { node: "c", port: "in" } },
+        { source: { node: "b", port: "in" }, target: { node: "c", port: "in" } },
+      ],
+    );
+
+    const inputs = derivePooledInputs(p, "c");
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].sources.map((s) => s.edgeIndex)).toEqual([1, 2]);
+  });
+
+  it("yields a source row with its edgeIndex for a self-edge (#339 self-feed trap)", () => {
+    const p = pipeline(
+      [node("c")],
+      [{ source: { node: "c", port: "in" }, target: { node: "c", port: "in" } }],
+    );
+
+    const inputs = derivePooledInputs(p, "c");
+
+    expect(inputs).toEqual([
+      { name: "in", repeated: false, sources: [{ nodeId: "c", label: "c", edgeIndex: 0 }] },
+    ]);
+  });
+
+  it("gives two same-source same-named edges two sources with distinct indices", () => {
+    const p = pipeline(
+      [node("a"), node("c")],
+      [
+        { source: { node: "a", port: "in" }, target: { node: "c", port: "in" } },
+        { source: { node: "a", port: "in" }, target: { node: "c", port: "in" } },
+      ],
+    );
+
+    const inputs = derivePooledInputs(p, "c");
+
+    expect(inputs[0].sources.map((s) => s.edgeIndex)).toEqual([0, 1]);
   });
 });

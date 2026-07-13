@@ -28,7 +28,14 @@ export async function openRunNodeDetails(
   runId: string,
   nodeName: string,
 ): Promise<void> {
-  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000 });
+  // Click at the label's top-left, not its center: hovering the row reveals up
+  // to four action icons (rename/pause/retry-all/open-session/cleanup, #110 +
+  // #316) that shift layout mid-click — a center click can land on the rename
+  // pencil, opening the inline rename input instead of selecting the run.
+  await page
+    .getByText(runId.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   const node = page.getByText(nodeName, { exact: true }).first();
   await expect(node).toBeVisible({ timeout: 5_000 });

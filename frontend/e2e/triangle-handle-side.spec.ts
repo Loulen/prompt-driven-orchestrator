@@ -104,7 +104,7 @@ test("output port with side:top renders its dot handle on the top edge", async (
   const json = await resp.json();
   runId = json.run_id;
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
 
   const reactFlow = page.locator(".react-flow");
   await expect(reactFlow).toBeVisible({ timeout: 5_000 });

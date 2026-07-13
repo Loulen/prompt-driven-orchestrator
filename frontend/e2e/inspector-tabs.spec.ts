@@ -95,7 +95,12 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   const { run_id } = await resp.json();
 
   // Select the run in the left panel
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  // Top-left click: hover reveals row action icons that shift layout mid-click
+  // (see helpers.openRunNodeDetails); a center click can hit the rename pencil.
+  await page
+    .getByText(run_id.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
 
   // Click on worker-a node (running)
@@ -127,7 +132,12 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  // Top-left click: hover reveals row action icons that shift layout mid-click
+  // (see helpers.openRunNodeDetails); a center click can hit the rename pencil.
+  await page
+    .getByText(run_id.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   await page
     .locator('.react-flow__node[data-id="worker-a"]')
@@ -222,7 +232,12 @@ test("terminal run: clicking a node defaults to Run tab (#271)", async ({
     .toMatch(/^(failed|completed|skipped|archived)$/);
 
   // Open the terminal run and select a regular node.
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  // Top-left click: hover reveals row action icons that shift layout mid-click
+  // (see helpers.openRunNodeDetails); a center click can hit the rename pencil.
+  await page
+    .getByText(run_id.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   await page
     .locator('.react-flow__node[data-id="worker-a"]')
@@ -264,7 +279,12 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
   const { run_id } = await resp.json();
 
   // Select the run
-  await page.getByText(run_id.slice(0, 8)).first().click({ timeout: 5_000 });
+  // Top-left click: hover reveals row action icons that shift layout mid-click
+  // (see helpers.openRunNodeDetails); a center click can hit the rename pencil.
+  await page
+    .getByText(run_id.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
 
   // Click on worker-b (pending)

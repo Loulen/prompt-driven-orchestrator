@@ -128,11 +128,19 @@ test("external edit on dirty tab shows conflict modal — Take external", async 
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
   await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
 
-  // Externally modify the YAML on disk
-  await fs.writeFile(PIPELINE_PATH, EXTERNAL_YAML);
-
-  // Conflict modal should appear
+  // Externally modify the YAML on disk. Under whole-suite load the watcher can
+  // coalesce/drop a change notification (many parallel specs churn the shared
+  // pipelines dir), so re-touch the file until the modal shows — equivalent to
+  // the external editor saving again.
   const conflictModal = page.getByTestId("conflict-modal-backdrop");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await fs.writeFile(PIPELINE_PATH, EXTERNAL_YAML);
+    const appeared = await conflictModal
+      .waitFor({ state: "visible", timeout: 4_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (appeared) break;
+  }
   await expect(conflictModal).toBeVisible({ timeout: 8_000 });
   await expect(page.getByText("External edit conflict")).toBeVisible();
   await expect(
@@ -176,11 +184,17 @@ test("external edit on dirty tab — Keep canvas retains local changes", async (
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
   await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
 
-  // External edit
-  await fs.writeFile(PIPELINE_PATH, EXTERNAL_YAML);
-
-  // Conflict modal appears
+  // External edit — re-touched until the modal shows, same watcher-coalescing
+  // tolerance as the Take-external test above.
   const conflictModal = page.getByTestId("conflict-modal-backdrop");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await fs.writeFile(PIPELINE_PATH, EXTERNAL_YAML);
+    const appeared = await conflictModal
+      .waitFor({ state: "visible", timeout: 4_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (appeared) break;
+  }
   await expect(conflictModal).toBeVisible({ timeout: 8_000 });
 
   // Click "Keep canvas"

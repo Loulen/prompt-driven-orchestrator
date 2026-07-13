@@ -164,7 +164,7 @@ async function openNode(page: Page) {
   await expect(page.getByText("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
 
   const reactFlow = page.locator(".react-flow");
   await expect(reactFlow).toBeVisible({ timeout: 5_000 });

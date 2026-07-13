@@ -76,14 +76,18 @@ test.afterAll(async () => {
   if (repoB) await fs.rm(repoB, { recursive: true, force: true });
 });
 
-// Wipe all triggers before each test so the daemon state is deterministic
-// regardless of `reuseExistingServer` or a prior local run. Safe: the e2e daemon
-// runs on its own dedicated port.
+// Wipe this spec's triggers before each test so the daemon state is
+// deterministic regardless of `reuseExistingServer` or a prior local run.
+// Scoped to `e2e-by-repo-` pipelines (not a global wipe): other spec files run
+// in parallel workers against the same daemon, and deleting THEIR triggers
+// mid-test breaks them (e.g. runs-filter's trigger-name resolution, #336).
 test.beforeEach(async ({ page, baseURL }) => {
   const resp = await page.request.get(`${baseURL}/triggers`);
-  const triggers = (await resp.json()) as Array<{ id: string }>;
+  const triggers = (await resp.json()) as Array<{ id: string; pipeline_id: string }>;
   for (const t of triggers) {
-    await page.request.delete(`${baseURL}/triggers/${t.id}`);
+    if (t.pipeline_id.startsWith("e2e-by-repo-")) {
+      await page.request.delete(`${baseURL}/triggers/${t.id}`);
+    }
   }
 });
 
@@ -171,21 +175,33 @@ test("Triggers list groups by repo across ≥2 repos; null target resolves to th
 
 test("Runs list groups by repo when runs span ≥2 repos", async ({ page, baseURL }) => {
   // Seed one run in each of two distinct repos (worker session is the e2e sleep stub).
+  const seededIds: string[] = [];
   for (const repo of [repoA, repoB]) {
     const resp = await page.request.post(`${baseURL}/runs`, {
       data: { pipeline: PIPELINE_NAME, input: "seed", target_repo: repo },
     });
     expect(resp.status()).toBe(201);
+    seededIds.push(((await resp.json()) as { run_id: string }).run_id);
   }
 
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
-  // Runs is the default tab.
+  // Runs is the default tab. Wait for this spec's rows before sampling the
+  // group headers: count()/allTextContents() don't auto-wait, and under
+  // parallel-suite load the initial /runs fetch can land after first paint.
+  for (const id of seededIds) {
+    await expect(page.getByText(id.slice(0, 20))).toBeVisible({ timeout: 10_000 });
+  }
   const labels = await page.getByTestId("run-repo-label").allTextContents();
   expect(await page.getByTestId("run-repo-group").count()).toBeGreaterThanOrEqual(2);
   expect(labels).toContain(path.basename(repoA));
   expect(labels).toContain(path.basename(repoB));
   // Run rows carry no per-row repo badge — the header is the only repo surface (G2).
   // (The trigger-provenance badge is unrelated and absent for these manual runs.)
-  await expect(page.getByTestId("run-trigger-badge")).toHaveCount(0);
+  // Scoped to THIS spec's rows: parallel spec files may hold triggered runs
+  // whose provenance badge is legitimate (e.g. runs-filter, #336).
+  for (const id of seededIds) {
+    const row = page.getByRole("button").filter({ hasText: id.slice(0, 20) });
+    await expect(row.getByTestId("run-trigger-badge")).toHaveCount(0);
+  }
 });

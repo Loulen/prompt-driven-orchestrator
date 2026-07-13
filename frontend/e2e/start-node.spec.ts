@@ -106,7 +106,7 @@ test("clicking start node shows StartInspector with header and input text", asyn
 
   // Wait for the run to appear in the list and click it. Selecting a run
   // auto-opens the editor canvas (#57), so the Start node card is clickable.
-  await page.getByText(rid.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(rid.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
 
   const reactFlow = page.locator(".react-flow");
   await expect(reactFlow).toBeVisible({ timeout: 5_000 });
@@ -148,7 +148,7 @@ test("view as markdown link opens modal", async ({ page }) => {
     await createRun(page);
   }
 
-  await page.getByText(runId.slice(0, 8)).first().click({ timeout: 5_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(500);
   await page.getByText("Start", { exact: true }).first().click();
 

@@ -40,7 +40,13 @@ se complète sur exit 0 / échoue sinon, et — en v1 — n'obtient pas de sous-
   `outputs_validator` s'applique, mais **fail-fast** (pas de retry interactif : la
   session a déjà quitté, il n'y a plus d'agent à relancer). Les répertoires des ports
   de sortie sont **pré-créés au spawn** (un `> "$PDO_OUTPUT_out"` échouerait sur un
-  parent manquant).
+  parent manquant). Un input `repeated` arrive comme la **liste séparée par des
+  sauts de ligne** des chemins des itérations COMPLETED de la source (plus
+  `PDO_INPUT_<PORT>_REPEATED=1`), **pas** un glob `iter-*` : un glob se ré-étendrait
+  sur disque dans le bash du script et ré-inclurait les itérations échouées mises en
+  quarantaine (#353). Le script itère p. ex. `while IFS= read -r f; do …; done <<<
+  "$PDO_INPUT_<PORT>"` (les valeurs env sont single-quotées par `wrap_with_env`, donc
+  les sauts de ligne survivent ; pool vide ⇒ variable vide).
 - **Le seam de test `tmux_cmd_override` est contourné pour un script.** Pour un agent,
   l'override remplace `claude` par un stub pour que la CI ne lance jamais de vrai
   claude. Un script *est* du bash déterministe : l'override ne doit pas l'écraser.

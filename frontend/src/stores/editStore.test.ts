@@ -470,6 +470,56 @@ describe("deleteEdge removes a region whose last cycle it destroys (ADR-0011 / #
   });
 });
 
+describe("deleteEdge selection handling (#339)", () => {
+  function edge(s: string, t: string): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
+  }
+
+  it("clears the selection by default (canvas behavior unchanged)", () => {
+    const a = makeNode({ id: "aaaa1111" });
+    const b = makeNode({ id: "bbbb2222" });
+    seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+    useEditStore.setState({ selection: { kind: "node", id: "bbbb2222" } });
+
+    useEditStore.getState().deleteEdge(0);
+
+    expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("keepSelection:true preserves the current node selection", () => {
+    const a = makeNode({ id: "aaaa1111" });
+    const b = makeNode({ id: "bbbb2222" });
+    seedTabWithPipeline(makePipeline([a, b], [edge("aaaa1111", "bbbb2222")]));
+    useEditStore.setState({ selection: { kind: "node", id: "bbbb2222" } });
+
+    useEditStore.getState().deleteEdge(0, { keepSelection: true });
+
+    expect(useEditStore.getState().openTabs[0].pipeline.edges).toHaveLength(0);
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "bbbb2222" });
+  });
+
+  it("keepSelection still prunes the loops: entry of a destroyed region", () => {
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const pipeline = makePipeline(
+      [a, b],
+      [edge("aaaa1111", "bbbb2222"), edge("bbbb2222", "aaaa1111")],
+    );
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111", "bbbb2222"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+    useEditStore.setState({ selection: { kind: "node", id: "aaaa1111" } });
+
+    useEditStore.getState().deleteEdge(1, { keepSelection: true });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "aaaa1111" });
+  });
+});
+
 describe("deleteNode reconciles loop regions (ADR-0011 / #173)", () => {
   function edge(s: string, t: string): EdgeDef {
     return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };

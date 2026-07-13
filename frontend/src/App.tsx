@@ -390,6 +390,7 @@ export default function App() {
         <NodeInspector
           libraryEntries={libraryEntries}
           onLibraryChanged={refreshLibrary}
+          readOnly={isActiveRunArchived}
         />
       );
     }
@@ -694,6 +695,7 @@ export default function App() {
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
+                    readOnly={isActiveRunArchived}
                   />
                 ) : selection.kind === "edge" ? (
                   <EdgeDetailPanel trigger={edgeTrigger} />

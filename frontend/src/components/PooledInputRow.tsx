@@ -11,10 +11,14 @@ export default function PooledInputRow({
   input,
   highlighted,
   isLast,
+  onDeleteSource,
 }: {
   input: PooledInput;
   highlighted?: boolean;
   isLast?: boolean;
+  /** Per-source delete (#339): deletes the contributing edge — the canonical
+   * "delete an input" since inputs are emergent. Absent → read-only render. */
+  onDeleteSource?: (edgeIndex: number) => void;
 }) {
   const pooled = input.sources.length > 1;
   return (
@@ -51,8 +55,25 @@ export default function PooledInputRow({
         </div>
         <div className="flex min-w-0 items-baseline gap-1 text-fg-3" style={{ fontSize: "10px" }}>
           <span className="shrink-0 text-fg-4 font-mono">{"←"}</span>
-          <span className="min-w-0 break-words font-mono">
-            {input.sources.map((s) => s.label).join(", ")}
+          <span className="flex min-w-0 flex-wrap items-baseline font-mono">
+            {input.sources.map((s, i) => (
+              <span key={s.edgeIndex} className="flex min-w-0 items-baseline break-words">
+                {s.label}
+                {onDeleteSource && (
+                  <Tooltip content="Delete this input source (removes the incoming edge).">
+                    <button
+                      data-testid={`pooled-input-${input.name}-delete-${s.nodeId}`}
+                      onClick={() => onDeleteSource(s.edgeIndex)}
+                      className="ml-0.5 cursor-pointer rounded px-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+                      aria-label={`Delete input source ${s.label}`}
+                    >
+                      ×
+                    </button>
+                  </Tooltip>
+                )}
+                {i < input.sources.length - 1 && <span className="mr-1">,</span>}
+              </span>
+            ))}
           </span>
         </div>
       </div>

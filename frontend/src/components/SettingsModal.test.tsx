@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
 }));
 
 import SettingsModal from "./SettingsModal";
+import { useEditStore } from "../stores/editStore";
 import type { InstanceSettings } from "../types";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
@@ -122,5 +123,61 @@ describe("SettingsModal", () => {
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "40" } });
     expect(await screen.findByTestId("settings-cap-advisory")).toBeInTheDocument();
+  });
+});
+
+describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+    // Reset the shared store so a prior test's toggle doesn't leak in.
+    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+  });
+
+  it("persists to localStorage at the change, WITHOUT the numeric Save button", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(toggle);
+
+    // Written immediately — no `settings-save` click, no PUT.
+    expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
+    expect(useEditStore.getState().singleTabMode).toBe(true);
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("toggles back off and writes false", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("false");
+    expect(useEditStore.getState().singleTabMode).toBe(false);
+  });
+
+  it("stays reachable when GET /settings fails (Trap A — lives in the outer modal)", async () => {
+    // Daemon 500: settings never load, the numeric form never mounts…
+    fetchSettingsMock.mockRejectedValue(new Error("500"));
+    render(<SettingsModal open onClose={() => {}} />);
+
+    // …but the toggle is present and functional.
+    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    expect(screen.queryByTestId("setting-session-cap")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
+  });
+
+  it("seeds the toggle from the current store state", async () => {
+    useEditStore.setState({ singleTabMode: true });
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
   });
 });

@@ -5,7 +5,11 @@ use crate::pipeline::{NodeDef, PipelineDef, PortType, IMAGE_EXTENSIONS};
 
 pub struct InputResolution {
     pub port_name: String,
-    pub path: PathBuf,
+    /// The concrete artifact path(s) this input resolves to. A single wire is a
+    /// one-element list; a `repeated`/pooled input (#353) is one path per
+    /// COMPLETED source iteration (empty when the source has completed none —
+    /// never a raw `iter-*` glob, which cannot exclude a failed iter).
+    pub paths: Vec<PathBuf>,
     pub repeated: bool,
     /// True when this input is sourced from the Start node's user prompt
     /// (`_input/output.md`). The entry node's prompt label adapts to
@@ -52,6 +56,14 @@ pub struct AugmentContext<'a> {
     /// map falls back to the consumer's own `iter` (positional), preserving
     /// override/injection flows where nothing has completed yet.
     pub source_iters: HashMap<String, i64>,
+    /// Set-valued resolution for `repeated`/pooled inputs (#353): for each
+    /// source node feeding a `repeated` incoming edge, its COMPLETED iterations
+    /// (ascending), per `input_resolution::resolved_repeated_iters`. Precomputed
+    /// by the daemon (this module is pure and cannot hold a `RunState`). A
+    /// source absent from the map (or mapping to an empty `Vec`) pools nothing —
+    /// failed iterations are quarantined, and no raw `iter-*` glob is ever
+    /// handed to an agent or script.
+    pub repeated_iters: HashMap<String, Vec<i64>>,
 }
 
 pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
@@ -113,14 +125,30 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             .iter()
             .any(|n| n.id == *source_node && n.node_type == crate::pipeline::NodeType::Start);
 
-        let path = if is_start {
-            crate::blackboard::input_path(ctx.artifacts_dir)
+        let paths: Vec<PathBuf> = if is_start {
+            vec![crate::blackboard::input_path(ctx.artifacts_dir)]
         } else if repeated {
-            ctx.artifacts_dir
-                .join(source_node)
-                .join("iter-*")
-                .join(&edge.source.port)
-                .join("output.md")
+            // #353: enumerate one concrete path per COMPLETED source iteration,
+            // resolved via the projection (`repeated_iters`) — never a raw
+            // `iter-*` glob, which cannot exclude a failed iteration's artifact.
+            // A source with no completed iter (absent from the map) pools
+            // nothing (D6).
+            ctx.repeated_iters
+                .get(source_node.as_str())
+                .map(|iters| {
+                    iters
+                        .iter()
+                        .map(|&n| {
+                            crate::blackboard::artifact_path(
+                                ctx.artifacts_dir,
+                                source_node,
+                                n,
+                                &edge.source.port,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
         } else {
             // Canonical resolution (#194): read the source's latest completed
             // iteration, never a failed iteration's artifact and never a
@@ -130,17 +158,17 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
                 .get(source_node.as_str())
                 .copied()
                 .unwrap_or(ctx.iter);
-            crate::blackboard::artifact_path(
+            vec![crate::blackboard::artifact_path(
                 ctx.artifacts_dir,
                 source_node,
                 source_iter,
                 &edge.source.port,
-            )
+            )]
         };
 
         inputs.push(InputResolution {
             port_name: edge.target.port.clone(),
-            path,
+            paths,
             repeated,
             from_start: is_start,
         });
@@ -149,7 +177,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     if inputs.is_empty() && ctx.node.inputs.iter().any(|p| p.name == "task") {
         inputs.push(InputResolution {
             port_name: "task".into(),
-            path: crate::blackboard::input_path(ctx.artifacts_dir),
+            paths: vec![crate::blackboard::input_path(ctx.artifacts_dir)],
             repeated: false,
             from_start: true,
         });
@@ -224,8 +252,12 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 /// resolution the preamble uses — a single source of truth, not a second path.
 ///
 /// - `PDO_ARTIFACTS_DIR` — the Blackboard root.
-/// - `PDO_INPUT_<PORT>` — absolute path (or `iter-*` glob) of each resolved input.
-/// - `PDO_INPUT_<PORT>_REPEATED=1` — set when that input is a `repeated` glob.
+/// - `PDO_INPUT_<PORT>` — absolute path of each resolved input. A `repeated`
+///   input holds one path per COMPLETED source iteration, `\n`-separated (empty
+///   when nothing has completed); a single wire holds exactly one path (#353).
+/// - `PDO_INPUT_<PORT>_REPEATED=1` — set when that input is a `repeated`/pooled
+///   input, so a script knows to `readarray -t files <<< "$PDO_INPUT_<PORT>"`
+///   (and to `pdo skip` when the value is empty).
 /// - `PDO_OUTPUT_<PORT>` — absolute path the script writes its `output.md` to.
 /// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
 ///
@@ -244,7 +276,18 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
         if input.repeated {
             env.push((format!("{key}_REPEATED"), "1".to_string()));
         }
-        env.push((key, input.path.to_string_lossy().into_owned()));
+        // #353: a `repeated` input is one path per completed source iteration,
+        // `\n`-separated (empty when none completed). `sh_single_quote` in
+        // `wrap_with_env` preserves the newlines verbatim, and a newline (not a
+        // space) keeps paths that contain spaces splittable. A single wire is a
+        // one-element list, so its value is unchanged.
+        let value = input
+            .paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n");
+        env.push((key, value));
     }
 
     for output in resolve_output_paths(ctx) {
@@ -334,34 +377,52 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
             // must source its own work; when a prompt is supplied it is merely
             // additional info layered on the node's own brief.
             if input.from_start && !ctx.pipeline.prompt_required {
+                // `from_start` is always a single path.
+                let path = input
+                    .paths
+                    .first()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
                 if ctx.start_prompt_present {
                     preamble.push_str(&format!(
                         "- `{}` (additional info): read `{}`. \
                          This is supplementary context — your role prompt below is the primary brief.\n",
-                        input.port_name,
-                        input.path.display()
+                        input.port_name, path
                     ));
                 } else {
                     preamble.push_str(&format!(
                         "- `{}`: No prompt was provided for this run. \
                          Source your own work from your role prompt below \
                          (an empty `{}` is expected).\n",
-                        input.port_name,
-                        input.path.display()
+                        input.port_name, path
                     ));
                 }
             } else if input.repeated {
-                preamble.push_str(&format!(
-                    "- `{}` (accumulated): read all files matching `{}`\n",
-                    input.port_name,
-                    input.path.display()
-                ));
+                // #353: enumerate one concrete path per completed source
+                // iteration — a raw `iter-*` glob would re-include failed iters.
+                // Empty pool → an explicit line, never an orphan glob (ADR-0004,
+                // no silent behaviour).
+                if input.paths.is_empty() {
+                    preamble.push_str(&format!(
+                        "- `{}` (accumulated): no completed iterations yet — nothing to read.\n",
+                        input.port_name
+                    ));
+                } else {
+                    preamble.push_str(&format!(
+                        "- `{}` (accumulated): read all of these files:\n",
+                        input.port_name
+                    ));
+                    for path in &input.paths {
+                        preamble.push_str(&format!("  - {}\n", path.display()));
+                    }
+                }
             } else {
-                preamble.push_str(&format!(
-                    "- `{}`: read `{}`\n",
-                    input.port_name,
-                    input.path.display()
-                ));
+                let path = input
+                    .paths
+                    .first()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                preamble.push_str(&format!("- `{}`: read `{}`\n", input.port_name, path));
             }
         }
         preamble.push('\n');
@@ -761,6 +822,7 @@ mod tests {
             input_images: Vec::new(),
             start_prompt_present: false,
             source_iters: HashMap::new(),
+            repeated_iters: HashMap::new(),
         }
     }
 
@@ -775,7 +837,7 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].port_name, "task");
         assert_eq!(
-            inputs[0].path,
+            inputs[0].paths[0],
             PathBuf::from("/repo/.pdo/artifacts/_input/output.md")
         );
         assert!(!inputs[0].repeated);
@@ -860,10 +922,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn script_env_marks_repeated_inputs() {
-        // A `repeated` edge → PDO_INPUT_<PORT> is an iter-* glob + a _REPEATED=1
-        // flag so the script knows to glob rather than read a single file.
+    fn script_with_repeated_laps_pipeline() -> PipelineDef {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
             id: "collector".into(),
@@ -889,20 +948,54 @@ mod tests {
             repeated: true,
             ..Default::default()
         });
+        pipeline
+    }
+
+    #[test]
+    fn script_env_marks_repeated_inputs_as_newline_separated_concrete_paths() {
+        // #353: a `repeated` edge → PDO_INPUT_<PORT> is the `\n`-joined list of
+        // concrete completed-iteration paths (no `iter-*` glob) + a _REPEATED=1
+        // flag so the script `readarray -t files <<< "$PDO_INPUT_<PORT>"`.
+        let pipeline = script_with_repeated_laps_pipeline();
         let node = pipeline.nodes.iter().find(|n| n.id == "collector").unwrap();
         let vars = HashMap::new();
-        let ctx = sample_ctx(&pipeline, node, &vars);
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.repeated_iters = HashMap::from([("planner".to_string(), vec![1, 2])]);
 
         let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
         assert_eq!(
             env.get("PDO_INPUT_LAPS_REPEATED").map(String::as_str),
             Some("1")
         );
-        assert!(
-            env.get("PDO_INPUT_LAPS")
-                .map(|v| v.contains("iter-*"))
-                .unwrap_or(false),
-            "repeated input is a glob: {env:?}"
+        let laps = env.get("PDO_INPUT_LAPS").expect("PDO_INPUT_LAPS is set");
+        assert!(!laps.contains("iter-*"), "no raw glob: {laps:?}");
+        assert_eq!(
+            laps,
+            "/repo/.pdo/artifacts/planner/iter-1/plan/output.md\n\
+             /repo/.pdo/artifacts/planner/iter-2/plan/output.md",
+            "newline-separated concrete paths (a path may contain spaces)"
+        );
+    }
+
+    #[test]
+    fn script_env_repeated_empty_pool_keeps_flag_and_empties_value() {
+        // #353 D3: a repeated source with nothing completed → PDO_INPUT_<PORT>
+        // is present but empty, _REPEATED=1 still set, so a script can detect
+        // "repeated but empty" and `pdo skip`.
+        let pipeline = script_with_repeated_laps_pipeline();
+        let node = pipeline.nodes.iter().find(|n| n.id == "collector").unwrap();
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars); // repeated_iters empty
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(
+            env.get("PDO_INPUT_LAPS_REPEATED").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            env.get("PDO_INPUT_LAPS").map(String::as_str),
+            Some(""),
+            "present but empty when nothing has completed"
         );
     }
 
@@ -1003,7 +1096,7 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].port_name, "plan");
         assert_eq!(
-            inputs[0].path,
+            inputs[0].paths[0],
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
         );
     }
@@ -1047,7 +1140,7 @@ mod tests {
         let inputs = resolve_input_paths(&ctx);
         assert_eq!(inputs.len(), 1);
         assert_eq!(
-            inputs[0].path,
+            inputs[0].paths[0],
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-2/plan/output.md")
         );
     }
@@ -1093,15 +1186,14 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].port_name, "plan");
         assert_eq!(
-            inputs[0].path,
+            inputs[0].paths[0],
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
         );
     }
 
-    #[test]
-    fn repeated_flag_read_off_edge_in_preamble() {
+    fn repeated_edge_pipeline() -> PipelineDef {
         // #149: `repeated` (accumulate across iterations) lives on the EDGE, not
-        // on a declared input port. The preamble globs `iter-*` accordingly.
+        // on a declared input port. planner → implementer, port `plans`.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
             id: "implementer".into(),
@@ -1130,22 +1222,68 @@ mod tests {
             repeated: true,
             ..Default::default()
         });
+        pipeline
+    }
 
+    #[test]
+    fn repeated_input_enumerates_concrete_completed_iter_paths() {
+        // #353: `repeated` resolves to one concrete path per COMPLETED source
+        // iteration (via the projected `repeated_iters` set), NEVER a raw
+        // `iter-*` glob. planner completed iters 1 and 3 (iter 2 failed) → the
+        // pool is iter-1 + iter-3, and the failed iter-2 is quarantined.
+        let pipeline = repeated_edge_pipeline();
         let node = &pipeline.nodes[1];
         let vars = HashMap::new();
-        let ctx = sample_ctx(&pipeline, node, &vars);
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.repeated_iters = HashMap::from([("planner".to_string(), vec![1, 3])]);
 
         let inputs = resolve_input_paths(&ctx);
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].port_name, "plans");
         assert!(inputs[0].repeated, "repeated comes from the edge");
         assert_eq!(
-            inputs[0].path,
-            PathBuf::from("/repo/.pdo/artifacts/planner/iter-*/plan/output.md")
+            inputs[0].paths,
+            vec![
+                PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md"),
+                PathBuf::from("/repo/.pdo/artifacts/planner/iter-3/plan/output.md"),
+            ]
         );
+        for p in &inputs[0].paths {
+            assert!(
+                !p.to_string_lossy().contains("iter-*"),
+                "no raw glob survives to the agent"
+            );
+        }
 
         let preamble = build_preamble(&ctx);
         assert!(preamble.contains("`plans` (accumulated)"));
+        assert!(preamble.contains("planner/iter-1/plan/output.md"));
+        assert!(preamble.contains("planner/iter-3/plan/output.md"));
+        assert!(
+            !preamble.contains("iter-2"),
+            "the failed iteration is never enumerated"
+        );
+    }
+
+    #[test]
+    fn repeated_input_with_empty_pool_is_an_explicit_line_not_a_glob() {
+        // #353 D6 / ADR-0004: a repeated source with no completed iteration
+        // yields an empty path list. The preamble says so explicitly (never an
+        // orphan glob), and PDO_INPUT_<PORT> is empty while _REPEATED=1 stays.
+        let pipeline = repeated_edge_pipeline();
+        let node = &pipeline.nodes[1];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars); // repeated_iters empty
+
+        let inputs = resolve_input_paths(&ctx);
+        assert_eq!(inputs.len(), 1);
+        assert!(inputs[0].repeated);
+        assert!(inputs[0].paths.is_empty(), "empty pool when none completed");
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("`plans` (accumulated)"));
+        assert!(preamble.contains("no completed iterations yet"));
+        assert!(!preamble.contains("iter-*"));
     }
 
     #[test]
@@ -1324,13 +1462,13 @@ mod tests {
 
         let plan_input = inputs.iter().find(|i| i.port_name == "plan").unwrap();
         assert_eq!(
-            plan_input.path,
+            plan_input.paths[0],
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
         );
 
         let ctx_input = inputs.iter().find(|i| i.port_name == "context").unwrap();
         assert_eq!(
-            ctx_input.path,
+            ctx_input.paths[0],
             PathBuf::from("/repo/.pdo/artifacts/researcher/iter-1/context/output.md")
         );
 

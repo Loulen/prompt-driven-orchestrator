@@ -55,6 +55,35 @@ pub fn resolved_source_iters(
         .collect()
 }
 
+/// For one consumer node, the set of completed source iterations of every
+/// `repeated` incoming edge: `source node id -> completed iters (asc)` (#353).
+///
+/// The set-valued twin of [`resolved_source_iters`], for `repeated`/pooled
+/// inputs that accumulate one artifact per completed source lap. Only
+/// `repeated` edges are included (non-repeated inputs resolve via
+/// [`resolved_source_iters`]). Keyed by source node id, consistent with that
+/// map. Delegates to [`RunState::completed_iters`] — the single authority; the
+/// disk is never scanned for iterations, only read at the blessed ones. A
+/// source with no completed iteration maps to an empty `Vec` (the pool is
+/// empty — never a raw `iter-*` glob, which cannot exclude a failed iter).
+pub fn resolved_repeated_iters(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    node_id: &str,
+) -> HashMap<String, Vec<i64>> {
+    pipeline
+        .edges
+        .iter()
+        .filter(|e| e.target.node == node_id && e.repeated)
+        .map(|e| {
+            (
+                e.source.node.clone(),
+                run_state.completed_iters(&e.source.node),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +217,100 @@ mod tests {
         let resolved = resolved_source_iters(&pipeline, &state, "tester", 1);
         assert_eq!(resolved.get("griller"), Some(&2));
         assert_eq!(resolved.get("impl"), Some(&1));
+    }
+
+    #[test]
+    fn resolved_repeated_iters_pools_only_completed_source_iters() {
+        // #353: a `repeated` edge reviewer→impl. The reviewer failed iter 2, so
+        // the pool is {1, 3} — the failed iter is quarantined, never globbed in.
+        // A second, non-repeated edge is ignored (it resolves via source_iter).
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        let pipeline = PipelineDef {
+            name: "cycle".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![
+                EdgeDef {
+                    source: EdgeEndpoint {
+                        node: "reviewer".into(),
+                        port: "review".into(),
+                    },
+                    target: EdgeEndpoint {
+                        node: "impl".into(),
+                        port: "reviews".into(),
+                    },
+                    repeated: true,
+                    ..Default::default()
+                },
+                EdgeDef {
+                    source: EdgeEndpoint {
+                        node: "planner".into(),
+                        port: "plan".into(),
+                    },
+                    target: EdgeEndpoint {
+                        node: "impl".into(),
+                        port: "plan".into(),
+                    },
+                    repeated: false,
+                    ..Default::default()
+                },
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let state = state_with(vec![
+            node_with_iterations(
+                "reviewer",
+                &[
+                    (1, NodeStatus::Completed),
+                    (2, NodeStatus::Failed),
+                    (3, NodeStatus::Completed),
+                ],
+            ),
+            node_with_iterations("planner", &[(1, NodeStatus::Completed)]),
+        ]);
+        let resolved = resolved_repeated_iters(&pipeline, &state, "impl");
+        assert_eq!(resolved.get("reviewer"), Some(&vec![1, 3]));
+        assert_eq!(
+            resolved.get("planner"),
+            None,
+            "non-repeated edges are excluded — they resolve via resolved_source_iters"
+        );
+    }
+
+    #[test]
+    fn resolved_repeated_iters_empty_pool_when_source_has_no_completed_iter() {
+        // #353 D6: a repeated source that has not completed any iteration yet
+        // maps to an empty Vec — the pool is empty, not a raw glob.
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        let pipeline = PipelineDef {
+            name: "cycle".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![],
+            edges: vec![EdgeDef {
+                source: EdgeEndpoint {
+                    node: "reviewer".into(),
+                    port: "review".into(),
+                },
+                target: EdgeEndpoint {
+                    node: "impl".into(),
+                    port: "reviews".into(),
+                },
+                repeated: true,
+                ..Default::default()
+            }],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let state = state_with(vec![node_with_iterations(
+            "reviewer",
+            &[(1, NodeStatus::Running)],
+        )]);
+        let resolved = resolved_repeated_iters(&pipeline, &state, "impl");
+        assert_eq!(resolved.get("reviewer"), Some(&Vec::<i64>::new()));
     }
 }

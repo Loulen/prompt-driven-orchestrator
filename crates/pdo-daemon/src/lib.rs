@@ -4523,14 +4523,25 @@ async fn spawn_node(
         // spawn time so each input path follows its source's latest COMPLETED
         // iteration — a failed iteration's artifacts are never consumed, and an
         // external feeder keeps serving its completed iter at any lap.
-        let source_iters = match reload_run_state(state, run_id).await {
-            Some((_, fresh_state)) => input_resolution::resolved_source_iters(
-                spawn_ctx.pipeline,
-                &fresh_state,
-                &node.id,
-                iter,
+        // #353: alongside the single-input source iters, resolve the `repeated`
+        // pools from the SAME fresh projection — one artifact per COMPLETED
+        // source iteration, so a failed iter's artifact is never pooled and no
+        // raw `iter-*` glob reaches the agent/script.
+        let (source_iters, repeated_iters) = match reload_run_state(state, run_id).await {
+            Some((_, fresh_state)) => (
+                input_resolution::resolved_source_iters(
+                    spawn_ctx.pipeline,
+                    &fresh_state,
+                    &node.id,
+                    iter,
+                ),
+                input_resolution::resolved_repeated_iters(
+                    spawn_ctx.pipeline,
+                    &fresh_state,
+                    &node.id,
+                ),
             ),
-            None => HashMap::new(),
+            None => (HashMap::new(), HashMap::new()),
         };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
@@ -4568,6 +4579,7 @@ async fn spawn_node(
             input_images,
             start_prompt_present,
             source_iters,
+            repeated_iters,
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -7326,7 +7338,10 @@ async fn node_io(
 
     let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
-    let io = node_io_resolver::resolve(&pipeline, &artifacts_dir, &node_id, iter);
+    // #353: the resolver reads `repeated` pools through the projection (already
+    // projected above, valid for live + archived runs), so a failed iteration's
+    // artifact on disk is never surfaced as resolvable.
+    let io = node_io_resolver::resolve(&pipeline, &artifacts_dir, &node_id, iter, &run_state);
     Json(io).into_response()
 }
 

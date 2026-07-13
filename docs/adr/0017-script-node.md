@@ -41,6 +41,17 @@ se complète sur exit 0 / échoue sinon, et — en v1 — n'obtient pas de sous-
   session a déjà quitté, il n'y a plus d'agent à relancer). Les répertoires des ports
   de sortie sont **pré-créés au spawn** (un `> "$PDO_OUTPUT_out"` échouerait sur un
   parent manquant).
+- **Encodage d'un input `repeated`/poolé (#353).** Un input d'accumulation résout vers
+  **un chemin par itération *complétée*** du nœud source (via la projection
+  `RunState::completed_iters`, jamais un glob `iter-*` du disque : une itération
+  échouée qui a laissé un `output.md` n'est jamais poolée). `PDO_INPUT_<PORT>` porte
+  donc la **liste de ces chemins absolus, séparés par des sauts de ligne** (`\n`), et
+  `PDO_INPUT_<PORT>_REPEATED=1` reste posé. Le saut de ligne (et non l'espace) est
+  choisi parce qu'un chemin d'artefact peut contenir des espaces ; `wrap_with_env`
+  single-quote la valeur, donc les `\n` survivent verbatim en bash. Idiome de
+  consommation : `readarray -t files <<< "$PDO_INPUT_<PORT>"`. Un pool **vide** (aucune
+  itération complétée) → `PDO_INPUT_<PORT>=` vide, `_REPEATED=1` toujours présent : le
+  script détecte « repeated mais vide » et peut `pdo skip`.
 - **Le seam de test `tmux_cmd_override` est contourné pour un script.** Pour un agent,
   l'override remplace `claude` par un stub pour que la CI ne lance jamais de vrai
   claude. Un script *est* du bash déterministe : l'override ne doit pas l'écraser.

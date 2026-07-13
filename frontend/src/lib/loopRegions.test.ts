@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  collectionFanoutFields,
   collectionFanoutNudges,
   reconcileLoopRegions,
   regionsDestroyedByEdgeRemoval,
@@ -231,5 +232,65 @@ describe("collectionFanoutNudges (#151)", () => {
       edges: [{ source: { node: "a", port: "out" }, target: { node: "b", port: "in" } }],
     };
     expect(collectionFanoutNudges(p)).toHaveLength(0);
+  });
+});
+
+describe("collectionFanoutFields (#269)", () => {
+  const edge = (s: string, sp: string, t: string): EdgeDef => ({
+    source: { node: s, port: sp },
+    target: { node: t, port: "in" },
+  });
+
+  it("returns the list field flowing into the member set", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [listNode("triage", "issues"), plainNode("fixer")],
+      edges: [edge("triage", "issues", "fixer")],
+    };
+    expect(collectionFanoutFields(p, ["fixer"])).toEqual(["issues"]);
+  });
+
+  it("ignores edges among the members themselves", () => {
+    // triage emits a list into fixer, but BOTH are candidate members: the
+    // intra-member edge contributes no fan-out field.
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [listNode("triage", "issues"), plainNode("fixer")],
+      edges: [edge("triage", "issues", "fixer")],
+    };
+    expect(collectionFanoutFields(p, ["triage", "fixer"])).toEqual([]);
+  });
+
+  it("ignores non-list outputs", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [plainNode("a", "doc-only"), plainNode("b")],
+      edges: [edge("a", "out", "b")],
+    };
+    expect(collectionFanoutFields(p, ["b"])).toEqual([]);
+  });
+
+  it("deduplicates a field fed to several members", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [listNode("triage", "issues"), plainNode("fixer"), plainNode("tester")],
+      edges: [edge("triage", "issues", "fixer"), edge("triage", "issues", "tester")],
+    };
+    expect(collectionFanoutFields(p, ["fixer", "tester"])).toEqual(["issues"]);
+  });
+
+  it("is pure field discovery: still returns fields when a member is already in a region (guard lives at the gesture/store level)", () => {
+    const p: PipelineDef = {
+      name: "p",
+      variables: {},
+      nodes: [listNode("triage", "issues"), plainNode("fixer")],
+      edges: [edge("triage", "issues", "fixer")],
+      loops: [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
+    };
+    expect(collectionFanoutFields(p, ["fixer"])).toEqual(["issues"]);
   });
 });

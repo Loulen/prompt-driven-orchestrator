@@ -19,6 +19,7 @@ import {
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 import {
+  generatedRegionId,
   materializeMissingRegions,
   reconcileLoopRegions,
   regionsDestroyedByEdgeRemoval,
@@ -141,6 +142,10 @@ interface EditState {
 
   // Region mutations (ADR-0011 / #150) — edit a bounded region's bound live.
   updateRegion: (regionId: string, updates: Partial<LoopRegion>) => void;
+  // Explicit "fan out over a collection" gesture (#151 / #269): wraps `members`
+  // in a `collection` region iterating the list field `over`. No-ops when any
+  // member already belongs to a region (a node lives in at most one).
+  createCollectionRegion: (members: string[], over: string) => void;
 
   // Note mutations (#307 / ADR-0018) — inert canvas notes. All are COW and
   // history-tracked (ADR-0014): they live on `PipelineDef.notes`, so a
@@ -287,6 +292,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       };
       if (r.max_iter !== undefined && r.max_iter !== null)
         region.max_iter = r.max_iter;
+      // A collection region's iterated field (#151 / #269) — without it, the
+      // region round-trips as an over-less shell the daemon can't fan out.
+      if (r.over) region.over = r.over;
       return region;
     });
   }
@@ -766,6 +774,27 @@ export const useEditStore = create<EditState>((set, get) => ({
         r.id === regionId ? { ...r, ...updates } : r,
       );
     }, { coalesceKey: `updateRegion:${regionId}:${Object.keys(updates).sort().join(",")}` }));
+  },
+
+  createCollectionRegion: (members: string[], over: string) => {
+    set((s) => {
+      // Guard BEFORE mutating so a rejected gesture stays a true no-op: no
+      // dirty flag, no history entry. A node lives in at most one region —
+      // the context menu applies the same guard; this is the authoritative
+      // backstop.
+      const tab = s.openTabs.find((t) => t.id === s.activeTabId);
+      if (!tab || members.length === 0) return {};
+      const taken = new Set(
+        (tab.pipeline.loops ?? []).flatMap((r) => r.members),
+      );
+      if (members.some((m) => taken.has(m))) return {};
+      return mutateActiveTabWithHistory(s, (t) => {
+        t.pipeline.loops = [
+          ...(t.pipeline.loops ?? []),
+          { id: generatedRegionId(members), kind: "collection", members, over },
+        ];
+      });
+    });
   },
 
   addNote: (note: NoteDef) => {

@@ -26,7 +26,6 @@ pub enum NodeType {
     End,
     Switch,
     Loop,
-    ForEach,
     Merge,
     /// A node that runs author-written bash deterministically instead of
     /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
@@ -40,7 +39,7 @@ impl NodeType {
     /// A *regular* node (doc-only / code-mutating / script) declares no inputs:
     /// its inputs are emergent, derived from incoming edges and named after the
     /// edge target port (#149 / ADR-0011). Structural nodes (start/end/switch/
-    /// loop/for-each/merge) keep their required, declared input ports. A `script`
+    /// loop/merge) keep their required, declared input ports. A `script`
     /// node consumes whole artifacts by edge just like a work node, so its inputs
     /// are emergent too (#248).
     pub fn has_emergent_inputs(&self) -> bool {
@@ -418,7 +417,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         "end",
         "switch",
         "loop",
-        "for-each",
         "merge",
         // #248: without this, a `type: script` node is silently rewritten to
         // `doc-only` with only a diagnostic (see the layer-1 test).
@@ -440,6 +438,15 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     .to_string();
 
                 match node_map.get(&type_key).and_then(|v| v.as_str()) {
+                    // ForEach is RETIRED (ADR-0011 / #269): a hard refusal, not
+                    // the warn+coerce below — silently rewriting a fan-out node
+                    // to doc-only would run each item's work zero times.
+                    Some(t @ ("for-each" | "foreach")) => {
+                        return Err(ParseError::MissingField(format!(
+                            "node '{node_id}': node type '{t}' was removed (ADR-0011) — \
+                             run `pdo migrate` to convert it to a collection loop region"
+                        )));
+                    }
                     None => {
                         diagnostics.push(Diagnostic {
                             severity: Severity::Warning,
@@ -551,29 +558,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     }
                 }
             }
-            NodeType::ForEach => {
-                let expected_inputs = ["in", "break"];
-                let expected_outputs = ["body", "done"];
-                let input_names: Vec<&str> = node.inputs.iter().map(|p| p.name.as_str()).collect();
-                let output_names: Vec<&str> =
-                    node.outputs.iter().map(|p| p.name.as_str()).collect();
-                for name in &expected_inputs {
-                    if !input_names.contains(name) {
-                        return Err(ParseError::MissingField(format!(
-                            "foreach node '{}' must have input '{}'",
-                            node.id, name
-                        )));
-                    }
-                }
-                for name in &expected_outputs {
-                    if !output_names.contains(name) {
-                        return Err(ParseError::MissingField(format!(
-                            "foreach node '{}' must have output '{}'",
-                            node.id, name
-                        )));
-                    }
-                }
-            }
             _ => {}
         }
     }
@@ -658,8 +642,9 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     })
 }
 
-/// Dangling edge references in a pipeline: an edge endpoint naming a node that
-/// does not exist, or a port not declared on its node. Emergent inputs are
+/// Dangling references in a pipeline: an edge endpoint naming a node that
+/// does not exist, a port not declared on its node, or a loop-region member
+/// naming a non-existent node (#269). Emergent inputs are
 /// exempt — the target port of an edge landing on a *regular* node names the
 /// emergent input and is valid by construction (#149 / ADR-0011).
 ///
@@ -711,6 +696,21 @@ pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
         }
         if let Some(e) = check(edge, &edge.target, "target", |n| &n.inputs) {
             errors.push(e);
+        }
+    }
+
+    // A loop-region member naming a non-existent node is the same class of
+    // dangling reference: the region silently no-ops at runtime (its gates
+    // never match any node). Seen in the wild when `pdo migrate` re-idified
+    // nodes without remapping `loops[].members` (#269).
+    for region in &pipeline.loops {
+        for member in &region.members {
+            if !node_ids.contains(member.as_str()) {
+                errors.push(format!(
+                    "loop region '{}': member references non-existent node '{}'",
+                    region.id, member
+                ));
+            }
         }
     }
     errors
@@ -1424,6 +1424,56 @@ edges:
 "#;
         let pipeline = parse_pipeline(yaml).unwrap().pipeline;
         assert!(dangling_edge_references(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn dangling_references_flag_unknown_loop_member() {
+        // #269: a loop-region member naming a non-existent node makes the
+        // region silently no-op at runtime — same class as a dangling edge.
+        // Parse-time warning, launch-time refusal (both call this fn).
+        let yaml = r#"
+name: orphan-region
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: worker
+    type: doc-only
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: per-item
+    kind: collection
+    over: items
+    members: [worker]
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let errors = dangling_edge_references(&result.pipeline);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("loop region 'per-item'")
+                && errors[0].contains("non-existent node 'worker'"),
+            "unexpected message: {}",
+            errors[0]
+        );
+        // And it surfaces as a parse-time warning too.
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("loop region 'per-item'")));
     }
 
     #[test]
@@ -3125,172 +3175,36 @@ nodes:
         assert!(schema.is_none());
     }
 
-    // --- ForEach node tests (issue #60) ---
+    // --- ForEach retirement (ADR-0011 / #269, ex-issue #60/#65) ---
 
     #[test]
-    fn parses_foreach_node() {
-        let yaml = with_start_end(
-            r#"
-name: foreach-test
+    fn foreach_node_type_is_refused_at_parse() {
+        // Not warn+coerce: silently rewriting a fan-out node to doc-only would
+        // run each item's work zero times. The error names the migration path.
+        for t in ["for-each", "foreach"] {
+            let yaml = format!(
+                r#"
+name: test
 nodes:
-  - id: ab000001
-    name: per-issue
-    type: for-each
+  - id: fe1
+    name: per-item
+    type: {t}
     inputs:
       - name: in
       - name: break
     outputs:
       - name: body
       - name: done
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        let fe = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab000001")
-            .unwrap();
-        assert_eq!(fe.node_type, NodeType::ForEach);
-        assert_eq!(fe.inputs.len(), 2);
-        assert_eq!(fe.outputs.len(), 2);
-        assert!(fe.max_iter.is_none());
-    }
-
-    #[test]
-    fn foreach_node_rejects_missing_break_input() {
-        let yaml = with_start_end(
-            r#"
-name: bad-foreach
-nodes:
-  - id: ab000001
-    name: bad
-    type: for-each
-    inputs:
-      - name: in
-    outputs:
-      - name: body
-      - name: done
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("must have input 'break'"),
-            "error should mention break: {msg}"
-        );
-    }
-
-    #[test]
-    fn foreach_node_rejects_missing_body_output() {
-        let yaml = with_start_end(
-            r#"
-name: bad-foreach
-nodes:
-  - id: ab000001
-    name: bad
-    type: for-each
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: done
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("must have output 'body'"),
-            "error should mention body: {msg}"
-        );
-    }
-
-    // --- ForEach `over` field tests (issue #65) ---
-
-    #[test]
-    fn parses_foreach_node_with_over_field() {
-        let yaml = with_start_end(
-            r#"
-name: foreach-over
-nodes:
-  - id: ab000001
-    name: per-issue
-    type: for-each
-    over: issues
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: body
-      - name: done
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        let fe = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab000001")
-            .unwrap();
-        assert_eq!(fe.node_type, NodeType::ForEach);
-        assert_eq!(fe.over.as_deref(), Some("issues"));
-    }
-
-    #[test]
-    fn foreach_node_without_over_field_defaults_to_none() {
-        let yaml = with_start_end(
-            r#"
-name: foreach-no-over
-nodes:
-  - id: ab000001
-    name: per-issue
-    type: for-each
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: body
-      - name: done
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        let fe = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab000001")
-            .unwrap();
-        assert!(fe.over.is_none());
-    }
-
-    #[test]
-    fn foreach_over_field_round_trips_through_serialize() {
-        let yaml = with_start_end(
-            r#"
-name: foreach-rt
-nodes:
-  - id: ab000001
-    name: per-issue
-    type: for-each
-    over: tasks
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: body
-      - name: done
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
-        let result2 = parse_pipeline(&serialized).unwrap();
-        let fe = result2
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab000001")
-            .unwrap();
-        assert_eq!(fe.over.as_deref(), Some("tasks"));
+edges: []
+"#
+            );
+            let err = parse_pipeline(&yaml).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("removed") && msg.contains("pdo migrate"),
+                "refusal must name `pdo migrate`, got: {msg}"
+            );
+        }
     }
 
     #[test]

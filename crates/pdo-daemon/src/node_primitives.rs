@@ -325,7 +325,6 @@ fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
         pipeline::NodeType::End => "end",
         pipeline::NodeType::Switch => "switch",
         pipeline::NodeType::Loop => "loop",
-        pipeline::NodeType::ForEach => "for-each",
         pipeline::NodeType::Merge => "merge",
         pipeline::NodeType::Script => "script",
     }

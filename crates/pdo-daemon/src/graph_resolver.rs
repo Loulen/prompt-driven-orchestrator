@@ -5,19 +5,38 @@ use crate::pipeline::{NodeType, PipelineDef};
 
 /// Returns the IDs of nodes that are ready to be spawned: all upstream
 /// dependencies completed, node not yet started, and not a control-flow
-/// construct (Start, End, Loop, ForEach).
+/// construct (Start, End, Loop, Switch).
 pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> {
     let mut ready = Vec::new();
 
     for node in &pipeline.nodes {
         if matches!(
             node.node_type,
-            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::ForEach | NodeType::Switch
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch
         ) {
             continue;
         }
         if run_state.nodes.contains_key(&node.id) {
             continue;
+        }
+
+        // A `collection` region member (ADR-0011 / #269) is spawned by the
+        // region fan-out (one lap per item), never by the readiness sweep —
+        // except in the degenerate case where its only external feed is Start
+        // (no producer completion will ever fire the fan-out edge, so the
+        // sweep spawning it plainly at iter 1 beats a silent stall).
+        if let Some(region) = crate::loop_region::collection_region_for_member(pipeline, &node.id) {
+            let fed_by_external_producer = pipeline.edges.iter().any(|e| {
+                e.target.node == node.id
+                    && !region.members.contains(&e.source.node)
+                    && !pipeline
+                        .nodes
+                        .iter()
+                        .any(|n| n.id == e.source.node && n.node_type == NodeType::Start)
+            });
+            if fed_by_external_producer {
+                continue;
+            }
         }
 
         // A conditional edge (`when:`/`else`, ADR-0011) only fires when the
@@ -53,6 +72,15 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             .collect();
 
         let all_completed = upstream.iter().all(|src| {
+            // A collection-region member upstream is a BARRIER input (#269):
+            // it counts as completed only once the whole region is done, never
+            // on a per-lap completion mid-fan-out.
+            if let Some(region) = crate::loop_region::collection_region_for_member(pipeline, src) {
+                return run_state
+                    .collection_states
+                    .get(region.id.as_str())
+                    .is_some_and(|cs| cs.done);
+            }
             run_state
                 .nodes
                 .get(*src)
@@ -76,10 +104,10 @@ pub enum BodyResolutionError {
     NoExitToBreakOrDone(String),
 }
 
-/// Computes the set of nodes that form the body subgraph of a Loop or ForEach
-/// node. BFS from the loop's "body" output port, collecting all reachable
-/// nodes until hitting the loop's own break/done ports. Nested loops are
-/// treated as opaque (included but their internals are not traversed).
+/// Computes the set of nodes that form the body subgraph of a Loop node. BFS
+/// from the loop's "body" output port, collecting all reachable nodes until
+/// hitting the loop's own break/done ports. Nested loops are treated as opaque
+/// (included but their internals are not traversed).
 pub fn compute_body_subgraph(
     pipeline: &PipelineDef,
     loop_node_id: &str,
@@ -87,7 +115,7 @@ pub fn compute_body_subgraph(
     pipeline
         .nodes
         .iter()
-        .find(|n| n.id == loop_node_id && matches!(n.node_type, NodeType::Loop | NodeType::ForEach))
+        .find(|n| n.id == loop_node_id && n.node_type == NodeType::Loop)
         .ok_or_else(|| BodyResolutionError::LoopNotFound(loop_node_id.to_string()))?;
 
     let body_targets: Vec<&str> = pipeline
@@ -112,7 +140,7 @@ pub fn compute_body_subgraph(
         let is_nested_loop = pipeline
             .nodes
             .iter()
-            .any(|n| n.id == current && matches!(n.node_type, NodeType::Loop | NodeType::ForEach));
+            .any(|n| n.id == current && n.node_type == NodeType::Loop);
         if is_nested_loop {
             body.insert(current.to_string());
             continue;

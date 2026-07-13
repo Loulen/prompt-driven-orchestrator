@@ -509,11 +509,11 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // ForEach context
+    // Collection fan-out context (ADR-0011 / #269, ex-ForEach)
     if let Some(ref fe) = ctx.foreach_context {
-        preamble.push_str("## ForEach Context\n\n");
+        preamble.push_str("## Collection Context\n\n");
         preamble.push_str(&format!(
-            "This node is running as part of a ForEach iteration ({} of {}).\n",
+            "This node is running as one lap of a collection fan-out ({} of {}).\n",
             fe.current_iter, fe.total
         ));
         preamble.push_str(&format!("- `current_item`: {}\n", fe.current_item));

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useEditStore, serializePipeline } from "./editStore";
+import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
 import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
@@ -1130,6 +1131,62 @@ describe("resolveConflict", () => {
   });
 });
 
+describe("createCollectionRegion (#151 / #269)", () => {
+  it("creates a collection region with a minted id, over and members, and marks dirty", () => {
+    const a = makeNode({ id: "aaaa1111", name: "worker" });
+    seedTabWithPipeline(makePipeline([a]));
+
+    useEditStore.getState().createCollectionRegion(["aaaa1111"], "items");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    const region = tab.pipeline.loops![0];
+    expect(region.id).toBe(generatedRegionId(["aaaa1111"]));
+    expect(region.kind).toBe("collection");
+    expect(region.members).toEqual(["aaaa1111"]);
+    expect(region.over).toBe("items");
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("no-ops (no region, not dirty) when a member already belongs to a region", () => {
+    const a = makeNode({ id: "aaaa1111" });
+    const b = makeNode({ id: "bbbb2222" });
+    const pipeline = makePipeline([a, b]);
+    pipeline.loops = [
+      { id: "review_loop", kind: "bounded", members: ["aaaa1111"], max_iter: 3 },
+    ];
+    seedTabWithPipeline(pipeline);
+
+    useEditStore.getState().createCollectionRegion(["aaaa1111", "bbbb2222"], "items");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(tab.pipeline.loops![0].id).toBe("review_loop");
+    expect(tab.dirty).toBe(false);
+  });
+
+  it("no-ops on an empty member set", () => {
+    seedTabWithPipeline(makePipeline([makeNode({ id: "aaaa1111" })]));
+
+    useEditStore.getState().createCollectionRegion([], "items");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+    expect(tab.dirty).toBe(false);
+  });
+
+  it("is undoable (ADR-0014)", () => {
+    const a = makeNode({ id: "aaaa1111" });
+    seedTabWithPipeline(makePipeline([a]));
+
+    useEditStore.getState().createCollectionRegion(["aaaa1111"], "items");
+    expect(useEditStore.getState().openTabs[0].pipeline.loops).toHaveLength(1);
+
+    useEditStore.getState().undo();
+    expect(useEditStore.getState().openTabs[0].pipeline.loops ?? []).toHaveLength(0);
+  });
+});
+
 describe("serializePipeline round-trip: YAML structural correctness", () => {
   function makeFullPipeline(extraNodes: NodeDef[], edges: EdgeDef[] = []): PipelineDef {
     const start: NodeDef = {
@@ -1178,6 +1235,23 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("max_iter: 3");
     // members listed
     expect(yaml).toMatch(/members:/);
+  });
+
+  it("serializes a collection loops: region with its over: field (#269)", () => {
+    const worker: NodeDef = {
+      id: "worker", name: "worker", type: "code-mutating",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const pipeline = makeFullPipeline([worker]);
+    pipeline.loops = [
+      { id: "fan_out", kind: "collection", members: ["worker"], over: "items" },
+    ];
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain("loops:");
+    expect(yaml).toContain("id: fan_out");
+    expect(yaml).toContain("kind: collection");
+    expect(yaml).toContain("over: items");
   });
 
   it("omits the loops: block when there are no regions", () => {

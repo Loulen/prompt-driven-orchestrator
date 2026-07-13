@@ -36,19 +36,22 @@ pub enum SchedulerAction {
     LoopDone {
         loop_node_id: String,
     },
-    ForEachStarted {
-        foreach_node_id: String,
+    /// A `kind: collection` region resolved its `over` list and fans its entry
+    /// out, one lap per item (ADR-0011 / #269). The caller deposits `items` so
+    /// each lap reads its own item.
+    CollectionStarted {
+        region_id: String,
+        entry: String,
         total_items: i64,
         items: Vec<serde_yaml::Value>,
     },
-    ForEachEmpty {
-        foreach_node_id: String,
+    /// The region's `over` list resolved empty: the barrier fires immediately.
+    CollectionEmpty {
+        region_id: String,
     },
-    ForEachBreakReceived {
-        foreach_node_id: String,
-    },
-    ForEachDone {
-        foreach_node_id: String,
+    /// Every item lap completed — the collection barrier fired.
+    CollectionDone {
+        region_id: String,
     },
 }
 
@@ -256,6 +259,21 @@ pub fn evaluate_outgoing_edges_full(
 
         let target_id = &edge.target.node;
 
+        // ── Collection region exit suppression (ADR-0011 / #269) ─────────────
+        //
+        // A member→non-member edge of a `collection` region is a BARRIER exit:
+        // it fires once, when every item lap has completed — never per-lap.
+        // The barrier sweep (`evaluate_collection_barrier`) owns that firing;
+        // letting the generic path (or the End shortcut above) act here would
+        // spawn downstream / complete the run after the FIRST item.
+        if let Some(region) =
+            crate::loop_region::collection_region_for_member(pipeline, completed_node_id)
+        {
+            if !region.members.iter().any(|m| m == target_id) {
+                continue;
+            }
+        }
+
         if end_node_id == Some(target_id.as_str()) {
             if let Some(raw_msg) = edge.reason.as_deref() {
                 let rendered = condition::render_halt_message(
@@ -294,10 +312,27 @@ pub fn evaluate_outgoing_edges_full(
                 frontmatter_fields,
                 resolved_vars,
             ));
+        } else if let Some(region) = crate::loop_region::collection_region_entered_by_edge(
+            pipeline,
+            completed_node_id,
+            target_id,
+        ) {
+            // ── Collection region ENTRY (ADR-0011 / #269) ─────────────────────
+            //
+            // The fired edge enters a `collection` region from outside: the
+            // artifact's frontmatter carries the region's `over` list. The
+            // region engine — not the generic forward-spawn path — governs the
+            // spawn: it fans the entry out once per item (laps 1..=total), or
+            // fires the barrier immediately for an empty collection.
+            actions.extend(handle_collection_entry(
+                pipeline,
+                run_state,
+                region,
+                frontmatter_fields,
+            ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
-            let is_foreach_target = target_node.is_some_and(|n| n.node_type == NodeType::ForEach);
 
             let is_switch_target = target_node.is_some_and(|n| n.node_type == NodeType::Switch);
 
@@ -329,15 +364,6 @@ pub fn evaluate_outgoing_edges_full(
                     resolved_vars,
                 );
                 actions.extend(loop_actions);
-            } else if is_foreach_target {
-                let foreach_actions = handle_foreach_input(
-                    pipeline,
-                    run_state,
-                    target_id,
-                    &edge.target.port,
-                    frontmatter_fields,
-                );
-                actions.extend(foreach_actions);
             } else {
                 let all_upstream_done = check_all_upstream_completed(
                     pipeline,
@@ -764,159 +790,128 @@ fn fire_done_port(pipeline: &PipelineDef, loop_node_id: &str, actions: &mut Vec<
     }
 }
 
-pub fn foreach_resolve_collection(
-    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
-    over: &str,
-) -> Vec<serde_yaml::Value> {
-    frontmatter_fields
-        .get(over)
-        .and_then(|v| v.as_sequence())
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn handle_foreach_input(
+/// Drives the ENTRY of a `kind: collection` region (ADR-0011 / #269) when an
+/// external edge fired into it. Delegates the decision to the pure region
+/// engine (`loop_region::collection_fanout`):
+///
+/// - **Non-empty collection**: emit `CollectionStarted` (projected into
+///   `collection_states` so the barrier sweep can account laps) then `Spawn`
+///   the region entry once per item, at laps `1..=total`, in parallel.
+/// - **Empty collection**: emit `CollectionEmpty` + `CollectionDone` and fire
+///   the barrier targets immediately (`Complete` if a target is `End`) —
+///   vacuous barrier, zero item laps, never a silent stall.
+///
+/// Idempotent per region: once `collection_states[region.id]` exists the
+/// fan-out already happened (a second inbound edge re-firing must not double
+/// the laps) — mirrors the legacy ForEach `in`-port guard.
+fn handle_collection_entry(
     pipeline: &PipelineDef,
     run_state: &RunState,
-    foreach_node_id: &str,
-    target_port: &str,
+    region: &crate::pipeline::LoopRegion,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
-    let foreach_node = match pipeline.nodes.iter().find(|n| n.id == foreach_node_id) {
-        Some(n) => n,
-        None => return actions,
-    };
-
-    match target_port {
-        "in" => {
-            if run_state.foreach_states.contains_key(foreach_node_id) {
-                return actions;
-            }
-
-            let over_field = foreach_node.over.as_deref().unwrap_or("items");
-            let items = foreach_resolve_collection(frontmatter_fields, over_field);
-
-            let total = items.len() as i64;
-
-            if total == 0 {
-                actions.push(SchedulerAction::ForEachEmpty {
-                    foreach_node_id: foreach_node_id.to_string(),
-                });
-                actions.push(SchedulerAction::ForEachDone {
-                    foreach_node_id: foreach_node_id.to_string(),
-                });
-                for edge in &pipeline.edges {
-                    if edge.source.node == foreach_node_id && edge.source.port == "done" {
-                        let end_node_id = pipeline
-                            .nodes
-                            .iter()
-                            .find(|n| n.node_type == NodeType::End)
-                            .map(|n| n.id.as_str());
-                        if end_node_id == Some(edge.target.node.as_str()) {
-                            actions.push(SchedulerAction::Complete);
-                        } else {
-                            actions.push(SchedulerAction::Spawn {
-                                node_id: edge.target.node.clone(),
-                                iter: 1,
-                            });
-                        }
-                    }
-                }
-                return actions;
-            }
-
-            actions.push(SchedulerAction::ForEachStarted {
-                foreach_node_id: foreach_node_id.to_string(),
-                total_items: total,
-                items: items.clone(),
-            });
-
-            for i in 1..=total {
-                for edge in &pipeline.edges {
-                    if edge.source.node == foreach_node_id && edge.source.port == "body" {
-                        actions.push(SchedulerAction::Spawn {
-                            node_id: edge.target.node.clone(),
-                            iter: i,
-                        });
-                    }
-                }
-            }
-        }
-        "break" => {
-            actions.push(SchedulerAction::ForEachBreakReceived {
-                foreach_node_id: foreach_node_id.to_string(),
-            });
-        }
-        _ => {}
-    }
-
-    actions
-}
-
-pub fn evaluate_foreach_body_completion(
-    pipeline: &PipelineDef,
-    run_state: &RunState,
-    foreach_node_id: &str,
-) -> Vec<SchedulerAction> {
-    let mut actions = Vec::new();
-
-    let foreach_node = match pipeline.nodes.iter().find(|n| n.id == foreach_node_id) {
-        Some(n) if n.node_type == NodeType::ForEach => n,
-        _ => return actions,
-    };
-
-    let foreach_state = match run_state.foreach_states.get(foreach_node_id) {
-        Some(fs) if !fs.done => fs,
-        _ => return actions,
-    };
-
-    let body_nodes = match graph_resolver::compute_body_subgraph(pipeline, foreach_node_id) {
-        Ok(nodes) => nodes,
-        Err(_) => return actions,
-    };
-
-    let total = foreach_state.total_items;
-
-    let all_iters_done = (1..=total).all(|i| {
-        body_nodes.iter().all(|node_id| {
-            run_state.nodes.get(node_id).is_some_and(|n| {
-                n.iterations
-                    .iter()
-                    .any(|it| it.iter == i && it.status == NodeStatus::Completed)
-            })
-        })
-    });
-
-    if !all_iters_done {
+    if run_state.collection_states.contains_key(region.id.as_str()) {
         return actions;
     }
 
-    actions.push(SchedulerAction::ForEachDone {
-        foreach_node_id: foreach_node_id.to_string(),
+    let fanout = crate::loop_region::collection_fanout(pipeline, region, frontmatter_fields);
+
+    if fanout.total == 0 {
+        actions.push(SchedulerAction::CollectionEmpty {
+            region_id: region.id.clone(),
+        });
+        actions.push(SchedulerAction::CollectionDone {
+            region_id: region.id.clone(),
+        });
+        actions.extend(collection_barrier_spawns(pipeline, region));
+        return actions;
+    }
+
+    actions.push(SchedulerAction::CollectionStarted {
+        region_id: region.id.clone(),
+        entry: fanout.entry.clone(),
+        total_items: fanout.total,
+        items: fanout.items,
     });
-
-    for edge in &pipeline.edges {
-        if edge.source.node == foreach_node.id && edge.source.port == "done" {
-            let end_node_id = pipeline
-                .nodes
-                .iter()
-                .find(|n| n.node_type == NodeType::End)
-                .map(|n| n.id.as_str());
-
-            if end_node_id == Some(edge.target.node.as_str()) {
-                actions.push(SchedulerAction::Complete);
-            } else {
-                actions.push(SchedulerAction::Spawn {
-                    node_id: edge.target.node.clone(),
-                    iter: 1,
-                });
-            }
-        }
+    for i in 1..=fanout.total {
+        actions.push(SchedulerAction::Spawn {
+            node_id: fanout.entry.clone(),
+            iter: i,
+        });
     }
 
     actions
+}
+
+/// Evaluates the BARRIER of a `kind: collection` region (ADR-0011 / #269): once
+/// every member has completed every lap `1..=total`, emit `CollectionDone` and
+/// fire the region's exits once (`Complete` if a target is `End`). The region
+/// twin of [`evaluate_foreach_body_completion`]; called from the lib.rs sweep
+/// after each node completion / re-evaluation, on fresh projected state.
+pub fn evaluate_collection_barrier(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    region: &crate::pipeline::LoopRegion,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    let collection_state = match run_state.collection_states.get(region.id.as_str()) {
+        Some(cs) if !cs.done => cs,
+        _ => return actions,
+    };
+
+    let total = collection_state.total_items;
+    let completed_iters: HashSet<i64> = (1..=total)
+        .filter(|i| {
+            region.members.iter().all(|member| {
+                run_state.nodes.get(member.as_str()).is_some_and(|n| {
+                    n.iterations
+                        .iter()
+                        .any(|it| it.iter == *i && it.status == NodeStatus::Completed)
+                })
+            })
+        })
+        .collect();
+
+    if !crate::loop_region::collection_barrier_reached(total, &completed_iters) {
+        return actions;
+    }
+
+    actions.push(SchedulerAction::CollectionDone {
+        region_id: region.id.clone(),
+    });
+    actions.extend(collection_barrier_spawns(pipeline, region));
+
+    actions
+}
+
+/// Maps a collection region's barrier targets to actions: `Complete` for `End`,
+/// `Spawn { iter: 1 }` for everything else — the same exit shape as the legacy
+/// ForEach `done` port.
+fn collection_barrier_spawns(
+    pipeline: &PipelineDef,
+    region: &crate::pipeline::LoopRegion,
+) -> Vec<SchedulerAction> {
+    let end_node_id = pipeline
+        .nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::End)
+        .map(|n| n.id.as_str());
+    crate::loop_region::collection_barrier_targets(pipeline, region)
+        .into_iter()
+        .map(|target| {
+            if end_node_id == Some(target.as_str()) {
+                SchedulerAction::Complete
+            } else {
+                SchedulerAction::Spawn {
+                    node_id: target,
+                    iter: 1,
+                }
+            }
+        })
+        .collect()
 }
 
 fn check_all_upstream_completed(
@@ -957,6 +952,16 @@ fn check_all_upstream_completed(
         .collect();
 
     upstream.iter().all(|src| {
+        // A collection-region member upstream (ADR-0011 / #269) is a BARRIER
+        // input: it counts as completed only once the whole region is done —
+        // a per-lap completion (or a stale `Completed` status mid-fan-out)
+        // must not satisfy a downstream join early.
+        if let Some(region) = crate::loop_region::collection_region_for_member(pipeline, src) {
+            return run_state
+                .collection_states
+                .get(region.id.as_str())
+                .is_some_and(|cs| cs.done);
+        }
         if *src == just_completed_node_id {
             return true;
         }
@@ -3749,224 +3754,203 @@ mod tests {
         }));
     }
 
-    // --- ForEach dispatch ---
+    // --- Collection region live dispatch (ADR-0011 / #269) ---
 
-    fn make_foreach_node_with_over(id: &str, over: &str) -> NodeDef {
-        let mut node = make_foreach_node(id);
-        node.over = Some(over.into());
-        node
-    }
-
-    fn make_foreach_node(id: &str) -> NodeDef {
-        NodeDef {
+    fn collection_region(id: &str, members: &[&str], over: &str) -> crate::pipeline::LoopRegion {
+        crate::pipeline::LoopRegion {
             id: id.into(),
-            name: id.into(),
-            node_type: NodeType::ForEach,
-            inputs: vec![
-                Port {
-                    name: "in".into(),
-                    repeated: false,
-                    side: None,
-                    port_type: PortType::Markdown,
-                    frontmatter: None,
-                    when: None,
-                    description: None,
-                },
-                Port {
-                    name: "break".into(),
-                    repeated: false,
-                    side: None,
-                    port_type: PortType::Markdown,
-                    frontmatter: None,
-                    when: None,
-                    description: None,
-                },
-            ],
-            outputs: vec![
-                Port {
-                    name: "body".into(),
-                    repeated: false,
-                    side: None,
-                    port_type: PortType::Markdown,
-                    frontmatter: None,
-                    when: None,
-                    description: None,
-                },
-                Port {
-                    name: "done".into(),
-                    repeated: false,
-                    side: None,
-                    port_type: PortType::Markdown,
-                    frontmatter: None,
-                    when: None,
-                    description: None,
-                },
-            ],
-            interactive: false,
-            view: None,
+            kind: crate::pipeline::LoopKind::Collection,
+            members: members.iter().map(|m| m.to_string()).collect(),
             max_iter: None,
-            over: None,
-            model: None,
+            over: Some(over.into()),
         }
     }
 
-    #[test]
-    fn foreach_empty_list_fires_done_immediately() {
-        let pipeline = PipelineDef {
-            name: "foreach-empty".into(),
+    /// upstream → worker (collection member, over: items) → sink → end
+    fn collection_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "collection".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![
                 make_node("upstream", &["in"], &["out"]),
-                make_foreach_node("fe1"),
                 make_node("worker", &["in"], &["out"]),
+                make_node("sink", &["in"], &["out"]),
                 make_end_node(),
             ],
             edges: vec![
-                make_edge("upstream", "out", "fe1", "in"),
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("fe1", "done", "end", "result"),
+                make_edge("upstream", "out", "worker", "in"),
+                make_edge("worker", "out", "sink", "in"),
+                make_edge("sink", "out", "end", "result"),
             ],
-            loops: Vec::new(),
+            loops: vec![collection_region("fan", &["worker"], "items")],
             notes: Vec::new(),
             prompt_required: true,
-        };
+        }
+    }
 
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("upstream".into(), completed_node("upstream"));
-
-        let frontmatter = HashMap::new();
-        let actions = evaluate_outgoing_edges_with_context(
-            &pipeline,
-            &state,
-            "upstream",
-            &HashMap::new(),
-            &frontmatter,
-        );
-
-        assert!(actions.contains(&SchedulerAction::ForEachEmpty {
-            foreach_node_id: "fe1".into(),
-        }));
-        assert!(actions.contains(&SchedulerAction::ForEachDone {
-            foreach_node_id: "fe1".into(),
-        }));
-        assert!(actions.contains(&SchedulerAction::Complete));
-        assert!(
-            !actions.iter().any(
-                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "worker")
+    fn items_frontmatter(n: usize) -> HashMap<String, serde_yaml::Value> {
+        let mut fm = HashMap::new();
+        fm.insert(
+            "items".into(),
+            serde_yaml::Value::Sequence(
+                (1..=n)
+                    .map(|i| serde_yaml::Value::String(format!("item-{i}")))
+                    .collect(),
             ),
-            "empty list should not spawn body nodes"
         );
+        fm
+    }
+
+    fn worker_with_completed_laps(laps: &[i64]) -> NodeState {
+        let mut ns = completed_node("worker");
+        ns.iter = laps.iter().copied().max().unwrap_or(1);
+        ns.iterations = laps
+            .iter()
+            .map(|&i| crate::event_log::IterationInfo {
+                iter: i,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+            })
+            .collect();
+        ns
     }
 
     #[test]
-    fn foreach_list_of_3_spawns_3_body_iterations() {
-        let pipeline = PipelineDef {
-            name: "foreach-3".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["in"], &["out"]),
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "fe1", "in"),
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("worker", "out", "fe1", "done"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
+    fn collection_entry_fans_out_one_lap_per_item() {
+        let pipeline = collection_pipeline();
         let mut state = empty_run_state();
         state
             .nodes
             .insert("upstream".into(), completed_node("upstream"));
-
-        let mut frontmatter = HashMap::new();
-        frontmatter.insert(
-            "items".into(),
-            serde_yaml::Value::Sequence(vec![
-                serde_yaml::Value::String("alpha".into()),
-                serde_yaml::Value::String("beta".into()),
-                serde_yaml::Value::String("gamma".into()),
-            ]),
-        );
 
         let actions = evaluate_outgoing_edges_with_context(
             &pipeline,
             &state,
             "upstream",
             &HashMap::new(),
-            &frontmatter,
+            &items_frontmatter(3),
         );
 
-        assert!(actions.contains(&SchedulerAction::ForEachStarted {
-            foreach_node_id: "fe1".into(),
+        assert!(actions.contains(&SchedulerAction::CollectionStarted {
+            region_id: "fan".into(),
+            entry: "worker".into(),
             total_items: 3,
             items: vec![
-                serde_yaml::Value::String("alpha".into()),
-                serde_yaml::Value::String("beta".into()),
-                serde_yaml::Value::String("gamma".into()),
+                serde_yaml::Value::String("item-1".into()),
+                serde_yaml::Value::String("item-2".into()),
+                serde_yaml::Value::String("item-3".into()),
             ],
         }));
-
         for i in 1..=3 {
             assert!(
                 actions.contains(&SchedulerAction::Spawn {
                     node_id: "worker".into(),
                     iter: i,
                 }),
-                "should spawn worker iter {i}"
+                "should spawn worker lap {i}"
             );
         }
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sink")),
+            "the barrier target must not spawn at fan-out time"
+        );
     }
 
     #[test]
-    fn foreach_break_mid_iteration() {
-        let pipeline = PipelineDef {
-            name: "foreach-break".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["in"], &["out"]),
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "fe1", "in"),
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("worker", "out", "fe1", "break"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
+    fn collection_empty_list_fires_barrier_immediately() {
+        let pipeline = collection_pipeline();
         let mut state = empty_run_state();
         state
             .nodes
             .insert("upstream".into(), completed_node("upstream"));
-        state.foreach_states.insert(
-            "fe1".into(),
-            crate::event_log::ForEachState {
-                foreach_node_id: "fe1".into(),
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &items_frontmatter(0),
+        );
+
+        assert!(actions.contains(&SchedulerAction::CollectionEmpty {
+            region_id: "fan".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
+        }));
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "sink".into(),
+                iter: 1,
+            }),
+            "an empty collection fires the barrier target immediately"
+        );
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "worker")
+            ),
+            "an empty collection spawns no laps"
+        );
+    }
+
+    #[test]
+    fn collection_entry_is_idempotent_once_state_exists() {
+        // A second inbound edge re-firing must not double the laps.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
                 total_items: 3,
-                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &items_frontmatter(3),
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { .. })
+                    || matches!(a, SchedulerAction::CollectionStarted { .. })),
+            "fan-out already happened — no re-spawn, no re-start: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn collection_member_completion_suppresses_exit_edges_per_lap() {
+        // worker finished lap 1 of 3: its worker→sink edge is a BARRIER exit
+        // and must not fire per-lap.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
                 done: false,
             },
         );
         state
             .nodes
-            .insert("worker".into(), completed_node("worker"));
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
 
         let actions = evaluate_outgoing_edges_with_context(
             &pipeline,
@@ -3976,307 +3960,211 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert!(actions.contains(&SchedulerAction::ForEachBreakReceived {
-            foreach_node_id: "fe1".into(),
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sink")),
+            "member→non-member edges fire on the barrier only"
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Complete),
+            "a per-lap completion must never complete the run"
+        );
+    }
+
+    #[test]
+    fn collection_member_to_end_edge_is_suppressed_per_lap() {
+        // Region exits straight to End: a per-lap completion must not Complete.
+        let mut pipeline = collection_pipeline();
+        pipeline.edges = vec![
+            make_edge("upstream", "out", "worker", "in"),
+            make_edge("worker", "out", "end", "result"),
+        ];
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "worker",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Complete),
+            "lap 1 of 3 completing must not complete the run: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn collection_barrier_fires_after_all_laps() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "sink".into(),
+            iter: 1,
         }));
     }
 
     #[test]
-    fn foreach_body_completion_fires_done() {
-        let pipeline = PipelineDef {
-            name: "foreach-done".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("worker", "out", "fe1", "done"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
+    fn collection_barrier_waits_on_a_missing_lap() {
+        let pipeline = collection_pipeline();
         let mut state = empty_run_state();
-        state.foreach_states.insert(
-            "fe1".into(),
-            crate::event_log::ForEachState {
-                foreach_node_id: "fe1".into(),
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
                 total_items: 3,
-                break_received: false,
                 done: false,
             },
         );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 3]));
 
-        let mut worker_state = completed_node("worker");
-        worker_state.iter = 3;
-        worker_state.iterations = vec![
-            crate::event_log::IterationInfo {
-                iter: 1,
-                status: NodeStatus::Completed,
-                started_at: Some("t0".into()),
-                completed_at: Some("t1".into()),
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        assert!(actions.is_empty(), "lap 2 missing — barrier must wait");
+    }
+
+    #[test]
+    fn collection_barrier_is_inert_once_done() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                done: true,
             },
-            crate::event_log::IterationInfo {
-                iter: 2,
-                status: NodeStatus::Completed,
-                started_at: Some("t0".into()),
-                completed_at: Some("t1".into()),
-            },
-            crate::event_log::IterationInfo {
-                iter: 3,
-                status: NodeStatus::Completed,
-                started_at: Some("t0".into()),
-                completed_at: Some("t1".into()),
-            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        assert!(actions.is_empty(), "a fired barrier never re-fires");
+    }
+
+    #[test]
+    fn collection_barrier_to_end_completes_the_run() {
+        let mut pipeline = collection_pipeline();
+        pipeline.edges = vec![
+            make_edge("upstream", "out", "worker", "in"),
+            make_edge("worker", "out", "end", "result"),
         ];
-        state.nodes.insert("worker".into(), worker_state);
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
+                total_items: 2,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2]));
 
-        let actions = evaluate_foreach_body_completion(&pipeline, &state, "fe1");
-
-        assert!(actions.contains(&SchedulerAction::ForEachDone {
-            foreach_node_id: "fe1".into(),
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
         }));
         assert!(actions.contains(&SchedulerAction::Complete));
     }
 
     #[test]
-    fn foreach_body_not_complete_no_done() {
-        let pipeline = PipelineDef {
-            name: "foreach-partial".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("worker", "out", "fe1", "done"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
+    fn collection_member_skipped_by_ready_nodes_when_fed_by_producer() {
+        let pipeline = collection_pipeline();
         let mut state = empty_run_state();
-        state.foreach_states.insert(
-            "fe1".into(),
-            crate::event_log::ForEachState {
-                foreach_node_id: "fe1".into(),
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"worker".to_string()),
+            "a collection member is spawned by the fan-out, not the sweep"
+        );
+    }
+
+    #[test]
+    fn collection_barrier_target_not_ready_until_region_done() {
+        // worker projects Completed after lap 1 while laps 2-3 still run: the
+        // readiness sweep must not spawn `sink` off that transient status.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::event_log::CollectionState {
+                region_id: "fan".into(),
                 total_items: 3,
-                break_received: false,
                 done: false,
             },
         );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
 
-        let mut worker_state = completed_node("worker");
-        worker_state.iter = 2;
-        worker_state.iterations = vec![
-            crate::event_log::IterationInfo {
-                iter: 1,
-                status: NodeStatus::Completed,
-                started_at: Some("t0".into()),
-                completed_at: Some("t1".into()),
-            },
-            crate::event_log::IterationInfo {
-                iter: 2,
-                status: NodeStatus::Completed,
-                started_at: Some("t0".into()),
-                completed_at: Some("t1".into()),
-            },
-        ];
-        state.nodes.insert("worker".into(), worker_state);
-
-        let actions = evaluate_foreach_body_completion(&pipeline, &state, "fe1");
-        assert!(
-            actions.is_empty(),
-            "should not fire done with only 2 of 3 complete"
-        );
-    }
-
-    #[test]
-    fn foreach_node_skipped_by_ready_nodes() {
-        let pipeline = PipelineDef {
-            name: "foreach-skip".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-            ],
-            edges: vec![make_edge("fe1", "body", "worker", "in")],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
-        let state = empty_run_state();
         let ready = ready_nodes(&pipeline, &state);
         assert!(
-            !ready.contains(&"fe1".to_string()),
-            "ForEach should not appear in ready_nodes"
+            !ready.contains(&"sink".to_string()),
+            "barrier target must wait for CollectionDone"
         );
+
+        // Once the region is done, the barrier sweep (not ready_nodes) spawns
+        // sink — but if it were already spawned it would be filtered anyway;
+        // assert ready_nodes now permits it (region gate open).
+        state.collection_states.get_mut("fan").unwrap().done = true;
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.contains(&"sink".to_string()));
     }
 
-    // --- foreach_resolve_collection tests (issue #65) ---
+    // --- Layer 3a: integration test — parse YAML + schedule (#65 → #269) ---
+    //
+    // The ex-ForEach integration coverage, migrated to the collection-region
+    // model: parse a `loops: {kind: collection}` YAML, then drive the live
+    // dispatch end-to-end (fan-out on a typed upstream / empty on a missing
+    // `over` field).
 
     #[test]
-    fn foreach_resolve_collection_returns_list_for_matching_field() {
-        let mut fm = HashMap::new();
-        fm.insert(
-            "issues".into(),
-            serde_yaml::Value::Sequence(vec![
-                serde_yaml::Value::String("a".into()),
-                serde_yaml::Value::String("b".into()),
-            ]),
-        );
-        let result = foreach_resolve_collection(&fm, "issues");
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn foreach_resolve_collection_returns_empty_for_missing_field() {
-        let fm = HashMap::new();
-        let result = foreach_resolve_collection(&fm, "issues");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn foreach_resolve_collection_returns_empty_for_wrong_type() {
-        let mut fm = HashMap::new();
-        fm.insert(
-            "issues".into(),
-            serde_yaml::Value::String("not-a-list".into()),
-        );
-        let result = foreach_resolve_collection(&fm, "issues");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn foreach_with_over_field_reads_named_frontmatter_field() {
-        let pipeline = PipelineDef {
-            name: "foreach-over".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["in"], &["out"]),
-                make_foreach_node_with_over("fe1", "tasks"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "fe1", "in"),
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("upstream".into(), completed_node("upstream"));
-
-        let mut frontmatter = HashMap::new();
-        frontmatter.insert(
-            "tasks".into(),
-            serde_yaml::Value::Sequence(vec![
-                serde_yaml::Value::String("t1".into()),
-                serde_yaml::Value::String("t2".into()),
-            ]),
-        );
-
-        let actions = evaluate_outgoing_edges_with_context(
-            &pipeline,
-            &state,
-            "upstream",
-            &HashMap::new(),
-            &frontmatter,
-        );
-
-        assert!(actions.contains(&SchedulerAction::ForEachStarted {
-            foreach_node_id: "fe1".into(),
-            total_items: 2,
-            items: vec![
-                serde_yaml::Value::String("t1".into()),
-                serde_yaml::Value::String("t2".into()),
-            ],
-        }));
-        for i in 1..=2 {
-            assert!(
-                actions.contains(&SchedulerAction::Spawn {
-                    node_id: "worker".into(),
-                    iter: i,
-                }),
-                "should spawn worker iter {i}"
-            );
-        }
-    }
-
-    #[test]
-    fn foreach_without_over_falls_back_to_items() {
-        let pipeline = PipelineDef {
-            name: "foreach-fallback".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_node("upstream", &["in"], &["out"]),
-                make_foreach_node("fe1"),
-                make_node("worker", &["in"], &["out"]),
-                make_end_node(),
-            ],
-            edges: vec![
-                make_edge("upstream", "out", "fe1", "in"),
-                make_edge("fe1", "body", "worker", "in"),
-                make_edge("fe1", "done", "end", "result"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-        };
-
-        let mut state = empty_run_state();
-        state
-            .nodes
-            .insert("upstream".into(), completed_node("upstream"));
-
-        let mut frontmatter = HashMap::new();
-        frontmatter.insert(
-            "items".into(),
-            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("x".into())]),
-        );
-
-        let actions = evaluate_outgoing_edges_with_context(
-            &pipeline,
-            &state,
-            "upstream",
-            &HashMap::new(),
-            &frontmatter,
-        );
-
-        assert!(actions.contains(&SchedulerAction::ForEachStarted {
-            foreach_node_id: "fe1".into(),
-            total_items: 1,
-            items: vec![serde_yaml::Value::String("x".into())],
-        }));
-    }
-
-    // --- Layer 3a: integration test — parse YAML + schedule (issue #65) ---
-
-    #[test]
-    fn integration_foreach_over_issues_with_typed_upstream() {
+    fn integration_collection_over_issues_with_typed_upstream() {
         let yaml = r#"
-name: foreach-integration
+name: collection-integration
 nodes:
   - id: start
     name: Start
@@ -4293,16 +4181,6 @@ nodes:
         frontmatter:
           issues:
             type: list
-  - id: ab000002
-    name: per-issue
-    type: for-each
-    over: issues
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: body
-      - name: done
   - id: ab000003
     name: worker
     type: code-mutating
@@ -4319,21 +4197,20 @@ edges:
   - source: { node: start, port: user_prompt }
     target: { node: ab000001, port: task }
   - source: { node: ab000001, port: plan }
-    target: { node: ab000002, port: in }
-  - source: { node: ab000002, port: body }
     target: { node: ab000003, port: in }
-  - source: { node: ab000002, port: done }
+  - source: { node: ab000003, port: out }
     target: { node: end, port: result }
+loops:
+  - id: per-issue
+    kind: collection
+    over: issues
+    members: [ab000003]
 "#;
         let result = crate::pipeline::parse_pipeline(yaml).unwrap();
         let pipeline = result.pipeline;
 
-        let fe = pipeline
-            .nodes
-            .iter()
-            .find(|n| n.node_type == NodeType::ForEach)
-            .unwrap();
-        assert_eq!(fe.over.as_deref(), Some("issues"));
+        assert_eq!(pipeline.loops.len(), 1);
+        assert_eq!(pipeline.loops[0].over.as_deref(), Some("issues"));
 
         let mut state = empty_run_state();
         state
@@ -4359,8 +4236,9 @@ edges:
         );
 
         assert!(
-            actions.contains(&SchedulerAction::ForEachStarted {
-                foreach_node_id: "ab000002".into(),
+            actions.contains(&SchedulerAction::CollectionStarted {
+                region_id: "per-issue".into(),
+                entry: "ab000003".into(),
                 total_items: 3,
                 items: vec![
                     serde_yaml::Value::String("a".into()),
@@ -4368,7 +4246,7 @@ edges:
                     serde_yaml::Value::String("c".into()),
                 ],
             }),
-            "3 issues should produce ForEachStarted with total_items=3"
+            "3 issues should produce CollectionStarted with total_items=3"
         );
         for i in 1..=3 {
             assert!(
@@ -4376,15 +4254,15 @@ edges:
                     node_id: "ab000003".into(),
                     iter: i,
                 }),
-                "should spawn worker iter {i}"
+                "should spawn worker lap {i}"
             );
         }
     }
 
     #[test]
-    fn integration_foreach_over_missing_field_fires_empty() {
+    fn integration_collection_over_missing_field_fires_empty() {
         let yaml = r#"
-name: foreach-missing
+name: collection-missing
 nodes:
   - id: start
     name: Start
@@ -4398,16 +4276,6 @@ nodes:
       - name: task
     outputs:
       - name: plan
-  - id: ab000002
-    name: per-issue
-    type: for-each
-    over: nonexistent
-    inputs:
-      - name: in
-      - name: break
-    outputs:
-      - name: body
-      - name: done
   - id: ab000003
     name: worker
     type: code-mutating
@@ -4424,11 +4292,14 @@ edges:
   - source: { node: start, port: user_prompt }
     target: { node: ab000001, port: task }
   - source: { node: ab000001, port: plan }
-    target: { node: ab000002, port: in }
-  - source: { node: ab000002, port: body }
     target: { node: ab000003, port: in }
-  - source: { node: ab000002, port: done }
+  - source: { node: ab000003, port: out }
     target: { node: end, port: result }
+loops:
+  - id: per-issue
+    kind: collection
+    over: nonexistent
+    members: [ab000003]
 "#;
         let result = crate::pipeline::parse_pipeline(yaml).unwrap();
         let pipeline = result.pipeline;
@@ -4454,16 +4325,20 @@ edges:
         );
 
         assert!(
-            actions.contains(&SchedulerAction::ForEachEmpty {
-                foreach_node_id: "ab000002".into(),
+            actions.contains(&SchedulerAction::CollectionEmpty {
+                region_id: "per-issue".into(),
             }),
-            "over: nonexistent should resolve to empty list and fire ForEachEmpty"
+            "over: nonexistent should resolve to empty and fire CollectionEmpty"
         );
         assert!(
-            actions.contains(&SchedulerAction::ForEachDone {
-                foreach_node_id: "ab000002".into(),
+            actions.contains(&SchedulerAction::CollectionDone {
+                region_id: "per-issue".into(),
             }),
-            "empty foreach should fire done immediately"
+            "an empty collection fires done immediately"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "the barrier target End completes the run immediately"
         );
     }
 

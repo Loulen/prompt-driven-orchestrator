@@ -349,6 +349,38 @@ pub fn collection_barrier_reached(
     (1..=total).all(|i| completed_iters.contains(&i))
 }
 
+/// The collection region `node_id` is a member of, if any (ADR-0011 / #269).
+/// Membership means the node's iteration is governed by the region fan-out —
+/// it is spawned once per item by the region engine, never by the generic
+/// forward path, and its member→non-member edges fire only on the barrier.
+/// Returns the first matching `collection` region.
+pub fn collection_region_for_member<'a>(
+    pipeline: &'a PipelineDef,
+    node_id: &str,
+) -> Option<&'a LoopRegion> {
+    pipeline
+        .loops
+        .iter()
+        .find(|r| r.kind == LoopKind::Collection && r.members.iter().any(|m| m == node_id))
+}
+
+/// The collection region a fired `source -> target` edge ENTERS (ADR-0011 /
+/// #269): `target` is a member, `source` is not. Such an edge carries the
+/// artifact whose frontmatter holds the region's `over` list — the scheduler
+/// hands it to the fan-out engine instead of the generic forward-spawn path.
+/// Returns the first matching `collection` region.
+pub fn collection_region_entered_by_edge<'a>(
+    pipeline: &'a PipelineDef,
+    source: &str,
+    target: &str,
+) -> Option<&'a LoopRegion> {
+    pipeline.loops.iter().find(|r| {
+        r.kind == LoopKind::Collection
+            && r.members.iter().any(|m| m == target)
+            && !r.members.iter().any(|m| m == source)
+    })
+}
+
 /// The external targets a collection region's barrier fires into (ADR-0011 /
 /// #151): the edges leaving the region (member → non-member). Fired **once**, in
 /// edge order, de-duplicated — preserving `done → Merge` convergence (ADR-0006).

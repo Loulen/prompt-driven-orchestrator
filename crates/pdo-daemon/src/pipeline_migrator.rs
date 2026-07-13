@@ -233,6 +233,13 @@ pub fn migrate_pipeline_yaml(
         }
     }
 
+    // The dissolve passes above run *before* id-rewriting, so the `loops:`
+    // regions they emit (and any pre-existing region) reference original node
+    // ids. Remap `members` like the edges — a stale member id orphans the
+    // region, which then silently no-ops at runtime (the exact failure #269
+    // eliminates).
+    rewrite_loop_members(&mut doc, &id_map);
+
     // Inputs are emergent (#149): strip declared inputs from regular nodes,
     // migrating any `repeated: true` flag onto the matching incoming edge so the
     // accumulate-across-iterations behavior is preserved. Run before side
@@ -278,8 +285,11 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         None => return Ok(()),
     };
 
-    // Collect ForEach nodes: id -> (name, over).
+    // Collect ForEach nodes: id -> (name, over). `fe_order` keeps document
+    // order so the emitted regions are stable across runs (a HashSet walk is
+    // not deterministic).
     let mut fe_ids: HashSet<String> = HashSet::new();
+    let mut fe_order: Vec<String> = Vec::new();
     let mut fe_meta: HashMap<String, (String, String)> = HashMap::new();
     for node in &nodes {
         let is_fe = node
@@ -305,6 +315,7 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
             .unwrap_or("items")
             .to_string();
         fe_ids.insert(id.clone());
+        fe_order.push(id.clone());
         fe_meta.insert(id, (name, over));
     }
 
@@ -384,8 +395,26 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         }
     }
 
+    // Region ids default to the ForEach node's *name*, which is user-chosen
+    // free text: guard against collisions with surviving node ids, existing
+    // `loops:` region ids, and sibling ForEach names (two ForEaches named
+    // "per-item" would otherwise corrupt each other's loop counters). The
+    // removed ForEach node ids themselves are free to reuse.
+    let mut taken_ids: HashSet<String> = nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
+        .filter(|id| !fe_ids.contains(id))
+        .collect();
+    if let Some(serde_yaml::Value::Sequence(existing)) = doc.get("loops") {
+        for r in existing {
+            if let Some(id) = r.get("id").and_then(|v| v.as_str()) {
+                taken_ids.insert(id.to_string());
+            }
+        }
+    }
+
     let mut regions: Vec<serde_yaml::Value> = Vec::new();
-    for fe_id in &fe_ids {
+    for fe_id in &fe_order {
         let entry = match fe_entry.get(fe_id) {
             Some(e) => e.clone(),
             None => continue, // ForEach with no body — nothing to enter
@@ -429,10 +458,17 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         }
 
         let (name, over) = fe_meta.get(fe_id).cloned().unwrap_or_default();
+        let mut region_id = name.clone();
+        let mut suffix = 2;
+        while taken_ids.contains(&region_id) {
+            region_id = format!("{name}-{suffix}");
+            suffix += 1;
+        }
+        taken_ids.insert(region_id.clone());
         let mut region = serde_yaml::Mapping::new();
         region.insert(
             serde_yaml::Value::String("id".into()),
-            serde_yaml::Value::String(name),
+            serde_yaml::Value::String(region_id),
         );
         region.insert(
             serde_yaml::Value::String("kind".into()),
@@ -735,6 +771,25 @@ fn inject_start_end_nodes(doc: &mut serde_yaml::Value) {
             serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(input_port)]),
         );
         nodes.push(serde_yaml::Value::Mapping(end));
+    }
+}
+
+/// Remaps node references inside the `loops:` block (`members` entries) through
+/// `id_map`, mirroring [`rewrite_edge_endpoint`] for edges. Region `id`s are
+/// free text, not node references, and are left alone.
+fn rewrite_loop_members(doc: &mut serde_yaml::Value, id_map: &HashMap<String, String>) {
+    let Some(regions) = doc.get_mut("loops").and_then(|l| l.as_sequence_mut()) else {
+        return;
+    };
+    for region in regions.iter_mut() {
+        let Some(members) = region.get_mut("members").and_then(|m| m.as_sequence_mut()) else {
+            continue;
+        };
+        for member in members.iter_mut() {
+            if let Some(new_id) = member.as_str().and_then(|old| id_map.get(old)) {
+                *member = serde_yaml::Value::String(new_id.clone());
+            }
+        }
     }
 }
 
@@ -2421,11 +2476,11 @@ edges:
     target: { node: end, port: result }
 "#;
         let parsed = migrate_str_and_parse(yaml);
+        // `parse_pipeline` now hard-refuses `type: for-each` (ADR-0011 / #269),
+        // so `migrate_str_and_parse` succeeding already proves dissolution;
+        // assert the node id is gone for good measure.
         assert!(
-            !parsed
-                .nodes
-                .iter()
-                .any(|n| n.node_type == NodeType::ForEach),
+            !parsed.nodes.iter().any(|n| n.id == "feNODE01"),
             "ForEach node must be dissolved"
         );
         assert_eq!(parsed.loops.len(), 1);
@@ -2494,12 +2549,10 @@ edges:
 "#;
         let parsed = migrate_str_and_parse(yaml);
 
-        // No ForEach node may remain, nor any edge referencing it.
+        // No ForEach node may remain, nor any edge referencing it (parse would
+        // refuse a surviving `type: for-each` outright, ADR-0011 / #269).
         assert!(
-            !parsed
-                .nodes
-                .iter()
-                .any(|n| n.node_type == NodeType::ForEach),
+            !parsed.nodes.iter().any(|n| n.id == "feNODE01"),
             "no ForEach node may remain after migration"
         );
         assert!(
@@ -2541,6 +2594,102 @@ edges:
         let second =
             migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
         assert!(!second.migrated, "foreach migration must be idempotent");
+    }
+
+    #[test]
+    fn foreach_dissolution_dedups_colliding_region_ids_in_document_order() {
+        // #269 slice 2: the region id defaults to the ForEach node's NAME —
+        // user-chosen free text. Two ForEaches sharing a name must not emit
+        // two regions with the same id (colliding loop counters); the second
+        // gets a deterministic `-2` suffix, in document order.
+        let yaml = r#"
+name: foreach-dup
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+  - id: liStErAA
+    name: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
+    name: per-item
+    type: for-each
+    over: issues
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: wRkRAAAA
+    name: worker-a
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+  - id: feNODE02
+    name: per-item
+    type: for-each
+    over: bugs
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: wRkRBBBB
+    name: worker-b
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: left
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: liStErAA, port: task }
+  - source: { node: liStErAA, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: wRkRAAAA, port: in }
+  - source: { node: feNODE01, port: done }
+    target: { node: feNODE02, port: in }
+  - source: { node: feNODE02, port: body }
+    target: { node: wRkRBBBB, port: in }
+  - source: { node: feNODE02, port: done }
+    target: { node: end, port: result }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        assert_eq!(parsed.loops.len(), 2, "two collection regions expected");
+        let ids: Vec<&str> = parsed.loops.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["per-item", "per-item-2"],
+            "colliding names dedup with a suffix, in document order"
+        );
+        // Each region keeps its own driver.
+        assert_eq!(parsed.loops[0].over.as_deref(), Some("issues"));
+        assert_eq!(parsed.loops[1].over.as_deref(), Some("bugs"));
     }
 
     #[test]
@@ -2601,6 +2750,126 @@ edges:
         let parsed = migrate_str_and_parse(yaml);
         let region = &parsed.loops[0];
         assert_eq!(region.over.as_deref(), Some("tasks"));
+    }
+
+    #[test]
+    fn foreach_dissolution_remaps_members_when_body_has_human_id() {
+        // #269 regression: the dissolve passes run before id-rewriting, so the
+        // emitted region references the body's *original* id. When that id is
+        // human-readable (the common legacy case) it gets re-idified to a
+        // nanoid — `loops[].members` must follow, like the edges, or the
+        // migrated region is orphaned and silently no-ops at runtime.
+        let yaml = r#"
+name: foreach-human-id
+version: "1.0"
+nodes:
+  - id: lister
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: feNODE01
+    name: per-item
+    type: for-each
+    over: items
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: worker
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+edges:
+  - source: { node: lister, port: plan }
+    target: { node: feNODE01, port: in }
+  - source: { node: feNODE01, port: body }
+    target: { node: worker, port: in }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        assert_eq!(parsed.loops.len(), 1);
+        let region = &parsed.loops[0];
+        let new_worker_id = deterministic_id("worker");
+        assert_eq!(
+            region.members,
+            vec![new_worker_id.clone()],
+            "members must be remapped to the re-idified node"
+        );
+        // Cross-check: every member names an existing node (the launch-time
+        // dangling-reference gate would otherwise refuse this pipeline).
+        assert!(
+            pipeline::dangling_edge_references(&parsed).is_empty(),
+            "migrated pipeline must carry no dangling references"
+        );
+    }
+
+    #[test]
+    fn loop_dissolution_remaps_members_when_body_has_human_id() {
+        // Same bug class as the ForEach variant, for `bounded` regions emitted
+        // by dissolve_loops: a human-id body node is re-idified, members must
+        // follow.
+        let yaml = r#"
+name: loop-human-id
+version: "1.0"
+nodes:
+  - id: feeder
+    type: doc-only
+    outputs:
+      - name: plan
+        side: right
+  - id: lpNODE01
+    name: retry
+    type: loop
+    max_iter: 3
+    inputs:
+      - name: in
+        side: left
+      - name: break
+        side: left
+    outputs:
+      - name: body
+        side: right
+      - name: done
+        side: right
+  - id: fixer
+    type: code-mutating
+    outputs:
+      - name: out
+        side: right
+edges:
+  - source: { node: feeder, port: plan }
+    target: { node: lpNODE01, port: in }
+  - source: { node: lpNODE01, port: body }
+    target: { node: fixer, port: in }
+  - source: { node: fixer, port: out }
+    target: { node: lpNODE01, port: break }
+    when:
+      verdict: { eq: PASS }
+  - source: { node: lpNODE01, port: done }
+    target: { node: end, port: result }
+"#;
+        let parsed = migrate_str_and_parse(yaml);
+
+        assert_eq!(parsed.loops.len(), 1);
+        let region = &parsed.loops[0];
+        assert_eq!(region.kind, pipeline::LoopKind::Bounded);
+        assert_eq!(
+            region.members,
+            vec![deterministic_id("fixer")],
+            "bounded-region members must be remapped to the re-idified node"
+        );
+        assert!(
+            pipeline::dangling_edge_references(&parsed).is_empty(),
+            "migrated pipeline must carry no dangling references"
+        );
     }
 
     // --- Real fixtures: Switch → guarded edges (issue #144) ---

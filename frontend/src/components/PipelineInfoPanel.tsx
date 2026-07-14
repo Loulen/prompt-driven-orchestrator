@@ -342,7 +342,9 @@ function YamlTab({ pipeline, scrollToLine }: { pipeline: PipelineDef | null; scr
   );
 }
 
-function highlightYaml(yaml: string, errorLine?: number): React.ReactNode {
+// Exported for reuse by the node-export modal (#345), which renders the same
+// syntax-highlighted YAML `<pre>` as this panel's YAML tab.
+export function highlightYaml(yaml: string, errorLine?: number): React.ReactNode {
   const lines = yaml.split("\n");
   return lines.map((line, i) => {
     const lineNum = i + 1;

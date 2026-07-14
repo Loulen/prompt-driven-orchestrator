@@ -10,11 +10,13 @@ import type { TabHistory } from "../stores/editStore";
 describe("EditToolbar", () => {
   const onAddNode = vi.fn();
   const onAddNote = vi.fn();
+  const onAddNodeFromYaml = vi.fn();
   const onLibraryDelete = vi.fn();
 
   beforeEach(() => {
     onAddNode.mockClear();
     onAddNote.mockClear();
+    onAddNodeFromYaml.mockClear();
     onLibraryDelete.mockClear();
   });
 
@@ -24,6 +26,7 @@ describe("EditToolbar", () => {
         <EditToolbar
           onAddNode={onAddNode}
           onAddNote={onAddNote}
+          onAddNodeFromYaml={onAddNodeFromYaml}
           libraryEntries={[]}
           onLibraryDelete={onLibraryDelete}
         />
@@ -62,6 +65,18 @@ describe("EditToolbar", () => {
     await user.click(screen.getByTestId("toolbar-add"));
     await user.click(await screen.findByTestId("add-menu-node"));
     expect(onAddNode).toHaveBeenCalledWith("code-mutating");
+    expect(onAddNote).not.toHaveBeenCalled();
+  });
+
+  it("dropdown has an 'Add node from YAML…' item that calls onAddNodeFromYaml (#345)", async () => {
+    const user = userEvent.setup();
+    renderToolbar();
+    await user.click(screen.getByTestId("toolbar-add"));
+    const item = await screen.findByTestId("add-menu-node-from-yaml");
+    expect(item).toBeInTheDocument();
+    await user.click(item);
+    expect(onAddNodeFromYaml).toHaveBeenCalledTimes(1);
+    expect(onAddNode).not.toHaveBeenCalled();
     expect(onAddNote).not.toHaveBeenCalled();
   });
 
@@ -146,7 +161,7 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
   function renderToolbar() {
     return render(
       <TooltipProvider>
-        <EditToolbar onAddNode={onAddNode} onAddNote={vi.fn()} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
+        <EditToolbar onAddNode={onAddNode} onAddNote={vi.fn()} onAddNodeFromYaml={vi.fn()} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
       </TooltipProvider>,
     );
   }

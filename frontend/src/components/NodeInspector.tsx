@@ -404,6 +404,9 @@ function StarButton({
         ...(p.when ? { when: p.when } : {}),
       })),
       interactive: node.interactive,
+      // #296/#345: persist the per-node model so the library is model-aware and
+      // a modelled node stays synced instead of flipping to diverged.
+      model: node.model ?? null,
       prompt,
     };
   }
@@ -440,6 +443,8 @@ function StarButton({
         inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
+        // #296/#345: reset the per-node model from the library entry too.
+        model: result.spec.model ?? null,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

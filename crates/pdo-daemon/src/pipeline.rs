@@ -397,6 +397,80 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "prompt_required",
 ];
 
+/// The node `type` strings the parser accepts verbatim. Anything else is coerced
+/// to `doc-only` with a warning (see `normalize_node_value`); `for-each`/`foreach`
+/// are refused outright (retired in ADR-0011).
+pub const VALID_NODE_TYPES: &[&str] = &[
+    "doc-only",
+    "code-mutating",
+    "start",
+    "end",
+    "switch",
+    "loop",
+    "merge",
+    // #248: without this, a `type: script` node is silently rewritten to
+    // `doc-only` with only a diagnostic (see the layer-1 test).
+    "script",
+];
+
+/// Normalize one node's raw YAML `type` field in place, returning any warnings.
+/// This is the per-node pass `parse_pipeline` runs over each element of the
+/// `nodes:` sequence, factored out so the single-node `POST /nodes/parse`
+/// endpoint (#345) shares exactly the same coercion rules — one source of truth
+/// for node-type handling:
+///
+/// - `for-each` / `foreach` → hard `Err` (the type was removed in ADR-0011;
+///   coercing a fan-out to `doc-only` would run each item's work zero times).
+/// - missing `type` → default to `doc-only` (noisy warning).
+/// - unknown `type` → coerce to `doc-only` (noisy warning).
+/// - a known type (incl. legacy `switch`/`loop`) → left untouched, no warning.
+///
+/// A non-mapping value (e.g. a stray scalar in the `nodes:` list) is a no-op.
+pub fn normalize_node_value(
+    node_val: &mut serde_yaml::Value,
+) -> Result<Vec<Diagnostic>, ParseError> {
+    let mut diagnostics = Vec::new();
+    let Some(node_map) = node_val.as_mapping_mut() else {
+        return Ok(diagnostics);
+    };
+    let type_key = serde_yaml::Value::String("type".into());
+    let node_id = node_map
+        .get(serde_yaml::Value::String("id".into()))
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>")
+        .to_string();
+
+    match node_map.get(&type_key).and_then(|v| v.as_str()) {
+        // ForEach is RETIRED (ADR-0011 / #269): a hard refusal, not the
+        // warn+coerce below — silently rewriting a fan-out node to doc-only
+        // would run each item's work zero times.
+        Some(t @ ("for-each" | "foreach")) => {
+            return Err(ParseError::MissingField(format!(
+                "node '{node_id}': node type '{t}' was removed (ADR-0011) — \
+                 run `pdo migrate` to convert it to a collection loop region"
+            )));
+        }
+        None => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!("node '{node_id}': missing 'type', defaulting to 'doc-only'"),
+            });
+            node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+        }
+        Some(t) if !VALID_NODE_TYPES.contains(&t) => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "node '{node_id}': unknown node type '{t}', defaulting to 'doc-only'"
+                ),
+            });
+            node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+        }
+        _ => {}
+    }
+    Ok(diagnostics)
+}
+
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let mut raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;
 
@@ -410,18 +484,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     let mut diagnostics = Vec::new();
-    let valid_types = [
-        "doc-only",
-        "code-mutating",
-        "start",
-        "end",
-        "switch",
-        "loop",
-        "merge",
-        // #248: without this, a `type: script` node is silently rewritten to
-        // `doc-only` with only a diagnostic (see the layer-1 test).
-        "script",
-    ];
 
     if let Some(nodes) = raw
         .as_mapping_mut()
@@ -429,45 +491,8 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         .and_then(|v| v.as_sequence_mut())
     {
         for node_val in nodes.iter_mut() {
-            if let Some(node_map) = node_val.as_mapping_mut() {
-                let type_key = serde_yaml::Value::String("type".into());
-                let node_id = node_map
-                    .get(serde_yaml::Value::String("id".into()))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("<unknown>")
-                    .to_string();
-
-                match node_map.get(&type_key).and_then(|v| v.as_str()) {
-                    // ForEach is RETIRED (ADR-0011 / #269): a hard refusal, not
-                    // the warn+coerce below — silently rewriting a fan-out node
-                    // to doc-only would run each item's work zero times.
-                    Some(t @ ("for-each" | "foreach")) => {
-                        return Err(ParseError::MissingField(format!(
-                            "node '{node_id}': node type '{t}' was removed (ADR-0011) — \
-                             run `pdo migrate` to convert it to a collection loop region"
-                        )));
-                    }
-                    None => {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Warning,
-                            message: format!(
-                                "node '{node_id}': missing 'type', defaulting to 'doc-only'"
-                            ),
-                        });
-                        node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
-                    }
-                    Some(t) if !valid_types.contains(&t) => {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Warning,
-                            message: format!(
-                                "node '{node_id}': unknown node type '{t}', defaulting to 'doc-only'"
-                            ),
-                        });
-                        node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
-                    }
-                    _ => {}
-                }
-            }
+            // Per-node type normalization, shared with `POST /nodes/parse` (#345).
+            diagnostics.extend(normalize_node_value(node_val)?);
         }
     }
 
@@ -3205,6 +3230,109 @@ edges: []
                 "refusal must name `pdo migrate`, got: {msg}"
             );
         }
+    }
+
+    // --- normalize_node_value: the per-node pass shared by parse_pipeline and
+    // the single-node `POST /nodes/parse` endpoint (#345). ---
+
+    fn node_value(yaml: &str) -> serde_yaml::Value {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    fn type_str(v: &serde_yaml::Value) -> Option<String> {
+        v.as_mapping()
+            .and_then(|m| m.get(serde_yaml::Value::String("type".into())))
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn normalize_node_value_defaults_missing_type() {
+        let mut v = node_value("id: n1\nname: X\n");
+        let diags = normalize_node_value(&mut v).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].message.contains("missing 'type'"),
+            "{}",
+            diags[0].message
+        );
+        assert_eq!(type_str(&v).as_deref(), Some("doc-only"));
+    }
+
+    #[test]
+    fn normalize_node_value_coerces_unknown_type() {
+        let mut v = node_value("id: n1\nname: X\ntype: bogus\n");
+        let diags = normalize_node_value(&mut v).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].message.contains("unknown node type 'bogus'"),
+            "{}",
+            diags[0].message
+        );
+        assert_eq!(type_str(&v).as_deref(), Some("doc-only"));
+    }
+
+    #[test]
+    fn normalize_node_value_leaves_known_types_untouched() {
+        for t in VALID_NODE_TYPES {
+            let mut v = node_value(&format!("id: n1\nname: X\ntype: {t}\n"));
+            let diags = normalize_node_value(&mut v).unwrap();
+            assert!(diags.is_empty(), "type {t} should not warn");
+            assert_eq!(type_str(&v).as_deref(), Some(*t));
+        }
+    }
+
+    #[test]
+    fn normalize_node_value_refuses_foreach() {
+        for t in ["for-each", "foreach"] {
+            let mut v = node_value(&format!("id: n1\nname: X\ntype: {t}\n"));
+            let err = normalize_node_value(&mut v).unwrap_err().to_string();
+            assert!(
+                err.contains("removed") && err.contains("pdo migrate"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_node_value_ignores_non_mapping() {
+        // A stray non-mapping element (e.g. a scalar in the nodes list) is a
+        // no-op: no diagnostics, no mutation.
+        let mut v = node_value("- a scalar");
+        let before = v.clone();
+        let diags = normalize_node_value(&mut v).unwrap();
+        assert!(diags.is_empty());
+        assert_eq!(v, before);
+    }
+
+    #[test]
+    fn normalize_node_value_matches_parse_pipeline_diagnostic() {
+        // Golden: the factored per-node pass emits exactly the diagnostic the
+        // full pipeline parse emits for the same node — single source of truth,
+        // so the refactor is behaviour-preserving.
+        let mut node = node_value("id: n1\nname: X\ntype: bogus\n");
+        let node_diags = normalize_node_value(&mut node).unwrap();
+        let yaml = with_start_end(
+            r#"
+name: t
+nodes:
+  - id: n1
+    name: X
+    type: bogus
+edges: []
+"#,
+        );
+        let msgs: Vec<String> = parse_pipeline(&yaml)
+            .unwrap()
+            .diagnostics
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| *m == node_diags[0].message),
+            "parse_pipeline diagnostics {msgs:?} must include {:?}",
+            node_diags[0].message
+        );
     }
 
     #[test]

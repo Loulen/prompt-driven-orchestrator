@@ -30,6 +30,8 @@ import { NoteNode } from "./NoteNode";
 import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
+import ExportNodeYamlModal from "./ExportNodeYamlModal";
+import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner, { type LintBannerItem } from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
@@ -282,6 +284,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     edgeIndex: number;
     loopIds: string[];
   } | null>(null);
+  // #345: id of the node whose "Export as YAML…" modal is open (null = closed),
+  // and whether the "Add node from YAML…" modal is open. Both are edit-mode
+  // affordances gated with the rest of the context menu / toolbar on readOnly.
+  const [exportNodeId, setExportNodeId] = useState<string | null>(null);
+  const [addFromYamlOpen, setAddFromYamlOpen] = useState(false);
   const reactFlowRef = useRef<HTMLDivElement>(null);
   const reactFlow = useReactFlow();
   const [isDraggingEdge, setIsDraggingEdge] = useState(false);
@@ -650,11 +657,18 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     setSelection({ kind: "note", id: null, noteId: id });
   };
 
+  // #345: resolve the export-modal target live, so a delete/undo that removes it
+  // mid-modal drops back to null (closes the modal) rather than showing a stale node.
+  const exportNode = exportNodeId
+    ? pipeline.nodes.find((n) => n.id === exportNodeId) ?? null
+    : null;
+
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
       <EditToolbar
         onAddNode={handleAddNode}
         onAddNote={handleAddNote}
+        onAddNodeFromYaml={() => setAddFromYamlOpen(true)}
         libraryEntries={libraryEntries}
         onLibraryDelete={onLibraryDelete}
         getDropPosition={computeDropPosition}
@@ -759,6 +773,10 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
             duplicateNode(contextMenu.id);
             setContextMenu(null);
           }}
+          onExportNode={() => {
+            setExportNodeId(contextMenu.id);
+            setContextMenu(null);
+          }}
           onFanOut={(field) => {
             if (contextMenu.fanoutMembers && contextMenu.fanoutMembers.length > 0) {
               createCollectionRegion(contextMenu.fanoutMembers, field);
@@ -795,6 +813,25 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
           setPendingDestroy(null);
         }}
       />
+
+      {/* #345: Export the selected node as YAML. The node is looked up live so a
+          concurrent edit/delete simply closes the modal (node → undefined). */}
+      {exportNode && (
+        <ExportNodeYamlModal
+          node={exportNode}
+          prompt={tab.prompts[exportNode.id] ?? ""}
+          onClose={() => setExportNodeId(null)}
+        />
+      )}
+
+      {/* #345: Add a node from pasted/uploaded YAML, placed at the viewport
+          centre (same drop logic as + Add node / a library insert). */}
+      {addFromYamlOpen && (
+        <AddNodeFromYamlModal
+          getDropPosition={computeDropPosition}
+          onClose={() => setAddFromYamlOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -807,6 +844,7 @@ function ContextMenu({
   onDeleteNode,
   onDeleteNote,
   onDuplicateNode,
+  onExportNode,
   onFanOut,
   onDeleteEdge,
   onClose,
@@ -818,6 +856,7 @@ function ContextMenu({
   onDeleteNode: () => void;
   onDeleteNote: () => void;
   onDuplicateNode: () => void;
+  onExportNode: () => void;
   onFanOut: (field: string) => void;
   onDeleteEdge: () => void;
   onClose: () => void;
@@ -851,6 +890,14 @@ function ContextMenu({
                 Fan out over "{field}"
               </button>
             ))}
+            {/* #345: front-only export of this node to YAML (no daemon). */}
+            <button
+              data-testid="ctx-export-node"
+              onClick={onExportNode}
+              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
+            >
+              Export as YAML…
+            </button>
             <button
               onClick={onDeleteNode}
               className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"

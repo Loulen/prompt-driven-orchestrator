@@ -15,10 +15,20 @@ pub struct LibraryEntry {
     pub outputs: Vec<pipeline::Port>,
     #[serde(default)]
     pub interactive: bool,
+    /// Per-node model override (#296 / #345). Added with the YAML node
+    /// export/import: the node library is now model-aware (it silently dropped
+    /// the model before). Optional + skip-if-none, so pre-#345 entries and nodes
+    /// on the account default round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iter: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branches: Option<u32>,
+    /// Defaulted (#345): a structural node exported to YAML carries no prompt,
+    /// and `POST /nodes/parse` must accept a prompt-less node map. Existing
+    /// library files always carry a prompt, so this is purely additive.
+    #[serde(default)]
     pub prompt: String,
 }
 
@@ -179,6 +189,9 @@ pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
         inputs: node.inputs.clone(),
         outputs: node.outputs.clone(),
         interactive: node.interactive,
+        // #345/#296: carry the per-node model so a starred node stays synced
+        // instead of flipping to `diverged` the moment it has an override.
+        model: node.model.clone(),
         max_iter: None,
         branches: None,
         prompt: prompt.to_string(),
@@ -957,6 +970,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
+                model: None,
                 max_iter: None,
                 branches: None,
                 prompt: "first".to_string(),
@@ -1020,6 +1034,8 @@ mod tests {
         let entry = LibraryEntry {
             name: "Complex Node".to_string(),
             node_type: pipeline::NodeType::CodeMutating,
+            // #345/#296: a per-node model must round-trip losslessly.
+            model: Some("opus".to_string()),
             inputs: vec![
                 pipeline::Port {
                     name: "plan".to_string(),
@@ -1066,8 +1082,42 @@ mod tests {
         };
 
         let yaml = serde_yaml::to_string(&entry).unwrap();
+        // #345/#296: the per-node model rides through the YAML.
+        assert!(yaml.contains("model: opus"), "yaml missing model:\n{yaml}");
         let parsed: LibraryEntry = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn yaml_round_trip_model_absent_is_omitted() {
+        // A node on the account default (model: None) must not emit a `model:`
+        // key, and must round-trip to None (#345/#296 — skip_serializing_if).
+        let entry = LibraryEntry {
+            name: "Plain".to_string(),
+            node_type: pipeline::NodeType::DocOnly,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            model: None,
+            max_iter: None,
+            branches: None,
+            prompt: "hi".to_string(),
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(!yaml.contains("model:"), "model: leaked into yaml:\n{yaml}");
+        let parsed: LibraryEntry = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed, entry);
+        assert_eq!(parsed.model, None);
+    }
+
+    #[test]
+    fn entry_from_node_carries_model() {
+        // #345/#296: a node with a per-node model must produce a model-aware
+        // library entry (previously the model was silently dropped).
+        let mut node = make_node("Modelled");
+        node.model = Some("sonnet".to_string());
+        let entry = entry_from_node(&node, "prompt");
+        assert_eq!(entry.model, Some("sonnet".to_string()));
     }
 
     #[test]
@@ -1079,6 +1129,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
+                model: None,
                 max_iter: None,
                 branches: None,
                 prompt: "p".to_string(),
@@ -1398,6 +1449,7 @@ mod tests {
         let entry = LibraryEntry {
             name: "Typed Node".to_string(),
             node_type: pipeline::NodeType::DocOnly,
+            model: None,
             inputs: vec![
                 pipeline::Port {
                     name: "task".to_string(),
@@ -1487,6 +1539,7 @@ mod tests {
             let entry = LibraryEntry {
                 name: "Schema Node".to_string(),
                 node_type: pipeline::NodeType::CodeMutating,
+                model: None,
                 inputs: vec![pipeline::Port {
                     name: "in".to_string(),
                     repeated: false,

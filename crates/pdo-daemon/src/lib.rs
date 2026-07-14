@@ -2676,6 +2676,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/sessions/{run_id}/shell", post(open_run_shell))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
+        // #345 — parse a single node's YAML into a canvas-instantiable spec.
+        // Disk-free; NEW top-level `/nodes` prefix ⇒ added to the vite proxy
+        // whitelist (frontend/vite.config.ts) so dev POSTs don't 404 as SPA.
+        .route("/nodes/parse", post(parse_node_yaml))
         .route(
             "/library/{name}",
             axum::routing::delete(delete_from_library),
@@ -3820,6 +3824,10 @@ struct SaveToLibraryRequest {
     outputs: Vec<pipeline::Port>,
     #[serde(default)]
     interactive: bool,
+    /// Per-node model override (#345/#296). Optional so a pre-#345 client that
+    /// omits it still stars a node (as model-less), rather than 400-ing.
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     prompt: String,
 }
@@ -3834,6 +3842,7 @@ async fn save_to_library(
         inputs: req.inputs,
         outputs: req.outputs,
         interactive: req.interactive,
+        model: req.model,
         max_iter: None,
         branches: None,
         prompt: req.prompt,
@@ -3873,12 +3882,146 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
                     "inputs": entry.inputs,
                     "outputs": entry.outputs,
                     "interactive": entry.interactive,
+                    // #345/#296: carry the per-node model so instantiating a
+                    // library node restores its override, not the default.
+                    "model": entry.model,
                 },
                 "prompt": prompt,
             }))
             .into_response()
         }
         None => (StatusCode::NOT_FOUND, "entry not found").into_response(),
+    }
+}
+
+/// Request body for `POST /nodes/parse` (#345): the raw YAML text of a single
+/// node (from a paste or an uploaded `.yaml`). Same field feeds both channels.
+#[derive(serde::Deserialize)]
+struct ParseNodeRequest {
+    yaml: String,
+}
+
+/// Node-library `LibraryEntry` fields plus the two identity/layout keys the
+/// canvas instantiation intentionally regenerates (`id`) or re-centres (`view`).
+/// Any *other* root key is surfaced as an ignored-field warning (ADR-0001/#268:
+/// no silent loss). Kept in sync with `library_store::LibraryEntry`.
+const KNOWN_NODE_KEYS: &[&str] = &[
+    "name",
+    "type",
+    "inputs",
+    "outputs",
+    "interactive",
+    "model",
+    "max_iter",
+    "branches",
+    "prompt",
+    // Accepted-and-dropped, not a semantic loss → no warning.
+    "id",
+    "view",
+];
+
+fn node_parse_error(msg: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg.into() })),
+    )
+        .into_response()
+}
+
+/// Pure core of `POST /nodes/parse` (#345), split from the axum handler so it is
+/// unit-testable without a router/AppState (the endpoint is disk-free and
+/// stateless). Returns the JSON body on success; `Err(msg)` is the verbatim
+/// 400 `{error}` message.
+///
+/// This is the daemon-side locus the node import reuses — the front carries no
+/// YAML parser, so this keeps a single source of truth (serde structs +
+/// `pipeline::normalize_node_value`) for node coercion. It never reads/writes
+/// the node library and never calls `parse_pipeline` (which requires a top-level
+/// `name:` AND a `nodes:` list).
+///
+/// Hard failures (`Err`): invalid YAML, non-mapping root, a whole pipeline
+/// pasted by mistake, missing `name`, retired `for-each`. Soft losses
+/// (defaulted/coerced type, ignored unknown keys) ride back in `warnings[]` with
+/// the node still produced — mirroring `/library/import`.
+fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
+    // 1. YAML syntax. A parse error is a hard failure (verbatim serde message).
+    let mut value: serde_yaml::Value =
+        serde_yaml::from_str(yaml).map_err(|e| format!("invalid YAML: {e}"))?;
+
+    // 2. Root must be a mapping — a node is a map. A bare scalar/sequence gets a
+    //    clear message instead of a downstream serde type error.
+    let Some(map) = value.as_mapping() else {
+        return Err(
+            "expected a single node definition (a YAML mapping), got a non-mapping document"
+                .to_string(),
+        );
+    };
+
+    // 3. Whole-pipeline-pasted-by-mistake: a `nodes:` or `edges:` root is a
+    //    pipeline, not a node. Reject with a clear message rather than serde's
+    //    cryptic "missing field `type`" (D3 / validation matrix).
+    if map.contains_key(serde_yaml::Value::String("nodes".into()))
+        || map.contains_key(serde_yaml::Value::String("edges".into()))
+    {
+        return Err(
+            "this looks like a whole pipeline, not a node — paste a single node's YAML \
+             (import a full pipeline from the pipeline library instead)"
+                .to_string(),
+        );
+    }
+
+    // 4. `name` is the node's identity — a hard requirement, checked here for a
+    //    clean message (serde would otherwise say "missing field `name`").
+    if map.get(serde_yaml::Value::String("name".into())).is_none() {
+        return Err("missing required field: name".to_string());
+    }
+
+    // 5. Normalize the node `type` in place — shared with `parse_pipeline`:
+    //    default/coerce to doc-only (warnings), refuse retired `for-each`.
+    let mut warnings: Vec<String> = pipeline::normalize_node_value(&mut value)
+        .map_err(|e| format!("{e}"))?
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+
+    // 6. Surface every root key serde will silently ignore (ADR-0001/#268).
+    if let Some(m) = value.as_mapping() {
+        for key in m.keys() {
+            if let Some(k) = key.as_str() {
+                if !KNOWN_NODE_KEYS.contains(&k) {
+                    warnings.push(format!("unknown field '{k}' (ignored)"));
+                }
+            }
+        }
+    }
+
+    // 7. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
+    //    to empty (a structural node carries none); unknown fields are ignored.
+    let entry: library_store::LibraryEntry =
+        serde_yaml::from_value(value).map_err(|e| format!("{e}"))?;
+
+    Ok(serde_json::json!({
+        "spec": {
+            "name": entry.name,
+            "type": entry.node_type,
+            "inputs": entry.inputs,
+            "outputs": entry.outputs,
+            "interactive": entry.interactive,
+            "model": entry.model,
+            "max_iter": entry.max_iter,
+            "branches": entry.branches,
+        },
+        "prompt": entry.prompt,
+        "warnings": warnings,
+    }))
+}
+
+/// `POST /nodes/parse` (#345 / ADR-0016): thin axum wrapper over
+/// `parse_node_spec` — 200 with `{spec, prompt, warnings}` or 400 `{error}`.
+async fn parse_node_yaml(Json(req): Json<ParseNodeRequest>) -> Response {
+    match parse_node_spec(&req.yaml) {
+        Ok(body) => Json(body).into_response(),
+        Err(msg) => node_parse_error(msg),
     }
 }
 
@@ -11208,6 +11351,182 @@ mod tests {
         use std::sync::atomic::{AtomicU16, Ordering};
         static NEXT: AtomicU16 = AtomicU16::new(20000);
         NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    // --- POST /nodes/parse (#345): single-node YAML → canvas-instantiable spec.
+    // The core (`parse_node_spec`) is a pure fn, so most cases test it directly;
+    // two router oneshots confirm the route is actually mounted (the FP's
+    // headline "404 blocking" risk) and maps Ok/Err to 200/400. ---
+
+    #[test]
+    fn parse_node_spec_happy_path_library_shape() {
+        // Exactly what the front export emits (LibraryEntry shape) → no warnings.
+        let body = parse_node_spec(
+            "name: Writer\ntype: doc-only\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
+        )
+        .unwrap();
+        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["spec"]["name"], "Writer");
+        assert_eq!(body["spec"]["outputs"][0]["name"], "adr");
+        assert_eq!(body["prompt"], "Write an ADR.\n");
+        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn parse_node_spec_missing_name_is_hard_error() {
+        let err = parse_node_spec("type: doc-only\n").unwrap_err();
+        assert!(err.contains("name"), "{err}");
+    }
+
+    #[test]
+    fn parse_node_spec_invalid_yaml_is_hard_error() {
+        let err = parse_node_spec("name: [unterminated\n").unwrap_err();
+        assert!(err.contains("invalid YAML"), "{err}");
+    }
+
+    #[test]
+    fn parse_node_spec_non_mapping_root_is_hard_error() {
+        let err = parse_node_spec("- just a list item\n").unwrap_err();
+        assert!(err.contains("mapping"), "{err}");
+    }
+
+    #[test]
+    fn parse_node_spec_whole_pipeline_is_hard_error() {
+        for yaml in ["name: p\nnodes: []\n", "name: p\nedges: []\n"] {
+            let err = parse_node_spec(yaml).unwrap_err();
+            assert!(err.contains("whole pipeline"), "{err}");
+        }
+    }
+
+    #[test]
+    fn parse_node_spec_foreach_is_hard_error() {
+        for t in ["for-each", "foreach"] {
+            let err = parse_node_spec(&format!("name: n\ntype: {t}\n")).unwrap_err();
+            assert!(
+                err.contains("removed") && err.contains("pdo migrate"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_node_spec_missing_type_defaults_doc_only_with_warning() {
+        let body = parse_node_spec("name: n\n").unwrap();
+        assert_eq!(body["spec"]["type"], "doc-only");
+        let ws = body["warnings"].as_array().unwrap();
+        assert!(
+            ws.iter()
+                .any(|m| m.as_str().unwrap().contains("missing 'type'")),
+            "{ws:?}"
+        );
+    }
+
+    #[test]
+    fn parse_node_spec_unknown_type_coerces_doc_only_with_warning() {
+        let body = parse_node_spec("name: n\ntype: bogus\n").unwrap();
+        assert_eq!(body["spec"]["type"], "doc-only");
+        let ws = body["warnings"].as_array().unwrap();
+        assert!(
+            ws.iter()
+                .any(|m| m.as_str().unwrap().contains("unknown node type 'bogus'")),
+            "{ws:?}"
+        );
+    }
+
+    #[test]
+    fn parse_node_spec_legacy_types_kept_verbatim() {
+        // Legacy switch/loop are NOT coerced to doc-only (silent semantic loss is
+        // forbidden, ADR-0001/#268) — imported as-is (a soft warning is fine).
+        for t in ["switch", "loop"] {
+            let body = parse_node_spec(&format!("name: n\ntype: {t}\n")).unwrap();
+            assert_eq!(body["spec"]["type"], t, "legacy {t} must survive");
+        }
+    }
+
+    #[test]
+    fn parse_node_spec_unknown_field_warns_but_still_parses() {
+        let body = parse_node_spec("name: n\ntype: doc-only\nwidget: 3\n").unwrap();
+        assert_eq!(body["spec"]["type"], "doc-only");
+        let ws = body["warnings"].as_array().unwrap();
+        assert!(
+            ws.iter()
+                .any(|m| m.as_str().unwrap().contains("unknown field 'widget'")),
+            "{ws:?}"
+        );
+    }
+
+    #[test]
+    fn parse_node_spec_drops_id_and_view_without_warning() {
+        // id is regenerated on add, view re-centred — dropping them is not a loss.
+        let body = parse_node_spec("name: n\ntype: doc-only\nid: keepme\nview:\n  x: 1\n  y: 2\n")
+            .unwrap();
+        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
+        assert!(body["spec"].get("id").is_none());
+    }
+
+    #[test]
+    fn parse_node_spec_model_round_trips() {
+        let body = parse_node_spec("name: n\ntype: code-mutating\nmodel: opus\n").unwrap();
+        assert_eq!(body["spec"]["model"], "opus");
+        // A node on the account default omits `model:` → null in the spec.
+        let plain = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        assert!(plain["spec"]["model"].is_null());
+    }
+
+    #[test]
+    fn parse_node_spec_prompt_absent_defaults_empty() {
+        let body = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        assert_eq!(body["prompt"], "");
+    }
+
+    #[tokio::test]
+    async fn nodes_parse_route_is_mounted_and_returns_spec() {
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/nodes/parse")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "yaml": "name: n\ntype: doc-only\nprompt: |\n  hi\n"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["prompt"], "hi\n");
+    }
+
+    #[tokio::test]
+    async fn nodes_parse_route_returns_400_on_missing_name() {
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/nodes/parse")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({ "yaml": "type: doc-only\n" }))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     async fn test_state() -> Arc<AppState> {

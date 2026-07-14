@@ -751,6 +751,9 @@ export interface LibraryEntry {
   inputs: LibraryPort[];
   outputs: LibraryPort[];
   interactive: boolean;
+  /** Per-node model override (#296/#345) — the node library is model-aware.
+   * Absent/null ⇒ account default. */
+  model?: string | null;
   max_iter?: number | null;
   branches?: number | null;
   prompt: string;
@@ -768,6 +771,8 @@ export interface LibrarySaveSpec {
   inputs: LibraryPort[];
   outputs: LibraryPort[];
   interactive: boolean;
+  /** Per-node model override (#296/#345). Omit/undefined ⇒ account default. */
+  model?: string | null;
   prompt: string;
 }
 
@@ -795,6 +800,8 @@ export interface InstantiateResult {
     inputs: LibraryPort[];
     outputs: LibraryPort[];
     interactive: boolean;
+    /** Per-node model override (#296/#345). Null ⇒ account default. */
+    model?: string | null;
   };
   prompt: string;
 }
@@ -804,6 +811,47 @@ export async function instantiateFromLibrary(name: string): Promise<InstantiateR
     method: "POST",
   });
   if (!resp.ok) throw new Error(`POST /library/${name}/instantiate failed: ${resp.status}`);
+  return resp.json();
+}
+
+/**
+ * Parsed form of a single node's YAML (#345): the `POST /nodes/parse` 200 body.
+ * `spec` is `LibraryEntry`-shaped (same as {@link InstantiateResult}) plus the
+ * legacy `max_iter`/`branches`; `warnings` carries soft losses (coerced/unknown
+ * fields) with the node still created. A hard failure throws (400 `{error}`).
+ */
+export interface ParseNodeResult {
+  spec: {
+    name: string;
+    type: string;
+    inputs: LibraryPort[];
+    outputs: LibraryPort[];
+    interactive: boolean;
+    model?: string | null;
+    max_iter?: number | string | null;
+    branches?: number | null;
+  };
+  prompt: string;
+  warnings: string[];
+}
+
+/**
+ * Validate a single node's YAML on the daemon (#345 / ADR-0016) and get back a
+ * canvas-instantiable spec. The front holds no YAML parser: it POSTs the raw
+ * text (paste OR uploaded `.yaml`) and the daemon parses with the same serde
+ * structs the pipeline parser uses. Mirror of {@link importWorkflow}: a 400
+ * body carries a verbatim `error`; a 200 carries `{spec, prompt, warnings}`.
+ */
+export async function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
+  const resp = await fetch(`${BASE}/nodes/parse`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml }),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `POST /nodes/parse failed: ${resp.status}`);
+  }
   return resp.json();
 }
 

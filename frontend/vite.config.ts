@@ -21,6 +21,9 @@ export default defineConfig({
       '/runs': daemonTarget,
       '/pipelines': daemonTarget,
       '/library': daemonTarget,
+      // #345: POST /nodes/parse — a top-level route, so it needs its own proxy
+      // entry (else dev GET/POST lie: SPA 200 / POST 404).
+      '/nodes': daemonTarget,
       '/repos': daemonTarget,
       '/triggers': daemonTarget,
       '/stale': daemonTarget,

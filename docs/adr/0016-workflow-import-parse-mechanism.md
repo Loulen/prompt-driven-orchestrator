@@ -39,5 +39,10 @@ complète.
 - **Reconnaissance de boucle gardée sur la présence d'un `agent()` dans le corps** : un `while`/`for`
   de plomberie (double-décodage des `args`, retry `JSON.parse`) ne matérialise **pas** une boucle —
   sinon un `bounded` fantôme. Même garde pour `if` → edge conditionnelle.
-</content>
-</invoke>
+- **Réutilisé pour l'import d'un nœud YAML unique** (#345) : `POST /nodes/parse` applique le même
+  locus *parse-côté-daemon + canal `warnings[]`* à un **nœud nu** (désérialise une `LibraryEntry`,
+  pas une pipeline ; disk-free — ni lecture ni écriture de la bibliothèque). Différence de nature :
+  c'est un round-trip **natif et sans perte** (l'export d'un nœud produit exactement cette forme),
+  pas la décompilation *avec perte* d'un format étranger — d'où le nom produit *Add node from YAML…*
+  et non « import ». Le refus de `for-each` / le défaut-`doc-only` sont partagés via
+  `pipeline::normalize_node_value`, seule source de vérité de la coercition de type.

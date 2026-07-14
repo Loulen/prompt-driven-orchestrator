@@ -393,6 +393,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false,
+      // #345/#296: the library is model-aware; a model-less node sends null.
+      model: null,
       prompt: "Review this code.",
     });
   });

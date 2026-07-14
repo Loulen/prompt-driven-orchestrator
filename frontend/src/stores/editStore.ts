@@ -5,6 +5,8 @@ import type {
   PipelineDef,
   NodeDef,
   EdgeDef,
+  PortDef,
+  PortSide,
 } from "../types";
 import type { LibraryPipelineScope } from "../api";
 import type { LoopRegion, NoteDef } from "../types";
@@ -379,6 +381,76 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
 
 export function serializePipeline(p: PipelineDef): string {
   return yamlStringify(pipelineToYamlObject(p));
+}
+
+// Serialize one authored port to the node-library YAML shape (#345), mirroring
+// `pipelineToYamlObject`'s per-port emit: `name` always; the rest only when
+// non-default so a plain port stays a clean `- name: x`. `side` is omitted when
+// it equals the direction's default (left for inputs, right for outputs) — the
+// value the daemon/`libraryPortToPortDef` re-fill on import, so it round-trips
+// by absence.
+function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, unknown> {
+  const p: Record<string, unknown> = { name: port.name };
+  if (port.repeated) p.repeated = true;
+  if (port.side && port.side !== defaultSide) p.side = port.side;
+  if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
+  if (port.frontmatter) p.frontmatter = port.frontmatter;
+  if (port.when) p.when = port.when;
+  return p;
+}
+
+// Emit a prompt as a YAML block scalar (#345) — the readable, copy-pasteable
+// form the issue asks for. NOT via `dumpYaml`: that JSON-escapes any multi-line
+// string onto a single illegible line (see the string branch of `dumpYaml`).
+//
+// An explicit indentation indicator (`|2` / `|2-`) fixes the block indent at 2
+// regardless of the prompt's own leading whitespace — without it, a first line
+// more-indented than a later one would make YAML end the block early and
+// misparse the rest. The chomping indicator preserves the exact trailing
+// newline: `|-` (strip) when the prompt has none, `|` (clip) keeps exactly one
+// when it does — so an import→export round-trip is byte-stable. Empty prompt →
+// `prompt: ""` (a block scalar cannot express the empty string).
+function promptToBlockScalar(prompt: string): string {
+  if (prompt === "") return 'prompt: ""';
+  const hasTrailingNewline = prompt.endsWith("\n");
+  const body = hasTrailingNewline ? prompt.slice(0, -1) : prompt;
+  const indicator = hasTrailingNewline ? "|2" : "|2-";
+  const indented = body
+    .split("\n")
+    .map((line) => (line.length > 0 ? `  ${line}` : ""))
+    .join("\n");
+  return `prompt: ${indicator}\n${indented}`;
+}
+
+/**
+ * Serialize a single node to the node-library YAML shape (#345): the same map a
+ * `~/.pdo/library/*.yaml` file carries, so the output is directly re-importable
+ * via `Add node from YAML…` and an actual library file exports/imports the same
+ * way. Structural fields go through `dumpYaml`; the prompt is appended by hand
+ * as a block scalar (see `promptToBlockScalar`).
+ *
+ * NEVER emits `id` (regenerated on add), `view` (re-centred), edges (they live
+ * at pipeline level), or `over` (a region driver, not a node field). Legacy
+ * `max_iter` (bounded-loop nodes) is emitted only when present. `model` (#296)
+ * is emitted when set so a per-node override round-trips.
+ */
+export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
+  const obj: Record<string, unknown> = {
+    name: node.name ?? "",
+    type: node.type,
+  };
+  if (node.interactive) obj.interactive = true;
+  if (node.model) obj.model = node.model;
+  // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
+  // requires; regular nodes never set it, so its presence is the signal.
+  if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
+  if (node.inputs.length > 0) {
+    obj.inputs = node.inputs.map((p) => portToYamlObject(p, "left"));
+  }
+  if (node.outputs.length > 0) {
+    obj.outputs = node.outputs.map((p) => portToYamlObject(p, "right"));
+  }
+  return `${yamlStringify(obj)}\n${promptToBlockScalar(prompt)}`;
 }
 
 function yamlStringify(obj: unknown): string {

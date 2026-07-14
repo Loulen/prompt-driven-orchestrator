@@ -119,4 +119,20 @@ describe("LibraryDropdown", () => {
     fireEvent.click(screen.getByTestId("toolbar-library"));
     expect(screen.getByText("A".repeat(60))).toBeInTheDocument();
   });
+
+  it("offers 'Add node from YAML…' when the callback is provided, and fires it (#345)", () => {
+    const onAddNodeFromYaml = vi.fn();
+    renderDropdown({ entries: [], onDelete: vi.fn(), onAddNodeFromYaml });
+    fireEvent.click(screen.getByTestId("toolbar-library"));
+    const entry = screen.getByTestId("library-add-node-from-yaml");
+    expect(entry).toBeInTheDocument();
+    fireEvent.click(entry);
+    expect(onAddNodeFromYaml).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the 'Add node from YAML…' entry when no callback is given", () => {
+    renderDropdown({ entries: [], onDelete: vi.fn() });
+    fireEvent.click(screen.getByTestId("toolbar-library"));
+    expect(screen.queryByTestId("library-add-node-from-yaml")).toBeNull();
+  });
 });

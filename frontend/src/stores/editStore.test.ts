@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { useEditStore, serializePipeline } from "./editStore";
+import { useEditStore, serializePipeline, exportNodeAsYaml } from "./editStore";
 import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
@@ -2675,5 +2675,65 @@ describe("single-tab mode (#342)", () => {
       expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["a"]);
       expect(useEditStore.getState().pendingSingleTab).toBeNull();
     });
+  });
+});
+
+describe("exportNodeAsYaml (#345)", () => {
+  function node(overrides: Partial<NodeDef> = {}): NodeDef {
+    return {
+      id: "abc12345",
+      name: "Reviewer",
+      type: "doc-only",
+      inputs: [],
+      outputs: [{ name: "review", repeated: false, side: "right" }],
+      interactive: false,
+      view: { x: 42, y: 99 },
+      ...overrides,
+    };
+  }
+
+  it("emits a multi-line prompt as a block scalar, not a JSON-escaped single line", () => {
+    const yaml = exportNodeAsYaml(node(), "Line one.\nLine two.");
+    expect(yaml).toContain("prompt: |");
+    expect(yaml).toContain("  Line one.");
+    expect(yaml).toContain("  Line two.");
+    // The naive `dumpYaml` path would emit "Line one.\nLine two." — assert we don't.
+    expect(yaml).not.toContain('"Line one.\\nLine two."');
+  });
+
+  it("omits id, view, and any edges (a node carries none)", () => {
+    const yaml = exportNodeAsYaml(node(), "p");
+    expect(yaml).not.toMatch(/(^|\n)id:/);
+    expect(yaml).not.toContain("view:");
+    expect(yaml).not.toContain("abc12345");
+    expect(yaml).not.toContain("edges");
+  });
+
+  it("includes model when set and omits it when unset (#296)", () => {
+    expect(exportNodeAsYaml(node({ model: "opus" }), "p")).toContain("model: opus");
+    expect(exportNodeAsYaml(node({ model: null }), "p")).not.toContain("model:");
+  });
+
+  it("emits interactive only when true", () => {
+    expect(exportNodeAsYaml(node({ interactive: true }), "p")).toContain("interactive: true");
+    expect(exportNodeAsYaml(node({ interactive: false }), "p")).not.toContain("interactive:");
+  });
+
+  it("omits a port's default side but keeps a non-default one", () => {
+    // right is the default output side → omitted for a clean, minimal YAML.
+    expect(exportNodeAsYaml(node(), "p")).not.toContain("side:");
+    const topped = exportNodeAsYaml(
+      node({ outputs: [{ name: "review", repeated: false, side: "top" }] }),
+      "p",
+    );
+    expect(topped).toContain("side: top");
+  });
+
+  it("emits an empty prompt as an explicit empty string", () => {
+    expect(exportNodeAsYaml(node(), "")).toContain('prompt: ""');
+  });
+
+  it("is library-entry-shaped: name + type at the root", () => {
+    expect(exportNodeAsYaml(node(), "p").startsWith("name: Reviewer\ntype: doc-only")).toBe(true);
   });
 });

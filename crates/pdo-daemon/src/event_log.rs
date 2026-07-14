@@ -448,6 +448,43 @@ impl RunState {
         from_history.or_else(|| (node.status == NodeStatus::Completed).then_some(node.iter))
     }
 
+    /// All `Completed` iterations of `node_id`, ascending (#353).
+    ///
+    /// The set-valued twin of [`latest_completed_iter`], for `repeated`/pooled
+    /// inputs that accumulate one artifact per completed lap. Failed/Stopped/
+    /// Stale iters are quarantined (their artifacts stay on disk but are never
+    /// resolvable as inputs). Falls back to `vec![head_iter]` when the head
+    /// status is `Completed` but no per-iteration history exists (legacy
+    /// states). Empty when the node has no completed iteration or does not
+    /// exist.
+    ///
+    /// `NodeState.iterations` is already sorted by `iter` and deduplicated by
+    /// `(node, iter)` in [`project`], so the history filter yields an ascending,
+    /// duplicate-free `Vec` — no `BTreeSet` needed.
+    ///
+    /// Invariant: `completed_iters(n).last().copied() == latest_completed_iter(n)`.
+    /// `latest_completed_iter` is NOT reimplemented on top of this: the spawn
+    /// path is hot and calls it per resolution, so it avoids the `Vec` alloc.
+    pub fn completed_iters(&self, node_id: &str) -> Vec<i64> {
+        let Some(node) = self.nodes.get(node_id) else {
+            return Vec::new();
+        };
+        let from_history: Vec<i64> = node
+            .iterations
+            .iter()
+            .filter(|it| it.status == NodeStatus::Completed)
+            .map(|it| it.iter)
+            .collect();
+        if !from_history.is_empty() {
+            return from_history;
+        }
+        if node.status == NodeStatus::Completed {
+            vec![node.iter]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// True iff `node_ids` is non-empty AND every id resolves to a node whose
     /// status is `Completed`.
     ///
@@ -3655,6 +3692,62 @@ mod tests {
     fn latest_completed_iter_is_none_for_an_absent_node() {
         let s = run_with(vec![]);
         assert_eq!(s.latest_completed_iter("ghost"), None);
+    }
+
+    #[test]
+    fn completed_iters_quarantines_a_failed_iter_in_the_middle_of_the_set() {
+        // #353: a repeated/pooled source that failed iter 2 must pool iters 1
+        // and 3 only — the failed iter's artifact stays on disk but is never
+        // resolvable.
+        let s = run_with(vec![node_state(
+            "reviewer",
+            NodeStatus::Completed,
+            3,
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        assert_eq!(s.completed_iters("reviewer"), vec![1, 3]);
+    }
+
+    #[test]
+    fn completed_iters_falls_back_to_head_when_history_is_empty() {
+        // Legacy state: head status Completed, no per-iteration history.
+        let s = run_with(vec![node_state("a", NodeStatus::Completed, 4, &[])]);
+        assert_eq!(s.completed_iters("a"), vec![4]);
+    }
+
+    #[test]
+    fn completed_iters_is_empty_when_nothing_completed_or_node_absent() {
+        let running = run_with(vec![node_state(
+            "a",
+            NodeStatus::Running,
+            1,
+            &[(1, NodeStatus::Running)],
+        )]);
+        assert_eq!(running.completed_iters("a"), Vec::<i64>::new());
+        assert_eq!(running.completed_iters("ghost"), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn completed_iters_last_equals_latest_completed_iter() {
+        // Documented invariant: the set's max is the single-input resolution.
+        let s = run_with(vec![node_state(
+            "a",
+            NodeStatus::Completed,
+            3,
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        assert_eq!(
+            s.completed_iters("a").last().copied(),
+            s.latest_completed_iter("a")
+        );
     }
 
     #[test]

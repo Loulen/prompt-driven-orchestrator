@@ -136,7 +136,7 @@ loops:
 - **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant. Un nœud hors boucle garde l'`iter` de ses propres runs (1 s'il n'a couru qu'une fois) : il n'est **jamais re-spawné par un lap** (#195/#199 — seul un vrai cycle émergent ou le moteur de région peut re-lancer un nœud déjà complété ; un membre n'est jamais spawné au-delà de `max_iter`).
 - **Résolution d'inputs** (canonique, #194/#210 — module `input_resolution`) : un input se résout vers **la dernière itération complétée** du nœud source — jamais l'artefact d'une itération échouée, jamais un alignement positionnel sur l'`iter` du consommateur. Un feeder externe à une boucle continue de servir son artefact complété à n'importe quel lap.
 - `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées — absorbe le double-spawn iter+1 de #108). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure, pas une machinerie dédiée.
-- Adressage et accumulation inchangés : `reviewer/iter-2/review/output.md` ; un input `repeated: true` glob `iter-*/<port>` → un artefact par lap, ordonné.
+- Adressage inchangé : `reviewer/iter-2/review/output.md`. L'accumulation (`repeated: true`) suit la **même quarantaine** que la résolution simple ci-dessus : un artefact par lap **complété** du nœud source (les itérations échouées/interrompues restent sur disque mais ne sont jamais poolées), ordonné par N — la résolution passe par la projection (`RunState::completed_iters`), jamais par un glob `iter-*` brut du disque (#353).
 
 ### Sortie de boucle
 
@@ -213,7 +213,7 @@ Chaque artefact produit par un NodeRun a un chemin canonique :
 
 **Résolution des inputs** :
 - Wire simple → input port lit `<artifacts>/<source-node>/iter-<latest>/<port>.md`.
-- Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit le glob `<artifacts>/<source>/iter-*/<port>.md`, ordonné par N.
+- Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit un artefact par **itération complétée** du nœud source (`<artifacts>/<source>/iter-<N>/<port>.md`), ordonné par N. La résolution passe par la projection (`input_resolution` / `RunState::completed_iters`), **pas** par un glob `iter-*` du disque : une itération échouée qui a laissé un `output.md` n'est jamais poolée (#353).
 
 ### Frontmatter — minimal
 

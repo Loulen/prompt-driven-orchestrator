@@ -145,6 +145,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.node_id,
             params.iter,
         ),
+        repeated_iters: crate::input_resolution::resolved_repeated_iters(
+            params.pipeline,
+            params.run_state,
+            params.node_id,
+        ),
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -271,6 +276,18 @@ fn resolve_inputs(
 ) -> HashMap<String, String> {
     let mut input_paths = HashMap::new();
 
+    // #353: `repeated` pools resolve through the projection — one concrete path
+    // per COMPLETED source iteration, never a raw `iter-*` disk glob (which would
+    // pool a failed iteration's artifact). Keyed by source node and filtered on
+    // `edge.repeated`, consistent with the other two resolvers; the declared
+    // `input_port.repeated` flag is NOT the authority (edge-based model, #149 /
+    // ADR-0011). This map backs only the forensic `NodeStarted` payload.
+    let repeated_iters = crate::input_resolution::resolved_repeated_iters(
+        params.pipeline,
+        params.run_state,
+        params.node_id,
+    );
+
     for input_port in &node.inputs {
         if let Some(override_path) = params
             .overrides
@@ -291,13 +308,28 @@ fn resolve_inputs(
             .find(|e| e.target.node == params.node_id && e.target.port == input_port.name);
 
         if let Some(edge) = matching_edge {
-            let resolved = if input_port.repeated {
-                let source_dir = params.artifacts_dir.join(&edge.source.node);
-                format!(
-                    "{}/iter-*/{}/output.md",
-                    source_dir.to_string_lossy(),
-                    edge.source.port
-                )
+            let resolved = if edge.repeated {
+                // Concrete completed-iteration paths, `\n`-joined (this HashMap
+                // is mono-value; the payload is forensic, not machine-read).
+                repeated_iters
+                    .get(&edge.source.node)
+                    .map(|iters| {
+                        iters
+                            .iter()
+                            .map(|&n| {
+                                blackboard::artifact_path(
+                                    params.artifacts_dir,
+                                    &edge.source.node,
+                                    n,
+                                    &edge.source.port,
+                                )
+                                .to_string_lossy()
+                                .to_string()
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default()
             } else {
                 // Canonical resolution (#194 / #210): the source's latest
                 // COMPLETED iteration, never a failed iteration's artifact.
@@ -958,8 +990,35 @@ mod tests {
         assert!(input_paths.contains_key("research"));
     }
 
+    fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
+        let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
+        NodeState {
+            node_id: id.into(),
+            status: head_status,
+            iter: head_iter,
+            started_at: Some("t0".into()),
+            completed_at: None,
+            failure_reason: None,
+            iterations: iters
+                .iter()
+                .map(|(iter, status)| IterationInfo {
+                    iter: *iter,
+                    status: status.clone(),
+                    started_at: Some("t0".into()),
+                    completed_at: None,
+                })
+                .collect(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+        }
+    }
+
     #[test]
-    fn start_node_resolves_repeated_port_with_glob() {
+    fn start_node_resolves_repeated_port_via_projection() {
+        // #353: a `repeated` edge resolves (in the forensic NodeStarted payload)
+        // to the concrete completed-iteration paths from the projection, NOT a
+        // raw `iter-*` glob. `repeated` is read off the EDGE (#149), and the
+        // reviewer's failed iter-2 is quarantined even though it may be on disk.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -968,13 +1027,27 @@ mod tests {
                 make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
                 make_node_with_repeated_input("implementer", "reviews"),
             ],
-            edges: vec![make_edge("reviewer", "review", "implementer", "reviews")],
+            edges: vec![EdgeDef {
+                repeated: true,
+                ..make_edge("reviewer", "review", "implementer", "reviews")
+            }],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
         };
 
-        let run_state = empty_run_state();
+        let mut run_state = empty_run_state();
+        run_state.nodes.insert(
+            "reviewer".into(),
+            completed_node_iters(
+                "reviewer",
+                &[
+                    (1, NodeStatus::Completed),
+                    (2, NodeStatus::Failed),
+                    (3, NodeStatus::Completed),
+                ],
+            ),
+        );
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
         std::fs::create_dir_all(&artifacts_dir).unwrap();
@@ -1003,8 +1076,18 @@ mod tests {
 
         let input_paths = resolve_inputs(&params, node);
         let reviews_path = input_paths.get("reviews").unwrap();
-        assert!(reviews_path.contains("iter-*"));
-        assert!(reviews_path.contains("review"));
+        assert!(
+            !reviews_path.contains("iter-*"),
+            "no raw glob: {reviews_path}"
+        );
+        assert!(reviews_path.contains("iter-1/review/output.md"));
+        assert!(reviews_path.contains("iter-3/review/output.md"));
+        assert!(
+            !reviews_path.contains("iter-2"),
+            "failed iter-2 is quarantined: {reviews_path}"
+        );
+        // The two paths are newline-joined (mono-value forensic HashMap).
+        assert_eq!(reviews_path.lines().count(), 2);
     }
 
     #[test]

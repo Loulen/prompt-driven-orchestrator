@@ -281,6 +281,16 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // emitted only when set so an unset node and a library twin with no model
     // both produce objects without the key and stay `synced`, not `diverged`.
     if (n.model) node.model = n.model;
+    // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
+    // `max_iter` that the daemon still requires and validates
+    // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the
+    // `loops:` region below, not on any node — but a legacy loop node has no
+    // matching region, so if its bound isn't round-tripped here the daemon
+    // rejects the save with "loop node '<id>' must declare 'max_iter'" and
+    // nothing persists (#352). Bounded loops are the only nodes that carry
+    // `node.max_iter` (regular nodes never set it), so its presence is the
+    // signal — this mirrors the region emit and keeps non-loop nodes clean.
+    if (n.max_iter !== undefined && n.max_iter !== null) node.max_iter = n.max_iter;
     // A collection's `over` driver now lives on the `loops:` region, not on any
     // node (#151) — no node-level `over` serialization.
     if (n.inputs.length > 0)

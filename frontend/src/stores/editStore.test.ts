@@ -839,10 +839,10 @@ describe("editStore.flushPendingSaves", () => {
 });
 
 describe("serializePipeline (via save) emits structural node fields", () => {
-  // The legacy Loop node carried a node-level `max_iter` (#171 removed it). A
-  // bounded loop is now a `loops:` region whose `max_iter` is serialized on the
-  // region, not on any node — so no node ever emits `max_iter`.
-  it("never emits a node-level max_iter (loop node removed, #171)", async () => {
+  // A regular node carries no node-level `max_iter` — the region model keeps the
+  // bound on the `loops:` block (ADR-0011). So an ordinary node must serialize
+  // clean, with no stray `max_iter` key.
+  it("does not emit max_iter for a node without one", async () => {
     const docNode = makeNode({ id: "doc1", type: "doc-only" });
     seedTabWithPipeline(makePipeline([docNode]));
 
@@ -850,6 +850,58 @@ describe("serializePipeline (via save) emits structural node fields", () => {
 
     const yaml = mockSavePipeline.mock.calls[0][1];
     expect(yaml).not.toMatch(/max_iter/);
+  });
+
+  // #352 regression: a legacy `type: loop` node still carries a node-level
+  // `max_iter` the daemon validates (`pipeline.rs` `NodeType::Loop`). The loader
+  // hydrates it, so the serializer MUST round-trip it — otherwise the save is
+  // rejected ("loop node '<id>' must declare 'max_iter'") and nothing persists.
+  // `type: "loop"` is a legacy value no longer in the `NodeType` union, hence the
+  // cast; the fix keys off the presence of `max_iter`, not the type string.
+  it("round-trips a legacy type:loop node's max_iter (#352)", async () => {
+    const loopNode: NodeDef = {
+      ...makeNode({ id: "qdtXejYS", name: "loop" }),
+      type: "loop" as unknown as NodeDef["type"],
+      max_iter: 3,
+      inputs: [
+        { name: "in", repeated: false },
+        { name: "break", repeated: false },
+      ],
+      outputs: [
+        { name: "body", repeated: false },
+        { name: "done", repeated: false },
+      ],
+    };
+    seedTabWithPipeline(makePipeline([loopNode]));
+
+    await useEditStore.getState().save("test-tab");
+
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).toMatch(/max_iter: 3/);
+  });
+
+  // A `$var` bound must survive verbatim (max_iter can be a variable reference,
+  // like the region model — see NodeDef.max_iter: number | string).
+  it("round-trips a legacy loop node's $var max_iter verbatim (#352)", async () => {
+    const loopNode: NodeDef = {
+      ...makeNode({ id: "spinner", name: "loop" }),
+      type: "loop" as unknown as NodeDef["type"],
+      max_iter: "$rounds",
+      inputs: [
+        { name: "in", repeated: false },
+        { name: "break", repeated: false },
+      ],
+      outputs: [
+        { name: "body", repeated: false },
+        { name: "done", repeated: false },
+      ],
+    };
+    seedTabWithPipeline(makePipeline([loopNode]));
+
+    await useEditStore.getState().save("test-tab");
+
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).toMatch(/max_iter: \$rounds/);
   });
 
   // ForEach-node `over` serialization and `over`-reset-on-edge-delete tests were

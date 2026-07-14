@@ -407,9 +407,11 @@ function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, 
 // regardless of the prompt's own leading whitespace — without it, a first line
 // more-indented than a later one would make YAML end the block early and
 // misparse the rest. The chomping indicator preserves the exact trailing
-// newline: `|-` (strip) when the prompt has none, `|` (clip) keeps exactly one
-// when it does — so an import→export round-trip is byte-stable. Empty prompt →
-// `prompt: ""` (a block scalar cannot express the empty string).
+// newline: `|2-` (strip) when the prompt has none, `|2` (clip) keeps exactly
+// one when it does — and clip only keeps a newline the source physically ends
+// in, so we emit that newline below. An import→export round-trip is thus
+// byte-stable. Empty prompt → `prompt: ""` (a block scalar cannot express the
+// empty string).
 function promptToBlockScalar(prompt: string): string {
   if (prompt === "") return 'prompt: ""';
   const hasTrailingNewline = prompt.endsWith("\n");
@@ -419,7 +421,11 @@ function promptToBlockScalar(prompt: string): string {
     .split("\n")
     .map((line) => (line.length > 0 ? `  ${line}` : ""))
     .join("\n");
-  return `prompt: ${indicator}\n${indented}`;
+  // Clip (`|2`) only keeps a trailing newline that physically ends the source,
+  // so emit that newline when the prompt has one; strip (`|2-`) needs none.
+  // Without this the `\n` is silently dropped and the round-trip diverges (the
+  // stripped node then re-exports as `|2-`), so the two indicators are a no-op.
+  return `prompt: ${indicator}\n${indented}${hasTrailingNewline ? "\n" : ""}`;
 }
 
 /**

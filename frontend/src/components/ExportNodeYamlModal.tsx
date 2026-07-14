@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Copy, Download, Check } from "lucide-react";
 import type { NodeDef } from "../types";
 import { exportNodeAsYaml } from "../stores/editStore";
-import { highlightYaml } from "./PipelineInfoPanel";
+import { highlightYaml } from "./yamlHighlight";
 
 /**
  * Export a single node's definition as YAML (#345). Pure front-end: the YAML is

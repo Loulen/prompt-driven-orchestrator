@@ -2701,6 +2701,23 @@ describe("exportNodeAsYaml (#345)", () => {
     expect(yaml).not.toContain('"Line one.\\nLine two."');
   });
 
+  it("preserves a trailing newline via clip + a physical trailing newline (#345 round-trip)", () => {
+    const yaml = exportNodeAsYaml(node(), "Line one.\nLine two.\n");
+    // Clip (`|2`, not `|2-`) is chosen …
+    expect(yaml).toContain("prompt: |2\n");
+    expect(yaml).not.toContain("prompt: |2-");
+    // … and the source must actually end in a newline for clip to keep it.
+    // Without this the trailing `\n` is silently dropped on round-trip.
+    expect(yaml.endsWith("  Line two.\n")).toBe(true);
+  });
+
+  it("strips (no phantom newline) when the prompt has no trailing newline", () => {
+    const yaml = exportNodeAsYaml(node(), "Line one.\nLine two.");
+    expect(yaml).toContain("prompt: |2-\n");
+    expect(yaml.endsWith("  Line two.")).toBe(true);
+    expect(yaml.endsWith("\n")).toBe(false);
+  });
+
   it("omits id, view, and any edges (a node carries none)", () => {
     const yaml = exportNodeAsYaml(node(), "p");
     expect(yaml).not.toMatch(/(^|\n)id:/);

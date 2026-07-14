@@ -7,6 +7,7 @@ import {
   Square,
   RotateCcw,
   Play,
+  Maximize2,
 } from "lucide-react";
 import type { IterationInfo, NodeState, NodeStatus } from "../types";
 import {
@@ -71,6 +72,29 @@ interface Props {
   initialTerminalExpanded?: boolean;
 }
 
+// The terminal inset has three mutually exclusive display modes (#346):
+//   - "split"     : terminal ~45% / detail pane ~55% (default for a live node)
+//   - "expanded"  : terminal full-frame, detail pane hidden (user gesture, #270)
+//   - "minimized" : terminal collapsed to a thin bar, Outputs take the full
+//                   height (default when opening a node whose session ended)
+// An enum (not two orthogonal booleans) makes the illegal
+// `{minimized + expanded}` state unrepresentable.
+type TerminalView = "minimized" | "split" | "expanded";
+
+// The session is settled — the tmux session is gone, so the terminal WebSocket
+// would attach to a dead session. `{completed, failed, stopped}` is exactly the
+// "settled" tier of `pollInterval` (5s). `stale` is EXCLUDED unless archived:
+// its tmux session is typically still alive and recovery happens *inside* the
+// terminal (nudge / Stop / Retry). An archived run overrides everything (its
+// worktree + session are torn down). An unknown future status falls on the
+// non-terminated (live) side.
+function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): boolean {
+  if (isArchived) return true;
+  return (
+    status === "completed" || status === "failed" || status === "stopped"
+  );
+}
+
 interface ModalState {
   portName: string;
   files: FileInfo[];
@@ -90,9 +114,16 @@ export default function NodeDetailPanel({
   const [outputs, setOutputs] = useState<PortIO[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
   const [missingOutputs, setMissingOutputs] = useState<string[] | null>(null);
-  const [terminalExpanded, setTerminalExpanded] = useState(
-    initialTerminalExpanded ?? false,
-  );
+  // Seed at mount only (no reactive effect on status): the issue trigger is
+  // "clicking the node" (= selection / mount), not a live transition. A node
+  // is `key`-ed by node_id at both mount sites, so selecting another terminated
+  // node remounts → re-seeds → minimized; a node that settles under the user's
+  // eyes is NOT folded reactively (that would be jarring — cf. #270 "agrandir =
+  // explicit gesture"). Retry clears `minimized` explicitly (session revives).
+  const [terminalView, setTerminalView] = useState<TerminalView>(() => {
+    if (initialTerminalExpanded) return "expanded"; // seam #270/#129 (dead in prod)
+    return nodeSessionEnded(node.status, isArchived) ? "minimized" : "split";
+  });
   const [userSelectedIter, setUserSelectedIter] = useState<{
     nodeId: string;
     iter: number;
@@ -198,9 +229,12 @@ export default function NodeDetailPanel({
       const preview = await retryNodePreview(runId, node.node_id);
       if (preview.affected_count > 0) {
         setRetryConfirm({ affectedCount: preview.affected_count });
-        return;
+        return; // not retried yet → leave terminalView untouched
       }
       await retryNode(runId, node.node_id);
+      // Session revives (status → running once refreshRun lands the NodeStarted
+      // event); re-show the terminal beside the details rather than full-frame.
+      setTerminalView("split");
     } catch {
       // best-effort
     }
@@ -210,6 +244,7 @@ export default function NodeDetailPanel({
     setRetryConfirm(null);
     try {
       await retryNode(runId, node.node_id);
+      setTerminalView("split");
     } catch {
       // best-effort
     }
@@ -449,8 +484,10 @@ export default function NodeDetailPanel({
             {showTerminal ? (
               <TmuxTerminal
                 session={sessionName}
-                expanded={terminalExpanded}
-                onExpand={() => setTerminalExpanded((v) => !v)}
+                expanded={terminalView === "expanded"}
+                onExpand={() =>
+                  setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
+                }
                 status={node.status}
               />
             ) : (
@@ -539,6 +576,40 @@ export default function NodeDetailPanel({
           </div>
         );
 
+        // Minimized view (#346): the session has ended, so prioritise the
+        // Outputs. Render a separate declarative subtree — a thin clickable bar
+        // + the full-height details pane — with NO `TmuxTerminal` and NO
+        // `ResizablePanelGroup`. The non-remount invariant of `TmuxTerminal`
+        // (below) is a *live-session* concern (a WS reconnect re-pushes Claude's
+        // prompt); for a settled session the WS points at a dead session, so
+        // NOT mounting it is harmless and avoids a pointless attach. Isolating
+        // `minimized` leaves the live path (split / expanded) fully intact.
+        if (terminalView === "minimized") {
+          return (
+            <div
+              className="flex min-h-0 flex-1 flex-col"
+              data-testid="terminal-minimized"
+            >
+              <button
+                type="button"
+                onClick={() => setTerminalView("split")}
+                data-testid="term-restore"
+                className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
+                style={{ fontSize: "11px" }}
+                title="Agrandir le terminal"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
+                Terminal
+                <span className="flex-1" />
+                <Maximize2 size={12} />
+              </button>
+              {/* detailsPane has an inner h-full wrapper → frame it flex-1 /
+                  min-h-0 under the bar so it takes the remaining height. */}
+              <div className="min-h-0 flex-1 overflow-hidden">{detailsPane}</div>
+            </div>
+          );
+        }
+
         // Keep `TmuxTerminal` mounted across the fullscreen toggle: render
         // the same `<ResizablePanelGroup>` parent in both modes and only
         // conditionally render the details panel + handle. React's reconciler
@@ -550,16 +621,16 @@ export default function NodeDetailPanel({
           <ResizablePanelGroup
             orientation="vertical"
             className="min-h-0 flex-1"
-            data-testid={terminalExpanded ? "terminal-fullsize" : undefined}
+            data-testid={terminalView === "expanded" ? "terminal-fullsize" : undefined}
           >
             <ResizablePanel
               id="terminal"
-              defaultSize={terminalExpanded ? 100 : 45}
+              defaultSize={terminalView === "expanded" ? 100 : 45}
               minSize="100px"
             >
               {terminalPane}
             </ResizablePanel>
-            {!terminalExpanded && (
+            {terminalView !== "expanded" && (
               <>
                 <ResizableHandle />
                 <ResizablePanel

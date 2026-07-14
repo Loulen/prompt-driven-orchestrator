@@ -660,13 +660,17 @@ describe("NodeDetailPanel", () => {
       expect(screen.queryByText("Mark complete")).not.toBeInTheDocument();
     });
 
-    it("renders terminal for stopped node", () => {
+    it("minimizes the terminal for a stopped node", () => {
+      // #346: a settled session (stopped) opens minimized — the terminal inset
+      // folds to a thin bar and is not mounted, so Outputs take the height.
       render(
         <TooltipProvider>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
         </TooltipProvider>,
       );
-      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
     });
 
     it("renders terminal for stale node", () => {
@@ -675,6 +679,156 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
         </TooltipProvider>,
       );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+  });
+
+  describe("Terminated-node default layout (#346)", () => {
+    it("defaults a completed node to a minimized terminal with Outputs visible", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it.each(["failed", "stopped"] as const)(
+      "minimizes the terminal for a %s node",
+      (status) => {
+        render(
+          <TooltipProvider>
+            <NodeDetailPanel node={makeNode({ status })} runId="run-1" />
+          </TooltipProvider>,
+        );
+        expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+        expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+        expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+      },
+    );
+
+    it("forces minimized for an archived node regardless of a live-ish status", () => {
+      // D1: `stale` alone stays split, but `isArchived` overrides — the run's
+      // worktree + tmux session are gone.
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "stale" })}
+            runId="run-1"
+            isArchived
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal in split for a running node", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal visible for an awaiting_user node", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "awaiting_user" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal visible for a non-archived stale node", () => {
+      // D1 lock: `stale` is NOT terminated (session typically still alive,
+      // recovery happens inside the terminal).
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("restores the terminal to split when clicking the minimized bar", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("term-restore"));
+
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("re-shows the terminal after Retry on a completed node", async () => {
+      // affected_count 0 → no confirm dialog → retry fires and terminalView
+      // flips to split (session revives).
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: [],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    it("re-shows the terminal after a confirmed Retry on a completed node", async () => {
+      // affected_count > 0 → confirm dialog → confirming fires retry and flips
+      // to split (guards handleRetryConfirmed's setTerminalView).
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+      // Still minimized: only the confirm dialog opened, no retry yet.
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("retry-confirm-ok"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     });
   });

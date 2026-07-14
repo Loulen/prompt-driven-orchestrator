@@ -8,7 +8,8 @@ import { groupByRepo } from "../lib/groupByRepo";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
-import RunFilters, { EMPTY_RUN_FILTER, runMatchesFilter } from "./RunFilters";
+import RunFilters from "./RunFilters";
+import { EMPTY_RUN_FILTER, runMatchesFilter } from "./runFilter";
 import RunShellModal from "./RunShellModal";
 import TriggersListPanel from "./TriggersListPanel";
 

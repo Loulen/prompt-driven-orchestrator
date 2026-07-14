@@ -6,49 +6,22 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
+import {
+  EMPTY_RUN_FILTER,
+  MANUAL_TRIGGER,
+  NONE,
+  pipelineKey,
+  repoKey,
+  triggerKey,
+  type RunFilterValue,
+} from "./runFilter";
 
-/* #336 — client-side filters for the Runs list. Option sets are derived from
-   the runs themselves (never from the live library/trigger stores) so runs of
-   renamed or deleted pipelines/triggers stay filterable. The daemon already
-   ships every axis on `GET /runs` (`effective_repo`, `pipeline_name`,
-   `triggered_by`); filtering is a pure view-layer computation. */
-
-/** Sentinel filter values for rows whose axis key is absent/empty. */
-export const MANUAL_TRIGGER = "__manual__";
-const NONE = "__none__";
-
-export interface RunFilterValue {
-  repo: string | null;
-  pipeline: string | null;
-  /** A trigger id, or MANUAL_TRIGGER for manually launched runs. */
-  trigger: string | null;
-}
-
-export const EMPTY_RUN_FILTER: RunFilterValue = {
-  repo: null,
-  pipeline: null,
-  trigger: null,
-};
-
-/** The filter key for a run on each axis (empty/missing values bucket to a sentinel). */
-function repoKey(r: RunListEntry): string {
-  return r.effective_repo && r.effective_repo.length > 0 ? r.effective_repo : NONE;
-}
-function pipelineKey(r: RunListEntry): string {
-  const name = r.pipeline_name ?? "";
-  return name.trim().length > 0 ? name : NONE;
-}
-function triggerKey(r: RunListEntry): string {
-  return r.triggered_by ?? MANUAL_TRIGGER;
-}
-
-/** AND predicate over the three axes; a null axis means "All". */
-export function runMatchesFilter(r: RunListEntry, f: RunFilterValue): boolean {
-  if (f.repo !== null && repoKey(r) !== f.repo) return false;
-  if (f.pipeline !== null && pipelineKey(r) !== f.pipeline) return false;
-  if (f.trigger !== null && triggerKey(r) !== f.trigger) return false;
-  return true;
-}
+/* #336 — client-side filters for the Runs list. The filter model
+   (`RunFilterValue`, `runMatchesFilter`, sentinels, per-axis keys) lives in
+   `runFilter.ts` so this file only exports a component (React Fast Refresh).
+   This module is the view: it derives option sets from the runs themselves
+   (never from the live library/trigger stores) so runs of renamed or deleted
+   pipelines/triggers stay filterable. */
 
 function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

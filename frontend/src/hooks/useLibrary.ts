@@ -66,6 +66,9 @@ export function computeSyncState(
   if (
     entry.type === node.type &&
     entry.interactive === node.interactive &&
+    // #296/#345: the per-node model is part of the node's identity — a model
+    // change must flip the star to diverged (silent loss is forbidden, ADR-0001).
+    (entry.model ?? null) === (node.model ?? null) &&
     entry.prompt === prompt &&
     portsMatch(node.inputs, entry.inputs) &&
     portsMatch(node.outputs, entry.outputs)

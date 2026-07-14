@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Plus, Trash2, FilePlus } from "lucide-react";
 import type { LibraryEntry } from "../api";
 import { instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
@@ -16,10 +16,15 @@ export default function LibraryDropdown({
   entries,
   onDelete,
   getDropPosition,
+  onAddNodeFromYaml,
 }: {
   entries: LibraryEntry[];
   onDelete: (name: string) => void;
   getDropPosition?: () => { x: number; y: number };
+  // #345 (Slice 3): open the "Add node from YAML…" modal from the library too,
+  // covering the issue's "+ or the library" affordance. Optional so existing
+  // callers/tests that omit it still compile.
+  onAddNodeFromYaml?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -54,6 +59,8 @@ export default function LibraryDropdown({
         inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
+        // #296/#345: the library is now model-aware — restore the per-node model.
+        model: result.spec.model ?? null,
         view,
       };
       addNode(node);
@@ -100,6 +107,23 @@ export default function LibraryDropdown({
               autoFocus
             />
           </div>
+
+          {/* #345 (Slice 3): create a node from a YAML definition, alongside the
+              saved library entries — the issue's "+ or the library" affordance. */}
+          {onAddNodeFromYaml && (
+            <button
+              data-testid="library-add-node-from-yaml"
+              onClick={() => {
+                setOpen(false);
+                onAddNodeFromYaml();
+              }}
+              className="flex w-full cursor-pointer items-center gap-2 border-b border-line px-3 py-1.5 text-left text-fg-2 transition-colors hover:bg-bg-3 hover:text-fg"
+              style={{ fontSize: "11px" }}
+            >
+              <FilePlus size={12} className="shrink-0 text-fg-4" />
+              <span>Add node from YAML…</span>
+            </button>
+          )}
 
           <div className="flex-1 overflow-y-auto">
             {filtered.length === 0 && entries.length === 0 && (

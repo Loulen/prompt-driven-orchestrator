@@ -58,6 +58,20 @@ describe("computeSyncState", () => {
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
   });
 
+  it("returns diverged when the per-node model differs (#296/#345)", () => {
+    // A node that gains a model but whose library twin has none must flip to
+    // diverged — silent model loss is forbidden (ADR-0001).
+    const node = makeNode({ model: "opus" });
+    const entries = [makeEntry()];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns synced when node and entry share the same model (#296/#345)", () => {
+    const node = makeNode({ model: "opus" });
+    const entries = [makeEntry({ model: "opus" })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
   it("returns diverged when interactive differs", () => {
     const node = makeNode({ interactive: true });
     const entries = [makeEntry()];

@@ -922,6 +922,7 @@ Un **onglet de pipeline** (ou *onglet canvas*) = un document ouvert dans la zone
 - **From scratch** : "+ Add node" → nœud vide à remplir.
 - **Duplicate existing** : right-click sur un nœud → copie avec id auto-incrémenté.
 - **Depuis la bibliothèque** : drag-drop d'un node favori (cf. *Bibliothèque* ci-dessous).
+- **Depuis un YAML** (#345) : "+ Add node" → *Add node from YAML…* — colle une définition de nœud (presse-papier) **ou** charge un fichier `.yaml`, validée côté daemon (`POST /nodes/parse`, même forme qu'une entrée de la bibliothèque de nodes), et instancie le nœud sur le **canvas** (id régénéré, sans arête, comme le *duplicate*). Round-trip **natif et sans perte** du *Export as YAML…* (menu contextuel du nœud, pur front-end). À **ne pas confondre** avec l'*Import de workflow* (format *étranger* CC → **brouillon de pipeline** en bibliothèque, avec perte — ADR-0016). _Éviter_ : « importer/import » (réservé au workflow ; deux affordances « Import » côte à côte brouilleraient le modèle mental) et « coller/paste » comme **nom du concept** (le fichier est aussi supporté).
 - **Pas de library de templates PDO-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer"). La bibliothèque est exclusivement user-managed.
 
 ---
@@ -930,7 +931,7 @@ Un **onglet de pipeline** (ou *onglet canvas*) = un document ouvert dans la zone
 
 `~/.pdo/library/` — store user-managed à deux niveaux :
 
-- **Nodes** (`~/.pdo/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty".
+- **Nodes** (`~/.pdo/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty". Une entrée porte désormais le `model` par-node (#296/#345) : la bibliothèque de nodes est **model-aware** (elle le droppait silencieusement avant), et une entrée est aussi la forme d'un *Export as YAML…* (elle s'importe telle quelle via *Add node from YAML…*).
 - **Pipelines** (`~/.pdo/library/pipelines/`) — pipelines complètes templatées. C'est cette liste qui peuple le **dropdown du modal "+ New Run"**. Bouton favoriter dans le panneau info de la toolbar pour ajouter / retirer une pipeline de la bibliothèque.
 
 Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run. Les modifs pendant un Run propagent vers la template d'origine (auto-sync montant, ADR-0007).

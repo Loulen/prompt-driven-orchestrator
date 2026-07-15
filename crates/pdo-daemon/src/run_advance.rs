@@ -11,15 +11,29 @@
 //! `lib.rs` with its load-bearing `reload_run_state` re-projection, deferred to a
 //! tracked follow-up (no integration backstop yet — #235 plan, §5 follow-up A).
 //!
-//! Node-completion convenience command (#275): this module also owns
-//! [`complete_node`], the shared post-`NodeCompleted` tail that the three node-done
-//! sites (`node_done`, the `mark_node_done` command arm, `handle_merge_resolver_done`)
-//! used to re-implement inline. It *composes* the deferred two-pass HNC site
-//! (`handle_node_completion`, still bodied in `lib.rs`) with [`advance_run`], the
-//! cross-run `retry_waiting_nodes`, and the single completion gate. It is a Layer-3
-//! convenience command (ADR-0009): the caller owns its bespoke *head* (guard,
-//! validation, its own `NodeCompleted`/companion appends, any reap); this owns the
-//! identical *tail*.
+//! Node-completion HEAD + TAIL (#275, #354): this module owns both halves of
+//! node completion.
+//!
+//! - The **tail** [`complete_node`] (#275) is the shared post-`NodeCompleted`
+//!   sequence the node-done sites used to re-implement inline: it composes the
+//!   deferred two-pass HNC site (`handle_node_completion`, still bodied in
+//!   `lib.rs`) with [`advance_run`], the cross-run `retry_waiting_nodes`, and the
+//!   single completion gate.
+//! - The **head** [`evaluate_completion_head`] (#354) is the shared *pure*
+//!   decision the three guard-driven completion sites (`node_done`, the
+//!   `mark_node_done` command arm, `node_skip`) used to copy: build the
+//!   `NodeCompleted` guard probe → [`transition_guard::validate_transition`] →
+//!   reject (409) / no-op (200) / allow. It touches no DB and no tmux, so every
+//!   caller runs it identically; the async, side-effecting checks stay caller-side
+//!   (`run_is_forgotten`, #328; the sub-worktree merge + `check_output_validation_with_retry`,
+//!   #36). `handle_merge_resolver_done` has no transition-guard head and stays a
+//!   tail-only caller.
+//!
+//! Both are Layer-3 convenience seams (ADR-0009): pure head, side-effecting tail.
+//! Sharing the head does **not** collapse the per-caller tail divergence ratified
+//! by ADR-0023 — `node_done` detaches its tail ([`CompletionOrder::CompletionFirst`]),
+//! the `mark_node_done` arm runs its tail inline ([`CompletionOrder::SweepFirst`],
+//! no self-reap), and `node_skip` ends the run as `Skipped` without a tail advance.
 //!
 //! Non-reentrancy (ADR-0009 / #122): [`advance_run`] calls [`spawn_node`], the
 //! pure `scheduler*` evaluators, and `append_event`/`emit_*` in a **linear**
@@ -34,6 +48,7 @@ use crate::event_log;
 use crate::pipeline;
 use crate::scheduler;
 use crate::scheduler_dispatcher;
+use crate::transition_guard;
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, effective_repo_root, emit_loop_action, handle_node_completion, load_events,
@@ -266,6 +281,62 @@ pub(crate) enum CompletionOutcome {
     Halted,
 }
 
+/// The three-way outcome of the pure completion **head** decision (#354).
+///
+/// Mirrors [`transition_guard::Verdict`] at the run-advance layer so callers
+/// match on a completion-specific type rather than the guard's internal enum:
+/// - [`CompletionHead::Reject`]  → the caller returns `409 CONFLICT { error }`.
+/// - [`CompletionHead::NoOp`]    → the caller returns `200 { ok, noop, reason }`.
+/// - [`CompletionHead::Allow`]   → the caller runs its own side effects, appends
+///   its own `NodeCompleted`, and drives its own tail.
+pub(crate) enum CompletionHead {
+    Reject { reason: String },
+    NoOp { reason: String },
+    Allow,
+}
+
+/// The shared, **pure** *head* of node completion (#354): the guard-verdict
+/// decision that `node_done`, the `mark_node_done` command arm, and `node_skip`
+/// used to copy verbatim.
+///
+/// Builds the `NodeCompleted` guard probe for `(run_id, node_id, iter)`, runs it
+/// through [`transition_guard::validate_transition`] against the projected
+/// `RunState`, and maps the verdict to [`CompletionHead`].
+///
+/// Pure: no DB, no tmux, no append, no clock dependence — the guard ignores
+/// `Event::ts`, so the probe carries an empty `ts`. That purity is what lets all
+/// three callers share it and what makes it unit-testable directly. It decides
+/// only *whether* the completion is legal; it builds no completion event and runs
+/// no tail. The async / side-effecting neighbours stay caller-side by design:
+/// `run_is_forgotten` (async DB, #328) runs *before* this head; the sub-worktree
+/// merge / doc-cleanliness check and `check_output_validation_with_retry` (async +
+/// in-session nudge, #36) run *after* an `Allow`, before the caller's append.
+///
+/// `run_state` is forwarded verbatim: `None` (no projected state) yields the
+/// guard's `Allow` — the caller decides whether to admit `None` (node_done and
+/// node_skip 404 on it *before* calling this; mark forwards it).
+pub(crate) fn evaluate_completion_head(
+    run_state: Option<&event_log::RunState>,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> CompletionHead {
+    let probe = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: String::new(), // guard is ts-blind; keep the seam clock-free
+        kind: event_log::EventKind::NodeCompleted,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: None,
+    };
+    match transition_guard::validate_transition(run_state, &probe) {
+        transition_guard::Verdict::Reject { reason } => CompletionHead::Reject { reason },
+        transition_guard::Verdict::NoOp { reason } => CompletionHead::NoOp { reason },
+        transition_guard::Verdict::Allow => CompletionHead::Allow,
+    }
+}
+
 /// Reload + re-project, then fire the just-completed producer's outgoing edges
 /// via [`handle_node_completion`].
 ///
@@ -361,7 +432,9 @@ pub(crate) async fn complete_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::{NodeDefInfo, NodeState, NodeStatus, RunState, RunStatus};
+    use crate::event_log::{
+        IterationInfo, NodeDefInfo, NodeState, NodeStatus, RunState, RunStatus,
+    };
     use crate::pipeline::{NodeDef, NodeType, PipelineDef, Port, PortType};
     use crate::scheduler_dispatcher::compute_ready_to_spawn;
     use pretty_assertions::assert_eq;
@@ -586,5 +659,85 @@ mod tests {
                 "status {status:?} must not re-complete"
             );
         }
+    }
+
+    // --- completion head (#354): state in -> guard verdict out, no HTTP -----
+
+    /// A node carrying a single iteration row — the shape `validate_completion`
+    /// actually reads (it consults `iterations[]`, never node-level `status`).
+    fn node_iter(id: &str, iter: i64, status: NodeStatus) -> NodeState {
+        let completed_at = (status == NodeStatus::Completed).then(|| "t1".to_string());
+        NodeState {
+            node_id: id.into(),
+            status: status.clone(),
+            iter,
+            started_at: Some("t0".into()),
+            completed_at: completed_at.clone(),
+            failure_reason: None,
+            iterations: vec![IterationInfo {
+                iter,
+                status,
+                started_at: Some("t0".into()),
+                completed_at,
+            }],
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn completion_head_allows_running_iteration() {
+        let s = state_with(
+            RunStatus::Running,
+            &[("n", node_iter("n", 1, NodeStatus::Running))],
+        );
+        assert!(matches!(
+            evaluate_completion_head(Some(&s), "run-1", "n", 1),
+            CompletionHead::Allow
+        ));
+    }
+
+    #[test]
+    fn completion_head_noops_duplicate_completion() {
+        let s = state_with(
+            RunStatus::Running,
+            &[("n", node_iter("n", 1, NodeStatus::Completed))],
+        );
+        assert!(matches!(
+            evaluate_completion_head(Some(&s), "run-1", "n", 1),
+            CompletionHead::NoOp { .. }
+        ));
+    }
+
+    #[test]
+    fn completion_head_rejects_never_started() {
+        // Node present but no iteration row for iter 1 -> "never started".
+        let s = state_with(RunStatus::Running, &[]);
+        assert!(matches!(
+            evaluate_completion_head(Some(&s), "run-1", "n", 1),
+            CompletionHead::Reject { .. }
+        ));
+    }
+
+    #[test]
+    fn completion_head_rejects_on_non_running_run() {
+        // Run-status gate fires before the iteration is inspected.
+        let s = state_with(
+            RunStatus::Halted,
+            &[("n", node_iter("n", 1, NodeStatus::Running))],
+        );
+        assert!(matches!(
+            evaluate_completion_head(Some(&s), "run-1", "n", 1),
+            CompletionHead::Reject { .. }
+        ));
+    }
+
+    #[test]
+    fn completion_head_allows_when_no_projected_state() {
+        // mark_node_done's None path: guard maps None -> Allow, forwarded verbatim.
+        assert!(matches!(
+            evaluate_completion_head(None, "run-1", "n", 1),
+            CompletionHead::Allow
+        ));
     }
 }

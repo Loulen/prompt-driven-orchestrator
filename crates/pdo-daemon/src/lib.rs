@@ -7742,6 +7742,45 @@ async fn handle_merge_resolver_done(
     (StatusCode::OK, "ok").into_response()
 }
 
+/// Map a completion-head verdict to an early HTTP response, or `None` to
+/// proceed. Shared by the three completion handlers (`node_done`,
+/// `mark_node_done`, `node_skip`) so the 409/200 shape + log line live once.
+///
+/// Returns `Option<Response>` (not `Result`) to match the sibling
+/// `check_output_validation_with_retry` early-return convention and dodge
+/// `clippy::result_large_err` on the large `Response` type.
+fn completion_head_gate(
+    head: run_advance::CompletionHead,
+    caller: &str,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> Option<Response> {
+    match head {
+        run_advance::CompletionHead::Reject { reason } => {
+            warn!("{caller} rejected for {node_id} iter {iter} in run {run_id}: {reason}");
+            Some(
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": reason })),
+                )
+                    .into_response(),
+            )
+        }
+        run_advance::CompletionHead::NoOp { reason } => {
+            info!("{caller} no-op for {node_id} iter {iter} in run {run_id}: {reason}");
+            Some(
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+                )
+                    .into_response(),
+            )
+        }
+        run_advance::CompletionHead::Allow => None,
+    }
+}
+
 async fn node_done(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -7793,37 +7832,19 @@ async fn node_done(
         return handle_merge_resolver_done(&state, &run_id, &worktree_dir, &pre_run_state).await;
     }
 
-    // Transition guard (#212): validate the completion against the projected
-    // state BEFORE any side effect (sub-worktree merge, doc-only cleanliness
-    // check, output validation, downstream dispatch). A duplicate completion
-    // is a no-op — it must not merge again nor re-trigger downstream spawns.
-    let completion_probe = event_log::Event {
-        id: None,
-        run_id: run_id.clone(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeCompleted,
-        node_id: Some(node_id.clone()),
-        iter: Some(iter),
-        payload: None,
-    };
-    match transition_guard::validate_transition(Some(&pre_run_state), &completion_probe) {
-        transition_guard::Verdict::Reject { reason } => {
-            warn!("node_done rejected for {node_id} iter {iter} in run {run_id}: {reason}");
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": reason })),
-            )
-                .into_response();
-        }
-        transition_guard::Verdict::NoOp { reason } => {
-            info!("node_done no-op for {node_id} iter {iter} in run {run_id}: {reason}");
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
-            )
-                .into_response();
-        }
-        transition_guard::Verdict::Allow => {}
+    // Transition guard (#212, #354): validate the completion against the
+    // projected state BEFORE any side effect (sub-worktree merge, doc-only
+    // cleanliness check, output validation, downstream dispatch). A duplicate
+    // completion is a no-op — it must not merge again nor re-trigger downstream
+    // spawns. The pure decision lives in the shared head.
+    if let Some(resp) = completion_head_gate(
+        run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter),
+        "node_done",
+        &run_id,
+        &node_id,
+        iter,
+    ) {
+        return resp;
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -8109,36 +8130,18 @@ async fn node_skip(
         }
     };
 
-    // Same guard as a completion (#212): the skip terminalizes the node as
+    // Same guard as a completion (#212, #354): the skip terminalizes the node as
     // Completed, so a duplicate skip / a skip on a terminal run must be
-    // rejected/no-op'd exactly like `node_done`, never double-appended.
-    let completion_probe = event_log::Event {
-        id: None,
-        run_id: run_id.clone(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeCompleted,
-        node_id: Some(node_id.clone()),
-        iter: Some(iter),
-        payload: None,
-    };
-    match transition_guard::validate_transition(Some(&pre_run_state), &completion_probe) {
-        transition_guard::Verdict::Reject { reason } => {
-            warn!("node_skip rejected for {node_id} iter {iter} in run {run_id}: {reason}");
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": reason })),
-            )
-                .into_response();
-        }
-        transition_guard::Verdict::NoOp { reason } => {
-            info!("node_skip no-op for {node_id} iter {iter} in run {run_id}: {reason}");
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
-            )
-                .into_response();
-        }
-        transition_guard::Verdict::Allow => {}
+    // rejected/no-op'd exactly like `node_done`, never double-appended. Shared
+    // head — same pure decision as `node_done` and `mark_node_done`.
+    if let Some(resp) = completion_head_gate(
+        run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter),
+        "node_skip",
+        &run_id,
+        &node_id,
+        iter,
+    ) {
+        return resp;
     }
 
     // Terminalize the node as Completed with a no-op marker. A graceful no-op
@@ -8712,35 +8715,19 @@ async fn run_command(
             };
             let run_state = event_log::project(&events);
 
-            // Transition guard (#212): validate the completion against the
-            // projected state BEFORE any side effect (output validation,
-            // append, downstream dispatch).
-            let completion_probe = event_log::Event {
-                id: None,
-                run_id: run_id.clone(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::NodeCompleted,
-                node_id: Some(node_id.clone()),
-                iter: Some(iter),
-                payload: None,
-            };
-            match transition_guard::validate_transition(run_state.as_ref(), &completion_probe) {
-                transition_guard::Verdict::Reject { reason } => {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({ "error": reason })),
-                    )
-                        .into_response();
-                }
-                transition_guard::Verdict::NoOp { reason } => {
-                    info!("mark_node_done no-op: {reason}");
-                    return (
-                        StatusCode::OK,
-                        Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
-                    )
-                        .into_response();
-                }
-                transition_guard::Verdict::Allow => {}
+            // Transition guard (#212, #354): validate the completion against the
+            // projected state BEFORE any side effect (output validation, append,
+            // downstream dispatch). Shared head — same pure decision as
+            // `node_done` and `node_skip`. `run_state.as_ref()` may be `None`
+            // (unstarted run); the guard maps `None -> Allow`, forwarded verbatim.
+            if let Some(resp) = completion_head_gate(
+                run_advance::evaluate_completion_head(run_state.as_ref(), &run_id, &node_id, iter),
+                "mark_node_done",
+                &run_id,
+                &node_id,
+                iter,
+            ) {
+                return resp;
             }
 
             let empty_run_state = event_log::RunState::new(run_id.clone(), String::new());

@@ -127,4 +127,26 @@ describe("OutputPortCard — O3 tab-head card", () => {
     fireEvent.change(screen.getByTestId("port-type-select"), { target: { value: "image" } });
     expect(onUpdate).toHaveBeenCalledWith({ port_type: "image" });
   });
+
+  // #333: the HTML port type is a selectable option, and (like image) selecting
+  // it hides the frontmatter schema editor (html carries no frontmatter).
+  it("offers an HTML option in the port type selector", () => {
+    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
+    const select = screen.getByTestId("port-type-select") as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toContain("html");
+  });
+
+  it("hides schema editor when port type is html", () => {
+    const port = { ...baseProps.port, port_type: "html" as const };
+    render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("output-schema-editor")).toBeNull();
+  });
+
+  it("calls onUpdate with port_type html when selected", () => {
+    const onUpdate = vi.fn();
+    render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
+    fireEvent.change(screen.getByTestId("port-type-select"), { target: { value: "html" } });
+    expect(onUpdate).toHaveBeenCalledWith({ port_type: "html" });
+  });
 });

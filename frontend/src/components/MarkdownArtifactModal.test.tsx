@@ -342,4 +342,65 @@ describe("MarkdownArtifactModal", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
+
+  // #333 / ADR-0028: an html port renders its fetched text inside a sandboxed
+  // iframe — NOT through react-markdown, and never with `allow-scripts`.
+  describe("html port rendering", () => {
+    it("renders a sandbox='' iframe whose srcDoc is the fetched text", async () => {
+      const html =
+        "<!doctype html><h1>Report</h1><script>window.__pdo_pwned=1</script>";
+      fetchArtifactMock.mockResolvedValue(html);
+
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="report"
+          portType="html"
+          source={{
+            kind: "static",
+            files: [makeFile("artifacts/node/iter-1/report/output.html")],
+          }}
+          onClose={() => {}}
+        />,
+      );
+
+      const frame = await screen.findByTestId("html-artifact-frame");
+      // The HTML flows through the `srcDoc` prop, never into the parent DOM.
+      expect(frame.getAttribute("srcdoc")).toBe(html);
+      // Empty allow-list: the attribute is present and literally empty.
+      expect(frame.getAttribute("sandbox")).toBe("");
+      // The non-negotiable security invariant: scripts are never allowed.
+      expect(frame.getAttribute("sandbox")).not.toContain("allow-scripts");
+      // The artifact is fetched as text (like markdown), not an image.
+      expect(fetchArtifactMock).toHaveBeenCalledWith(
+        "run-1",
+        "artifacts/node/iter-1/report/output.html",
+      );
+      // It is not rendered as markdown or an image.
+      expect(screen.queryByTestId("image-viewer")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("image-gallery")).not.toBeInTheDocument();
+    });
+
+    it("shows a placeholder (no iframe) when the html file does not exist", async () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="report"
+          portType="html"
+          source={{
+            kind: "static",
+            files: [makeFile("artifacts/node/iter-1/report/output.html", false)],
+          }}
+          onClose={() => {}}
+        />,
+      );
+
+      await act(async () => {});
+
+      expect(screen.queryByTestId("html-artifact-frame")).not.toBeInTheDocument();
+      expect(screen.getByText("File does not exist yet.")).toBeInTheDocument();
+      // A non-existent file must never trigger a fetch.
+      expect(fetchArtifactMock).not.toHaveBeenCalled();
+    });
+  });
 });

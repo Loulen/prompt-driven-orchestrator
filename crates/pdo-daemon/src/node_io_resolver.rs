@@ -149,6 +149,24 @@ pub fn resolve(
                     files: vec![info],
                 });
             }
+            // #333: an html port lists its single `output.html`. Plain
+            // `file_info` (not `file_info_with_frontmatter`): html has no
+            // frontmatter to parse.
+            PortType::Html => {
+                let path = crate::blackboard::artifact_path_html(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &output_port.name,
+                );
+                let info = file_info(artifacts_dir, &path);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    repeated: output_port.repeated,
+                    port_type: output_port.port_type,
+                    files: vec![info],
+                });
+            }
         }
     }
 
@@ -1058,5 +1076,81 @@ mod tests {
 
         assert!(io.inputs.is_empty());
         assert!(io.outputs.is_empty());
+    }
+
+    // --- html output port (#333) ---
+
+    /// A single `designer` node with one `html` output port `report`.
+    fn html_output_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "html-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![NodeDef {
+                id: "designer".into(),
+                name: "designer".into(),
+                node_type: NodeType::DocOnly,
+                inputs: vec![],
+                outputs: vec![Port {
+                    name: "report".into(),
+                    repeated: false,
+                    side: None,
+                    port_type: PortType::Html,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+                over: None,
+                model: None,
+            }],
+            edges: Vec::new(),
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        }
+    }
+
+    #[test]
+    fn html_output_port_lists_output_html_with_html_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("designer/iter-1/report");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.html"), "<h1>Report</h1>").unwrap();
+
+        let pipeline = html_output_pipeline();
+        let io = resolve(&pipeline, &artifacts, "designer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert_eq!(io.outputs[0].port, "report");
+        assert_eq!(io.outputs[0].port_type, PortType::Html);
+        assert_eq!(io.outputs[0].files.len(), 1);
+        assert_eq!(
+            io.outputs[0].files[0].path,
+            "designer/iter-1/report/output.html"
+        );
+        assert!(io.outputs[0].files[0].exists);
+        // html carries no frontmatter — plain file_info, never parsed.
+        assert!(io.outputs[0].files[0].frontmatter.is_none());
+    }
+
+    #[test]
+    fn html_output_port_missing_file_reports_output_html_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+
+        let pipeline = html_output_pipeline();
+        let io = resolve(&pipeline, &artifacts, "designer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert_eq!(
+            io.outputs[0].files[0].path,
+            "designer/iter-1/report/output.html"
+        );
+        assert!(!io.outputs[0].files[0].exists);
     }
 }

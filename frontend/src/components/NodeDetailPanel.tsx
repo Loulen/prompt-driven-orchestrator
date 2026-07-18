@@ -940,6 +940,9 @@ function PortRow({
   // lightbox, or null when it is closed (#312).
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const isImage = portType === "image" || portType === "image_list";
+  // #333: an html port shows a type badge for parity with image ports (its
+  // artifact is otherwise a single markdown-like file row).
+  const isHtml = portType === "html";
 
   let dotClass = "bg-fg-5";
   if (anyExists && port.repeated && port.files.length > 1) {
@@ -988,7 +991,7 @@ function PortRow({
               repeated
             </span>
           )}
-          {isImage && (
+          {(isImage || isHtml) && (
             <span
               className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
               style={{ fontSize: "9px" }}

@@ -11,6 +11,20 @@ pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: 
     port_dir(artifacts_dir, node_id, iter, port_name).join("output.md")
 }
 
+/// Path of an `html` output port's file (#333). Parallel to `artifact_path`
+/// (`output.md`): an html port materializes a single `output.html` in the
+/// port's directory. A dedicated helper localizes the `output.html` choice to
+/// the three output sites that emit it, keeping the type-blind input side
+/// (which reads `output.md`) untouched.
+pub fn artifact_path_html(
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+    port_name: &str,
+) -> PathBuf {
+    port_dir(artifacts_dir, node_id, iter, port_name).join("output.html")
+}
+
 #[allow(dead_code)]
 pub fn artifact_exists(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> bool {
     artifact_path(artifacts_dir, node_id, iter, port_name).exists()
@@ -44,6 +58,36 @@ mod tests {
             path,
             PathBuf::from("/repo/.pdo/artifacts/reviewer/iter-3/review/output.md")
         );
+    }
+
+    #[test]
+    fn html_artifact_path_uses_output_html() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path_html(dir, "designer", 1, "report");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/designer/iter-1/report/output.html")
+        );
+    }
+
+    #[test]
+    fn html_artifact_path_honors_iteration() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path_html(dir, "designer", 4, "report");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/designer/iter-4/report/output.html")
+        );
+    }
+
+    #[test]
+    fn html_and_markdown_paths_share_a_port_dir_but_differ_in_filename() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let md = artifact_path(dir, "designer", 1, "report");
+        let html = artifact_path_html(dir, "designer", 1, "report");
+        assert_eq!(md.parent(), html.parent());
+        assert_ne!(md, html);
+        assert_eq!(html.file_name().unwrap(), "output.html");
     }
 
     #[test]

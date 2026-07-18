@@ -204,6 +204,14 @@ pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> 
                     ctx.iter,
                     &port.name,
                 ),
+                // #333: an html port's declared path is its `output.html` file
+                // (parallel to markdown's `output.md`), not the port dir.
+                PortType::Html => crate::blackboard::artifact_path_html(
+                    ctx.artifacts_dir,
+                    &ctx.node.id,
+                    ctx.iter,
+                    &port.name,
+                ),
             };
             OutputDeclaration {
                 port_name: port.name.clone(),
@@ -338,7 +346,10 @@ pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     for output in resolve_output_paths(ctx) {
         let dir = match output.port_type {
             PortType::Image | PortType::ImageList => output.path.clone(),
-            PortType::Markdown => output
+            // #333: html resolves to a file path (`.../output.html`) like
+            // markdown, so pre-create its parent directory — a `script` node's
+            // `> "$PDO_OUTPUT_x"` redirect fails on a missing parent.
+            PortType::Markdown | PortType::Html => output
                 .path
                 .parent()
                 .map(|p| p.to_path_buf())
@@ -501,6 +512,23 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                             }
                         }
                     }
+                }
+                // #333: bespoke instruction — no frontmatter block, and the
+                // agent must know the page renders offline in a scriptless
+                // sandboxed iframe (ADR-0028), so it can't rely on JS.
+                PortType::Html => {
+                    preamble.push_str(&format!(
+                        "- `{}` (html): write a single self-contained HTML file to `{}`\n\
+                         \x20 Inline all CSS in a `<style>` tag and use no external network \
+                         requests (no CDN links, web fonts, or remote assets) — the artifact is \
+                         rendered offline.\n\
+                         \x20 **JavaScript will NOT run**: the file is displayed in a sandboxed \
+                         iframe with scripts disabled. Do not rely on `<script>`, inline event \
+                         handlers, or any interactivity — everything must be conveyed through \
+                         static HTML and CSS.\n",
+                        output.port_name,
+                        output.path.display(),
+                    ));
                 }
             }
         }

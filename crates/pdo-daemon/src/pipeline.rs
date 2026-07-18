@@ -65,6 +65,10 @@ pub enum PortType {
     Markdown,
     Image,
     ImageList,
+    /// #333: a rendered, static HTML artifact (`output.html`). A leaf review
+    /// surface displayed in a sandboxed iframe (no JS), never consumed
+    /// downstream in v1 (ADR-0028).
+    Html,
 }
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
@@ -3631,6 +3635,55 @@ edges:
         assert_eq!(designer.outputs[1].port_type, PortType::ImageList);
         assert_eq!(designer.outputs[2].name, "report");
         assert_eq!(designer.outputs[2].port_type, PortType::Markdown);
+    }
+
+    #[test]
+    fn port_type_html_deserializes_and_round_trips() {
+        // #333: a `port_type: html` output survives load → save. The daemon read
+        // path maps it to PortType::Html (not the markdown default), and the
+        // serde snake_case rename emits it back as the bare scalar `html`.
+        let yaml = r#"
+name: test
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: designer
+    name: Designer
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: report
+        port_type: html
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: designer, port: task }
+  - source: { node: designer, port: report }
+    target: { node: end, port: result }
+"#;
+        let result = parse_pipeline(yaml).unwrap();
+        let designer = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "designer")
+            .unwrap();
+        assert_eq!(designer.outputs[0].name, "report");
+        assert_eq!(designer.outputs[0].port_type, PortType::Html);
+
+        // Enum-level serde round-trip: html <-> "html".
+        let rendered = serde_yaml::to_string(&PortType::Html).unwrap();
+        assert_eq!(rendered.trim(), "html");
+        let back: PortType = serde_yaml::from_str("html").unwrap();
+        assert_eq!(back, PortType::Html);
     }
 
     #[test]

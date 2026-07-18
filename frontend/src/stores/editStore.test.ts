@@ -1744,6 +1744,34 @@ describe("serializePipeline persists port_type", () => {
     // implicitly and never appear in the YAML.
     expect(yaml).not.toContain("port_type: markdown");
   });
+
+  // #333: an `html` output port round-trips as `port_type: html` (emitted only
+  // because it is non-default), so a saved pipeline preserves it.
+  it("emits port_type: html for an html output port", () => {
+    const designer: NodeDef = {
+      id: "designer0",
+      name: "Designer",
+      type: "doc-only",
+      inputs: [],
+      outputs: [
+        { name: "report", repeated: false, side: "right", port_type: "html" },
+        { name: "notes", repeated: false, side: "right" },
+      ],
+      interactive: false,
+      view: { x: 0, y: 0 },
+    };
+    const yaml = serializePipeline({
+      name: "html-port-test",
+      version: "1.0",
+      variables: {},
+      nodes: [designer],
+      edges: [],
+    });
+    const occurrences = yaml.match(/port_type: html/g) ?? [];
+    expect(occurrences.length).toBe(1);
+    // The default-markdown "notes" port never carries a port_type.
+    expect(yaml).not.toContain("port_type: markdown");
+  });
 });
 
 describe("updateNode propagates port changes to edges", () => {

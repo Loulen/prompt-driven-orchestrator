@@ -196,4 +196,63 @@ describe("DiffSection", () => {
       expect(mockedFetchNodeDiff).toHaveBeenCalledWith("test-run-1", "impl-1");
     });
   });
+
+  it("shows an honest message for archived runs and does not fetch", async () => {
+    render(<DiffSection run={makeRun({ status: "archived" })} />);
+    fireEvent.click(screen.getByText("Diff"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("diff-content")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText("Diff not preserved for archived runs."),
+    ).toBeInTheDocument();
+    // The branch is gone at cleanup — a fetch would be a lie.
+    expect(mockedFetchRunDiff).not.toHaveBeenCalled();
+    expect(mockedFetchNodeDiff).not.toHaveBeenCalled();
+    expect(screen.queryByText("No changes")).toBeNull();
+  });
+
+  it("groups the diff by file with per-file paths and +/- badges", async () => {
+    mockedFetchRunDiff.mockResolvedValue(
+      [
+        "diff --git a/src/a.rs b/src/a.rs",
+        "index 111..222 100644",
+        "--- a/src/a.rs",
+        "+++ b/src/a.rs",
+        "@@ -1 +1 @@",
+        "-old a",
+        "+new a",
+        "diff --git a/src/b.rs b/src/b.rs",
+        "new file mode 100644",
+        "index 0000000..333",
+        "--- /dev/null",
+        "+++ b/src/b.rs",
+        "@@ -0,0 +1,2 @@",
+        "+line 1",
+        "+line 2",
+        "",
+      ].join("\n"),
+    );
+
+    render(<DiffSection run={makeRun()} />);
+    fireEvent.click(screen.getByText("Diff"));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("diff-file")).toHaveLength(2);
+    });
+
+    const sections = screen.getAllByTestId("diff-file");
+    // First file: modified src/a.rs, +1/-1.
+    expect(sections[0].textContent).toContain("src/a.rs");
+    expect(sections[0].textContent).toContain("+1");
+    expect(sections[0].textContent).toContain("-1");
+    // Second file: added src/b.rs, +2/-0.
+    expect(sections[1].textContent).toContain("src/b.rs");
+    expect(sections[1].textContent).toContain("+2");
+    expect(sections[1].textContent).toContain("-0");
+    // No monolithic "No changes" fallback when there is a diff.
+    expect(screen.queryByText("No changes")).toBeNull();
+  });
 });

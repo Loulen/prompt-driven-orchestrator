@@ -6680,8 +6680,12 @@ async fn run_diff(
     }
 
     let pipeline_branch = format!("pdo/run-{run_id}");
+    // Three-dot (merge-base = fork point) so main's advance after the fork does
+    // not surface as phantom deletions; `:(exclude).pdo/` drops the blackboard
+    // artefacts. Mirrors compute_run_loc (see lib.rs ~10985). #376.
+    let range = format!("HEAD...{pipeline_branch}");
     let output = match std::process::Command::new("git")
-        .args(["diff", "HEAD", &pipeline_branch])
+        .args(["diff", &range, "--", ".", ":(exclude).pdo/"])
         .current_dir(&state.repo_root)
         .output()
     {
@@ -20073,6 +20077,134 @@ edges: []
         assert!(
             body.contains("fn hello()"),
             "diff should contain the added content"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_diff_excludes_main_advance_after_fork() {
+        // #376: three-dot range → commits landed on main AFTER the fork must not
+        // appear as phantom deletions. RED under two-dot `git diff HEAD pdo/run-<id>`.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-fork";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap()
+        };
+
+        // The run's real work on the run branch.
+        std::fs::write(wt_dir.join("run_file.rs"), "fn run_work() {}\n").unwrap();
+        git(&wt_dir, &["add", "run_file.rs"]);
+        git(&wt_dir, &["commit", "-m", "run work"]);
+
+        // Advance main/HEAD AFTER the fork.
+        std::fs::write(repo.join("main_advance.rs"), "fn advanced_on_main() {}\n").unwrap();
+        git(repo, &["add", "main_advance.rs"]);
+        git(repo, &["commit", "-m", "advance main after fork"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            body.contains("run_file.rs") && body.contains("fn run_work()"),
+            "diff must contain the run's own change: {body}"
+        );
+        // RED under two-dot (main_advance.rs shown as a deletion); GREEN under three-dot.
+        assert!(
+            !body.contains("main_advance.rs"),
+            "diff must not mention main's post-fork file (phantom deletion): {body}"
+        );
+        assert!(
+            !body.contains("advanced_on_main"),
+            "diff must not contain main's post-fork content as a removed line: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_diff_excludes_pdo_artifacts() {
+        // #376: `:(exclude).pdo/` keeps the blackboard out of the diff. RED under
+        // the current no-pathspec two-dot call.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "diff-pdo";
+        let state = test_state_with_dir(repo).await;
+        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&wt_dir)
+                .output()
+                .unwrap()
+        };
+        std::fs::write(wt_dir.join("code.rs"), "fn code_change() {}\n").unwrap();
+        std::fs::create_dir_all(wt_dir.join(".pdo")).unwrap();
+        std::fs::write(wt_dir.join(".pdo/artifact.txt"), "internal-artifact\n").unwrap();
+        git(&["add", "code.rs"]);
+        // force so it's genuinely committed → test is not vacuous
+        git(&["add", "-f", ".pdo/artifact.txt"]);
+        git(&["commit", "-m", "code + pdo artifact"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            body.contains("code.rs") && body.contains("fn code_change()"),
+            "diff should contain the real code change: {body}"
+        );
+        assert!(
+            !body.contains("artifact.txt") && !body.contains("internal-artifact"),
+            "diff must exclude .pdo/ artifacts: {body}"
         );
     }
 

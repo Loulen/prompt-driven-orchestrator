@@ -67,3 +67,28 @@ l'historique du panneau ouvert (couvre aussi les fires cron tombant pendant la c
   bouton Play ; le mode reste dans le code (inoffensif) tant qu'un autre appelant existe.
 - Un guard lent (timeout dur ~30 s) rend la requête manuelle synchrone d'autant — acceptable
   pour un geste explicite ; le lock tick est tenu pendant ce temps, comme pour un tick cron.
+
+## Addendum (2026-07-18, #350) — le pôle opposé : « Tester le guard (dry-run) »
+
+Le même axe « exécuter le guard d'un Trigger » porte un second pôle, symétrique de « Run now » :
+tester le guard **sans le moindre effet de bord**. `POST /triggers/guard/test` (#350) exécute la
+commande de guard *telle qu'en cours de saisie dans l'onglet New trigger* (le Trigger n'est pas
+forcément sauvegardé) via un **seam pur** (`run_guard`, sans `Trigger` ni `AppState`), puis
+s'arrête au verdict : **aucun Run spawné, aucune ligne `trigger_fires`, aucun recalcul de
+`next_fire_at`, aucun lock de tick, aucune gate d'overlap**. L'endpoint est **guard-faithful** — il
+mappe `GuardResult` 1:1 — et le verdict **would-fire / would-reject** est composé **côté client** à
+partir de l'`outcome` retourné.
+
+Pourquoi *ne pas* réutiliser `fire_one_trigger` avec un flag `dry_run` : ce chemin *est défini par
+ses effets* (audit + Run + provenance + lock) ; un flag qui les court-circuiterait tous ferait
+mentir son nom et rouvrirait la fenêtre de course que `trigger_tick_lock` ferme. Le dry-run n'a
+besoin que du guard, d'où un seam dédié à zéro effet de bord.
+
+La sécurité est **net-neutre** : le même sink `run_guard` → `sh -c` est déjà atteignable, sans auth,
+via `POST /triggers` + `POST /triggers/{id}/fire` (cf. ADR-0017 : « même surface, aucune nouvelle
+frontière de confiance »). Le durcissement du bind `0.0.0.0` (#260) reste orthogonal.
+
+Ce pôle n'est **pas** un ADR distinct : additif, trivialement réversible (aucune migration, aucun
+état persistant), il ne fait que compléter l'axe du présent ADR. Il se distingue aussi du **rejet
+de champ vide** à la création d'un Trigger (`prompt_required` sans input résolu) — un refus de
+*config*, pas un verdict de *guard*. (ADR-0029 est réservé par le plan de #373.)

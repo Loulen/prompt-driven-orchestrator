@@ -7549,6 +7549,14 @@ async fn artifact(
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
+        // #333 / ADR-0028: an `.html` artifact (html output port) DELIBERATELY
+        // falls through to `text/markdown`. Do NOT add `Some("html") =>
+        // "text/html"`: serving agent-authored HTML as a top-level document at
+        // the daemon origin (127.0.0.1, no auth, no CSP) would let it execute
+        // arbitrary script. The html artifact is only ever rendered client-side
+        // in a sandboxed iframe. The `.html → text/markdown` invariant is
+        // locked by the `artifact_serves_html_as_text_markdown_never_text_html`
+        // regression test.
         _ => "text/markdown",
     };
 
@@ -17530,6 +17538,57 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("# Plan"));
+    }
+
+    // #333 / ADR-0028 security invariant: an `output.html` artifact is served as
+    // `text/markdown`, NEVER `text/html`. Serving it as a top-level HTML
+    // document at the daemon origin (no auth, no CSP) would execute
+    // agent-authored (prompt-injectable) script. The html artifact is only ever
+    // rendered client-side inside a sandboxed iframe. This test fails loudly if
+    // a future contributor "helpfully" maps `.html → text/html`.
+    #[tokio::test]
+    async fn artifact_serves_html_as_text_markdown_never_text_html() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "artifact-html-mime";
+        seed_io_test(tmp.path(), run_id);
+        // Seed a real html artifact under a port dir (canonicalize needs it).
+        let html_body = "<!doctype html><html><body><h1>Report</h1>\
+             <script>window.__pdo_pwned=1</script></body></html>";
+        std::fs::write(
+            tmp.path()
+                .join(".pdo/runs")
+                .join(run_id)
+                .join("worktree/.pdo/artifacts/planner/iter-1/plan/output.html"),
+            html_body,
+        )
+        .unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        seed_io_run_events(&state, run_id).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/runs/{run_id}/artifact?path=planner/iter-1/plan/output.html"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get("content-type").unwrap();
+        assert_eq!(ct, "text/markdown");
+        assert_ne!(ct, "text/html");
+        // The body is returned verbatim (the daemon does not sanitize) — the
+        // safety comes entirely from the non-executable content type + the
+        // client-side sandboxed iframe.
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert_eq!(text, html_body);
     }
 
     #[tokio::test]

@@ -87,6 +87,10 @@ export default function MarkdownArtifactModal({
   const hasIterNav = source.kind === "iter-nav" && iterNumbers.length > 1;
 
   const isImage = portType === "image" || portType === "image_list";
+  // #333: an html port renders its fetched text inside a sandboxed iframe. Like
+  // markdown (and unlike image), its content flows through `fetchArtifact`, so
+  // the fetch effect below (which only short-circuits on `isImage`) still runs.
+  const isHtml = portType === "html";
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(!isImage);
   // The ordered image list + clicked index currently shown fullscreen in the
@@ -268,6 +272,37 @@ export default function MarkdownArtifactModal({
               portType={portType}
               onZoom={(images, index) => setLightbox({ images, index })}
             />
+          ) : isHtml ? (
+            /*
+             * #333 / ADR-0028: render the html artifact in a maximally isolated
+             * iframe. SECURITY INVARIANTS — DO NOT RELAX:
+             *  - `sandbox=""` is a literal empty allow-list: no scripts, opaque
+             *    origin, no form submission, no top-level navigation. NEVER add
+             *    `allow-scripts` / `allow-forms` / `allow-same-origin` — that
+             *    would let agent-authored (prompt-injectable) HTML execute.
+             *  - The HTML is passed via the `srcDoc` PROP, never
+             *    `dangerouslySetInnerHTML` and never concatenated into the
+             *    parent DOM.
+             *  - Uses raw `content` (fetched text), not `bodyContent` (which
+             *    strips a leading `---` frontmatter fence html doesn't have).
+             */
+            filesLoading || loading ? (
+              <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                Loading...
+              </span>
+            ) : file?.exists ? (
+              <iframe
+                data-testid="html-artifact-frame"
+                sandbox=""
+                srcDoc={content ?? ""}
+                title={portName}
+                className="h-[70vh] w-full rounded border border-line bg-white"
+              />
+            ) : (
+              <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                File does not exist yet.
+              </span>
+            )
           ) : (
             <>
               {/* Frontmatter card */}

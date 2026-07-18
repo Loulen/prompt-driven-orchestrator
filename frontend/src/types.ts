@@ -382,7 +382,7 @@ export interface PipelineListEntry {
 }
 
 export type PortSide = "left" | "right" | "top" | "bottom";
-export type PortType = "markdown" | "image" | "image_list";
+export type PortType = "markdown" | "image" | "image_list" | "html";
 
 export interface PortDef {
   name: string;

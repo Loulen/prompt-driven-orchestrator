@@ -100,6 +100,18 @@ pub fn validate(
                     }
                 }
             }
+            // #333: an html port validates on the existence of its `output.html`
+            // only — an exact mirror of the non-`repeated` markdown arm. No
+            // frontmatter parsing (html carries none) and no emptiness check
+            // (markdown doesn't test non-empty either; a broken/empty page is
+            // caught by the human reviewer, which is the whole point).
+            PortType::Html => {
+                let path =
+                    crate::blackboard::artifact_path_html(artifacts_dir, node_id, iter, &port.name);
+                if !path.exists() {
+                    missing.push(port.name.clone());
+                }
+            }
         }
     }
 
@@ -791,5 +803,70 @@ mod tests {
         let pipeline = make_pipeline(vec![make_node("node", vec![image_list_port("gallery")])]);
         let result = validate(&pipeline, "node", 1, artifacts);
         assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["gallery"]));
+    }
+
+    // --- html port: existence of output.html only (#333) ---
+
+    fn html_port(name: &str) -> Port {
+        Port {
+            name: name.into(),
+            repeated: false,
+            side: None,
+            port_type: PortType::Html,
+            frontmatter: None,
+            when: None,
+            description: None,
+        }
+    }
+
+    fn write_html(dir: &Path, node_id: &str, iter: i64, port_name: &str, content: &str) {
+        let d = dir
+            .join(node_id)
+            .join(format!("iter-{iter}"))
+            .join(port_name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("output.html"), content).unwrap();
+    }
+
+    #[test]
+    fn html_port_with_output_html_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_html(artifacts, "designer", 1, "report", "<h1>ok</h1>");
+        let pipeline = make_pipeline(vec![make_node("designer", vec![html_port("report")])]);
+        assert!(validate(&pipeline, "designer", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn html_port_without_output_html_is_missing() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let pipeline = make_pipeline(vec![make_node("designer", vec![html_port("report")])]);
+        let result = validate(&pipeline, "designer", 1, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["report"]));
+    }
+
+    #[test]
+    fn html_port_ignores_a_stray_output_md() {
+        // A parasitic `output.md` in the html port dir must not be mistaken for
+        // the html artifact — only `output.html` counts.
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_artifact(artifacts, "designer", 1, "report", "# not the artifact");
+        let pipeline = make_pipeline(vec![make_node("designer", vec![html_port("report")])]);
+        let result = validate(&pipeline, "designer", 1, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["report"]));
+    }
+
+    #[test]
+    fn html_port_does_not_validate_frontmatter() {
+        // An html artifact carries no frontmatter; the frontmatter-schema pass
+        // skips non-markdown ports, so even content that looks like a broken
+        // frontmatter fence passes as long as the file exists.
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        write_html(artifacts, "designer", 1, "report", "---\nnot: really\n");
+        let pipeline = make_pipeline(vec![make_node("designer", vec![html_port("report")])]);
+        assert!(validate(&pipeline, "designer", 1, artifacts).is_ok());
     }
 }

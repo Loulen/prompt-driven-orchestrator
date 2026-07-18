@@ -8,6 +8,7 @@ const PORT_TYPE_OPTIONS: { value: PortType; label: string }[] = [
   { value: "markdown", label: "Markdown" },
   { value: "image", label: "Image" },
   { value: "image_list", label: "Image List" },
+  { value: "html", label: "HTML" },
 ];
 
 interface OutputPortCardProps {

@@ -215,6 +215,13 @@ Chaque artefact produit par un NodeRun a un chemin canonique :
 - Wire simple → input port lit `<artifacts>/<source-node>/iter-<latest>/<port>.md`.
 - Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit un artefact par **itération complétée** du nœud source (`<artifacts>/<source>/iter-<N>/<port>.md`), ordonné par N. La résolution passe par la projection (`input_resolution` / `RunState::completed_iters`), **pas** par un glob `iter-*` du disque : une itération échouée qui a laissé un `output.md` n'est jamais poolée (#353).
 
+**html** *(type de port de sortie)* :
+Un port de sortie dont l'artefact est un `output.html` **rendu** dans une iframe `sandbox=""`
+(`srcDoc`), pour une relecture experte confortable — HTML + CSS **statiques**, **aucun JS exécuté**
+(même classe de confiance « contenu rendu » qu'ADR-0013/0018 ; voir ADR-0028). Surface de relecture,
+**non consommée en aval** en v1. Le daemon ne sert jamais l'artefact en `text/html`.
+_Éviter_ : « aperçu HTML interactif » (la variante JS est hors périmètre v1).
+
 ### Frontmatter — minimal
 
 Les artefacts sont des `.md` avec **frontmatter YAML minimale**. La frontmatter sert au *runtime* (parser un verdict, savoir quoi router) — **pas** à structurer le contenu. Tout ce qui est destiné à être lu par un autre LLM (issues bloquantes, justifications, recommandations) reste dans le **corps** markdown.

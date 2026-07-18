@@ -29,11 +29,10 @@ export default function DiffSection({ run }: Props) {
     if (!expanded || !run) return;
     // #376: an archived run's `pdo/run-<id>` branch is deleted at cleanup
     // (ADR-0020), so there is nothing to diff — skip the fetch entirely and
-    // render an honest message instead of a lying "No changes".
-    if (run.status === "archived") {
-      setLoading(false);
-      return;
-    }
+    // render an honest message instead of a lying "No changes". The `isArchived`
+    // render branch short-circuits before the loading check, so no setLoading
+    // is needed here (and a sync setState in an effect trips react-hooks lint).
+    if (run.status === "archived") return;
     let stale = false;
     const promise =
       selectedNode === ""

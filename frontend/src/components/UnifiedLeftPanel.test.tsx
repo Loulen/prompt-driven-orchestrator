@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -582,6 +583,155 @@ describe("UnifiedLeftPanel library duplicate (#224)", () => {
       expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"),
     );
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+});
+
+// #371 — after Duplicate, the new copy row must be immediately usable (proper
+// button, "library" badge, opens on click) WITHOUT a full page reload. The bug:
+// the duplicate handler refreshed only /library/pipelines, so the copy landed
+// there tagged with its raw storage scope "user" and — being absent from
+// /pipelines — fell through to the degraded block-2 <div> (wrong "user" badge,
+// no button role, dead click). A reload re-fetched /pipelines (where the daemon
+// tags the copy scope:"library"), which repaired all three symptoms. The fix
+// re-fetches /pipelines right after the duplicate, so the copy lands in the
+// block-1 button path at once. Both Copy affordances route through the same
+// handleDuplicate seam, so they can never drift apart again.
+describe("UnifiedLeftPanel duplicate is usable without reload (#371)", () => {
+  const original: PipelineListEntry = {
+    id: "planner",
+    name: "planner",
+    scope: "library",
+    path: "/home/u/.pdo/library/pipelines/planner.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {},
+  };
+  // /pipelines shape of the copy: the daemon scans the library dir and tags it
+  // scope:"library", so it belongs in block 1 (proper button, "library" badge).
+  const copyPipe: PipelineListEntry = {
+    ...original,
+    id: "planner-copy",
+    name: "planner (copy)",
+    path: "/home/u/.pdo/library/pipelines/planner-copy.yaml",
+  };
+  // /library/pipelines shape of the same copy: raw storage scope "user" — the
+  // value that rendered the degraded block-2 row before the fix.
+  const copyLib: LibraryPipelineEntry = {
+    id: "planner-copy",
+    name: "planner (copy)",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: planner (copy)\n",
+    pipeline: { name: "planner (copy)", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  it("moves the copy from the degraded block-2 <div> to a proper block-1 button (block-1 Copy)", async () => {
+    // /pipelines: only the original at mount; original + copy (both tagged
+    // scope:"library") on the post-duplicate re-fetch the fix now performs.
+    mockFetchPipelines.mockReset();
+    mockFetchPipelines
+      .mockResolvedValueOnce([original])
+      .mockResolvedValue([original, copyPipe]);
+    mockDuplicateLibraryPipeline.mockResolvedValueOnce({
+      id: "planner-copy",
+      scope: "user",
+      entry: null,
+    });
+
+    // A stateful parent that mirrors App: onLibraryPipelinesChanged adds the
+    // copy (raw "user" scope) to the /library/pipelines prop — exactly the
+    // refresh that, ALONE, produced the degraded row before the fix.
+    function Harness() {
+      const [lib, setLib] = useState<LibraryPipelineEntry[]>([]);
+      return (
+        <UnifiedLeftPanel
+          runs={[]}
+          selectedRunId={null}
+          onSelectRun={noop}
+          onNewRun={noop}
+          libraryPipelines={lib}
+          onLibraryPipelinesChanged={() => setLib([copyLib])}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    await screen.findByText("planner");
+    expect(screen.queryByText("planner (copy)")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // The copy is now a real <button> (role) named for the copy, carrying the
+    // "library" badge — not the degraded "user" <div>. Pre-fix this row stayed
+    // a library-only <div>, so findByRole would time out.
+    const copyRow = await screen.findByRole("button", { name: /planner \(copy\)/ });
+    expect(within(copyRow).getByText("library")).toBeInTheDocument();
+    // No degraded library-only row survives: once /pipelines carries the copy,
+    // the block-2 name-absence filter drops it.
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+
+  it("surfaces the copy as a block-1 button when duplicating from a block-2 library-only row (block-2 Copy)", async () => {
+    const solo: PipelineListEntry = {
+      id: "solo",
+      name: "solo",
+      scope: "library",
+      path: "/home/u/.pdo/library/pipelines/solo.yaml",
+      node_count: 2,
+      modified: null,
+      variables: {},
+    };
+    const soloCopy: PipelineListEntry = {
+      ...solo,
+      id: "solo-copy",
+      name: "solo (copy)",
+      path: "/home/u/.pdo/library/pipelines/solo-copy.yaml",
+    };
+    const soloLibOnly: LibraryPipelineEntry = {
+      id: "solo",
+      name: "solo",
+      scope: "user",
+      node_count: 2,
+      modified: null,
+      yaml: "name: solo\n",
+      pipeline: { name: "solo", version: "1.0", variables: {}, nodes: [], edges: [] },
+      prompts: {},
+    };
+    // /pipelines empty at mount ⇒ `solo` renders as a block-2 library-only row;
+    // the fix's re-fetch then returns both entries tagged scope:"library".
+    mockFetchPipelines.mockReset();
+    mockFetchPipelines
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([solo, soloCopy]);
+    mockDuplicateLibraryPipeline.mockResolvedValueOnce({
+      id: "solo-copy",
+      scope: "user",
+      entry: null,
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[soloLibOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    // The block-2 library-only row carries the duplicate affordance.
+    await screen.findByTestId("library-only-entry");
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // loadPipelines() (the block-2 handler now shares it) re-fetches /pipelines,
+    // landing the copy in the clickable, "library"-badged block-1 path.
+    const copyRow = await screen.findByRole("button", { name: /solo \(copy\)/ });
+    expect(within(copyRow).getByText("library")).toBeInTheDocument();
   });
 });
 

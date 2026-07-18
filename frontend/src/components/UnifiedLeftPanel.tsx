@@ -199,6 +199,32 @@ export default function UnifiedLeftPanel({
     }
   }
 
+  // #224/#371 — duplicate a library template. One shared seam for both Copy
+  // affordances (the block-1 scope:"library" row and the block-2 library-only
+  // row) so they can never again drift apart. Busy-guarded (a double-click on
+  // the Copy icon fires once), then refreshes BOTH pipeline lists:
+  //   - loadPipelines() re-fetches the authoritative /pipelines, where the
+  //     daemon tags the copy scope:"library" — so it lands in the proper
+  //     block-1 button path at once: a clickable, correctly-badged row.
+  //   - onLibraryPipelinesChanged() re-fetches /library/pipelines.
+  // Refreshing only the latter (the pre-#371 behaviour) left the copy in the
+  // degraded block-2 <div>: wrong "user" badge, no button role, dead click,
+  // until a full page reload. The New/Import handlers already loadPipelines()
+  // the same way; only Duplicate had drifted.
+  async function handleDuplicate(id: string) {
+    if (duplicatingId === id) return;
+    setDuplicatingId(id);
+    try {
+      await duplicateLibraryPipeline(id);
+      await loadPipelines();
+      onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
+    } catch {
+      /* ignore */
+    } finally {
+      setDuplicatingId(null);
+    }
+  }
+
   // One run row, rendered identically whether the list is flat or grouped by
   // repo (#258). Extracted so both code paths share the exact same markup.
   function renderRunRow(run: RunListEntry) {
@@ -655,15 +681,9 @@ export default function UnifiedLeftPanel({
                   <span
                     className="hidden shrink-0 group-hover:inline-flex"
                     data-testid="library-duplicate-button"
-                    onClick={async (e) => {
+                    onClick={(e) => {
                       e.stopPropagation();
-                      if (duplicatingId === p.id) return;
-                      setDuplicatingId(p.id);
-                      try {
-                        await duplicateLibraryPipeline(p.id);
-                        onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
-                      } catch { /* ignore */ }
-                      finally { setDuplicatingId(null); }
+                      handleDuplicate(p.id);
                     }}
                     role="button"
                     title="Duplicate pipeline"
@@ -730,15 +750,9 @@ export default function UnifiedLeftPanel({
                 <span
                   className="hidden shrink-0 group-hover:inline-flex"
                   data-testid="library-duplicate-button"
-                  onClick={async (e) => {
+                  onClick={(e) => {
                     e.stopPropagation();
-                    if (duplicatingId === lp.id) return;
-                    setDuplicatingId(lp.id);
-                    try {
-                      await duplicateLibraryPipeline(lp.id);
-                      onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
-                    } catch { /* ignore */ }
-                    finally { setDuplicatingId(null); }
+                    handleDuplicate(lp.id);
                   }}
                   role="button"
                   title="Duplicate pipeline"

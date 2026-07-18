@@ -108,7 +108,11 @@ async fn create_trigger_with_guard(
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "POST /triggers (guarded) should succeed");
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers (guarded) should succeed"
+    );
     resp.json().await.unwrap()
 }
 
@@ -218,7 +222,11 @@ async fn absent_target_repo_runs_in_repo_root() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     // No target_repo → cwd falls back to the daemon's repo_root, where `seed`
     // committed a `.gitignore`. Reading it by relative name proves the fallback.
-    let resp = guard_test(&daemon, serde_json::json!({ "guard_command": "cat .gitignore" })).await;
+    let resp = guard_test(
+        &daemon,
+        serde_json::json!({ "guard_command": "cat .gitignore" }),
+    )
+    .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["outcome"], "pass");
@@ -258,8 +266,7 @@ async fn leaves_no_fire_row_and_does_not_bump_next_fire() {
 
     // A witness Trigger with its own guard. A dry-run of an unrelated (or even
     // identical) command must not touch its audit trail or schedule.
-    let trigger =
-        create_trigger_with_guard(&daemon, "witness", "0 9 * * *", "gh issue list").await;
+    let trigger = create_trigger_with_guard(&daemon, "witness", "0 9 * * *", "gh issue list").await;
     let trigger_id = trigger["id"].as_str().unwrap();
 
     let fires_before = list_fires(&daemon, trigger_id).await;

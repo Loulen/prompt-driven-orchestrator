@@ -201,12 +201,20 @@ async fn io_endpoint_resolves_cross_iteration_input_to_latest_completed_source()
         .join(&run_id)
         .join("worktree/.pdo/artifacts/planner/iter-1/plan");
     std::fs::create_dir_all(&planner_dir).unwrap();
-    std::fs::write(planner_dir.join("output.md"), "# Plan\n\nthe feeder's only lap").unwrap();
+    std::fs::write(
+        planner_dir.join("output.md"),
+        "# Plan\n\nthe feeder's only lap",
+    )
+    .unwrap();
 
     // Mark the planner COMPLETED at iter-1 so the projection records it (output
     // seeded above lets output validation pass, refs #36).
     let resp = reqwest::Client::new()
-        .post(format!("{}/runs/{}/nodes/planner/done", daemon.url(), run_id))
+        .post(format!(
+            "{}/runs/{}/nodes/planner/done",
+            daemon.url(),
+            run_id
+        ))
         .json(&serde_json::json!({ "iter": 1 }))
         .send()
         .await

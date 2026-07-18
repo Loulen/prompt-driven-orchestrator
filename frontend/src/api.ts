@@ -392,6 +392,40 @@ export async function fetchTriggerFires(triggerId: string): Promise<TriggerFire[
   return resp.json();
 }
 
+/** Verdict of `POST /triggers/guard/test` (#350): a 1:1 projection of the
+ * backend `GuardResult`. `outcome` drives the client-side would-fire / would-skip
+ * / guard-error label. */
+export interface TestGuardResponse {
+  outcome: "pass" | "skip" | "error";
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  detail: string | null;
+}
+
+/**
+ * Dry-run a Trigger guard command — the opposite pole of "Run now" (ADR-0027
+ * addendum, #350). Runs the guard *as currently typed* through the pure
+ * `run_guard` seam with **zero side effects** (no Run, no fire history, no
+ * `next_fire_at` bump) and returns the verdict. `target_repo` is optional; when
+ * omitted the daemon runs the guard in its own repo_root.
+ */
+export async function testGuard(
+  guard_command: string,
+  target_repo?: string,
+): Promise<TestGuardResponse> {
+  const resp = await fetch(`${BASE}/triggers/guard/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ guard_command, target_repo }),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null);
+    throw new Error(body?.error ?? `POST /triggers/guard/test failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 // --- Repo validation and branch listing ---
 
 export interface ValidateRepoResponse {

@@ -2057,6 +2057,125 @@ fn first_next_fire(schedule: &cron_schedule::CronSchedule) -> Option<String> {
         .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
+/// Body of `POST /triggers/guard/test` (#350): the guard command *as currently
+/// typed in the New-trigger tab* (the Trigger need not be saved) plus an optional
+/// target repo. No trigger id — this is inline, pre-save.
+#[derive(serde::Deserialize)]
+struct GuardTestRequest {
+    guard_command: String,
+    #[serde(default)]
+    target_repo: Option<String>,
+}
+
+/// Response of `POST /triggers/guard/test` (#350): a 1:1 projection of
+/// [`fire_decision::GuardResult`]. `outcome` is `"pass" | "skip" | "error"`; the
+/// would-fire / would-skip verdict is composed client-side from it. `exit_code`
+/// is `Some(0)` on pass, the real code on skip, and `None` on error (spawn
+/// failure or timeout).
+#[derive(serde::Serialize)]
+struct GuardTestResponse {
+    outcome: &'static str,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    detail: Option<String>,
+}
+
+impl From<fire_decision::GuardResult> for GuardTestResponse {
+    fn from(r: fire_decision::GuardResult) -> Self {
+        use fire_decision::GuardResult::*;
+        match r {
+            // Pass ≡ exit 0 by definition; expose 0 so the UI can show it.
+            Pass { stdout } => Self {
+                outcome: "pass",
+                stdout,
+                stderr: String::new(),
+                exit_code: Some(0),
+                detail: None,
+            },
+            Skip {
+                stdout,
+                stderr,
+                exit_code,
+            } => Self {
+                outcome: "skip",
+                stdout,
+                stderr,
+                exit_code,
+                detail: None,
+            },
+            Error { detail } => Self {
+                outcome: "error",
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: None,
+                detail: Some(detail),
+            },
+        }
+    }
+}
+
+/// `POST /triggers/guard/test` — dry-run a Trigger guard command (#350).
+///
+/// The opposite pole of "Run now" (ADR-0027 addendum) on the "execute a
+/// Trigger's guard" axis: it runs the guard *as currently typed in the
+/// New-trigger tab* — the Trigger need not be saved — through the **pure**
+/// [`guard_runner::run_guard`] seam and stops at the verdict. It has **zero side
+/// effects**: no Run spawned, no `trigger_fires` row written, no `next_fire_at`
+/// recompute, no tick lock, no overlap gate. The endpoint is *guard-faithful*
+/// (maps [`fire_decision::GuardResult`] 1:1); the would-fire / would-skip verdict
+/// is composed client-side from `outcome`.
+///
+/// Zero-side-effect invariant: this handler calls ONLY `validate_target_repo`,
+/// `instance_config::get`, `guard_runner::guard_timeout_with`, and
+/// `guard_runner::run_guard`. It must never route through `fire_one_trigger`,
+/// `plan_tick`, `create_run_inner`, `trigger_store::*`, or
+/// `record_and_broadcast_fire`.
+async fn guard_test(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GuardTestRequest>,
+) -> Response {
+    // Empty command → 400 (mirror of the `cmd.trim().is_empty()` guard-gate in
+    // `fire_one_trigger`).
+    if req.guard_command.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "guard_command must not be empty" })),
+        )
+            .into_response();
+    }
+
+    // Resolve the cwd: a supplied repo is validated (400 on a bad / non-git
+    // path); absent or blank falls back to the daemon's own repo_root.
+    let cwd = match req.target_repo.as_deref().map(str::trim) {
+        Some(repo) if !repo.is_empty() => match validate_target_repo(repo) {
+            Ok(p) => p,
+            Err(msg) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": msg })),
+                )
+                    .into_response();
+            }
+        },
+        _ => state.repo_root.clone(),
+    };
+
+    // Guard-faithful timeout: same `stored → env → default` precedence a real
+    // fire uses (#129, ADR-0015), so a dry-run reflects the bound the scheduler
+    // would actually apply. Stored is seconds; the env seam is ms.
+    let stored_secs = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.guard_timeout_secs)
+        .map(|n| n as u64);
+    let timeout = guard_runner::guard_timeout_with(stored_secs);
+
+    // The ONLY call: the pure seam. Nothing that spawns a Run or writes history.
+    let result = guard_runner::run_guard(req.guard_command.trim(), &cwd, timeout).await;
+    Json(GuardTestResponse::from(result)).into_response()
+}
+
 async fn create_trigger(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateTriggerRequest>,
@@ -2717,6 +2836,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
         // `/triggers` proxy prefix already covers it — no vite proxy edit (#222).
         .route("/triggers/health", get(triggers_health))
+        // #350: dry-run a guard command without any side effects — the opposite
+        // pole of "Run now" (ADR-0027 addendum). The static `guard/test` segment
+        // sits beside the `{trigger_id}` param: axum 0.8 / matchit 0.8 prefers a
+        // static segment over a param in the same subtree (like `/triggers/health`
+        // beside `{trigger_id}`), so there is no route conflict, and the
+        // `/triggers` proxy prefix already covers it — no vite proxy edit.
+        .route("/triggers/guard/test", post(guard_test))
         // Stale-detector liveness (#251), sibling of `/triggers/health`. New
         // top-level `/stale` prefix → added to the vite dev proxy whitelist so a
         // dev-mode GET hits the daemon instead of the SPA fallback.
@@ -11516,6 +11642,85 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_string(&serde_json::json!({ "yaml": "type: doc-only\n" }))
                             .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- POST /triggers/guard/test (#350): dry-run a guard, zero side effects.
+    // Router oneshots prove the route is mounted (the FP's "404 blocking" risk)
+    // and maps the pass / empty-command / bad-repo branches to 200 / 400 / 400.
+    // Deeper pass/skip/cwd + zero-side-effect proofs live in the layer-3a
+    // `guard_dry_run.rs` (real daemon); the timeout path is isolated in its own
+    // binary because `PDO_GUARD_TIMEOUT_MS` is process-global. ---
+
+    #[tokio::test]
+    async fn guard_test_route_is_mounted_and_returns_pass() {
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers/guard/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({ "guard_command": "echo hi" }))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["outcome"], "pass");
+        assert_eq!(body["stdout"], "hi\n");
+        assert_eq!(body["exit_code"], 0);
+    }
+
+    #[tokio::test]
+    async fn guard_test_empty_command_is_400() {
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers/guard/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({ "guard_command": "   " }))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn guard_test_invalid_target_repo_is_400() {
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers/guard/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "guard_command": "echo hi",
+                            "target_repo": "/no/such/path/pdo-guard-dry-run-xyz",
+                        }))
+                        .unwrap(),
                     ))
                     .unwrap(),
             )

@@ -23,9 +23,16 @@ vi.mock("../api", () => ({
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
   listBranches: vi.fn().mockResolvedValue(["main", "dev", "feature-x"]),
   promotePipeline: vi.fn().mockResolvedValue({ id: "test-pipe", drifted: false }),
+  testGuard: vi.fn().mockResolvedValue({
+    outcome: "pass",
+    stdout: "",
+    stderr: "",
+    exit_code: 0,
+    detail: null,
+  }),
 }));
 
-const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline } = await import("../api");
+const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, testGuard } = await import("../api");
 
 const noop = () => {};
 
@@ -858,6 +865,156 @@ describe("NewRunModal — Trigger mode (#160)", () => {
         }),
       );
     });
+  });
+});
+
+describe("NewRunModal — Test guard dry-run (#350)", () => {
+  async function enterTriggerMode(promptRequired = false) {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: promptRequired }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+  }
+
+  it("disables Test guard (with a tooltip) until the target repo is valid", () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    const button = screen.getByTestId("guard-test-button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "Select a valid target repository first");
+  });
+
+  it("keeps Test guard disabled with a valid repo but an empty guard command, then enables it", async () => {
+    await enterTriggerMode();
+    expect(screen.getByTestId("guard-test-button")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+    expect(screen.getByTestId("guard-test-button")).not.toBeDisabled();
+  });
+
+  it("shows 'Would fire' and the stdout for a passing guard", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "pass",
+      stdout: "issue-123\n",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would fire");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("issue-123");
+    expect(testGuard).toHaveBeenCalledWith("gh issue list", "/home/user/project");
+  });
+
+  it("shows 'Would skip' with the exit code and stderr for a non-zero guard", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "skip",
+      stdout: "",
+      stderr: "no work to do",
+      exit_code: 3,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "exit 3" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would skip");
+    const output = screen.getByTestId("guard-test-output");
+    expect(output).toHaveTextContent("3");
+    expect(output).toHaveTextContent("no work to do");
+  });
+
+  it("shows 'Guard error' and surfaces a request failure inline", async () => {
+    vi.mocked(testGuard).mockRejectedValueOnce(new Error("boom"));
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "sleep 99" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-error")).toHaveTextContent("boom");
+    expect(screen.queryByTestId("guard-test-result")).not.toBeInTheDocument();
+  });
+
+  it("clears a stale verdict when the guard command is edited", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "pass",
+      stdout: "ok",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+    await screen.findByTestId("guard-test-result");
+
+    // Editing the command invalidates the verdict.
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true # edited" },
+    });
+    expect(screen.queryByTestId("guard-test-result")).not.toBeInTheDocument();
+  });
+
+  it("shows the would-reject caveat only for a prompt-required pipeline whose input would be empty", async () => {
+    vi.mocked(testGuard).mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    // Prompt-required pipeline, empty input, guard passes with empty stdout.
+    await enterTriggerMode(true);
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.getByTestId("guard-test-caveat")).toBeInTheDocument();
+  });
+
+  it("omits the caveat for a prompt-optional pipeline even with empty stdout", async () => {
+    vi.mocked(testGuard).mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode(false);
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.queryByTestId("guard-test-caveat")).not.toBeInTheDocument();
   });
 });
 

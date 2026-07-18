@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, Star, X } from "lucide-react";
 import type { PipelineListEntry, Trigger } from "../types";
-import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches } from "../api";
+import type { TestGuardResponse } from "../api";
+import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
+import GuardOutput from "./GuardOutput";
 import { CRON_PRESETS, presetToCron, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
+
+/** Guard dry-run verdict → label + status color (#350). Mirrors the three
+ * `GuardResult` variants 1:1: pass → would fire (green), skip → would skip
+ * (amber), error → guard error (red). */
+const GUARD_VERDICT: Record<
+  TestGuardResponse["outcome"],
+  { label: string; cls: string }
+> = {
+  pass: { label: "Would fire", cls: "border-st-done/30 bg-st-done-bg text-st-done" },
+  skip: { label: "Would skip", cls: "border-st-paused/30 bg-st-paused-bg text-st-paused" },
+  error: { label: "Guard error", cls: "border-st-failed/30 bg-st-failed-bg text-st-failed" },
+};
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -48,6 +62,12 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
   const [dailyMinute, setDailyMinute] = useState(0);
   const [rawCron, setRawCron] = useState("");
   const [guardCommand, setGuardCommand] = useState("");
+  // Guard dry-run (#350): the last verdict, an in-flight flag, and an error. The
+  // verdict is stale the moment the command is edited, so it is cleared on every
+  // guard-command change, mode switch, and close.
+  const [guardTest, setGuardTest] = useState<TestGuardResponse | null>(null);
+  const [guardTesting, setGuardTesting] = useState(false);
+  const [guardTestError, setGuardTestError] = useState<string | null>(null);
   // Overlap policy (#239): unchecked → "skip"; checked → "allow", with an
   // optional concurrency cap (blank = unbounded). `maxConcurrent` is a string so
   // an empty input maps cleanly to "no cap".
@@ -105,6 +125,10 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
     }
     if (triggerPrefillDone.current || !prefillTrigger) return;
     triggerPrefillDone.current = true;
+
+    // A prefilled guard command carries no verdict yet (#350).
+    setGuardTest(null);
+    setGuardTestError(null);
 
     // One-shot prefill: the `triggerPrefillDone` ref gates this to a single run
     // per open, so the setState cascade is bounded and does not re-fire. The
@@ -476,6 +500,21 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
     onClose,
   ]);
 
+  // Guard dry-run (#350): run the guard *as currently typed* with zero side
+  // effects and record the verdict. Never creates a Run or touches history.
+  const onTestGuard = useCallback(async () => {
+    setGuardTesting(true);
+    setGuardTestError(null);
+    try {
+      setGuardTest(await testGuard(guardCommand.trim(), targetRepo.trim() || undefined));
+    } catch (e) {
+      setGuardTest(null);
+      setGuardTestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGuardTesting(false);
+    }
+  }, [guardCommand, targetRepo]);
+
   let repoBorderClass = "border-line-strong focus:border-acc";
   if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
   else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
@@ -506,7 +545,12 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
               <button
                 role="tab"
                 aria-selected={mode === "run"}
-                onClick={() => setMode("run")}
+                onClick={() => {
+                  setMode("run");
+                  // Drop any stale guard verdict when leaving Trigger mode (#350).
+                  setGuardTest(null);
+                  setGuardTestError(null);
+                }}
                 className={`rounded px-2 py-0.5 font-medium transition-colors ${
                   mode === "run" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
                 }`}
@@ -517,7 +561,11 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
               <button
                 role="tab"
                 aria-selected={mode === "trigger"}
-                onClick={() => setMode("trigger")}
+                onClick={() => {
+                  setMode("trigger");
+                  setGuardTest(null);
+                  setGuardTestError(null);
+                }}
                 className={`rounded px-2 py-0.5 font-medium transition-colors ${
                   mode === "trigger" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
                 }`}
@@ -854,13 +902,79 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
                     rows={2}
                     placeholder="e.g. gh issue list --label ready-for-agent"
                     value={guardCommand}
-                    onChange={(e) => setGuardCommand(e.target.value)}
+                    onChange={(e) => {
+                      setGuardCommand(e.target.value);
+                      // A verdict is stale the moment the command changes (#350).
+                      setGuardTest(null);
+                      setGuardTestError(null);
+                    }}
                     data-testid="guard-command-input"
                   />
                   <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
                     Runs before each fire from the target repo. Exit 0 fires (its stdout becomes the
                     Run input); a non-zero exit skips. Bounded by a 60s timeout.
                   </span>
+
+                  {/* Test guard (dry-run, #350): run the guard as typed, with no
+                      side effects, and show would-fire / would-skip / error. */}
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      onClick={onTestGuard}
+                      disabled={!repoValid || guardCommand.trim().length === 0 || guardTesting}
+                      title={!repoValid ? "Select a valid target repository first" : undefined}
+                      className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
+                      style={{ fontSize: "11px" }}
+                      data-testid="guard-test-button"
+                    >
+                      {guardTesting ? "Testing…" : "Test guard"}
+                    </button>
+
+                    {guardTestError && (
+                      <div
+                        className="rounded-md border border-st-failed/30 bg-st-failed-bg px-2.5 py-1.5 text-st-failed"
+                        style={{ fontSize: "10.5px" }}
+                        data-testid="guard-test-error"
+                      >
+                        {guardTestError}
+                      </div>
+                    )}
+
+                    {guardTest && (
+                      <div
+                        className={`flex flex-col gap-1.5 rounded-md border px-2.5 py-2 ${GUARD_VERDICT[guardTest.outcome].cls}`}
+                        data-testid="guard-test-result"
+                      >
+                        <span className="font-medium" data-testid="guard-test-verdict" style={{ fontSize: "11.5px" }}>
+                          {GUARD_VERDICT[guardTest.outcome].label}
+                        </span>
+                        {/* Honest caveat: the guard passes, but a real fire of a
+                            prompt-required pipeline with no resolved input would be
+                            rejected. Same rule the server enforces, read off the
+                            actual stdout — not the empty-field reject variable. */}
+                        {guardTest.outcome === "pass" &&
+                          guardTest.stdout.trim() === "" &&
+                          selectedPipeline &&
+                          !promptOptional &&
+                          input.trim() === "" && (
+                            <span
+                              className="text-st-blocked"
+                              style={{ fontSize: "10.5px" }}
+                              data-testid="guard-test-caveat"
+                            >
+                              Guard passes, but the resolved input would be empty — a prompt-required
+                              pipeline would reject this fire.
+                            </span>
+                          )}
+                        <GuardOutput
+                          stdout={guardTest.stdout}
+                          stderr={guardTest.stderr}
+                          exitCode={guardTest.exit_code}
+                          data-testid="guard-test-output"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Overlap policy (#239): allow concurrent fires, optionally capped. */}

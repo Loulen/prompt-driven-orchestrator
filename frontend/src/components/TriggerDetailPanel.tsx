@@ -13,6 +13,7 @@ import {
 import type { Trigger, TriggerFire } from "../types";
 import { fetchTriggerFires } from "../api";
 import { humanizeCron } from "../cronPresets";
+import GuardOutput from "./GuardOutput";
 
 interface Props {
   trigger: Trigger;
@@ -297,43 +298,15 @@ function FireEntry({
             Guard output
           </button>
           {showOutput && (
-            <div
-              className="flex flex-col gap-1 pt-0.5"
+            <GuardOutput
+              stdout={fire.guard_stdout}
+              stderr={fire.guard_stderr}
+              exitCode={fire.guard_exit_code}
               data-testid="fire-guard-output"
-            >
-              {fire.guard_exit_code != null && (
-                <div className="text-fg-4" style={{ fontSize: "10px" }}>
-                  exit code{" "}
-                  <span className="font-mono text-fg-2">{fire.guard_exit_code}</span>
-                </div>
-              )}
-              {fire.guard_stdout?.trim() && (
-                <GuardStream label="stdout" text={fire.guard_stdout} />
-              )}
-              {fire.guard_stderr?.trim() && (
-                <GuardStream label="stderr" text={fire.guard_stderr} />
-              )}
-            </div>
+            />
           )}
         </>
       )}
-    </div>
-  );
-}
-
-/** A labelled, scrollable block for one captured guard stream (#244). */
-function GuardStream({ label, text }: { label: string; text: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="text-fg-4" style={{ fontSize: "10px" }}>
-        {label}
-      </div>
-      <pre
-        className="overflow-x-auto whitespace-pre-wrap rounded border border-line bg-bg-0 px-2 py-1.5 font-mono text-fg-3"
-        style={{ fontSize: "10px" }}
-      >
-        {text}
-      </pre>
     </div>
   );
 }
@@ -351,3 +324,5 @@ function formatTs(iso: string | null | undefined): string | null {
     return iso;
   }
 }
+// GuardStream moved to GuardOutput.tsx (#350) so the New-trigger dry-run and the
+// #351 detail-panel dry-run share one output surface. Nothing else referenced it.

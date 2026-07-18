@@ -106,73 +106,28 @@ pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> 
 }
 
 pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
-    let mut inputs = Vec::new();
-
-    for edge in &ctx.pipeline.edges {
-        if edge.target.node != ctx.node.id {
-            continue;
-        }
-
-        // `repeated` lives on the edge (#149): inputs are emergent, derived from
-        // incoming edges, so the accumulate-across-iterations flag rides the edge
-        // rather than a declared input port.
-        let repeated = edge.repeated;
-
-        let source_node = &edge.source.node;
-        let is_start = ctx
-            .pipeline
-            .nodes
-            .iter()
-            .any(|n| n.id == *source_node && n.node_type == crate::pipeline::NodeType::Start);
-
-        let paths: Vec<PathBuf> = if is_start {
-            vec![crate::blackboard::input_path(ctx.artifacts_dir)]
-        } else if repeated {
-            // #353: enumerate one concrete path per COMPLETED source iteration,
-            // resolved via the projection (`repeated_iters`) — never a raw
-            // `iter-*` glob, which cannot exclude a failed iteration's artifact.
-            // A source with no completed iter (absent from the map) pools
-            // nothing (D6).
-            ctx.repeated_iters
-                .get(source_node.as_str())
-                .map(|iters| {
-                    iters
-                        .iter()
-                        .map(|&n| {
-                            crate::blackboard::artifact_path(
-                                ctx.artifacts_dir,
-                                source_node,
-                                n,
-                                &edge.source.port,
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            // Canonical resolution (#194): read the source's latest completed
-            // iteration, never a failed iteration's artifact and never a
-            // positional iter the source has not produced.
-            let source_iter = ctx
-                .source_iters
-                .get(source_node.as_str())
-                .copied()
-                .unwrap_or(ctx.iter);
-            vec![crate::blackboard::artifact_path(
-                ctx.artifacts_dir,
-                source_node,
-                source_iter,
-                &edge.source.port,
-            )]
-        };
-
-        inputs.push(InputResolution {
-            port_name: edge.target.port.clone(),
-            paths,
-            repeated,
-            from_start: is_start,
-        });
-    }
+    // Project over the single edge-walk (#370): the iteration decision (source's
+    // latest-completed iter, completed-iters pool, Start → `_input`) lives in
+    // `input_resolution::resolve_consumer_inputs`, fed the precomputed maps the
+    // daemon injected (this module is pure and cannot hold a `RunState`). The
+    // preamble/script-env are then pure projections over the result — one
+    // `InputResolution` per incoming edge, no independent edge-walk.
+    let mut inputs: Vec<InputResolution> = crate::input_resolution::resolve_consumer_inputs(
+        ctx.pipeline,
+        ctx.artifacts_dir,
+        &ctx.node.id,
+        ctx.iter,
+        &ctx.source_iters,
+        &ctx.repeated_iters,
+    )
+    .into_iter()
+    .map(|r| InputResolution {
+        port_name: r.port,
+        paths: r.paths,
+        repeated: r.repeated,
+        from_start: r.from_start,
+    })
+    .collect();
 
     if inputs.is_empty() && ctx.node.inputs.iter().any(|p| p.name == "task") {
         inputs.push(InputResolution {

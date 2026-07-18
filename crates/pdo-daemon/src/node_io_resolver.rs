@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -57,37 +57,36 @@ pub fn resolve(
     };
 
     // Inputs are EMERGENT (#149): derived from incoming edges, not declared on
-    // the node. Each edge contributes files to a logical input named after its
-    // target endpoint (which inherits the source document name). Several
-    // same-named edges POOL into one list input. `repeated` (accumulate
-    // `iter-*`) is read off the edge, never off a declared port.
+    // the node. The edge-walk + iteration decision (source's latest-COMPLETED
+    // iter for a single wire, COMPLETED iters for a `repeated` pool) lives in
+    // ONE place — `input_resolution::resolve_consumer_inputs` (#370) — never
+    // re-derived here. This resolver's own job is the projection: add a disk
+    // stat (`FileInfo`) per resolved path, and POOL same-named edges into one
+    // logical list input.
+    let source_iters =
+        crate::input_resolution::resolved_source_iters(pipeline, run_state, node_id, iter);
+    let repeated_iters =
+        crate::input_resolution::resolved_repeated_iters(pipeline, run_state, node_id);
+    let resolved = crate::input_resolution::resolve_consumer_inputs(
+        pipeline,
+        artifacts_dir,
+        node_id,
+        iter,
+        &source_iters,
+        &repeated_iters,
+    );
+
     let mut inputs: Vec<PortIO> = Vec::new();
     let mut input_index: HashMap<String, usize> = HashMap::new();
 
-    for edge in &pipeline.edges {
-        if edge.target.node != node_id {
-            continue;
-        }
+    for input in resolved {
+        let files: Vec<FileInfo> = input
+            .paths
+            .iter()
+            .map(|p| file_info(artifacts_dir, p))
+            .collect();
 
-        let mut files = Vec::new();
-        if edge.repeated {
-            // #353: pool one file per COMPLETED source iteration, resolved via
-            // the projection — never a raw `iter-*` disk scan, which would
-            // surface a failed iteration's artifact.
-            let source_dir = artifacts_dir.join(&edge.source.node);
-            let completed = run_state.completed_iters(&edge.source.node);
-            files.extend(glob_repeated(&source_dir, &edge.source.port, &completed));
-        } else {
-            let path = crate::blackboard::artifact_path(
-                artifacts_dir,
-                &edge.source.node,
-                iter,
-                &edge.source.port,
-            );
-            files.push(file_info(artifacts_dir, &path));
-        }
-
-        match input_index.get(&edge.target.port) {
+        match input_index.get(&input.port) {
             // Pool same-named edges into one logical list input. Once two edges
             // share a target name the input is a list (repeated), regardless of
             // each edge's own flag.
@@ -97,10 +96,10 @@ pub fn resolve(
                 pooled.files.extend(files);
             }
             None => {
-                input_index.insert(edge.target.port.clone(), inputs.len());
+                input_index.insert(input.port.clone(), inputs.len());
                 inputs.push(PortIO {
-                    port: edge.target.port.clone(),
-                    repeated: edge.repeated,
+                    port: input.port,
+                    repeated: input.repeated,
                     port_type: PortType::Markdown,
                     files,
                 });
@@ -279,54 +278,6 @@ fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
     files
 }
 
-/// Collect one `output.md` per COMPLETED source iteration, ascending.
-///
-/// `completed` is the set of source iterations the projection blesses (#353).
-/// The disk is still walked to find the `iter-N` directories, but an iter is
-/// kept only if it is in `completed` — a failed iteration that left an
-/// `output.md` on disk is quarantined, never pooled.
-fn glob_repeated(source_dir: &Path, port_name: &str, completed: &[i64]) -> Vec<FileInfo> {
-    let mut results = Vec::new();
-
-    let Ok(entries) = std::fs::read_dir(source_dir) else {
-        return results;
-    };
-
-    let mut iter_dirs: Vec<(i64, PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_dir()))
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let n = name.strip_prefix("iter-")?.parse::<i64>().ok()?;
-            completed.contains(&n).then_some((n, e.path()))
-        })
-        .collect();
-
-    iter_dirs.sort_by_key(|(n, _)| *n);
-
-    let artifacts_dir = source_dir.parent().unwrap_or(source_dir);
-
-    for (_, dir) in iter_dirs {
-        let file_path = dir.join(port_name).join("output.md");
-        let exists = file_path.exists();
-        let size = if exists {
-            std::fs::metadata(&file_path).ok().map(|m| m.len())
-        } else {
-            None
-        };
-        if exists {
-            results.push(FileInfo {
-                path: relative_path(artifacts_dir, &file_path),
-                exists,
-                size,
-                frontmatter: None,
-            });
-        }
-    }
-
-    results
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +434,41 @@ mod tests {
 
         assert!(io.inputs[0].files[0].exists);
         assert!(io.inputs[0].files[0].size.unwrap() > 0);
+    }
+
+    #[test]
+    fn simple_wire_resolves_cross_iteration_to_latest_completed_source() {
+        // #370 regression (RED→GREEN): a consumer reading at iter-2 from a
+        // non-repeated edge whose source only ever COMPLETED at iter-1 (the
+        // textbook external-feeder / loop-member case) must resolve to the
+        // source's latest-completed iteration (iter-1), NOT its own positional
+        // iter-2 — a path that never existed. Before the fix, the simple-wire
+        // branch walked the edge on the consumer's `iter` and reported the input
+        // "missing", the one escapee of the #194/#210/#353 quarantine invariant.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "# Plan\nfrom the feeder's only lap").unwrap();
+
+        let pipeline = simple_pipeline();
+        // The planner (feeder) completed only at iter-1; the implementer reads
+        // it at lap 2.
+        let run_state = run_state_with("planner", &[(1, NodeStatus::Completed)]);
+        let io = resolve(&pipeline, &artifacts, "implementer", 2, &run_state);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(!io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(
+            io.inputs[0].files[0].path, "planner/iter-1/plan/output.md",
+            "resolves to the source's latest-completed iter, not the consumer's iter-2"
+        );
+        assert!(
+            io.inputs[0].files[0].exists,
+            "the feeder's iter-1 artifact exists and must be surfaced, not reported missing"
+        );
     }
 
     #[test]

@@ -274,20 +274,41 @@ fn resolve_inputs(
     params: &StartNodeParams<'_>,
     node: &pipeline::NodeDef,
 ) -> HashMap<String, String> {
-    let mut input_paths = HashMap::new();
-
-    // #353: `repeated` pools resolve through the projection — one concrete path
-    // per COMPLETED source iteration, never a raw `iter-*` disk glob (which would
-    // pool a failed iteration's artifact). Keyed by source node and filtered on
-    // `edge.repeated`, consistent with the other two resolvers; the declared
-    // `input_port.repeated` flag is NOT the authority (edge-based model, #149 /
-    // ADR-0011). This map backs only the forensic `NodeStarted` payload.
+    // Project over the single edge-walk (#370): the iteration decision (source's
+    // latest-COMPLETED iter for a single wire, COMPLETED iters for a `repeated`
+    // pool — never a raw `iter-*` disk glob, #353) lives in
+    // `input_resolution::resolve_consumer_inputs`, not re-derived here. This
+    // path is keyed on the node's DECLARED inputs (the forensic `NodeStarted`
+    // payload is a per-declared-port, mono-value map) and layers overrides + the
+    // entry-node `task` fallback on top; a `repeated` pool flattens to a
+    // `\n`-joined string.
+    let source_iters = crate::input_resolution::resolved_source_iters(
+        params.pipeline,
+        params.run_state,
+        params.node_id,
+        params.iter,
+    );
     let repeated_iters = crate::input_resolution::resolved_repeated_iters(
         params.pipeline,
         params.run_state,
         params.node_id,
     );
+    let resolved = crate::input_resolution::resolve_consumer_inputs(
+        params.pipeline,
+        params.artifacts_dir,
+        params.node_id,
+        params.iter,
+        &source_iters,
+        &repeated_iters,
+    );
+    // First resolved input per target port — preserves the previous
+    // first-matching-edge semantics when several edges share a target port.
+    let mut by_port: HashMap<&str, &crate::input_resolution::ResolvedInput> = HashMap::new();
+    for r in &resolved {
+        by_port.entry(r.port.as_str()).or_insert(r);
+    }
 
+    let mut input_paths = HashMap::new();
     for input_port in &node.inputs {
         if let Some(override_path) = params
             .overrides
@@ -301,53 +322,14 @@ fn resolve_inputs(
             continue;
         }
 
-        let matching_edge = params
-            .pipeline
-            .edges
-            .iter()
-            .find(|e| e.target.node == params.node_id && e.target.port == input_port.name);
-
-        if let Some(edge) = matching_edge {
-            let resolved = if edge.repeated {
-                // Concrete completed-iteration paths, `\n`-joined (this HashMap
-                // is mono-value; the payload is forensic, not machine-read).
-                repeated_iters
-                    .get(&edge.source.node)
-                    .map(|iters| {
-                        iters
-                            .iter()
-                            .map(|&n| {
-                                blackboard::artifact_path(
-                                    params.artifacts_dir,
-                                    &edge.source.node,
-                                    n,
-                                    &edge.source.port,
-                                )
-                                .to_string_lossy()
-                                .to_string()
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default()
-            } else {
-                // Canonical resolution (#194 / #210): the source's latest
-                // COMPLETED iteration, never a failed iteration's artifact.
-                let source_iter = crate::input_resolution::source_iter(
-                    params.run_state,
-                    &edge.source.node,
-                    params.iter,
-                );
-                blackboard::artifact_path(
-                    params.artifacts_dir,
-                    &edge.source.node,
-                    source_iter,
-                    &edge.source.port,
-                )
-                .to_string_lossy()
-                .to_string()
-            };
-            input_paths.insert(input_port.name.clone(), resolved);
+        if let Some(r) = by_port.get(input_port.name.as_str()) {
+            let joined = r
+                .paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            input_paths.insert(input_port.name.clone(), joined);
         } else if input_port.name == "task" {
             let path = blackboard::input_path(params.artifacts_dir);
             input_paths.insert(input_port.name.clone(), path.to_string_lossy().to_string());
@@ -1142,6 +1124,73 @@ mod tests {
         assert!(
             review_path.contains("iter-3"),
             "should resolve to iter-3 (latest), got: {review_path}"
+        );
+    }
+
+    #[test]
+    fn resolve_inputs_reads_latest_completed_not_failed_iter() {
+        // #370 guard (the node_primitives projection): a non-repeated
+        // cross-iteration edge whose source FAILED at iter-1 then COMPLETED at
+        // iter-2 must record iter-2 in the forensic payload — never the failed
+        // iter-1, and never the consumer's positional iter.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
+                make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
+            ],
+            edges: vec![make_edge("reviewer", "review", "implementer", "review")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut run_state = empty_run_state();
+        run_state.nodes.insert(
+            "reviewer".into(),
+            completed_node_iters(
+                "reviewer",
+                &[(1, NodeStatus::Failed), (2, NodeStatus::Completed)],
+            ),
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let node = pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "implementer")
+            .unwrap();
+        let params = StartNodeParams {
+            run_id: "run-1",
+            node_id: "implementer",
+            iter: 1,
+            overrides: None,
+            pipeline: &pipeline,
+            run_state: &run_state,
+            artifacts_dir: &artifacts_dir,
+            worktree_dir: tmp.path(),
+            repo_root: tmp.path(),
+            pipeline_path: &tmp.path().join("pipeline.yaml"),
+            resolved_vars: &HashMap::new(),
+            daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
+            default_model: None,
+        };
+
+        let input_paths = resolve_inputs(&params, node);
+        let review_path = input_paths.get("review").unwrap();
+        assert!(
+            review_path.contains("iter-2/review/output.md"),
+            "resolves to the latest-completed iter-2, got: {review_path}"
+        );
+        assert!(
+            !review_path.contains("iter-1"),
+            "the failed iter-1 is quarantined, got: {review_path}"
         );
     }
 

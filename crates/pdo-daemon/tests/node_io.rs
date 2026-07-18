@@ -179,6 +179,84 @@ async fn io_endpoint_returns_port_paths_and_frontmatter() {
         .output();
 }
 
+/// #370 (AC4): the `/io` endpoint — which backs the NodeRun inputs panel and the
+/// `node_done` node-IO surface — must resolve a non-repeated cross-iteration edge
+/// to the source's latest-COMPLETED iteration, not the consumer's own `iter`.
+///
+/// Scenario: the planner (a feeder) completes only at iter-1; the endpoint is
+/// then asked for the implementer's inputs at iter-2 (as a loop member reading an
+/// external feeder would be). The input must resolve to `planner/iter-1/...`
+/// (which exists), never `planner/iter-2/...` (which never existed). Before the
+/// fix the simple-wire branch walked the edge on the consumer's iter and reported
+/// the input "missing".
+#[tokio::test]
+async fn io_endpoint_resolves_cross_iteration_input_to_latest_completed_source() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon.url()).await;
+
+    // The planner produced its only lap at iter-1.
+    let planner_dir = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/artifacts/planner/iter-1/plan");
+    std::fs::create_dir_all(&planner_dir).unwrap();
+    std::fs::write(planner_dir.join("output.md"), "# Plan\n\nthe feeder's only lap").unwrap();
+
+    // Mark the planner COMPLETED at iter-1 so the projection records it (output
+    // seeded above lets output validation pass, refs #36).
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{}/nodes/planner/done", daemon.url(), run_id))
+        .json(&serde_json::json!({ "iter": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "planner done should succeed: {}",
+        resp.status()
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Ask for the implementer's inputs at LAP 2. The planner never ran iter-2.
+    let resp = reqwest::get(format!(
+        "{}/runs/{}/nodes/implementer/io?iter=2",
+        daemon.url(),
+        run_id,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let io: serde_json::Value = resp.json().await.unwrap();
+
+    let inputs = io["inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 1, "implementer should have 1 input port");
+    assert_eq!(inputs[0]["port"], "plan");
+    let path = inputs[0]["files"][0]["path"].as_str().unwrap();
+    assert!(
+        path.contains("planner/iter-1/plan/output.md"),
+        "must resolve to the feeder's latest-completed iter-1, got: {path}"
+    );
+    assert!(
+        !path.contains("iter-2"),
+        "must NOT resolve to the consumer's positional iter-2, got: {path}"
+    );
+    assert_eq!(
+        inputs[0]["files"][0]["exists"], true,
+        "the iter-1 feeder artifact exists and must be surfaced, not reported missing"
+    );
+
+    // Cleanup
+    for session in [
+        format!("pdo-{run_id}-planner-iter-1"),
+        format!("pdo-{run_id}-implementer-iter-1"),
+    ] {
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .output();
+    }
+}
+
 #[tokio::test]
 async fn io_endpoint_returns_404_before_run_creation() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();

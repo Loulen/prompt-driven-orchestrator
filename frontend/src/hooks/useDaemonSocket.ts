@@ -38,7 +38,12 @@ export function useDaemonSocket() {
             msg.type === "pipeline_changed" ||
             msg.type === "trigger_created" ||
             msg.type === "trigger_fired" ||
-            msg.type === "trigger_deleted"
+            msg.type === "trigger_deleted" ||
+            // #348: without this line the global-pause event is silently dropped
+            // here before it reaches the App dispatcher, so a second client's
+            // banner would never light up. (This transport allowlist is the
+            // easiest line in the ticket to miss.)
+            msg.type === "triggers_paused"
           ) {
             for (const listener of listenersRef.current) {
               listener(msg);

@@ -22,6 +22,7 @@ mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;
 pub mod node_primitives;
+mod node_spawn;
 mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
@@ -69,13 +70,20 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
 
+// `create_sub_worktree` is now referenced only from tests here (its production
+// caller `spawn_node` moved to `node_spawn` in #356), so it joins the test-only
+// import to keep the non-test build warning-clean.
 #[cfg(test)]
-use crate::worktree_ops::commit_and_merge_sub_worktree;
+use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
-    commit_and_merge_sub_worktree_inner, create_sub_worktree, create_worktree,
-    reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
-    worktree_dir_for_run, worktree_has_tracked_changes, MergeResult,
+    commit_and_merge_sub_worktree_inner, create_worktree, sub_worktree_branch, sub_worktree_path,
+    validate_merge_resolution, worktree_dir_for_run, worktree_has_tracked_changes, MergeResult,
 };
+// #356: spawn primitive carved into `node_spawn`. Imported unqualified here so
+// the many construction sites (`SpawnContext { .. }`), the 7 in-file
+// `spawn_node` call sites, and `record_spawn`'s `SpawnOutcome` match need no
+// per-site path churn; `SpawnDeps::from_state` wraps each call's `&AppState`.
+use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
@@ -2925,7 +2933,17 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
+/// Append an event (with the #212 transition-guard backstop) taking only the
+/// two side-effects the append actually touches — the DB pool and the event
+/// broadcast sink — instead of the whole `AppState`. This is the injectable
+/// core (#356): `spawn_node`, which holds a narrow `SpawnDeps` rather than
+/// `&AppState`, appends through it, while the ~130 in-process callers keep using
+/// the [`append_event`] wrapper below (behaviour identical).
+pub(crate) async fn append_event_with(
+    db: &sqlx::SqlitePool,
+    event_tx: &broadcast::Sender<event_log::Event>,
+    event: &event_log::Event,
+) -> Result<()> {
     // Transition guard backstop (#212): every lifecycle append is validated
     // against the freshly projected state, so no emitter — present or future —
     // can bypass the guard. Emitters with side effects (spawn, merge) must
@@ -2939,7 +2957,7 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
             | event_log::EventKind::NodeStale
             | event_log::EventKind::NodeFailed
     ) {
-        let events = load_events(&state.db, &event.run_id).await?;
+        let events = load_events(db, &event.run_id).await?;
         let run_state = event_log::project(&events);
         match transition_guard::validate_transition(run_state.as_ref(), event) {
             transition_guard::Verdict::Allow => {}
@@ -2974,16 +2992,23 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
     .bind(event.iter)
     .bind(&payload_str)
     .bind(&event.run_id)
-    .execute(&state.db)
+    .execute(db)
     .await
     .context("failed to append event")?;
     if result.rows_affected() == 0 {
         anyhow::bail!("run {} has been forgotten", event.run_id);
     }
 
-    let _ = state.event_tx.send(event.clone());
+    let _ = event_tx.send(event.clone());
 
     Ok(())
+}
+
+/// Thin `AppState` wrapper over [`append_event_with`] — the name every
+/// in-process caller already uses. The db-only core exists so `spawn_node`
+/// (#356) can append through a narrow `SpawnDeps` without the full `AppState`.
+async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
+    append_event_with(&state.db, &state.event_tx, event).await
 }
 
 /// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
@@ -4574,16 +4599,6 @@ async fn promote_pipeline(
 
 // --- API handlers ---
 
-struct SpawnContext<'a> {
-    pipeline: &'a pipeline::PipelineDef,
-    run_id: &'a str,
-    pipeline_path: &'a std::path::Path,
-    worktree_dir: &'a std::path::Path,
-    artifacts_dir: &'a std::path::Path,
-    resolved_vars: &'a HashMap<String, serde_yaml::Value>,
-    repo_root: &'a std::path::Path,
-}
-
 /// Deposits one `_item.md` per lap under the collection entry's artifact dir
 /// (ADR-0011 / #269): `<artifacts>/<entry>/iter-N/_item.md` with `item / iter /
 /// total` frontmatter, so each spawned lap reads its own item.
@@ -4610,473 +4625,20 @@ fn deposit_collection_items(
     }
 }
 
-/// A collection-region member (ADR-0011 / #269) reads its OWN deposited item:
-/// the fan-out deposits `_item.md` under the entry's artifact dir, one per
-/// lap — there is no separate driver node like the retired ForEach.
-fn find_collection_context(
-    spawn_ctx: &SpawnContext<'_>,
-    node_id: &str,
-    iter: i64,
-) -> Option<prompt_augmenter::ForEachContext> {
-    crate::loop_region::collection_region_for_member(spawn_ctx.pipeline, node_id)?;
-    let item_path = spawn_ctx
-        .artifacts_dir
-        .join(node_id)
-        .join(format!("iter-{iter}"))
-        .join("_item.md");
-    let item_content = std::fs::read_to_string(&item_path).ok()?;
-    let total = std::fs::read_dir(spawn_ctx.artifacts_dir.join(node_id))
-        .map(|entries| {
-            entries
-                .filter(|e| e.as_ref().is_ok_and(|e| e.path().is_dir()))
-                .count()
-        })
-        .unwrap_or(0) as i64;
-    let current_item = item_content
-        .split("---")
-        .nth(2)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    Some(prompt_augmenter::ForEachContext {
-        current_item,
-        current_iter: iter,
-        total,
-    })
-}
-
-/// What actually happened in a `spawn_node` call (ADR-0025 / #327). Every exit
-/// path is distinguishable so callers that must tell the truth about a
-/// re-scheduling (`re_evaluate_after_command`) can report the real effect
-/// instead of assuming success. Callers on fire-and-forget paths simply drop it
-/// (intentionally not `#[must_use]`).
-#[derive(Debug, Clone)]
-enum SpawnOutcome {
-    /// A tmux session was launched and `NodeStarted` recorded.
-    Spawned,
-    /// Admission cap reached: the node entered `waiting` (`NodeWaiting`
-    /// appended); `retry_waiting_nodes` re-drives it later.
-    Throttled,
-    /// The transition guard refused the spawn before any side effect
-    /// (already live / already completed iteration).
-    Refused { reason: String },
-    /// The spawn aborted (empty script body, worktree creation failure,
-    /// panic/error in the isolated span) — a failure was recorded.
-    Failed { reason: String },
-}
-
-async fn spawn_node(
-    state: &AppState,
-    spawn_ctx: &SpawnContext<'_>,
-    node: &pipeline::NodeDef,
-    iter: i64,
-) -> SpawnOutcome {
-    let run_id = spawn_ctx.run_id;
-
-    // Transition guard (#212): refuse an illegal NodeStarted BEFORE any side
-    // effect (sub-worktree creation, tmux session spawn) — never after. This
-    // covers every caller: scheduler dispatch, resume re-evaluation,
-    // restart_node, waiting-node retries.
-    let started_probe = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeStarted,
-        node_id: Some(node.id.clone()),
-        iter: Some(iter),
-        payload: None,
-    };
-    let projected = reload_run_state(state, run_id).await.map(|(_, s)| s);
-    match transition_guard::validate_transition(projected.as_ref(), &started_probe) {
-        transition_guard::Verdict::Allow => {}
-        transition_guard::Verdict::NoOp { reason }
-        | transition_guard::Verdict::Reject { reason } => {
-            warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
-            return SpawnOutcome::Refused { reason };
-        }
-    }
-
-    // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
-    // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.
-    // `create_run` guards this at launch, but the scheduler and `restart_node`
-    // reach `spawn_node` directly, and a mid-run edit could have emptied a
-    // pending script's body since launch. Fail loud (before admission / any side
-    // effect) rather than silently no-op.
-    if node.node_type == pipeline::NodeType::Script {
-        let body_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
-        let body_empty = std::fs::read_to_string(&body_path)
-            .map(|s| s.trim().is_empty())
-            .unwrap_or(true);
-        if body_empty {
-            let reason = format!("script node {} has an empty body", node.id);
-            fail_spawn_before_start(state, spawn_ctx.repo_root, run_id, &node.id, None, &reason)
-                .await;
-            return SpawnOutcome::Failed { reason };
-        }
-    }
-
-    // Admission control (#159 / #213): bound the number of live NodeRun
-    // sessions daemon-wide. The check is an ATOMIC check-and-reserve — the
-    // `admission_lock` is held from the count until the reservation event
-    // (`NodeStarted` / `NodeWaiting`) is appended, so concurrent spawns can
-    // never all observe the same free slot and overshoot the cap. If admitting
-    // one more would exceed the cap, the node enters `waiting` and holds no
-    // session; `retry_waiting_nodes` re-drives it once a slot frees. Checked
-    // first so a throttled node creates no worktree.
-    let admission_guard = state.admission_lock.lock().await;
-    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
-    let live = count_global_live_sessions(&state.db).await;
-    if !admission::can_admit(live, cap) {
-        let waiting = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeWaiting,
-            node_id: Some(node.id.clone()),
-            iter: Some(iter),
-            payload: Some(serde_json::json!({ "live_sessions": live, "cap": cap })),
-        };
-        if let Err(e) = append_event(state, &waiting).await {
-            error!("failed to append node_waiting for {}: {e}", node.id);
-        }
-        info!(
-            "node {} throttled into waiting ({live}/{cap} sessions live)",
-            node.id
-        );
-        return SpawnOutcome::Throttled;
-    }
-
-    let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
-    let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
-
-    let foreach_context = find_collection_context(spawn_ctx, &node.id, iter);
-
-    let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-        || node.node_type == pipeline::NodeType::Merge;
-
-    // Track the sub-worktree + branch this spawn creates so an abort in the
-    // panic-isolated span below can reap them (#279). `None` for nodes that own
-    // no worktree (doc-only / control nodes).
-    let mut orphan_to_reap: Option<(PathBuf, String)> = None;
-    let working_dir = if has_sub_worktree {
-        let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
-        let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
-        let pipeline_branch = format!("pdo/run-{run_id}");
-
-        if let Err(e) = create_sub_worktree(
-            spawn_ctx.repo_root,
-            &sub_wt_dir,
-            &sub_branch,
-            &pipeline_branch,
-        ) {
-            error!("failed to create sub-worktree for {}: {e:#}", node.id);
-            return SpawnOutcome::Failed {
-                reason: format!("failed to create sub-worktree for {}: {e:#}", node.id),
-            };
-        }
-        orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
-        sub_wt_dir
-    } else {
-        spawn_ctx.worktree_dir.to_path_buf()
-    };
-
-    // Panic/cancellation-isolated spawn window (#279). Everything from here to
-    // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
-    // input resolution) or — when this runs in-request inside `node_done` — be
-    // dropped if the completing client disconnects (hyper drops the in-flight
-    // future at an `.await`). Before #279 either left the freshly-created
-    // sub-worktree orphaned with NO `NodeStarted`, wedging the run `running`
-    // forever: no live node, no error, nothing logged. It slips past every
-    // recovery path — `advance_run` is event-triggered, the stale detector only
-    // inspects live tmux sessions, and `reconcile_run_level_stall` saw the node
-    // as "ready, about to be driven". Run the window under `catch_unwind` so a
-    // panic becomes a LOUD failure (reap the orphan, fail the run) instead of a
-    // silent stall (ADR-0004 « jamais de stall silencieux »). A dropped
-    // (cancelled) future can't be caught here; the periodic detector in
-    // `run_stall_reason` (#279 Layer 2) is the backstop for that path — and
-    // since #304 (ADR-0023) the `node_done` tail runs DETACHED from the request
-    // future, so the completing client's disconnect can no longer cancel this
-    // window in the first place.
-    // `tokio::sync::Mutex` doesn't poison, so the DB / admission state stay
-    // usable after a caught panic (the property `run_isolated` relies on too).
-    let span = std::panic::AssertUnwindSafe(async {
-        // Debug-only one-shot fault injection (#279): exercises the catch + reap
-        // + RunFailed path. Armed via `PDO_DEBUG_PANIC_SPAWN` or
-        // `DaemonHandle::arm_spawn_panic`. Checked at the span head so the
-        // orphaned worktree already exists and the reap has something to remove.
-        if state
-            .panic_on_spawn
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("PDO_DEBUG_PANIC_SPAWN fault injection (#279)");
-        }
-
-        let is_entry_node = spawn_ctx.pipeline.edges.iter().any(|e| {
-            e.target.node == node.id
-                && spawn_ctx
-                    .pipeline
-                    .nodes
-                    .iter()
-                    .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
-        });
-        let input_images = if is_entry_node {
-            prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
-        } else {
-            Vec::new()
-        };
-
-        // Canonical input resolution (#194 / #210): re-project the run state at
-        // spawn time so each input path follows its source's latest COMPLETED
-        // iteration — a failed iteration's artifacts are never consumed, and an
-        // external feeder keeps serving its completed iter at any lap.
-        // #353: alongside the single-input source iters, resolve the `repeated`
-        // pools from the SAME fresh projection — one artifact per COMPLETED
-        // source iteration, so a failed iter's artifact is never pooled and no
-        // raw `iter-*` glob reaches the agent/script.
-        let (source_iters, repeated_iters) = match reload_run_state(state, run_id).await {
-            Some((_, fresh_state)) => (
-                input_resolution::resolved_source_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                    iter,
-                ),
-                input_resolution::resolved_repeated_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                ),
-            ),
-            None => (HashMap::new(), HashMap::new()),
-        };
-
-        // Precompute whether the Start prompt carries content so `build_preamble`
-        // stays pure (#274). Gate on `!prompt_required` (the only branch that
-        // consults it), NOT on the edge-based `is_entry_node` — that would regress
-        // the `task`-port fallback (a node with no incoming edge still reads from
-        // `_input`). On a genuine I/O error, fail toward "prompt present" and log:
-        // a false negative would silently discard the run's actual brief.
-        let start_prompt_present = if spawn_ctx.pipeline.prompt_required {
-            false // value is never consulted for prompt-required pipelines — skip the read
-        } else {
-            match prompt_augmenter::read_start_prompt_present(spawn_ctx.artifacts_dir) {
-                Ok(present) => present,
-                Err(e) => {
-                    warn!(
-                        "entry-node input read failed (run {run_id} node {} iter {iter}): {e}; \
-                         assuming a prompt is present",
-                        node.id
-                    );
-                    true // fail toward "prompt present" — never tell the agent "no prompt" on an I/O error
-                }
-            }
-        };
-
-        let aug_ctx = prompt_augmenter::AugmentContext {
-            pipeline: spawn_ctx.pipeline,
-            node,
-            run_id,
-            iter,
-            artifacts_dir: spawn_ctx.artifacts_dir,
-            variables: spawn_ctx.resolved_vars,
-            daemon_url: &format!("http://localhost:{}", state.port),
-            foreach_context,
-            source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
-            input_images,
-            start_prompt_present,
-            source_iters,
-            repeated_iters,
-        };
-
-        let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
-
-        // A `script` node (#248 / ADR-0017) runs the author's bash instead of
-        // Claude. Compute its I/O env catalogue and pre-create its output dirs
-        // here (inside the panic-isolated span, next to `aug_ctx`) and hand the
-        // env back to the spawn below — a script can't read the prose preamble.
-        let script_env = if node.node_type == pipeline::NodeType::Script {
-            prompt_augmenter::precreate_output_dirs(&aug_ctx);
-            prompt_augmenter::build_script_env(&aug_ctx)
-        } else {
-            Vec::new()
-        };
-
-        let node_started = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeStarted,
-            node_id: Some(node.id.clone()),
-            iter: Some(iter),
-            payload: Some(serde_json::json!({
-                "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
-                "node_type": match node.node_type {
-                    pipeline::NodeType::DocOnly => "doc-only",
-                    pipeline::NodeType::CodeMutating => "code-mutating",
-                    pipeline::NodeType::Start => "start",
-                    pipeline::NodeType::End => "end",
-                    pipeline::NodeType::Switch => "switch",
-                    pipeline::NodeType::Loop => "loop",
-                    pipeline::NodeType::Merge => "merge",
-                    pipeline::NodeType::Script => "script",
-                },
-            })),
-        };
-        // A failed `NodeStarted` append means the reservation was NOT recorded:
-        // treat it as a spawn abort (reap + RunFailed) rather than launching a
-        // tmux session the run's event log has no record of.
-        append_event(state, &node_started)
-            .await
-            .context("failed to append node_started")?;
-        Ok::<(String, Vec<(String, String)>), anyhow::Error>((full_prompt, script_env))
-    });
-
-    let span_outcome = futures_util::future::FutureExt::catch_unwind(span).await;
-
-    // The reservation (`NodeStarted`) is recorded iff the span returned
-    // `Ok(Ok(_))`; either way the admission lock can be released now — on failure
-    // nothing was reserved, on success the projected state already counts the
-    // session.
-    drop(admission_guard);
-
-    let (full_prompt, script_env) = match span_outcome {
-        Ok(Ok(pair)) => pair,
-        Ok(Err(e)) => {
-            let reason = format!("spawn of node {} aborted before start: {e}", node.id);
-            fail_spawn_before_start(
-                state,
-                spawn_ctx.repo_root,
-                run_id,
-                &node.id,
-                orphan_to_reap.as_ref(),
-                &reason,
-            )
-            .await;
-            return SpawnOutcome::Failed { reason };
-        }
-        Err(panic) => {
-            let reason = format!(
-                "spawn of node {} panicked before start: {}",
-                node.id,
-                panic_payload_message(panic.as_ref())
-            );
-            fail_spawn_before_start(
-                state,
-                spawn_ctx.repo_root,
-                run_id,
-                &node.id,
-                orphan_to_reap.as_ref(),
-                &reason,
-            )
-            .await;
-            return SpawnOutcome::Failed { reason };
-        }
-    };
-
-    let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
-    let is_script = node.node_type == pipeline::NodeType::Script;
-    // #347: resolve the instance default fresh (stored → env → None), then let
-    // the node's own `model:` override win over it. `__manager__` /
-    // `__merge_resolver__` are infra sessions with no NodeDef and stay at the
-    // account default — they don't route through `spawn_node` (#296).
-    let default_effective = stored_default_model(&state.db).await;
-    let tail = if is_script {
-        tmux_session_manager::SessionTail::Script {
-            timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
-            env: &script_env,
-        }
-    } else {
-        tmux_session_manager::SessionTail::Agent {
-            model: tmux_session_manager::resolve_node_model(
-                node.model.as_deref(),
-                default_effective.as_deref(),
-            ),
-        }
-    };
-    // A script node executes the RAW bash body (`role_prompt`), never the
-    // augmented prompt — the preamble is prose an agent reads, not runnable bash.
-    let spawn_prompt: &str = if is_script {
-        &role_prompt
-    } else {
-        &full_prompt
-    };
-    if let Err(e) = tmux_session_manager::spawn(
-        &session_name,
-        spawn_prompt,
-        &working_dir,
-        run_id,
-        &node.id,
-        iter,
-        state.port,
-        state.tmux_cmd_override.as_deref(),
-        tail,
-    ) {
-        error!("failed to spawn tmux session: {e}");
-    }
-
-    if node.interactive {
-        let awaiting = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeAwaitingUser,
-            node_id: Some(node.id.clone()),
-            iter: Some(iter),
-            payload: None,
-        };
-        if let Err(e) = append_event(state, &awaiting).await {
-            error!("failed to append node_awaiting_user: {e}");
-        }
-    }
-
-    SpawnOutcome::Spawned
-}
-
 /// Extract a human-readable message from a caught panic payload.
 /// `std::panic`'s default payload is a `&str` or `String`; anything else is
 /// opaque, so we fall back to a generic label.
-fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> String {
+///
+/// `pub(crate)` since #356: `node_spawn::spawn_node` reaches it for the caught
+/// spawn-window panic (it shares this with `detach_terminal_tail`, so it stays
+/// in lib.rs rather than moving into the spawn module).
+pub(crate) fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = panic.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = panic.downcast_ref::<String>() {
         s.clone()
     } else {
         "unknown panic payload".to_string()
-    }
-}
-
-/// Fail a run loud when a node spawn aborts *before* `NodeStarted` is appended
-/// (#279, Layer 1). Reaps any orphaned sub-worktree + branch the spawn created,
-/// then appends a visible cause.
-///
-/// The cause is `RunFailed`, **not** `NodeFailed`: the node has no
-/// `NodeStarted`, so `transition_guard::validate_fail` treats a `NodeFailed`
-/// for it as a guard no-op (a failure for an iteration "that was never started")
-/// — the run would stay `Running` and the fix would be defeated. `RunFailed` is
-/// un-guarded and reliably moves the run terminal.
-async fn fail_spawn_before_start(
-    state: &AppState,
-    repo_root: &std::path::Path,
-    run_id: &str,
-    node_id: &str,
-    orphan: Option<&(PathBuf, String)>,
-    reason: &str,
-) {
-    error!("Run {run_id}: node {node_id} spawn aborted before NodeStarted — {reason}");
-    if let Some((sub_worktree_dir, sub_branch)) = orphan {
-        reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
-    }
-    let run_failed = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunFailed,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({ "reason": reason })),
-    };
-    if let Err(e) = append_event(state, &run_failed).await {
-        error!("Run {run_id}: failed to append RunFailed after spawn abort: {e}");
     }
 }
 
@@ -5147,7 +4709,7 @@ pub(crate) async fn handle_node_completion(
         match action {
             scheduler::SchedulerAction::Spawn { node_id, iter } => {
                 if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                    spawn_node(state, &spawn_ctx, node, *iter).await;
+                    spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
                 }
             }
             scheduler::SchedulerAction::Halt { message } => {
@@ -5231,7 +4793,8 @@ pub(crate) async fn handle_node_completion(
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
+                            .await;
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
@@ -5255,7 +4818,8 @@ pub(crate) async fn handle_node_completion(
             match action {
                 scheduler::SchedulerAction::Spawn { node_id, iter } => {
                     if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
+                            .await;
                     }
                 }
                 scheduler::SchedulerAction::Complete => {
@@ -5268,6 +4832,24 @@ pub(crate) async fn handle_node_completion(
     }
 }
 
+/// Reload events and re-project the run state, taking only the DB pool it needs
+/// (#356) so `spawn_node`'s narrow `SpawnDeps` can re-project without the full
+/// `AppState`. The [`reload_run_state`] wrapper below is what most callers use.
+pub(crate) async fn reload_run_state_with(
+    db: &sqlx::SqlitePool,
+    run_id: &str,
+) -> Option<(Vec<event_log::Event>, event_log::RunState)> {
+    let events = match load_events(db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("reload_run_state: failed to load events for {run_id}: {e}");
+            return None;
+        }
+    };
+    let run_state = event_log::project(&events)?;
+    Some((events, run_state))
+}
+
 /// Reload events and re-project the run state.
 ///
 /// Use after appending events inside a multi-pass dispatch so the next pass
@@ -5278,15 +4860,7 @@ async fn reload_run_state(
     state: &AppState,
     run_id: &str,
 ) -> Option<(Vec<event_log::Event>, event_log::RunState)> {
-    let events = match load_events(&state.db, run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            error!("reload_run_state: failed to load events for {run_id}: {e}");
-            return None;
-        }
-    };
-    let run_state = event_log::project(&events)?;
-    Some((events, run_state))
+    reload_run_state_with(&state.db, run_id).await
 }
 
 /// Thin shim over the single-pass advancement tick now owned by
@@ -9489,7 +9063,7 @@ async fn run_command(
                     repo_root: &repo_root,
                 };
 
-                spawn_node(&state, &spawn_ctx, node, iter).await;
+                spawn_node(SpawnDeps::from_state(&state), &spawn_ctx, node, iter).await;
             }
 
             info!("restart_node: node {node_id} iter {iter} in run {run_id}");
@@ -9905,7 +9479,8 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
                         info!("re_evaluate_after_command: skip spawn — {reason}");
                         summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome = spawn_node(state, &spawn_ctx, node, *iter).await;
+                        let outcome =
+                            spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
                         summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
@@ -10007,7 +9582,9 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
                         info!("re_evaluate_after_command(loop): skip spawn — {reason}");
                         summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome = spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        let outcome =
+                            spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
+                                .await;
                         summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
@@ -10039,7 +9616,9 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
                         info!("re_evaluate_after_command(collection): skip spawn — {reason}");
                         summary.skipped.push(reason);
                     } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome = spawn_node(state, &fresh_spawn_ctx, node, *iter).await;
+                        let outcome =
+                            spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
+                                .await;
                         summary.record_spawn(node_id, *iter, outcome);
                     }
                 }
@@ -21147,6 +20726,247 @@ edges: []
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::NodeStarted),
             "no NodeStarted may be appended when force-spawn is rejected at the cap"
+        );
+    }
+
+    // --- #356: spawn_node driven directly through the injectable SpawnDeps ---
+    //
+    // Before the carve, `spawn_node` could only be exercised end-to-end through a
+    // live daemon (POST /runs, real tmux). With `SpawnDeps::from_state`, its
+    // ordering invariants are drivable in-process against fakes: these three
+    // tests each pin one exit path (throttle / panic-reap / guard-refuse) without
+    // launching a session (`tmux_cmd_override = "exec true"`).
+
+    /// Minimal `SpawnContext` scaffolding shared by the direct-drive tests: a
+    /// one-node pipeline plus the four dir borrows. Returns owned values the
+    /// caller keeps alive; the `SpawnContext` is built at the call site from
+    /// borrows of these.
+    fn spawn_test_fixture(
+        repo_root: &std::path::Path,
+        node_id: &str,
+        node_type: pipeline::NodeType,
+    ) -> (pipeline::PipelineDef, pipeline::NodeDef, std::path::PathBuf) {
+        let node = pipeline::NodeDef {
+            id: node_id.into(),
+            name: node_id.into(),
+            node_type,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            model: None,
+        };
+        let pipeline = pipeline::PipelineDef {
+            name: "spawn-unit".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![node.clone()],
+            edges: Vec::new(),
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: false,
+        };
+        let pipeline_path = repo_root.join("spawn-unit.yaml");
+        (pipeline, node, pipeline_path)
+    }
+
+    /// INV-3 (#213): at the daemon-wide session cap, `spawn_node` throttles the
+    /// node into `waiting` (appending `NodeWaiting`) instead of starting it — no
+    /// NodeStarted, no session. Pure in-memory (no git, no tmux).
+    #[tokio::test]
+    async fn spawn_node_at_cap_throttles_into_waiting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        // Saturate the global cap with live sessions in a filler run.
+        saturate_session_cap(&state).await;
+        assert_eq!(
+            count_global_live_sessions(&state.db).await,
+            admission::DEFAULT_SESSION_CAP
+        );
+
+        let run_id = "spawn-unit-throttle";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Throttled),
+            "spawn at the session cap must throttle into waiting, got {outcome:?}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeWaiting
+                    && e.node_id.as_deref() == Some("worker")),
+            "a throttled spawn must append NodeWaiting for the node"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "a throttled node must not be started"
+        );
+    }
+
+    /// INV-4/5/6 (#279): when the spawn window panics *after* the sub-worktree is
+    /// created but *before* NodeStarted, `spawn_node` reaps the orphan
+    /// (dir + branch) and fails the run LOUD as `RunFailed` — never `NodeFailed`
+    /// (which the guard would no-op for a never-started node, wedging the run).
+    /// A direct-call re-cut of `tests/spawn_abort_recovery.rs`.
+    #[tokio::test]
+    async fn spawn_node_panic_reaps_orphan_and_fails_run_loud() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let state = test_state_with_dir(repo).await;
+
+        let run_id = "spawn-unit-panic";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        // Create the pipeline branch `pdo/run-<id>` (via the pipeline worktree)
+        // so `create_sub_worktree` has a base to branch the sub-worktree from —
+        // the same layout the daemon builds at run start.
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        // Arm the one-shot spawn poison: the code-mutating spawn will create its
+        // sub-worktree, then panic at the span head (before NodeStarted).
+        state
+            .panic_on_spawn
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &wt_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: repo,
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Failed { .. }),
+            "a spawn that panics before start must return Failed, got {outcome:?}"
+        );
+
+        // The orphaned sub-worktree dir + branch are reaped.
+        let sub_wt = sub_worktree_path(repo, run_id, "worker", 1);
+        assert!(
+            !sub_wt.exists(),
+            "orphaned sub-worktree {} must be reaped after the aborted spawn",
+            sub_wt.display()
+        );
+        let sub_branch = sub_worktree_branch(run_id, "worker", 1);
+        let branch_list = std::process::Command::new("git")
+            .args(["branch", "--list", &sub_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&branch_list.stdout)
+                .trim()
+                .is_empty(),
+            "orphaned branch {sub_branch} must be deleted after the aborted spawn"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the spawn abort must surface as a RunFailed"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "no NodeStarted may exist for a spawn that aborted before start"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeFailed),
+            "the abort must NOT be a NodeFailed (it would no-op and wedge the run)"
+        );
+    }
+
+    /// INV-1 (#212): the transition guard refuses an illegal NodeStarted BEFORE
+    /// any side effect. Spawning iter-2 of a node whose iter-1 is still live is
+    /// rejected — `Refused`, and no NodeStarted for iter-2 is appended.
+    #[tokio::test]
+    async fn spawn_node_refuses_concurrent_iteration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let run_id = "spawn-unit-refuse";
+        // Seeds RunStarted + NodeStarted worker iter-1 (iter-1 is live).
+        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        // Spawn iter-2 while iter-1 is live → guard rejects.
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 2).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Refused { .. }),
+            "spawning a concurrent iteration must be Refused, got {outcome:?}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted && e.iter == Some(2)),
+            "a refused spawn must not append NodeStarted for iter-2"
+        );
+        let iter1_starts = events
+            .iter()
+            .filter(|e| {
+                e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")
+                    && e.iter == Some(1)
+            })
+            .count();
+        assert_eq!(
+            iter1_starts, 1,
+            "the live iter-1 NodeStarted must be untouched by the refused iter-2 spawn"
         );
     }
 

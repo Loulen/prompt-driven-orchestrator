@@ -2872,6 +2872,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // beside `{trigger_id}`), so there is no route conflict, and the
         // `/triggers` proxy prefix already covers it — no vite proxy edit.
         .route("/triggers/guard/test", post(guard_test))
+        // #348: global Trigger kill-switch. Static segment beside the
+        // `{trigger_id}` param and under the already-proxied `/triggers` prefix —
+        // no vite proxy edit (same as `/triggers/health` and `/triggers/guard/test`).
+        .route("/triggers/pause", post(pause_triggers))
         // Stale-detector liveness (#251), sibling of `/triggers/health`. New
         // top-level `/stale` prefix → added to the vite dev proxy whitelist so a
         // dev-mode GET hits the daemon instead of the SPA fallback.
@@ -3441,6 +3445,27 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
     state
         .last_trigger_tick_ms
         .store(now.timestamp_millis(), std::sync::atomic::Ordering::Relaxed);
+
+    // #348 global kill-switch: skip the whole fire loop while paused. Read FRESH
+    // from the DB each tick so a `POST /triggers/pause` takes effect on the next
+    // tick without a restart (same fresh-read posture as the guard-timeout read in
+    // `fire_one_trigger`). Liveness (stored above) still advances — paused ≠ dead,
+    // so `GET /triggers/health` stays truthful. Because `due_triggers` is never
+    // called while paused, `next_fire_at` is left frozen in the past; on unpause
+    // the very next ordinary tick sees it `≤ now` and fires each due Trigger
+    // once, then recomputes forward — a one-shot catch-up identical to the first
+    // tick at daemon boot (ADR-0012 addendum #348), with NO dedicated code and NO
+    // `Transition` variant. Fail-OPEN on a DB read error: the same failure would
+    // also break the `due_triggers()` call just below (which already returns), so
+    // the choice is practically moot; open matches the scheduler's best-effort
+    // "default to firing" posture.
+    if instance_config::triggers_paused(&state.db)
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
+
     let now_str = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let due = match trigger_store::due_triggers(&state.db, &now_str).await {
         Ok(t) => t,
@@ -5999,11 +6024,50 @@ async fn put_settings(
     }
 }
 
+#[derive(Deserialize)]
+struct PauseTriggersRequest {
+    paused: bool,
+}
+
+/// `POST /triggers/pause` — flip the global Trigger kill-switch (#348).
+///
+/// Persists `triggers_paused` on `instance_config` (a daemon-wide scheduler
+/// gate, outside the `/settings` machinery) and broadcasts a `triggers_paused`
+/// WS event so every client — this tab, a second tab, the CLI — reflects the
+/// flip live (there is no trigger polling). Mirrors the broadcast idiom of
+/// `record_and_broadcast_fire`. Idempotent: re-sending the same value is a
+/// harmless no-op re-render. No auth, net-neutral: the same surface as
+/// `POST /triggers` (ADR-0027 addendum #350). The per-Trigger `enabled` flag is
+/// never touched — pause and per-Trigger disable are orthogonal channels, which
+/// is what makes "restore the prior state on unpause" free.
+///
+/// Contract: `200 { ok, paused }`; `500 { error }` on a DB write failure.
+async fn pause_triggers(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PauseTriggersRequest>,
+) -> Response {
+    match instance_config::set_triggers_paused(&state.db, req.paused).await {
+        Ok(()) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "triggers_paused",
+                "paused": req.paused,
+            }));
+            Json(serde_json::json!({ "ok": true, "paused": req.paused })).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /triggers/health` — scheduler liveness (#222). Reports `last_tick_at`
 /// (ISO-8601 millis of the most recent tick start, or `null` if it has never
-/// ticked) and the configured tick interval, so a dead/stalled Trigger scheduler
-/// is observable instead of silently dormant. Additive sub-route under the
-/// `/triggers` prefix (already proxied) — does not touch the `/triggers` array.
+/// ticked), the configured tick interval, and the global pause flag (#348), so a
+/// dead/stalled Trigger scheduler — or a deliberately-paused one — is observable
+/// instead of silently dormant. Additive sub-route under the `/triggers` prefix
+/// (already proxied) — does not touch the `/triggers` array.
 async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
     let ms = state
         .last_trigger_tick_ms
@@ -6012,9 +6076,16 @@ async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
         .then(|| chrono::DateTime::from_timestamp_millis(ms))
         .flatten()
         .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    // Fail-open on a DB read error (report `false`), matching the tick gate — a
+    // paused daemon must never look "dead", and a genuinely-broken DB surfaces on
+    // the very next tick anyway.
+    let paused = instance_config::triggers_paused(&state.db)
+        .await
+        .unwrap_or(false);
     Json(serde_json::json!({
         "last_tick_at": last_tick_at,
         "tick_interval_secs": trigger_scheduler::TICK_INTERVAL_SECS,
+        "paused": paused,
     }))
     .into_response()
 }

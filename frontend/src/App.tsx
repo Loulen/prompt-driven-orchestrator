@@ -5,7 +5,7 @@ import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
-import { fetchRuns, fetchRun, fetchTriggers, fetchSessions } from "./api";
+import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
 import { shouldClearTriggerOnCanvasFocus } from "./lib/triggerCanvasReconcile";
@@ -141,6 +141,10 @@ export default function App() {
   const { runs, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
+  // #348: global Trigger pause. Lifted here (not in a per-panel hook) so the WS
+  // dispatcher can flip it live and every consumer stays in sync; hydrated on
+  // mount from GET /triggers/health since there is no trigger polling.
+  const [triggersPaused, setTriggersPaused] = useState(false);
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
   // #368: mirror readable inside the stable WS callback (App.tsx subscribe
   // effect) without widening its deps — same latest-value idiom as
@@ -321,6 +325,15 @@ export default function App() {
   // surfaces as a banner.
   const handleRunNowTrigger = useCallback(
     async (t: Trigger) => {
+      // #348 (D3-A permissive): a manual fire still works while triggers are
+      // globally paused — but behind a confirmation, so it stays a deliberate
+      // escape hatch rather than a silent bypass of the kill-switch.
+      if (
+        triggersPaused &&
+        !window.confirm(`Triggers are globally paused. Fire "${t.name}" anyway?`)
+      ) {
+        return;
+      }
       try {
         const { fireTrigger } = await import("./api");
         await fireTrigger(t.id);
@@ -330,8 +343,21 @@ export default function App() {
       }
       handleSelectTrigger(t.id);
     },
-    [handleSelectTrigger],
+    [handleSelectTrigger, triggersPaused],
   );
+
+  // #348: flip the global kill-switch. Optimistic (the master switch reflects the
+  // intent immediately); the daemon's WS broadcast re-affirms it for every client,
+  // and a failure reverts so a dead switch can't mislead the operator.
+  const handleTogglePause = useCallback(async () => {
+    const next = !triggersPaused;
+    setTriggersPaused(next);
+    try {
+      await pauseTriggers(next);
+    } catch {
+      setTriggersPaused(!next);
+    }
+  }, [triggersPaused]);
 
   const handleCloseNewRunModal = useCallback(() => {
     setNewRunModalOpen(false);
@@ -427,6 +453,11 @@ export default function App() {
       refreshRuns();
       refreshSessions();
       refreshTriggers();
+      // #348: hydrate the global pause flag once — no trigger polling carries it,
+      // so without this a page reload would show the banner off while paused.
+      fetchTriggersHealth()
+        .then((h) => setTriggersPaused(h.paused))
+        .catch(() => {});
       useRecentReposStore.getState().refresh();
     }
   }, [refreshRuns, refreshSessions, refreshTriggers]);
@@ -514,6 +545,13 @@ export default function App() {
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
+        return;
+      }
+      // #348: global pause flip — reflect it live across every client. The
+      // per-Trigger `enabled` state (and hence the Triggers list) is untouched,
+      // so no refresh is needed; just mirror the flag.
+      if (msg.type === "triggers_paused") {
+        setTriggersPaused(!!msg.paused);
         return;
       }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
@@ -640,6 +678,8 @@ export default function App() {
               onTriggersChanged={refreshTriggers}
               onRunNowTrigger={handleRunNowTrigger}
               onEditTrigger={(t) => openTriggerModal({ trigger: t, mode: "edit" })}
+              triggersPaused={triggersPaused}
+              onTogglePause={handleTogglePause}
             />
           </ResizablePanel>
 

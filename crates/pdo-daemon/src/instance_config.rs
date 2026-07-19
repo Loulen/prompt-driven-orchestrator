@@ -87,6 +87,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             reaper_ttl_secs    INTEGER,
             guard_timeout_secs INTEGER,
             default_model      TEXT,
+            triggers_paused    INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -114,6 +115,21 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .is_some();
     if !has_default_model {
         sqlx::query("ALTER TABLE instance_config ADD COLUMN default_model TEXT")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration for pre-#348 databases: the `triggers_paused` column is
+    // absent on tables created before the global trigger kill-switch. Same guarded
+    // `ADD COLUMN` idiom as `default_model` above — safe on every boot.
+    let has_triggers_paused = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'triggers_paused'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_triggers_paused {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN triggers_paused INTEGER")
             .execute(db)
             .await?;
     }
@@ -194,6 +210,37 @@ pub async fn update(
     query.execute(db).await?;
 
     get(db).await
+}
+
+/// Read the global Trigger pause flag (#348). `NULL`/`0` ≡ not paused, `1` ≡
+/// paused.
+///
+/// This flag is a **daemon-wide scheduler gate**, deliberately kept OUTSIDE the
+/// `stored → env → default` `/settings` machinery ([`InstanceConfig`],
+/// [`UpdateInstanceConfig`], `build_settings_view`, `put_settings`): a boolean
+/// kill-switch has no env tier and no meaningful default other than "off", so
+/// the per-field settings view would only add noise. It rides the same
+/// singleton `instance_config` row purely for storage — the first knob on that
+/// table excluded from the settings resolver.
+pub async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let v: Option<i64> =
+        sqlx::query_scalar("SELECT triggers_paused FROM instance_config WHERE id = 1")
+            .fetch_optional(db)
+            .await?
+            .flatten();
+    Ok(v == Some(1))
+}
+
+/// Set (or clear) the global Trigger pause flag (#348). Unpausing stores SQL
+/// `NULL` (≡ not paused) rather than `0`, keeping the "unset ≡ off" convention
+/// the rest of the table follows. Bumps `updated_at` like [`update`].
+pub async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE instance_config SET triggers_paused = ?, updated_at = ? WHERE id = 1")
+        .bind(if paused { Some(1_i64) } else { None })
+        .bind(crate::event_log::now_iso())
+        .execute(db)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -428,5 +475,113 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.default_model.as_deref(), Some("opus"));
+    }
+
+    #[tokio::test]
+    async fn triggers_paused_defaults_off() {
+        // A fresh row has NULL triggers_paused ≡ not paused (#348).
+        let db = test_db().await;
+        assert!(!triggers_paused(&db).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn set_triggers_paused_round_trips_and_clears_to_null() {
+        // #348: pausing stores 1, unpausing stores NULL (not 0), and both are
+        // observable through `triggers_paused`.
+        let db = test_db().await;
+
+        set_triggers_paused(&db, true).await.unwrap();
+        assert!(triggers_paused(&db).await.unwrap(), "paused must read true");
+        // Unpause stores SQL NULL, keeping the "unset ≡ off" table convention.
+        set_triggers_paused(&db, false).await.unwrap();
+        assert!(
+            !triggers_paused(&db).await.unwrap(),
+            "unpaused must read false"
+        );
+        let raw: Option<i64> =
+            sqlx::query_scalar("SELECT triggers_paused FROM instance_config WHERE id = 1")
+                .fetch_optional(&db)
+                .await
+                .unwrap()
+                .flatten();
+        assert_eq!(raw, None, "unpause must persist NULL, never 0");
+    }
+
+    #[tokio::test]
+    async fn triggers_paused_survives_init_and_is_orthogonal_to_settings() {
+        // The kill-switch persists across a daemon restart (a second `init`) and
+        // does not disturb the `/settings` knobs, nor they it (#348: two
+        // orthogonal channels sharing one row).
+        let db = test_db().await;
+        update(
+            &db,
+            UpdateInstanceConfig {
+                session_cap: Some(5),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        set_triggers_paused(&db, true).await.unwrap();
+
+        init(&db).await.unwrap(); // mimic a restart
+
+        assert!(
+            triggers_paused(&db).await.unwrap(),
+            "pause flag must survive a restart"
+        );
+        assert_eq!(
+            get(&db).await.unwrap().session_cap,
+            Some(5),
+            "a settings knob must survive the pause write untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_triggers_paused_schema() {
+        // Installs created before #348 lack the `triggers_paused` column. Simulate
+        // that schema (also missing default_model, so this covers the double
+        // guarded ALTER), then prove `init` adds the column idempotently and the
+        // flag is writable afterwards, without clobbering the stored knob.
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap        INTEGER,
+                reaper_ttl_secs    INTEGER,
+                guard_timeout_secs INTEGER,
+                updated_at         TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 9, ?)")
+            .bind(crate::event_log::now_iso())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        assert!(
+            !triggers_paused(&db).await.unwrap(),
+            "migrated column defaults to not-paused"
+        );
+        assert_eq!(
+            get(&db).await.unwrap().session_cap,
+            Some(9),
+            "existing knob must survive the ALTER"
+        );
+        set_triggers_paused(&db, true).await.unwrap();
+        assert!(
+            triggers_paused(&db).await.unwrap(),
+            "the migrated column is writable"
+        );
     }
 }

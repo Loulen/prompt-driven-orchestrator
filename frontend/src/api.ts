@@ -444,6 +444,29 @@ export function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
   return request<TriggerFire[]>("GET", `/triggers/${encodeURIComponent(triggerId)}/fires`);
 }
 
+/**
+ * #348 global Trigger kill-switch: pause (or resume) all scheduled fires
+ * daemon-wide. Idempotent; returns the applied state. The per-Trigger `enabled`
+ * flag is untouched — pause is an orthogonal channel — so resuming restores the
+ * prior state for free. Manual "Run now" still fires while paused.
+ */
+export function pauseTriggers(paused: boolean): Promise<{ ok: boolean; paused: boolean }> {
+  return request("POST", "/triggers/pause", {
+    body: { paused },
+    label: `POST /triggers/pause ${paused}`,
+  });
+}
+
+/** Scheduler liveness + global pause flag (#222/#348). Hydrates the paused flag
+ * on mount, since there is no trigger polling to carry it. */
+export function fetchTriggersHealth(): Promise<{
+  last_tick_at: string | null;
+  tick_interval_secs: number;
+  paused: boolean;
+}> {
+  return request("GET", "/triggers/health", { label: "GET /triggers/health" });
+}
+
 /** Verdict of `POST /triggers/guard/test` (#350): a 1:1 projection of the
  * backend `GuardResult`. `outcome` drives the client-side would-fire / would-skip
  * / guard-error label. */

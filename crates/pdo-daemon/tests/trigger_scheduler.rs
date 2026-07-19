@@ -1232,6 +1232,172 @@ async fn cron_fires_are_stamped_source_cron() {
     cleanup_runs(&daemon).await;
 }
 
+// --- #348: global Trigger pause (kill-switch) ---
+
+/// Flip the global pause flag via `POST /triggers/pause`. Returns the parsed
+/// `{ ok, paused }` body after asserting a 200.
+async fn set_paused(daemon: &TestDaemon, paused: bool) -> serde_json::Value {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/pause", daemon.url()))
+        .json(&serde_json::json!({ "paused": paused }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "POST /triggers/pause should succeed");
+    resp.json().await.unwrap()
+}
+
+/// #348: while paused, a forced-due Trigger is NOT fired and its `next_fire_at`
+/// stays frozen in the past — proof that `due_triggers` was never called (so no
+/// recompute happened). Liveness still advances and health reports `paused:true`
+/// (paused ≠ dead). Daemon-wide analogue of `patch_disable_then_enable…`.
+#[tokio::test]
+async fn paused_gates_the_tick() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "kill-switched", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let body = set_paused(&daemon, true).await;
+    assert_eq!(body["paused"].as_bool(), Some(true));
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a paused scheduler must not fire any Run"
+    );
+    // The frozen-in-the-past next_fire proves due_triggers never ran (no
+    // recompute) — this is what makes the unpause catch-up work.
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["next_fire_at"].as_str(),
+        Some("2020-01-01T00:00:00.000Z"),
+        "paused: next_fire_at must stay frozen (due_triggers never called)"
+    );
+    // No audit row either: the loop is short-circuited before the fire path.
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "paused: no fire-history row is written"
+    );
+
+    // Health: paused is truthful, and liveness advanced (heartbeat non-null).
+    let health = get_health(&daemon).await;
+    assert_eq!(
+        health["paused"].as_bool(),
+        Some(true),
+        "health must report paused=true"
+    );
+    assert!(
+        health["last_tick_at"].as_str().is_some(),
+        "liveness must advance even while paused (paused ≠ dead)"
+    );
+}
+
+/// #348: unpausing does a forward-only, one-shot catch-up of the current slot —
+/// exactly ONE fire, then `next_fire_at` recomputed forward. No dedicated code:
+/// it falls out of the ordinary tick seeing the frozen past slot, mirroring the
+/// first tick at boot. Structural mirror of `missed_slots_are_forward_only…`.
+#[tokio::test]
+async fn unpause_does_forward_only_one_shot_catchup() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // Hourly, forced long-overdue: the many missed slots must NOT flood on unpause.
+    let trigger = create_trigger(&daemon, "resumes", "0 * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    set_paused(&daemon, true).await;
+    daemon.force_trigger_due(&trigger_id).await;
+    // A tick while paused is a no-op (guarded above by paused_gates_the_tick).
+    daemon.run_trigger_tick().await;
+    assert!(list_runs(&daemon).await.is_empty(), "paused: still no run");
+
+    // Unpause, then the next ordinary tick catches up exactly once.
+    let body = set_paused(&daemon, false).await;
+    assert_eq!(body["paused"].as_bool(), Some(false));
+    daemon.run_trigger_tick().await;
+
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        1,
+        "unpause must fire the current slot exactly once (no backfill flood)"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    // Recomputed forward from now, like boot — not left on the frozen past slot.
+    let next = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .expect("next_fire recomputed after the catch-up fire")
+        .to_string();
+    assert!(
+        next.as_str() > "2020-01-01T00:00:00.000Z",
+        "unpause fire must recompute next_fire forward; got {next}"
+    );
+    // Health flips back to not-paused.
+    assert_eq!(
+        get_health(&daemon).await["paused"].as_bool(),
+        Some(false),
+        "health must report paused=false after unpause"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #348 (D3-A permissive): a manual "Run now" fires even while globally paused —
+/// the manual path (`fire_trigger_now`) is disjoint from the tick and consults no
+/// pause flag. The confirmation lives in the UI; the backend stays permissive.
+#[tokio::test]
+async fn manual_fire_still_works_while_paused() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "manual-during-pause", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    set_paused(&daemon, true).await;
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200, "manual fire is unaffected by the pause");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["fired"].as_bool(), Some(true));
+
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        1,
+        "manual fire must create its Run even while paused"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(
+        fires[0]["source"].as_str(),
+        Some("manual"),
+        "the fire is stamped manual"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #348: the pause flag round-trips through `GET /triggers/health` and is
+/// idempotent — re-sending the same value keeps the reported state. (Persistence
+/// across a restart is covered by the fresh per-tick DB read + the
+/// `instance_config` unit tests.)
+#[tokio::test]
+async fn pause_flag_round_trips_through_health() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Default: not paused.
+    assert_eq!(
+        get_health(&daemon).await["paused"].as_bool(),
+        Some(false),
+        "a fresh daemon reports not-paused"
+    );
+
+    set_paused(&daemon, true).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(true));
+    // Idempotent: re-pausing stays paused.
+    set_paused(&daemon, true).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(true));
+
+    set_paused(&daemon, false).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(false));
+}
+
 /// Best-effort: kill any tmux sessions the runs spawned so a `sleep 60` doesn't
 /// leak past the test.
 async fn cleanup_runs(daemon: &TestDaemon) {

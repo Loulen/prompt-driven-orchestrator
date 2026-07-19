@@ -186,3 +186,57 @@ describe("TriggersListPanel grouping by repo (#258)", () => {
     expect(within(c1Row).queryByText("svc")).not.toBeInTheDocument();
   });
 });
+
+// #348 — a global kill-switch pauses all scheduled fires. It's a separate
+// channel from the per-row enable/disable toggle: the master switch + amber
+// banner reflect the global state, and the rows are never grayed by it.
+describe("TriggersListPanel global pause (#348)", () => {
+  it("shows the master switch in the non-paused state by default", () => {
+    renderPanel([trigger()]);
+    const sw = screen.getByTestId("triggers-pause-switch");
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).toHaveTextContent(/pause all/i);
+    // No suppression banner when not paused.
+    expect(screen.queryByTestId("triggers-paused-banner")).not.toBeInTheDocument();
+  });
+
+  it("reflects the paused state in the switch and shows the amber banner", () => {
+    renderPanel([trigger()], { paused: true });
+    const sw = screen.getByTestId("triggers-pause-switch");
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(sw).toHaveTextContent(/paused/i);
+    const banner = screen.getByTestId("triggers-paused-banner");
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/all triggers paused/i);
+  });
+
+  it("fires onTogglePause when the master switch is clicked", () => {
+    const onTogglePause = vi.fn();
+    renderPanel([trigger()], { onTogglePause });
+    fireEvent.click(screen.getByTestId("triggers-pause-switch"));
+    expect(onTogglePause).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the master switch and banner even with no triggers", () => {
+    renderPanel([], { paused: true });
+    expect(screen.getByTestId("triggers-pause-switch")).toBeInTheDocument();
+    expect(screen.getByTestId("triggers-paused-banner")).toBeInTheDocument();
+  });
+
+  it("leaves trigger rows untouched by the global pause (orthogonal channels)", () => {
+    // An enabled row stays enabled-looking (not grayed) while globally paused; the
+    // per-row toggle is a distinct control from the master switch.
+    const { container } = renderPanel([trigger({ enabled: true })], { paused: true });
+    // Pause does not add the per-row `disabled` badge nor the opacity-60 gray.
+    expect(screen.queryByText("disabled")).not.toBeInTheDocument();
+    const row = screen.getByTestId("trigger-row");
+    expect(row.className).not.toContain("opacity-60");
+    // The per-row enable/disable toggle is still its own switch.
+    expect(within(row).getByTestId("trigger-toggle")).toBeInTheDocument();
+    // The master switch is a different element from any per-row toggle.
+    expect(
+      within(row).queryByTestId("triggers-pause-switch"),
+    ).not.toBeInTheDocument();
+    expect(container).toBeTruthy();
+  });
+});

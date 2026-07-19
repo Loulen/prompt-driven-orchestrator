@@ -1,4 +1,4 @@
-import { Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
+import { AlertCircle, PauseCircle, Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
 import type { Trigger } from "../types";
 import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
@@ -14,6 +14,10 @@ interface Props {
   onRunNow?: (trigger: Trigger) => void;
   /** Open the modal in edit mode for this Trigger. */
   onEditTrigger?: (trigger: Trigger) => void;
+  /** #348 global kill-switch: whether all scheduled fires are currently paused. */
+  paused?: boolean;
+  /** #348: flip the global pause flag. */
+  onTogglePause?: () => void;
 }
 
 /**
@@ -50,6 +54,8 @@ export default function TriggersListPanel({
   onTriggersChanged,
   onRunNow,
   onEditTrigger,
+  paused = false,
+  onTogglePause,
 }: Props) {
   async function handleDelete(triggerId: string) {
     try {
@@ -196,15 +202,59 @@ export default function TriggersListPanel({
         style={{ fontSize: "11.5px" }}
       >
         Triggers
-        <button
-          onClick={onNewTrigger}
-          className="ml-auto flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
-          style={{ fontSize: "10.5px" }}
-        >
-          <Plus size={10} />
-          New Trigger
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {/* #348 master switch — global kill-switch, deliberately distinct from
+              the per-row enable/disable toggle (amber st-await when active, vs the
+              per-row green/grey Power). */}
+          <span
+            role="switch"
+            aria-checked={paused}
+            aria-label={paused ? "Resume all triggers" : "Pause all triggers"}
+            title={
+              paused
+                ? "Resume all triggers"
+                : "Pause all triggers (global kill-switch)"
+            }
+            onClick={onTogglePause}
+            data-testid="triggers-pause-switch"
+            className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors ${
+              paused
+                ? "bg-st-await-bg text-st-await"
+                : "text-fg-4 hover:bg-bg-4 hover:text-fg-2"
+            }`}
+            style={{ fontSize: "10.5px" }}
+          >
+            <PauseCircle size={12} />
+            {paused ? "Paused" : "Pause all"}
+          </span>
+          <button
+            onClick={onNewTrigger}
+            className="flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+            style={{ fontSize: "10.5px" }}
+          >
+            <Plus size={10} />
+            New Trigger
+          </button>
+        </div>
       </div>
+
+      {/* #348 amber banner — the two channels (global pause vs per-row disabled)
+          stay visually distinct: this suppression banner never grays a row. */}
+      {paused && (
+        <div
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          data-testid="triggers-paused-banner"
+        >
+          <AlertCircle size={14} className="shrink-0 text-st-await" />
+          <span
+            className="text-st-await"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            All triggers paused — scheduled fires are suppressed. Manual “Run now”
+            still works.
+          </span>
+        </div>
+      )}
 
       {triggers.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

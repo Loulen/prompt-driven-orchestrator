@@ -48,6 +48,10 @@ interface Props {
   /** Run-now / edit a Trigger via the New Run modal (#162). */
   onRunNowTrigger?: (trigger: Trigger) => void;
   onEditTrigger?: (trigger: Trigger) => void;
+  /** #348 global Trigger kill-switch state + toggle. Optional so existing
+   * callers/tests keep working (defaults to not-paused, no-op toggle). */
+  triggersPaused?: boolean;
+  onTogglePause?: () => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -64,6 +68,8 @@ export default function UnifiedLeftPanel({
   onTriggersChanged,
   onRunNowTrigger,
   onEditTrigger,
+  triggersPaused = false,
+  onTogglePause,
 }: Props) {
   const [activeTab, setActiveTab] = useState<LeftTab>("runs");
   const [confirmCleanup, setConfirmCleanup] = useState<
@@ -592,6 +598,8 @@ export default function UnifiedLeftPanel({
             onTriggersChanged={onTriggersChanged ?? (() => {})}
             onRunNow={onRunNowTrigger}
             onEditTrigger={onEditTrigger}
+            paused={triggersPaused}
+            onTogglePause={onTogglePause ?? (() => {})}
           />
         </div>
       )}

@@ -342,7 +342,8 @@ export interface WsMessage {
     | "trigger_created"
     | "trigger_fired"
     | "trigger_updated"
-    | "trigger_deleted";
+    | "trigger_deleted"
+    | "triggers_paused";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;
@@ -351,6 +352,8 @@ export interface WsMessage {
   trigger_id?: string;
   outcome?: string;
   run_id?: string | null;
+  /** Set on `triggers_paused` messages (#348): the new global pause state. */
+  paused?: boolean;
 }
 
 export type EditScope = null | "run";

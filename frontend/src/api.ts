@@ -2,42 +2,141 @@ import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunS
 
 const BASE = "";
 
-async function throwStructuredSaveError(resp: Response, fallback: string): Promise<never> {
-  const body = await resp.json().catch(() => null);
-  let message: string = body?.message ?? body?.error ?? fallback;
-  // A mid-run mutation rejection (409, ADR-0007 / #211) carries the "why" in
-  // `rejections[].reason` — surface it, not just "mutation rejected".
-  if (Array.isArray(body?.rejections)) {
-    const reasons = body.rejections
-      .map((r: { reason?: string }) => r?.reason)
-      .filter((r: unknown): r is string => typeof r === "string");
+/**
+ * The one error contract for the whole client. Every non-ok response funnels
+ * through {@link request} and is thrown as an `ApiError` — never a bare `Error`
+ * and never a plain object. Subclassing `Error` is load-bearing: ~7 UI callers
+ * render failures via `err instanceof Error ? err.message : fallback`, so a
+ * plain-object contract would surface `[object Object]`.
+ *
+ * - `status` — HTTP status; `undefined` for a network/parse failure.
+ * - `line`   — YAML validation line, lifted from a structured save-error body
+ *              (`PUT /pipelines/{id}` / `PUT /runs/{id}/pipeline`); drives the
+ *              SaveErrorModal `line N:` and the info-panel scroll-to-line.
+ * - `body`   — the parsed JSON error body (or `null`); additive, no current
+ *              reader, kept for truthful surfacing (ADR-0025).
+ */
+export class ApiError extends Error {
+  readonly status?: number;
+  readonly line?: number;
+  readonly body?: unknown;
+  constructor(
+    message: string,
+    opts: { status?: number; line?: number; body?: unknown } = {},
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = opts.status;
+    this.line = opts.line;
+    this.body = opts.body;
+  }
+}
+
+/**
+ * Assemble the human-readable message from a daemon error body. Mirrors the old
+ * `throwStructuredSaveError`/`errorBodyMessage` idioms in one place:
+ * `body.message ?? body.error ?? fallback`, with any mid-run mutation-rejection
+ * reasons (409, ADR-0007 / #211) folded in from `rejections[].reason`.
+ */
+function apiErrorMessage(body: unknown, fallback: string): string {
+  const b = body as { message?: unknown; error?: unknown; rejections?: unknown } | null;
+  let message: string;
+  if (typeof b?.message === "string") message = b.message;
+  else if (typeof b?.error === "string") message = b.error;
+  else message = fallback;
+  if (Array.isArray(b?.rejections)) {
+    const reasons = (b.rejections as unknown[])
+      .map((r) => (r as { reason?: unknown })?.reason)
+      .filter((r): r is string => typeof r === "string");
     if (reasons.length > 0) message = `${message}: ${reasons.join("; ")}`;
   }
-  const err: Record<string, unknown> = {
-    message,
-    status: resp.status,
-  };
-  if (typeof body?.line === "number") err.line = body.line;
-  throw err;
+  return message;
 }
 
-export async function fetchRuns(): Promise<RunListEntry[]> {
-  const resp = await fetch(`${BASE}/runs`);
-  if (!resp.ok) throw new Error(`GET /runs failed: ${resp.status}`);
-  return resp.json();
+/**
+ * How {@link request} turns a 2xx response into its resolved value:
+ * - `json` (default) — `await resp.json()`
+ * - `text`           — `await resp.text()` (prompts, artifacts, diffs)
+ * - `void`           — resolve `undefined` without touching the body (commands)
+ * - `raw`            — resolve the `Response` itself; the caller inspects
+ *                      `status`/`ok` and does its own body read. The single
+ *                      escape hatch for the wrappers with bespoke status logic.
+ */
+export type ResponseMode = "json" | "text" | "void" | "raw";
+
+export interface RequestOpts {
+  /** `object` → JSON body + `Content-Type: application/json`; `FormData` → sent
+   *  as-is so the browser sets the multipart boundary; `undefined` → no body. */
+  body?: unknown;
+  /** Query params appended to `path`; `undefined` values are dropped, keys and
+   *  values are `encodeURIComponent`-encoded. */
+  query?: Record<string, string | number | boolean | undefined>;
+  /** Response handling; defaults to `"json"`. */
+  responseMode?: ResponseMode;
+  /** Fallback error label; defaults to `` `${method} ${path}` ``. */
+  label?: string;
 }
 
-export async function fetchSessions(): Promise<DaemonStatus> {
-  const resp = await fetch(`${BASE}/sessions`);
-  if (!resp.ok) throw new Error(`GET /sessions failed: ${resp.status}`);
-  return resp.json();
+/**
+ * The single HTTP seam. Owns `BASE`, URL + query building, headers, body
+ * encoding, response parsing, and error construction. Every exported wrapper is
+ * a thin typed call over this; on a non-ok response (outside `raw` mode) it
+ * throws one {@link ApiError} carrying `status`, `line`, and the parsed `body`.
+ */
+export async function request<T = unknown>(
+  method: string,
+  path: string,
+  opts: RequestOpts = {},
+): Promise<T> {
+  const { body, query, responseMode = "json", label } = opts;
+
+  let url = BASE + path;
+  if (query) {
+    const qs = Object.entries(query)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join("&");
+    if (qs) url += (path.includes("?") ? "&" : "?") + qs;
+  }
+
+  const init: RequestInit = { method };
+  if (body instanceof FormData) {
+    init.body = body; // browser sets the multipart boundary — no Content-Type
+  } else if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+
+  const resp = await fetch(url, init);
+  if (responseMode === "raw") return resp as unknown as T; // caller owns status
+
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => null);
+    const line =
+      typeof (errBody as { line?: unknown } | null)?.line === "number"
+        ? (errBody as { line: number }).line
+        : undefined;
+    throw new ApiError(
+      apiErrorMessage(errBody, `${label ?? `${method} ${path}`} failed: ${resp.status}`),
+      { status: resp.status, line, body: errBody },
+    );
+  }
+  if (responseMode === "void") return undefined as T;
+  if (responseMode === "text") return (await resp.text()) as unknown as T;
+  return (await resp.json()) as T;
+}
+
+export function fetchRuns(): Promise<RunListEntry[]> {
+  return request<RunListEntry[]>("GET", "/runs");
+}
+
+export function fetchSessions(): Promise<DaemonStatus> {
+  return request<DaemonStatus>("GET", "/sessions");
 }
 
 /** Instance-wide settings, per knob (#129, ADR-0015). */
-export async function fetchSettings(): Promise<InstanceSettings> {
-  const resp = await fetch(`${BASE}/settings`);
-  if (!resp.ok) throw new Error(`GET /settings failed: ${resp.status}`);
-  return resp.json();
+export function fetchSettings(): Promise<InstanceSettings> {
+  return request<InstanceSettings>("GET", "/settings");
 }
 
 /**
@@ -45,31 +144,18 @@ export async function fetchSettings(): Promise<InstanceSettings> {
  * (#129, ADR-0015). Surfaces the daemon's fail-fast validation error (`400`)
  * verbatim so the modal can show it.
  */
-export async function updateSettings(
+export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
-  const resp = await fetch(`${BASE}/settings`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `PUT /settings failed: ${resp.status}`);
-  }
-  return resp.json();
+  return request<InstanceSettings>("PUT", "/settings", { body: patch });
 }
 
-export async function fetchRun(runId: string): Promise<RunState> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}`);
-  if (!resp.ok) throw new Error(`GET /runs/${runId} failed: ${resp.status}`);
-  return resp.json();
+export function fetchRun(runId: string): Promise<RunState> {
+  return request<RunState>("GET", `/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function fetchRunEvents(runId: string): Promise<unknown[]> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/events`);
-  if (!resp.ok) throw new Error(`GET /runs/${runId}/events failed: ${resp.status}`);
-  return resp.json();
+export function fetchRunEvents(runId: string): Promise<unknown[]> {
+  return request<unknown[]>("GET", `/runs/${encodeURIComponent(runId)}/events`);
 }
 
 export interface MissingOutputsError {
@@ -87,36 +173,35 @@ export async function markNodeDone(
   nodeId: string,
   iter: number,
 ): Promise<MarkNodeDoneResult> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/commands`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "mark_node_done", node_id: nodeId, iter }),
-    },
+  // Status-inspecting: a 409 is not an error but a "missing outputs" verdict, so
+  // raw mode keeps the bespoke branch (incl. the deliberately UNGUARDED 409 json).
+  const resp = await request<Response>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "mark_node_done", node_id: nodeId, iter }, responseMode: "raw" },
   );
   if (resp.status === 409) {
     const body = await resp.json();
     return { ok: false, missingOutputs: { kind: "missing_outputs", missing: body.missing ?? [] } };
   }
-  if (!resp.ok) throw new Error(`mark_node_done failed: ${resp.status}`);
+  if (!resp.ok) throw new ApiError(`mark_node_done failed: ${resp.status}`, { status: resp.status });
   return { ok: true };
 }
 
-export async function attachSession(sessionId: string): Promise<void> {
-  const resp = await fetch(
-    `${BASE}/sessions/${encodeURIComponent(sessionId)}/attach`,
-    { method: "POST" },
+export function attachSession(sessionId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/sessions/${encodeURIComponent(sessionId)}/attach`,
+    { responseMode: "void", label: "attach" },
   );
-  if (!resp.ok) throw new Error(`attach failed: ${resp.status}`);
 }
 
-export async function attachManager(runId: string): Promise<void> {
-  const resp = await fetch(
-    `${BASE}/sessions/${encodeURIComponent(runId)}/manager/attach`,
-    { method: "POST" },
+export function attachManager(runId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/sessions/${encodeURIComponent(runId)}/manager/attach`,
+    { responseMode: "void", label: "manager attach" },
   );
-  if (!resp.ok) throw new Error(`manager attach failed: ${resp.status}`);
 }
 
 /**
@@ -125,15 +210,14 @@ export async function attachManager(runId: string): Promise<void> {
  * attach to via the existing `WS /sessions/<session>/pty` bridge (no OS spawn).
  * `created` distinguishes a fresh shell from a re-attach.
  */
-export async function openRunShell(
+export function openRunShell(
   runId: string,
 ): Promise<{ session: string; created: boolean }> {
-  const resp = await fetch(
-    `${BASE}/sessions/${encodeURIComponent(runId)}/shell`,
-    { method: "POST" },
+  return request<{ session: string; created: boolean }>(
+    "POST",
+    `/sessions/${encodeURIComponent(runId)}/shell`,
+    { label: "open shell" },
   );
-  if (!resp.ok) throw new Error(`open shell failed: ${resp.status}`);
-  return resp.json();
 }
 
 export interface PaneResponse {
@@ -150,16 +234,16 @@ export interface PaneResponse {
   source: "live" | "resumed" | "snapshot" | "unavailable";
 }
 
-export async function fetchPrompt(
+export function fetchPrompt(
   runId: string,
   nodeId: string,
   iter: number,
 ): Promise<string> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/prompt?iter=${iter}`,
+  return request<string>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/prompt`,
+    { query: { iter }, responseMode: "text", label: "GET prompt" },
   );
-  if (!resp.ok) throw new Error(`GET prompt failed: ${resp.status}`);
-  return resp.text();
 }
 
 // --- Node IO ---
@@ -183,49 +267,47 @@ export interface NodeIO {
   outputs: PortIO[];
 }
 
-export async function fetchNodeIO(
+export function fetchNodeIO(
   runId: string,
   nodeId: string,
   iter: number,
 ): Promise<NodeIO> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/io?iter=${iter}`,
+  return request<NodeIO>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/io`,
+    { query: { iter }, label: "GET io" },
   );
-  if (!resp.ok) throw new Error(`GET io failed: ${resp.status}`);
-  return resp.json();
 }
 
-export async function fetchArtifact(
+export function fetchArtifact(
   runId: string,
   relativePath: string,
 ): Promise<string> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`,
+  return request<string>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/artifact`,
+    { query: { path: relativePath }, responseMode: "text", label: "GET artifact" },
   );
-  if (!resp.ok) throw new Error(`GET artifact failed: ${resp.status}`);
-  return resp.text();
 }
 
 export function artifactUrl(runId: string, relativePath: string): string {
   return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
 }
 
-export async function fetchPane(
+export function fetchPane(
   runId: string,
   nodeId: string,
   iter: number,
 ): Promise<PaneResponse> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane?iter=${iter}`,
+  return request<PaneResponse>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane`,
+    { query: { iter }, label: "GET pane" },
   );
-  if (!resp.ok) throw new Error(`GET pane failed: ${resp.status}`);
-  return resp.json();
 }
 
-export async function fetchPipelines(): Promise<PipelineListEntry[]> {
-  const resp = await fetch(`${BASE}/pipelines`);
-  if (!resp.ok) throw new Error(`GET /pipelines failed: ${resp.status}`);
-  return resp.json();
+export function fetchPipelines(): Promise<PipelineListEntry[]> {
+  return request<PipelineListEntry[]>("GET", "/pipelines");
 }
 
 export interface CreateRunRequest {
@@ -243,10 +325,9 @@ export interface CreateRunResponse {
   run_id: string;
 }
 
-export async function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
+export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
   const hasImages = req.images && req.images.length > 0;
 
-  let resp: Response;
   if (hasImages) {
     const form = new FormData();
     form.append("pipeline", req.pipeline);
@@ -259,22 +340,12 @@ export async function createRun(req: CreateRunRequest): Promise<CreateRunRespons
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
-    resp = await fetch(`${BASE}/runs`, { method: "POST", body: form });
-  } else {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { images: _omitted, ...jsonBody } = req;
-    resp = await fetch(`${BASE}/runs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(jsonBody),
-    });
+    // FormData → no manual Content-Type, so the browser sets the boundary.
+    return request<CreateRunResponse>("POST", "/runs", { body: form, label: "POST /runs" });
   }
-
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /runs failed: ${resp.status}`);
-  }
-  return resp.json();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { images: _omitted, ...jsonBody } = req;
+  return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
 }
 
 // --- Triggers (#160) ---
@@ -293,29 +364,16 @@ export interface CreateTriggerRequest {
   max_concurrent?: number | null;
 }
 
-export async function fetchTriggers(): Promise<Trigger[]> {
-  const resp = await fetch(`${BASE}/triggers`);
-  if (!resp.ok) throw new Error(`GET /triggers failed: ${resp.status}`);
-  return resp.json();
+export function fetchTriggers(): Promise<Trigger[]> {
+  return request<Trigger[]>("GET", "/triggers");
 }
 
-export async function createTrigger(req: CreateTriggerRequest): Promise<Trigger> {
-  const resp = await fetch(`${BASE}/triggers`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /triggers failed: ${resp.status}`);
-  }
-  return resp.json();
+export function createTrigger(req: CreateTriggerRequest): Promise<Trigger> {
+  return request<Trigger>("POST", "/triggers", { body: req, label: "POST /triggers" });
 }
 
-export async function fetchTrigger(triggerId: string): Promise<Trigger> {
-  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`);
-  if (!resp.ok) throw new Error(`GET /triggers/${triggerId} failed: ${resp.status}`);
-  return resp.json();
+export function fetchTrigger(triggerId: string): Promise<Trigger> {
+  return request<Trigger>("GET", `/triggers/${encodeURIComponent(triggerId)}`);
 }
 
 /**
@@ -339,28 +397,27 @@ export interface UpdateTriggerRequest {
   max_concurrent?: number | null;
 }
 
-export async function updateTrigger(
+export function updateTrigger(
   triggerId: string,
   req: UpdateTriggerRequest,
 ): Promise<Trigger> {
-  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `PATCH /triggers/${triggerId} failed: ${resp.status}`);
-  }
-  return resp.json();
+  return request<Trigger>(
+    "PATCH",
+    `/triggers/${encodeURIComponent(triggerId)}`,
+    { body: req, label: `PATCH /triggers/${triggerId}` },
+  );
 }
 
 export async function deleteTrigger(triggerId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}`, {
-    method: "DELETE",
-  });
+  // Status-inspecting: a 404 is a tolerated success (idempotent delete), so raw
+  // mode keeps the bespoke guard rather than routing through the core's throw.
+  const resp = await request<Response>(
+    "DELETE",
+    `/triggers/${encodeURIComponent(triggerId)}`,
+    { responseMode: "raw" },
+  );
   if (!resp.ok && resp.status !== 404) {
-    throw new Error(`DELETE /triggers/${triggerId} failed: ${resp.status}`);
+    throw new ApiError(`DELETE /triggers/${triggerId} failed: ${resp.status}`, { status: resp.status });
   }
 }
 
@@ -375,21 +432,16 @@ export interface FireTriggerResponse {
 }
 
 /** Manually fire a Trigger — a first-class fire (guard + overlap + history). */
-export async function fireTrigger(triggerId: string): Promise<FireTriggerResponse> {
-  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}/fire`, {
-    method: "POST",
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /triggers/${triggerId}/fire failed: ${resp.status}`);
-  }
-  return resp.json();
+export function fireTrigger(triggerId: string): Promise<FireTriggerResponse> {
+  return request<FireTriggerResponse>(
+    "POST",
+    `/triggers/${encodeURIComponent(triggerId)}/fire`,
+    { label: `POST /triggers/${triggerId}/fire` },
+  );
 }
 
-export async function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
-  const resp = await fetch(`${BASE}/triggers/${encodeURIComponent(triggerId)}/fires`);
-  if (!resp.ok) throw new Error(`GET /triggers/${triggerId}/fires failed: ${resp.status}`);
-  return resp.json();
+export function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
+  return request<TriggerFire[]>("GET", `/triggers/${encodeURIComponent(triggerId)}/fires`);
 }
 
 /** Verdict of `POST /triggers/guard/test` (#350): a 1:1 projection of the
@@ -410,20 +462,15 @@ export interface TestGuardResponse {
  * `next_fire_at` bump) and returns the verdict. `target_repo` is optional; when
  * omitted the daemon runs the guard in its own repo_root.
  */
-export async function testGuard(
+export function testGuard(
   guard_command: string,
   target_repo?: string,
 ): Promise<TestGuardResponse> {
-  const resp = await fetch(`${BASE}/triggers/guard/test`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ guard_command, target_repo }),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /triggers/guard/test failed: ${resp.status}`);
-  }
-  return resp.json();
+  return request<TestGuardResponse>(
+    "POST",
+    "/triggers/guard/test",
+    { body: { guard_command, target_repo }, label: "POST /triggers/guard/test" },
+  );
 }
 
 // --- Repo validation and branch listing ---
@@ -434,20 +481,26 @@ export interface ValidateRepoResponse {
 }
 
 export async function validateRepo(path: string): Promise<ValidateRepoResponse> {
-  const resp = await fetch(`${BASE}/repos/validate?path=${encodeURIComponent(path)}`);
+  // No `resp.ok` check by contract: the `{ valid, error }` body is authoritative
+  // even on a non-2xx, so raw mode reads the body unconditionally (never throws).
+  const resp = await request<Response>(
+    "GET",
+    `/repos/validate?path=${encodeURIComponent(path)}`,
+    { responseMode: "raw" },
+  );
   return resp.json();
 }
 
-export async function listBranches(repoPath: string): Promise<string[]> {
-  const resp = await fetch(`${BASE}/repos/branches?path=${encodeURIComponent(repoPath)}`);
-  if (!resp.ok) throw new Error(`GET /repos/branches failed: ${resp.status}`);
-  return resp.json();
+export function listBranches(repoPath: string): Promise<string[]> {
+  return request<string[]>(
+    "GET",
+    `/repos/branches?path=${encodeURIComponent(repoPath)}`,
+    { label: "GET /repos/branches" },
+  );
 }
 
-export async function fetchRecentRepos(): Promise<string[]> {
-  const resp = await fetch(`${BASE}/repos/recent`);
-  if (!resp.ok) throw new Error(`GET /repos/recent failed: ${resp.status}`);
-  return resp.json();
+export function fetchRecentRepos(): Promise<string[]> {
+  return request<string[]>("GET", "/repos/recent");
 }
 
 // --- Filesystem explorer (#131) ---
@@ -478,72 +531,49 @@ export interface BrowseResponse {
  * Only genuine caller/system bugs (relative path → 400, collapsed default → 500)
  * throw here.
  */
-export async function browseRepos(path?: string): Promise<BrowseResponse> {
+export function browseRepos(path?: string): Promise<BrowseResponse> {
   const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  const resp = await fetch(`${BASE}/repos/browse${qs}`);
-  if (!resp.ok) throw new Error(`GET /repos/browse failed: ${resp.status}`);
-  return resp.json();
+  return request<BrowseResponse>("GET", `/repos/browse${qs}`, { label: "GET /repos/browse" });
 }
 
-export async function killNode(
+export function killNode(
   runId: string,
   nodeId: string,
   iter: number,
 ): Promise<void> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/commands`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "kill_node", node_id: nodeId, iter }),
-    },
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "kill_node", node_id: nodeId, iter }, responseMode: "void", label: "kill_node" },
   );
-  if (!resp.ok) throw new Error(`kill_node failed: ${resp.status}`);
 }
 
-export async function restartNode(
+export function restartNode(
   runId: string,
   nodeId: string,
   iter: number,
 ): Promise<void> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/commands`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "restart_node", node_id: nodeId, iter }),
-    },
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "restart_node", node_id: nodeId, iter }, responseMode: "void", label: "restart_node" },
   );
-  if (!resp.ok) throw new Error(`restart_node failed: ${resp.status}`);
 }
 
-export async function pauseRun(runId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "pause_run" }),
-  });
-  if (!resp.ok) throw new Error(`pause_run failed: ${resp.status}`);
+export function pauseRun(runId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "pause_run" }, responseMode: "void", label: "pause_run" },
+  );
 }
 
-/** Extract the daemon's `{"error": "..."}` body message, if any (ADR-0025). */
-async function errorBodyMessage(resp: Response): Promise<string> {
-  try {
-    const body = await resp.json();
-    if (body && typeof body.error === "string") return `: ${body.error}`;
-  } catch {
-    // non-JSON body — fall through to the status-only message
-  }
-  return "";
-}
-
-export async function resumeRun(runId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "resume_run" }),
-  });
-  if (!resp.ok) throw new Error(`resume_run failed: ${resp.status}${await errorBodyMessage(resp)}`);
+export function resumeRun(runId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "resume_run" }, responseMode: "void", label: "resume_run" },
+  );
 }
 
 /**
@@ -551,13 +581,12 @@ export async function resumeRun(runId: string): Promise<void> {
  * (fire its completion) so a region blocked "exhausted — unrouted" leaves the
  * region and the run proceeds. The daemon resumes the run as part of the command.
  */
-export async function endRegion(runId: string, regionId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "end_region", region_id: regionId }),
-  });
-  if (!resp.ok) throw new Error(`end_region failed: ${resp.status}${await errorBodyMessage(resp)}`);
+export function endRegion(runId: string, regionId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "end_region", region_id: regionId }, responseMode: "void", label: "end_region" },
+  );
 }
 
 /**
@@ -565,31 +594,28 @@ export async function endRegion(runId: string, regionId: string): Promise<void> 
  * (run `additionalIter` more iterations) so a region blocked "exhausted —
  * unrouted" resumes iterating. The daemon resumes the run as part of the command.
  */
-export async function bumpRegion(
+export function bumpRegion(
   runId: string,
   regionId: string,
   additionalIter: number,
 ): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      kind: "bump_region",
-      region_id: regionId,
-      additional_iter: additionalIter,
-    }),
-  });
-  if (!resp.ok) throw new Error(`bump_region failed: ${resp.status}${await errorBodyMessage(resp)}`);
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    {
+      body: { kind: "bump_region", region_id: regionId, additional_iter: additionalIter },
+      responseMode: "void",
+      label: "bump_region",
+    },
+  );
 }
 
-export async function retryAll(runId: string): Promise<CreateRunResponse> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "retry_all" }),
-  });
-  if (!resp.ok) throw new Error(`retry_all failed: ${resp.status}`);
-  return resp.json();
+export function retryAll(runId: string): Promise<CreateRunResponse> {
+  return request<CreateRunResponse>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "retry_all" }, label: "retry_all" },
+  );
 }
 
 export interface StartNodeResult {
@@ -598,33 +624,26 @@ export interface StartNodeResult {
   already_running?: boolean;
 }
 
-export async function startNode(
+export function startNode(
   runId: string,
   nodeId: string,
 ): Promise<StartNodeResult> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/start`,
-    { method: "POST" },
+  return request<StartNodeResult>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/start`,
+    { label: "start_node" },
   );
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `start_node failed: ${resp.status}`);
-  }
-  return resp.json();
 }
 
-export async function stopNode(
+export function stopNode(
   runId: string,
   nodeId: string,
 ): Promise<void> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/stop`,
-    { method: "POST" },
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/stop`,
+    { responseMode: "void", label: "stop_node" },
   );
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `stop_node failed: ${resp.status}`);
-  }
 }
 
 export interface RetryNodeResult {
@@ -633,19 +652,15 @@ export interface RetryNodeResult {
   invalidated: string[];
 }
 
-export async function retryNode(
+export function retryNode(
   runId: string,
   nodeId: string,
 ): Promise<RetryNodeResult> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
-    { method: "POST" },
+  return request<RetryNodeResult>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
+    { label: "retry_node" },
   );
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `retry_node failed: ${resp.status}`);
-  }
-  return resp.json();
 }
 
 export interface RetryPreviewResult {
@@ -654,64 +669,61 @@ export interface RetryPreviewResult {
   with_artifacts: string[];
 }
 
-export async function retryNodePreview(
+export function retryNodePreview(
   runId: string,
   nodeId: string,
 ): Promise<RetryPreviewResult> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry/preview`,
+  return request<RetryPreviewResult>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry/preview`,
+    { label: "retry_preview" },
   );
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `retry_preview failed: ${resp.status}`);
-  }
-  return resp.json();
 }
 
-export async function cleanupRun(runId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "cleanup_run" }),
-  });
-  if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+export function cleanupRun(runId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "cleanup_run" }, responseMode: "void", label: `POST /runs/${runId}/commands` },
+  );
 }
 
-export async function renameRun(runId: string, name: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "rename_run", name }),
-  });
-  if (!resp.ok) throw new Error(`POST /runs/${runId}/commands failed: ${resp.status}`);
+export function renameRun(runId: string, name: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "rename_run", name }, responseMode: "void", label: `POST /runs/${runId}/commands` },
+  );
 }
 
-export async function forgetRun(runId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}`, {
-    method: "DELETE",
-  });
-  if (!resp.ok) throw new Error(`DELETE /runs/${runId} failed: ${resp.status}`);
+export function forgetRun(runId: string): Promise<void> {
+  return request<void>(
+    "DELETE",
+    `/runs/${encodeURIComponent(runId)}`,
+    { responseMode: "void", label: `DELETE /runs/${runId}` },
+  );
 }
 
 // --- Run-scoped pipeline ---
 
-export async function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/pipeline`);
-  if (!resp.ok) throw new Error(`GET /runs/${runId}/pipeline failed: ${resp.status}`);
-  return resp.json();
+export function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
+  return request<PipelineDetail>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline`,
+    { label: `GET /runs/${runId}/pipeline` },
+  );
 }
 
-export async function saveRunPipeline(
+export function saveRunPipeline(
   runId: string,
   yaml: string,
   prompts: Record<string, string>,
 ): Promise<void> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/pipeline`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ yaml, prompts }),
-  });
-  if (!resp.ok) await throwStructuredSaveError(resp, `PUT /runs/${runId}/pipeline failed: ${resp.status}`);
+  return request<void>(
+    "PUT",
+    `/runs/${encodeURIComponent(runId)}/pipeline`,
+    { body: { yaml, prompts }, responseMode: "void", label: `PUT /runs/${runId}/pipeline` },
+  );
 }
 
 // --- Pipeline CRUD ---
@@ -724,37 +736,36 @@ function scopeQuery(scope?: string): string {
   return scope && scope !== "run" ? `?scope=${encodeURIComponent(scope)}` : "";
 }
 
-export async function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`);
-  if (!resp.ok) throw new Error(`GET /pipelines/${id} failed: ${resp.status}`);
-  return resp.json();
+export function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
+  return request<PipelineDetail>(
+    "GET",
+    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    { label: `GET /pipelines/${id}` },
+  );
 }
 
-export async function savePipeline(
+export function savePipeline(
   id: string,
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
 ): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ yaml, prompts }),
-  });
-  if (!resp.ok) await throwStructuredSaveError(resp, `PUT /pipelines/${id} failed: ${resp.status}`);
+  return request<void>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    { body: { yaml, prompts }, responseMode: "void", label: `PUT /pipelines/${id}` },
+  );
 }
 
-export async function createPipeline(
+export function createPipeline(
   name: string,
   scope: string,
 ): Promise<{ id: string; scope: string; path: string }> {
-  const resp = await fetch(`${BASE}/pipelines`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, scope }),
-  });
-  if (!resp.ok) throw new Error(`POST /pipelines failed: ${resp.status}`);
-  return resp.json();
+  return request<{ id: string; scope: string; path: string }>(
+    "POST",
+    "/pipelines",
+    { body: { name, scope }, label: "POST /pipelines" },
+  );
 }
 
 // --- Library API ---
@@ -793,10 +804,8 @@ export interface LibraryEntry {
   prompt: string;
 }
 
-export async function fetchLibrary(): Promise<LibraryEntry[]> {
-  const resp = await fetch(`${BASE}/library`);
-  if (!resp.ok) throw new Error(`GET /library failed: ${resp.status}`);
-  return resp.json();
+export function fetchLibrary(): Promise<LibraryEntry[]> {
+  return request<LibraryEntry[]>("GET", "/library");
 }
 
 export interface LibrarySaveSpec {
@@ -810,21 +819,16 @@ export interface LibrarySaveSpec {
   prompt: string;
 }
 
-export async function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
-  const resp = await fetch(`${BASE}/library`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(spec),
-  });
-  if (!resp.ok) throw new Error(`POST /library failed: ${resp.status}`);
-  return resp.json();
+export function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
+  return request<LibraryEntry>("POST", "/library", { body: spec, label: "POST /library" });
 }
 
-export async function deleteFromLibrary(name: string): Promise<void> {
-  const resp = await fetch(`${BASE}/library/${encodeURIComponent(name)}`, {
-    method: "DELETE",
-  });
-  if (!resp.ok) throw new Error(`DELETE /library/${name} failed: ${resp.status}`);
+export function deleteFromLibrary(name: string): Promise<void> {
+  return request<void>(
+    "DELETE",
+    `/library/${encodeURIComponent(name)}`,
+    { responseMode: "void", label: `DELETE /library/${name}` },
+  );
 }
 
 export interface InstantiateResult {
@@ -840,12 +844,12 @@ export interface InstantiateResult {
   prompt: string;
 }
 
-export async function instantiateFromLibrary(name: string): Promise<InstantiateResult> {
-  const resp = await fetch(`${BASE}/library/${encodeURIComponent(name)}/instantiate`, {
-    method: "POST",
-  });
-  if (!resp.ok) throw new Error(`POST /library/${name}/instantiate failed: ${resp.status}`);
-  return resp.json();
+export function instantiateFromLibrary(name: string): Promise<InstantiateResult> {
+  return request<InstantiateResult>(
+    "POST",
+    `/library/${encodeURIComponent(name)}/instantiate`,
+    { label: `POST /library/${name}/instantiate` },
+  );
 }
 
 /**
@@ -876,34 +880,24 @@ export interface ParseNodeResult {
  * structs the pipeline parser uses. Mirror of {@link importWorkflow}: a 400
  * body carries a verbatim `error`; a 200 carries `{spec, prompt, warnings}`.
  */
-export async function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
-  const resp = await fetch(`${BASE}/nodes/parse`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ yaml }),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /nodes/parse failed: ${resp.status}`);
-  }
-  return resp.json();
-}
-
-export interface DeletePipelineError {
-  conflict: boolean;
-  message: string;
+export function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
+  return request<ParseNodeResult>("POST", "/nodes/parse", { body: { yaml }, label: "POST /nodes/parse" });
 }
 
 export async function deletePipeline(id: string, scope?: string): Promise<void> {
-  const resp = await fetch(`${BASE}/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`, {
-    method: "DELETE",
-  });
+  // Status-inspecting: a 409 (active runs) carries the reason in the body, so
+  // raw mode keeps the bespoke branch (incl. the deliberately UNGUARDED 409
+  // json). The old `{ conflict }` field had no reader — folded into status 409.
+  const resp = await request<Response>(
+    "DELETE",
+    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    { responseMode: "raw" },
+  );
   if (resp.status === 409) {
     const body = await resp.json();
-    const err: DeletePipelineError = { conflict: true, message: body.error ?? "Pipeline has active runs" };
-    throw err;
+    throw new ApiError(body.error ?? "Pipeline has active runs", { status: 409, body });
   }
-  if (!resp.ok) throw new Error(`DELETE /pipelines/${id} failed: ${resp.status}`);
+  if (!resp.ok) throw new ApiError(`DELETE /pipelines/${id} failed: ${resp.status}`, { status: resp.status });
 }
 
 // --- Library Pipelines API ---
@@ -925,10 +919,8 @@ export interface LibraryPipelineEntry {
   prompts: Record<string, string>;
 }
 
-export async function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {
-  const resp = await fetch(`${BASE}/library/pipelines`);
-  if (!resp.ok) throw new Error(`GET /library/pipelines failed: ${resp.status}`);
-  return resp.json();
+export function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {
+  return request<LibraryPipelineEntry[]>("GET", "/library/pipelines");
 }
 
 export interface SaveLibraryPipelineOptions {
@@ -939,25 +931,26 @@ export interface SaveLibraryPipelineOptions {
   scope?: LibraryPipelineScope;
 }
 
-export async function saveLibraryPipeline(
+export function saveLibraryPipeline(
   name: string,
   yaml: string,
   prompts: Record<string, string> = {},
   options: SaveLibraryPipelineOptions = {},
 ): Promise<{ id: string; scope: LibraryPipelineScope }> {
-  const resp = await fetch(`${BASE}/library/pipelines`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      yaml,
-      prompts,
-      ...(options.id ? { id: options.id } : {}),
-      ...(options.scope ? { scope: options.scope } : {}),
-    }),
-  });
-  if (!resp.ok) throw new Error(`POST /library/pipelines failed: ${resp.status}`);
-  return resp.json();
+  return request<{ id: string; scope: LibraryPipelineScope }>(
+    "POST",
+    "/library/pipelines",
+    {
+      body: {
+        name,
+        yaml,
+        prompts,
+        ...(options.id ? { id: options.id } : {}),
+        ...(options.scope ? { scope: options.scope } : {}),
+      },
+      label: "POST /library/pipelines",
+    },
+  );
 }
 
 /// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
@@ -965,58 +958,54 @@ export async function saveLibraryPipeline(
 /// daemon never reads `~/.claude/workflows` off disk). `filename` seeds the
 /// fallback pipeline name. Returns the new id, scope, and any lossy-translation
 /// warnings; a 400 body carries a verbatim `error` a real `.js` can trigger.
-export async function importWorkflow(
+export function importWorkflow(
   filename: string,
   content: string,
 ): Promise<{ id: string; scope: string; warnings?: string[] }> {
-  const resp = await fetch(`${BASE}/library/import`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename, content }),
-  });
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /library/import failed: ${resp.status}`);
-  }
-  return resp.json();
+  return request<{ id: string; scope: string; warnings?: string[] }>(
+    "POST",
+    "/library/import",
+    { body: { filename, content }, label: "POST /library/import" },
+  );
 }
 
 /// Duplicate a library pipeline template into an unlinked clone: fresh id, name
 /// suffixed `(copy)` / `(copy N)`, no promotion metadata (#224). Returns the new
 /// id, its scope, and the freshly-listed library entry (or null if the list
 /// race-loses the just-created file).
-export async function duplicateLibraryPipeline(
+export function duplicateLibraryPipeline(
   id: string,
 ): Promise<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }> {
-  const resp = await fetch(
-    `${BASE}/library/pipelines/${encodeURIComponent(id)}/duplicate`,
-    { method: "POST" },
+  return request<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }>(
+    "POST",
+    `/library/pipelines/${encodeURIComponent(id)}/duplicate`,
   );
-  if (!resp.ok) throw new Error(`POST /library/pipelines/${id}/duplicate failed: ${resp.status}`);
-  return resp.json();
 }
 
 // --- Diff API ---
 
-export async function fetchRunDiff(runId: string): Promise<string> {
-  const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/diff`);
-  if (!resp.ok) throw new Error(`GET /runs/${runId}/diff failed: ${resp.status}`);
-  return resp.text();
-}
-
-export async function fetchNodeDiff(runId: string, nodeId: string): Promise<string> {
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/diff`,
+export function fetchRunDiff(runId: string): Promise<string> {
+  return request<string>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/diff`,
+    { responseMode: "text", label: `GET /runs/${runId}/diff` },
   );
-  if (!resp.ok) throw new Error(`GET /runs/${runId}/nodes/${nodeId}/diff failed: ${resp.status}`);
-  return resp.text();
 }
 
-export async function deleteLibraryPipeline(id: string): Promise<void> {
-  const resp = await fetch(`${BASE}/library/pipelines/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-  if (!resp.ok) throw new Error(`DELETE /library/pipelines/${id} failed: ${resp.status}`);
+export function fetchNodeDiff(runId: string, nodeId: string): Promise<string> {
+  return request<string>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/diff`,
+    { responseMode: "text", label: `GET /runs/${runId}/nodes/${nodeId}/diff` },
+  );
+}
+
+export function deleteLibraryPipeline(id: string): Promise<void> {
+  return request<void>(
+    "DELETE",
+    `/library/pipelines/${encodeURIComponent(id)}`,
+    { responseMode: "void", label: `DELETE /library/pipelines/${id}` },
+  );
 }
 
 export interface PromoteResult {
@@ -1024,14 +1013,10 @@ export interface PromoteResult {
   drifted: boolean;
 }
 
-export async function promotePipeline(pipelineId: string): Promise<PromoteResult> {
-  const resp = await fetch(
-    `${BASE}/pipelines/${encodeURIComponent(pipelineId)}/promote`,
-    { method: "POST" },
+export function promotePipeline(pipelineId: string): Promise<PromoteResult> {
+  return request<PromoteResult>(
+    "POST",
+    `/pipelines/${encodeURIComponent(pipelineId)}/promote`,
+    { label: `POST /pipelines/${pipelineId}/promote` },
   );
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => null);
-    throw new Error(body?.error ?? `POST /pipelines/${pipelineId}/promote failed: ${resp.status}`);
-  }
-  return resp.json();
 }

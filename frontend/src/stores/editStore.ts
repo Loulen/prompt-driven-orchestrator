@@ -11,6 +11,7 @@ import type {
 import type { LibraryPipelineScope } from "../api";
 import type { LoopRegion, NoteDef } from "../types";
 import {
+  ApiError,
   fetchPipeline,
   fetchPipelines,
   savePipeline,
@@ -1210,8 +1211,11 @@ export const useEditStore = create<EditState>((set, get) => ({
         lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
       }));
     } catch (err: unknown) {
-      const raw = err as Record<string, unknown> | null;
-      const status = typeof raw?.status === "number" ? raw.status : undefined;
+      // One typed error contract (`ApiError`) — no more sniffing an `unknown`
+      // shape. `status`/`line` are typed fields; a non-`ApiError` (unexpected)
+      // still degrades gracefully to its `Error.message`.
+      const apiErr = err instanceof ApiError ? err : null;
+      const status = apiErr?.status;
       // A 404 on a run-scoped PUT means the run was archived (its pipeline.yaml
       // was deleted) while this tab was still open and dirty. There's nothing
       // left to save into — silently close the tab rather than surfacing a
@@ -1235,9 +1239,8 @@ export const useEditStore = create<EditState>((set, get) => ({
         return;
       }
       const message =
-        typeof raw?.message === "string" ? raw.message : "Save failed";
-      const line =
-        typeof raw?.line === "number" ? raw.line : undefined;
+        apiErr?.message ?? (err instanceof Error ? err.message : "Save failed");
+      const line = apiErr?.line;
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === id ? { ...t, saveError: { message, line } } : t,
@@ -1392,10 +1395,10 @@ export const useEditStore = create<EditState>((set, get) => ({
         }));
       }
     } catch (err: unknown) {
-      const raw = err as Record<string, unknown> | null;
+      const apiErr = err instanceof ApiError ? err : null;
       const message =
-        typeof raw?.message === "string" ? raw.message : "Reload failed";
-      const line = typeof raw?.line === "number" ? raw.line : undefined;
+        apiErr?.message ?? (err instanceof Error ? err.message : "Reload failed");
+      const line = apiErr?.line;
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === tabId ? { ...t, saveError: { message, line } } : t,

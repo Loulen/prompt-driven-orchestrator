@@ -2043,20 +2043,6 @@ where
     Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
-/// The first scheduled fire for a freshly created or rescheduled Trigger, as
-/// **canonical UTC RFC3339-millis** (`…Z`). Both `create_trigger` and
-/// `patch_trigger` go through here so the write-side timezone can't drift between
-/// them (#222): `next_fire_after` is fed `chrono::Utc::now()`, so the stored
-/// string is always `…Z` and the due query's comparison stays correct. Using
-/// `chrono::Local::now()` here is the original bug — on a non-UTC host it stored
-/// a `…±HH:MM` offset that `due_triggers` then mis-compared, dormanting the
-/// Trigger for hours.
-fn first_next_fire(schedule: &cron_schedule::CronSchedule) -> Option<String> {
-    schedule
-        .next_fire_after(chrono::Utc::now())
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-}
-
 /// Body of `POST /triggers/guard/test` (#350): the guard command *as currently
 /// typed in the New-trigger tab* (the Trigger need not be saved) plus an optional
 /// target repo. No trigger id — this is inline, pre-save.
@@ -2266,7 +2252,16 @@ async fn create_trigger(
         }
     }
 
-    let next_fire_at = first_next_fire(&schedule);
+    // The first fire, via the single recompute seam (#372, invariant #222):
+    // `NewTrigger.next_fire_at` is a flat `Option<String>`, so flatten the
+    // `Some(Some(_))` the `Create` arm returns (`Some(None)` = impossible cron →
+    // stays dormant, exactly as before).
+    let now = chrono::Utc::now();
+    let next_fire_at = trigger_scheduler::recompute_next_fire(
+        now,
+        trigger_scheduler::Transition::Create(&schedule),
+    )
+    .flatten();
 
     let variables = serde_json::to_value(&req.variables).unwrap_or(serde_json::json!({}));
 
@@ -2463,12 +2458,20 @@ async fn patch_trigger(
         }
     }
 
-    // A schedule edit re-validates the cron and recomputes the next fire forward.
+    // One `now` for the whole request (#372): a combined enable + cron-edit +
+    // repoint PATCH must recompute every slot against the same instant.
+    let now = chrono::Utc::now();
+
+    // A schedule edit re-validates the cron and recomputes the next fire forward
+    // through the single recompute seam (#372).
     let mut next_fire_at: Option<Option<String>> = None;
     if let Some(ref cron) = req.cron {
         match cron_schedule::CronSchedule::parse(cron) {
             Ok(schedule) => {
-                next_fire_at = Some(first_next_fire(&schedule));
+                next_fire_at = trigger_scheduler::recompute_next_fire(
+                    now,
+                    trigger_scheduler::Transition::CronEdit(&schedule),
+                );
             }
             Err(e) => {
                 return (
@@ -2524,10 +2527,35 @@ async fn patch_trigger(
             // staying dead (Sharp tool; ADR-0012).
             if next_fire_at.is_none() {
                 if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
-                    next_fire_at = Some(first_next_fire(&schedule));
+                    next_fire_at = trigger_scheduler::recompute_next_fire(
+                        now,
+                        trigger_scheduler::Transition::Repoint(&schedule),
+                    );
                 }
             }
         }
+    }
+
+    // Re-activating a disabled Trigger recomputes next_fire_at FORWARD from now
+    // (missed slot SKIPPED, no catch-up — decision B, ADR-0012 amended, #372).
+    // Before #372 the enable path only flipped the bit and left next_fire_at
+    // frozen in the past, so the next tick saw a stale-due slot and fired an
+    // implicit catch-up. `enabling` is the disabled→enabled front only: an
+    // `{enabled:true}` on an already-live Trigger must not shift its schedule.
+    // The `next_fire_at.is_none()` guard is load-bearing: a combined
+    // enable + cron-edit / enable + repoint already recomputed forward off the
+    // *new* schedule above; without the guard, Enable would overwrite it with
+    // the *existing* cron.
+    let enabling = !existing.enabled && req.enabled == Some(true);
+    if enabling && next_fire_at.is_none() {
+        if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
+            next_fire_at = trigger_scheduler::recompute_next_fire(
+                now,
+                trigger_scheduler::Transition::Enable(&schedule),
+            );
+        }
+        // A non-parseable existing.cron (should not happen — validated on write)
+        // leaves next_fire_at untouched: the Trigger stays dormant (correct).
     }
 
     // Validate a target-repo edit (Some(Some(path)) means set; Some(None) clears).
@@ -2602,6 +2630,11 @@ async fn patch_trigger(
         }),
         max_concurrent: req.max_concurrent,
         next_fire_at,
+        // Fold the enable/disable toggle into the single UpdateTrigger write
+        // (#372): the enable bit and the forward next_fire_at land in one atomic
+        // UPDATE, closing the window where enabled=1 could persist with a stale
+        // (past) next_fire_at.
+        enabled: req.enabled,
     };
 
     if let Err(e) = trigger_store::update(&state.db, &trigger_id, edit).await {
@@ -2611,18 +2644,6 @@ async fn patch_trigger(
             Json(serde_json::json!({ "error": "failed to update trigger" })),
         )
             .into_response();
-    }
-
-    // Enable/disable is a dedicated column toggle.
-    if let Some(enabled) = req.enabled {
-        if let Err(e) = trigger_store::set_enabled(&state.db, &trigger_id, enabled).await {
-            error!("failed to toggle trigger enabled: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to update trigger" })),
-            )
-                .into_response();
-        }
     }
 
     match trigger_store::get(&state.db, &trigger_id).await {
@@ -3414,9 +3435,16 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
         }
 
         // A dangling pipeline/repo reference: surface an error outcome and stop
-        // firing (clear next_fire) rather than rot silently or auto-delete.
+        // firing (clear next_fire) rather than rot silently or auto-delete. The
+        // clear goes through the single recompute seam (#372, `Dangling` arm →
+        // `Some(None)` → NULL).
         if let Some(reason) = trigger_dangling_reason(state, &trigger) {
-            let _ = trigger_store::set_next_fire(&state.db, &trigger.id, None).await;
+            let cleared = trigger_scheduler::recompute_next_fire(
+                now,
+                trigger_scheduler::Transition::Dangling,
+            )
+            .flatten();
+            let _ = trigger_store::set_next_fire(&state.db, &trigger.id, cleared.as_deref()).await;
             let record = trigger_store::FireRecord {
                 outcome: "error".to_string(),
                 reason: Some(reason),
@@ -3485,11 +3513,20 @@ async fn fire_one_trigger(
     let plan =
         trigger_scheduler::plan_tick(trigger, now, live_count, guard, prompt_required, source);
 
-    // Recompute the next fire (forward-only) — cron only. A manual fire never
-    // recales the schedule (#341): `next_fire_at` belongs to the cron heartbeat.
-    if source == trigger_scheduler::FireSource::Cron {
-        if let Err(e) =
-            trigger_store::set_next_fire(&state.db, &trigger.id, plan.next_fire_at.as_deref()).await
+    // Who owns next_fire_at on this fire (#372): a cron tick advances it forward
+    // (the `CronTick` arm, already folded into `plan.next_fire_at`); a manual
+    // "Run now" leaves it intact (the `ManualFire` arm — #341, ADR-0027: a 14:32
+    // click must not shift the 15:00 slot). Routing the manual case through the
+    // recompute seam keeps the leave-vs-advance rule in the one exhaustive match
+    // rather than an ad-hoc branch.
+    let next_write: Option<Option<String>> = match source {
+        trigger_scheduler::FireSource::Cron => Some(plan.next_fire_at.clone()),
+        trigger_scheduler::FireSource::Manual => {
+            trigger_scheduler::recompute_next_fire(now, trigger_scheduler::Transition::ManualFire)
+        }
+    };
+    if let Some(next) = next_write {
+        if let Err(e) = trigger_store::set_next_fire(&state.db, &trigger.id, next.as_deref()).await
         {
             warn!(
                 "trigger scheduler: set_next_fire failed for {}: {e}",

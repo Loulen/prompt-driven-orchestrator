@@ -39,6 +39,64 @@ impl FireSource {
     }
 }
 
+/// A lifecycle event that decides what happens to a Trigger's `next_fire_at`
+/// (#372). Every writer of `next_fire_at` names its transition here and routes
+/// through [`recompute_next_fire`], so "who recomputes the next fire, and to
+/// what" lives in one exhaustive `match` instead of five scattered sites.
+///
+/// The five `advance` variants carry the `CronSchedule` **already parsed by the
+/// calling site**: no re-parse, and the type makes an advance-without-schedule
+/// unrepresentable. (`&Trigger` would risk reading a stale cron — a PATCH's new
+/// cron lives in the request, not the stored row; `&str` would re-derive a parse
+/// error each route already handles to render its own `400`.)
+#[derive(Debug, Clone, Copy)]
+pub enum Transition<'a> {
+    /// A freshly created Trigger.
+    Create(&'a CronSchedule),
+    /// A schedule edit (new cron).
+    CronEdit(&'a CronSchedule),
+    /// A pipeline repoint reviving a dormant Trigger (existing cron).
+    Repoint(&'a CronSchedule),
+    /// Re-enabling a disabled Trigger. Decision B (#372, ADR-0012): recompute
+    /// **forward** from `now`, skipping the missed slot — never a hidden
+    /// catch-up fire. This arm is the behaviour change; before #372 the enable
+    /// path left `next_fire_at` frozen in the past *by omission*.
+    Enable(&'a CronSchedule),
+    /// A scheduler tick advancing past the slot it just evaluated.
+    CronTick(&'a CronSchedule),
+    /// A manual "Run now" (#341, ADR-0027): leave `next_fire_at` intact — the
+    /// cron heartbeat owns the schedule, a 14:32 click must not shift 15:00.
+    ManualFire,
+    /// A dangling pipeline/repo reference: stop firing (clear `next_fire_at`).
+    Dangling,
+}
+
+/// The single writer-side decision for `next_fire_at` (#372). The return mirrors
+/// [`crate::trigger_store::UpdateTrigger::next_fire_at`]
+/// (`Option<Option<String>>`): `None` = leave the stored value alone;
+/// `Some(None)` = set NULL; `Some(Some(s))` = write `s` (canonical UTC `…Z`).
+///
+/// The five ADVANCE arms share one body — deliberately. The exhaustive `match`
+/// *proves* every transition chose a behaviour explicitly (the issue's ask), and
+/// the compiler forces any future transition to choose too. The `Enable` arm
+/// advancing (rather than leaving, as it did by omission) is the #372 fix.
+pub fn recompute_next_fire(
+    now: DateTime<Utc>,
+    transition: Transition<'_>,
+) -> Option<Option<String>> {
+    use Transition::*;
+    match transition {
+        Create(s) | CronEdit(s) | Repoint(s) | Enable(s) | CronTick(s) => {
+            // `Some(None)` when the cron yields no future slot (e.g. Feb 30):
+            // that clears `next_fire_at`, so an impossible expression stops
+            // firing — identical to the pre-#372 behaviour.
+            Some(s.next_fire_utc(now))
+        }
+        ManualFire => None,
+        Dangling => Some(None),
+    }
+}
+
 /// The plan for one Trigger on one tick: what to do, what to audit, and the
 /// recomputed next fire.
 #[derive(Debug, Clone, PartialEq)]
@@ -96,11 +154,13 @@ pub fn plan_tick(
         OverlapPolicy::Skip
     };
 
-    // Recompute the next fire forward from `now` (forward-only, no backfill).
-    let next_fire_at = schedule.as_ref().and_then(|s| {
-        s.next_fire_after(now)
-            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-    });
+    // Recompute the next fire forward from `now` (forward-only, no backfill),
+    // through the single recompute seam (#372). `schedule` is already parsed
+    // above (needed for `cron_invalid`), so the `CronTick` arm reuses it — no
+    // re-parse, no second stringification.
+    let next_fire_at = schedule
+        .as_ref()
+        .and_then(|s| recompute_next_fire(now, Transition::CronTick(s)).flatten());
 
     if cron_invalid {
         // Only audit an error once we'd otherwise have acted (it's due-ish);
@@ -479,5 +539,92 @@ mod tests {
         assert!(record.guard_stdout.is_none());
         assert!(record.guard_stderr.is_none());
         assert!(record.guard_exit_code.is_none());
+    }
+
+    // --- #372: the single `recompute_next_fire` seam (the transition matrix) ---
+    //
+    // Each ADVANCE test starts from a `now` already *past* a slot to prove the
+    // recompute jumps forward (strictly after `now`), never catching up the
+    // missed slot.
+
+    fn daily_nine() -> CronSchedule {
+        CronSchedule::parse("0 9 * * *").expect("valid cron")
+    }
+
+    #[test]
+    fn create_recomputes_forward() {
+        let s = daily_nine();
+        let now = at("2026-06-06T10:00:30.000Z"); // past today's 09:00
+        let out = recompute_next_fire(now, Transition::Create(&s));
+        assert_eq!(out, Some(Some("2026-06-07T09:00:00.000Z".to_string())));
+        let fwd = out.flatten().unwrap();
+        assert!(at(&fwd) > now, "create must recompute strictly forward");
+    }
+
+    #[test]
+    fn cron_edit_recomputes_forward() {
+        let s = daily_nine();
+        let now = at("2026-06-06T10:00:30.000Z");
+        let out = recompute_next_fire(now, Transition::CronEdit(&s));
+        assert_eq!(out, Some(Some("2026-06-07T09:00:00.000Z".to_string())));
+    }
+
+    #[test]
+    fn repoint_recomputes_forward() {
+        let s = daily_nine();
+        let now = at("2026-06-06T10:00:30.000Z");
+        let out = recompute_next_fire(now, Transition::Repoint(&s));
+        assert_eq!(out, Some(Some("2026-06-07T09:00:00.000Z".to_string())));
+    }
+
+    /// The load-bearing test for decision B (#372): re-enabling recomputes
+    /// forward and skips the missed slot — no catch-up fire.
+    #[test]
+    fn enable_recomputes_forward_no_catchup() {
+        let s = daily_nine();
+        // Trigger was disabled around its 09:00 slot; re-enabled at 10:00.
+        let now = at("2026-06-06T10:00:30.000Z");
+        let out = recompute_next_fire(now, Transition::Enable(&s));
+        let fwd = out.expect("advance").expect("a future slot");
+        assert!(fwd.ends_with('Z'), "canonical UTC, got {fwd}");
+        assert!(
+            at(&fwd) > now,
+            "enable must recompute strictly forward, never replay the missed slot"
+        );
+        assert_eq!(fwd, "2026-06-07T09:00:00.000Z");
+    }
+
+    #[test]
+    fn cron_tick_recomputes_forward() {
+        let s = daily_nine();
+        let now = at("2026-06-06T10:00:30.000Z");
+        let out = recompute_next_fire(now, Transition::CronTick(&s));
+        assert_eq!(out, Some(Some("2026-06-07T09:00:00.000Z".to_string())));
+    }
+
+    /// An impossible-but-valid expression clears `next_fire_at` on any ADVANCE
+    /// arm (`Some(None)`), so the Trigger stops firing — same as pre-#372.
+    #[test]
+    fn advance_on_impossible_cron_clears() {
+        let s = CronSchedule::parse("0 0 30 2 *").expect("parses fine");
+        let now = at("2026-06-06T10:00:30.000Z");
+        assert_eq!(recompute_next_fire(now, Transition::Create(&s)), Some(None));
+        assert_eq!(recompute_next_fire(now, Transition::Enable(&s)), Some(None));
+    }
+
+    /// A manual fire leaves `next_fire_at` untouched (ADR-0027): the seam returns
+    /// `None` (do not write).
+    #[test]
+    fn manual_fire_leaves_next_fire_intact() {
+        let now = at("2026-06-06T10:00:30.000Z");
+        assert_eq!(recompute_next_fire(now, Transition::ManualFire), None);
+    }
+
+    /// A dangling reference clears `next_fire_at` (`Some(None)` → NULL): the
+    /// Trigger stops firing.
+    #[test]
+    fn dangling_clears_next_fire() {
+        let now = at("2026-06-06T10:00:30.000Z");
+        assert_eq!(recompute_next_fire(now, Transition::Dangling), Some(None));
     }
 }

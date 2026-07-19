@@ -6,7 +6,7 @@
 //! seconds and no year field. No I/O — the public entry point takes a `now`
 //! and returns the next matching local datetime.
 
-use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Duration, SecondsFormat, TimeZone, Timelike, Utc};
 
 /// A parsed 5-field cron expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +79,22 @@ impl CronSchedule {
             candidate = candidate.checked_add_signed(Duration::minutes(1))?;
         }
         None
+    }
+
+    /// The next fire strictly after `now`, stringified as **canonical UTC
+    /// RFC3339-millis** (`…Z`). A thin wrapper over [`Self::next_fire_after`]:
+    /// the single point where `next_fire_at` is stringified anywhere in the
+    /// daemon (#372, invariant #222). `None` when the cron yields no future slot
+    /// (e.g. Feb 30) — callers treat that as "clear / never fires".
+    ///
+    /// Pinned to `DateTime<Utc>` on purpose: `to_rfc3339_opts(_, true)` only
+    /// emits `Z` when the offset is zero, so feeding it a `Local`/`FixedOffset`
+    /// would print `+HH:MM` — exactly the #222 bug. The type makes the canonical
+    /// `…Z` impossible to violate. (`next_fire_after` stays generic over `Tz`
+    /// for its own tz-aware tests; this wrapper sits on top in UTC.)
+    pub fn next_fire_utc(&self, now: DateTime<Utc>) -> Option<String> {
+        self.next_fire_after(now)
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
     }
 
     fn matches<Tz: TimeZone>(&self, dt: &DateTime<Tz>) -> bool {
@@ -319,6 +335,29 @@ mod tests {
         assert_eq!(next.hour(), 2);
         assert_eq!(next.minute(), 30);
         assert_eq!(next.day(), 25);
+    }
+
+    /// `next_fire_utc` stringifies to canonical UTC millis (`…Z`) — the single
+    /// stringification point (#372, invariant #222).
+    #[test]
+    fn next_fire_utc_formats_canonical_utc_millis() {
+        let sched = CronSchedule::parse("* * * * *").expect("valid cron");
+        let now = Utc.with_ymd_and_hms(2026, 6, 6, 10, 30, 45).unwrap();
+        let next = sched.next_fire_utc(now).expect("a next fire exists");
+        assert!(
+            next.ends_with('Z'),
+            "must be canonical UTC (…Z), got {next}"
+        );
+        assert_eq!(next, "2026-06-06T10:31:00.000Z");
+    }
+
+    /// An impossible expression (Feb 30) yields `None` — the ADVANCE arms of the
+    /// recompute matrix turn that into a "clear / stops firing".
+    #[test]
+    fn next_fire_utc_is_none_for_impossible_expression() {
+        let sched = CronSchedule::parse("0 0 30 2 *").expect("parses fine");
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(sched.next_fire_utc(now), None);
     }
 
     #[test]

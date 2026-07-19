@@ -6,9 +6,10 @@
 //! event log remains the source of truth for *Run* state; a Trigger merely
 //! *produces* Runs.
 //!
-//! The public API is intentionally small: table creation, CRUD, the scheduler's
-//! `due_triggers(now)` query, and the fire-audit helpers (`record_fire`,
-//! `set_next_fire`, `set_enabled`).
+//! The public API is intentionally small: table creation, CRUD (`update` folds
+//! every field edit, including the enable/disable bit, into one atomic write —
+//! #372), the scheduler's `due_triggers(now)` query, and the fire-audit helpers
+//! (`record_fire`, `set_next_fire`).
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
@@ -438,6 +439,10 @@ pub struct UpdateTrigger {
     /// fields: `None` leaves it, `Some(None)` clears to NULL, `Some(Some(n))` sets.
     pub max_concurrent: Option<Option<i64>>,
     pub next_fire_at: Option<Option<String>>,
+    /// Enable/disable toggle (#372): `None` leaves the bit, `Some(v)` sets it.
+    /// Folded in here so the enable bit and a forward `next_fire_at` land in one
+    /// atomic UPDATE (was a separate `set_enabled` write).
+    pub enabled: Option<bool>,
 }
 
 impl UpdateTrigger {
@@ -454,6 +459,7 @@ impl UpdateTrigger {
             && self.overlap_policy.is_none()
             && self.max_concurrent.is_none()
             && self.next_fire_at.is_none()
+            && self.enabled.is_none()
     }
 }
 
@@ -506,6 +512,9 @@ pub async fn update(
     if edit.next_fire_at.is_some() {
         sets.push("next_fire_at = ?");
     }
+    if edit.enabled.is_some() {
+        sets.push("enabled = ?");
+    }
 
     let sql = format!("UPDATE triggers SET {} WHERE id = ?", sets.join(", "));
     let mut query = sqlx::query(&sql);
@@ -545,22 +554,11 @@ pub async fn update(
     if let Some(v) = &edit.next_fire_at {
         query = query.bind(v.clone());
     }
+    if let Some(v) = &edit.enabled {
+        query = query.bind(if *v { 1 } else { 0 });
+    }
     query = query.bind(trigger_id);
     query.execute(db).await?;
-    Ok(())
-}
-
-/// Enable or disable a Trigger.
-pub async fn set_enabled(
-    db: &SqlitePool,
-    trigger_id: &str,
-    enabled: bool,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE triggers SET enabled = ? WHERE id = ?")
-        .bind(if enabled { 1 } else { 0 })
-        .bind(trigger_id)
-        .execute(db)
-        .await?;
     Ok(())
 }
 
@@ -649,7 +647,16 @@ mod tests {
         let mut disabled = sample("disabled", "* * * * *");
         disabled.next_fire_at = Some("2020-01-01T00:00:00.000Z".to_string());
         let disabled = create(&db, disabled).await.unwrap();
-        set_enabled(&db, &disabled.id, false).await.unwrap();
+        update(
+            &db,
+            &disabled.id,
+            UpdateTrigger {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
         let selected = due_triggers(&db, "2026-06-06T10:00:00.000Z").await.unwrap();
         let ids: Vec<&str> = selected.iter().map(|t| t.id.as_str()).collect();
@@ -924,21 +931,85 @@ mod tests {
         assert_eq!(get(&db, &t.id).await.unwrap().unwrap(), t);
     }
 
+    /// #372: the enable/disable bit now toggles through `update()` (folded into
+    /// the single atomic write). Disabling excludes a due Trigger from
+    /// `due_triggers`; re-enabling brings it back.
     #[tokio::test]
-    async fn set_enabled_toggles_and_pauses_firing() {
+    async fn update_enabled_toggles_and_pauses_firing() {
         let db = test_db().await;
         let mut due = sample("toggle", "* * * * *");
         due.next_fire_at = Some("2020-01-01T00:00:00.000Z".to_string());
         let t = create(&db, due).await.unwrap();
-        set_enabled(&db, &t.id, false).await.unwrap();
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(!get(&db, &t.id).await.unwrap().unwrap().enabled);
         // A disabled-but-due trigger is excluded from due_triggers.
         assert!(due_triggers(&db, "2026-06-06T10:00:00.000Z")
             .await
             .unwrap()
             .is_empty());
-        set_enabled(&db, &t.id, true).await.unwrap();
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(get(&db, &t.id).await.unwrap().unwrap().enabled);
+    }
+
+    /// #372: `update()` writes the enable bit and a forward `next_fire_at` in one
+    /// atomic UPDATE (the fold that replaced the separate `set_enabled` write).
+    #[tokio::test]
+    async fn update_writes_enabled_and_next_fire_atomically() {
+        let db = test_db().await;
+        let mut t = sample("atomic", "* * * * *");
+        t.next_fire_at = Some("2020-01-01T00:00:00.000Z".to_string()); // stale/past
+        let t = create(&db, t).await.unwrap();
+
+        // `create()` always makes an enabled Trigger; disable it first.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // Re-enable AND move next_fire forward in a single UPDATE (the #372 fold).
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                enabled: Some(true),
+                next_fire_at: Some(Some("2027-01-01T09:00:00.000Z".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let fetched = get(&db, &t.id).await.unwrap().unwrap();
+        assert!(fetched.enabled, "enable bit must be written");
+        assert_eq!(
+            fetched.next_fire_at.as_deref(),
+            Some("2027-01-01T09:00:00.000Z"),
+            "next_fire_at must be written in the same update"
+        );
     }
 
     // --- #239: bounded-`allow` max_concurrent persistence ---

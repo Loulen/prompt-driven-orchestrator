@@ -1044,56 +1044,13 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     ]);
   });
 
-  it("run-now opens in Run-now mode pre-filled from the trigger and creates a run (no guard)", async () => {
-    const onCreated = vi.fn();
-    render(
-      <NewRunModal
-        open={true}
-        onClose={noop}
-        onCreated={onCreated}
-        prefillTrigger={{ trigger: sampleTrigger, mode: "run" }}
-      />,
-    );
-
-    // Run-now mode is active (creates a Run, not a Trigger).
-    await waitFor(() => {
-      expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
-    });
-    // Prefilled repo + input.
-    await waitFor(() => {
-      expect(screen.getByLabelText(/target repository/i)).toHaveValue("/home/user/project");
-    });
-    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("audit the codebase");
-
-    // Let the debounced repo validation resolve so the form is launchable.
-    await vi.advanceTimersByTimeAsync(500);
-    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
-
-    vi.useRealTimers();
-    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
-
-    await waitFor(() => {
-      expect(createRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pipeline_id: "p1",
-          input: "audit the codebase",
-          target_repo: "/home/user/project",
-        }),
-      );
-    });
-    // Run-now never creates or fires a guard.
-    expect(createTrigger).not.toHaveBeenCalled();
-    expect(updateTrigger).not.toHaveBeenCalled();
-  });
-
   it("edit opens in Trigger mode pre-filled and PATCHes the trigger on submit", async () => {
     render(
       <NewRunModal
         open={true}
         onClose={noop}
         onCreated={noop}
-        prefillTrigger={{ trigger: sampleTrigger, mode: "edit" }}
+        openIntent={{ kind: "edit-trigger", trigger: sampleTrigger }}
       />,
     );
 
@@ -1146,7 +1103,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
         open={true}
         onClose={noop}
         onCreated={noop}
-        prefillTrigger={{ trigger: bounded, mode: "edit" }}
+        openIntent={{ kind: "edit-trigger", trigger: bounded }}
       />,
     );
 
@@ -1183,7 +1140,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
         open={true}
         onClose={noop}
         onCreated={noop}
-        prefillTrigger={{ trigger: sampleTrigger, mode: "edit" }}
+        openIntent={{ kind: "edit-trigger", trigger: sampleTrigger }}
       />,
     );
 
@@ -1216,5 +1173,130 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
       );
     });
     expect(createTrigger).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewRunModal — open-intent reset (#386)", () => {
+  const trigger = {
+    id: "trg-9",
+    name: "Nightly audit",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    target_repo: "/home/user/project",
+    source_branch: "dev",
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: null,
+    overlap_policy: "allow",
+    enabled: true,
+    next_fire_at: null,
+    last_fired_at: null,
+    last_outcome: null,
+  };
+
+  it("edit → close → open(run) reopens as a clean New Run (kills the stale Edit-Trigger)", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    // Opened in Edit-Trigger mode (footer is Save).
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+
+    // Dismiss, then reopen as a plain run.
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "run" }} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Run")).toBeInTheDocument();
+    expect(screen.getByTestId("launch-button")).toBeInTheDocument();
+    // No trigger footer leaks — Finding B (silent PATCH of the wrong trigger).
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-trigger-button")).not.toBeInTheDocument();
+    // Trigger-only fields aren't even rendered in run mode.
+    expect(screen.queryByTestId("trigger-name-input")).not.toBeInTheDocument();
+  });
+
+  it("edit → close → open(new-trigger) reopens as a blank Create Trigger (Finding B)", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("trigger-name-input")).toHaveValue("Nightly audit");
+    });
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "new-trigger" }} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Trigger")).toBeInTheDocument();
+    // Footer is Create (a fresh POST), NOT Save: editingTriggerId is cleared, so
+    // submitting can't silently PATCH the previously edited trigger.
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+    // The trigger name is blank, not the edited trigger's name.
+    expect(screen.getByTestId("trigger-name-input")).toHaveValue("");
+  });
+
+  it("new-trigger opens fresh in Trigger mode with no prior edit", async () => {
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "new-trigger" }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+  });
+
+  it("edit → close → open(run) clears the shared draft carried from the trigger (#386 Part 2)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: "repo", prompt_required: false }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    // The edit prefilled the shared draft from the trigger (prompt, repo, pipeline).
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("audit the codebase");
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
+    });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "run" }} />);
+
+    // A fresh run must not inherit the consulted trigger's prompt or pipeline.
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
+    });
+    expect((screen.getByTestId("pipeline-select") as HTMLSelectElement).value).not.toBe("p1");
   });
 });

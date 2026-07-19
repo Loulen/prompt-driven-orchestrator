@@ -100,12 +100,17 @@ async function createRunAndSeedArtifacts(page: Page, baseURL: string) {
   return runId;
 }
 
-/** The seeded `review` output card (the one port-row that is a button). */
+/**
+ * The seeded `review` output card. Target it by port name, not `.first()`:
+ * since #370 fixed input resolution, the reviewer's resolved `task` input also
+ * renders as a clickable `button.port-row`, so the first button is no longer
+ * guaranteed to be the output. The port name is the button's leading text.
+ */
 function reviewCard(page: Page) {
   return page
     .getByTestId("inspector-pane-run")
     .locator("button.port-row")
-    .first();
+    .filter({ hasText: /^review/ });
 }
 
 test("clicking anywhere on port card opens modal with markdown + frontmatter", async ({

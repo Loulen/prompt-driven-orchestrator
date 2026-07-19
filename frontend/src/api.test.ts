@@ -5,9 +5,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ApiError,
   deletePipeline,
   duplicateLibraryPipeline,
   fetchPipeline,
+  request,
   savePipeline,
   saveRunPipeline,
 } from "./api";
@@ -143,5 +145,105 @@ describe("duplicateLibraryPipeline", () => {
   it("throws on a non-2xx response", async () => {
     captureFetch(404, "pipeline template not found");
     await expect(duplicateLibraryPipeline("ghost")).rejects.toThrow(/404/);
+  });
+});
+
+// #358 — the whole client funnels through one `request()` core with one error
+// contract (`ApiError`). Test the seam once here instead of per endpoint.
+describe("request core", () => {
+  it("resolves the parsed JSON body on success (json mode default)", async () => {
+    stubFetchWith(200, { id: "x" });
+    await expect(request("GET", "/x")).resolves.toMatchObject({ id: "x" });
+  });
+
+  it("throws an ApiError carrying status + message on an HTTP error with a body", async () => {
+    stubFetchWith(400, { error: "invalid YAML: boom" });
+    const err = await request("GET", "/x").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 400, message: "invalid YAML: boom" });
+  });
+
+  it("lifts `line` and folds `rejections[].reason` into a structured error", async () => {
+    stubFetchWith(409, {
+      error: "mutation rejected",
+      line: 12,
+      rejections: [{ reason: "node running" }],
+    });
+    const err = await request("PUT", "/pipelines/p").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 409, line: 12 });
+    expect((err as ApiError).message).toContain("node running");
+  });
+
+  it("falls back to `<label> failed: <status>` when the body has no message", async () => {
+    stubFetchWith(500, null);
+    await expect(request("GET", "/x", { label: "boom" })).rejects.toMatchObject({
+      status: 500,
+      message: "boom failed: 500",
+    });
+  });
+
+  it("preserves the raw error body on the ApiError", async () => {
+    stubFetchWith(400, { error: "bad", extra: 1 });
+    const err = (await request("GET", "/x").catch((e) => e)) as ApiError;
+    expect(err.body).toMatchObject({ error: "bad", extra: 1 });
+  });
+
+  // D1 — the contract MUST subclass Error, else the ~7 UI callers that render
+  // via `err instanceof Error ? err.message` fall back to `[object Object]`.
+  it("ApiError is an instanceof Error", () => {
+    expect(new ApiError("x") instanceof Error).toBe(true);
+  });
+
+  it("serializes an object body as JSON with a Content-Type header", async () => {
+    const fetchMock = captureFetch(200, { ok: true });
+    await request("POST", "/things", { body: { a: 1 } });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: 1 }),
+    });
+  });
+
+  it("sends a FormData body without a manual Content-Type (browser sets the boundary)", async () => {
+    const fetchMock = captureFetch(200, { ok: true });
+    const form = new FormData();
+    form.append("k", "v");
+    await request("POST", "/upload", { body: form });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect(init?.headers).toBeUndefined();
+  });
+
+  it("appends query params, encoding values and dropping undefined", async () => {
+    const fetchMock = captureFetch(200, []);
+    await request("GET", "/search", { query: { q: "a b", n: 3, skip: undefined } });
+    expect(fetchMock.mock.calls[0][0]).toBe("/search?q=a%20b&n=3");
+  });
+
+  it("joins query with & when the path already has a query string", async () => {
+    const fetchMock = captureFetch(200, []);
+    await request("GET", "/search?scope=x", { query: { q: "y" } });
+    expect(fetchMock.mock.calls[0][0]).toBe("/search?scope=x&q=y");
+  });
+
+  it("returns the raw string in text mode without JSON-parsing", async () => {
+    stubFetchWith(200, "plain text body");
+    await expect(request("GET", "/artifact", { responseMode: "text" })).resolves.toBe(
+      "plain text body",
+    );
+  });
+
+  it("resolves undefined in void mode", async () => {
+    stubFetchWith(200, { ignored: true });
+    await expect(request("POST", "/cmd", { responseMode: "void" })).resolves.toBeUndefined();
+  });
+
+  it("returns the Response itself in raw mode and never throws on a non-ok status", async () => {
+    stubFetchWith(409, { conflict: true });
+    const resp = await request<Response>("DELETE", "/pipelines/p", { responseMode: "raw" });
+    expect(resp.status).toBe(409);
+    expect(await resp.json()).toMatchObject({ conflict: true });
   });
 });

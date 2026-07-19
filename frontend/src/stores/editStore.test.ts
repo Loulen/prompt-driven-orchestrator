@@ -3,10 +3,13 @@ import { useEditStore, serializePipeline, exportNodeAsYaml } from "./editStore";
 import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
-import { savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
+import { ApiError, savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
-vi.mock("../api", () => ({
+vi.mock("../api", async (importOriginal) => ({
+  // Keep the real `ApiError` (a value the store reads via `instanceof`) while
+  // stubbing the network wrappers the store calls.
+  ...(await importOriginal<typeof import("../api")>()),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   fetchPipeline: vi.fn().mockResolvedValue({
     scope: "repo",
@@ -913,7 +916,7 @@ describe("save error storage", () => {
   it("stores a structured save error on the tab when save fails", async () => {
     seedTab("p1", true);
     mockSavePipeline.mockImplementationOnce(() =>
-      Promise.reject({ message: "invalid YAML: missing field 'name'", line: 42 }),
+      Promise.reject(new ApiError("invalid YAML: missing field 'name'", { line: 42 })),
     );
 
     await useEditStore.getState().save("p1");
@@ -927,7 +930,7 @@ describe("save error storage", () => {
   it("keeps dirty flag true when save fails", async () => {
     seedTab("p1", true);
     mockSavePipeline.mockImplementationOnce(() =>
-      Promise.reject({ message: "fail" }),
+      Promise.reject(new ApiError("fail")),
     );
 
     await useEditStore.getState().save("p1");
@@ -940,7 +943,7 @@ describe("save error storage", () => {
     seedTab("p1", true);
     // First fail
     mockSavePipeline.mockImplementationOnce(() =>
-      Promise.reject({ message: "fail" }),
+      Promise.reject(new ApiError("fail")),
     );
     await useEditStore.getState().save("p1");
     expect(useEditStore.getState().openTabs[0].saveError).toBeDefined();
@@ -973,7 +976,7 @@ describe("save error storage", () => {
   it("stores error without line when line is not present", async () => {
     seedTab("p1", true);
     mockSavePipeline.mockImplementationOnce(() =>
-      Promise.reject({ message: "write failed: permission denied" }),
+      Promise.reject(new ApiError("write failed: permission denied")),
     );
 
     await useEditStore.getState().save("p1");
@@ -1004,10 +1007,9 @@ describe("save error storage", () => {
       lastSavedAt: { [tabId]: 123 },
     });
     mockSaveRunPipeline.mockImplementationOnce(() =>
-      Promise.reject({
-        message: "PUT /runs/archived-run-id/pipeline failed: 404",
-        status: 404,
-      }),
+      Promise.reject(
+        new ApiError("PUT /runs/archived-run-id/pipeline failed: 404", { status: 404 }),
+      ),
     );
 
     await useEditStore.getState().save(tabId);
@@ -1038,7 +1040,7 @@ describe("save error storage", () => {
       lastSavedAt: {},
     });
     mockSaveRunPipeline.mockImplementationOnce(() =>
-      Promise.reject({ message: "boom", status: 500 }),
+      Promise.reject(new ApiError("boom", { status: 500 })),
     );
 
     await useEditStore.getState().save(tabId);
@@ -2386,7 +2388,7 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       expect(useEditStore.getState().history[tabId].past.length).toBeGreaterThan(0);
 
       mockSaveRunPipeline.mockImplementationOnce(() =>
-        Promise.reject({ message: "404", status: 404 }),
+        Promise.reject(new ApiError("404", { status: 404 })),
       );
       await useEditStore.getState().save(tabId);
       expect(useEditStore.getState().history[tabId]).toBeUndefined();

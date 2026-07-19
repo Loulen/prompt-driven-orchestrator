@@ -142,6 +142,11 @@ export default function App() {
   const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
+  // #368: mirror readable inside the stable WS callback (App.tsx subscribe
+  // effect) without widening its deps — same latest-value idiom as
+  // currentIdRef in useSelectedRun. A ref read during render is banned by
+  // react-hooks/refs (see note ~L148), but here read/write are outside render.
+  const selectedTriggerIdRef = useRef<string | null>(null);
   // #320: the tab id (=== pipeline_id) that selecting a Trigger opened in the
   // canvas. The reconciliation below reads it to tell the Trigger's OWN
   // openPipeline focus change apart from a genuine user canvas interaction.
@@ -498,6 +503,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [hasEditTab, isActiveRunArchived, editUndo, editRedo]);
 
+  // #368: keep the ref in step with the selected Trigger so the stable WS
+  // callback below reads the committed value, not the stale-null closure.
+  useEffect(() => {
+    selectedTriggerIdRef.current = selectedTriggerId;
+  }, [selectedTriggerId]);
+
   useEffect(() => {
     return subscribe((msg) => {
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
@@ -516,8 +527,13 @@ export default function App() {
         refreshTriggers();
         if (msg.type === "trigger_fired") {
           refreshRuns();
-          // #341: an open TriggerDetail panel refetches its fire history.
-          setFiresRefreshKey((v) => v + 1);
+          // #341 + #368: only the OPEN trigger's panel refetches, so an
+          // unrelated fire doesn't flash/reload the currently-viewed history.
+          // Read the ref (not selectedTriggerId) to keep this stable callback
+          // out of the effect deps and dodge the stale-null closure.
+          if (msg.trigger_id === selectedTriggerIdRef.current) {
+            setFiresRefreshKey((v) => v + 1);
+          }
         }
         return;
       }

@@ -788,6 +788,116 @@ mod tests {
         assert!(after.last_fired_at.is_none());
     }
 
+    /// #368: fire history and the `last_fired_at`/`last_outcome` rollup are keyed
+    /// by *Trigger*, not by the pipeline the Trigger fires. Every other test
+    /// creates a single Trigger, so this isolation is unproven — under a
+    /// per-pipeline bug, two Triggers on the SAME pipeline could share history or
+    /// clobber each other's rollup. This drives both directions: A's fires must
+    /// never appear in B's history or move B's rollup, and vice-versa.
+    #[tokio::test]
+    async fn fire_history_and_rollups_are_isolated_per_trigger() {
+        let db = test_db().await;
+        // Two distinct Triggers on the SAME library pipeline ("lib-pipe-1").
+        let a = create(&db, sample("alpha", "* * * * *")).await.unwrap();
+        let b = create(&db, sample("bravo", "*/5 * * * *")).await.unwrap();
+        assert_ne!(a.id, b.id, "the two triggers must be distinct rows");
+        assert_eq!(a.pipeline_id, "lib-pipe-1");
+        assert_eq!(b.pipeline_id, "lib-pipe-1");
+
+        // --- Fire ONLY trigger A: one real fire, then a non-fire. ---
+        record_fire(
+            &db,
+            &a.id,
+            &FireRecord {
+                outcome: "fired".to_string(),
+                reason: None,
+                run_id: Some("run-a-fired".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: None,
+            },
+        )
+        .await
+        .unwrap();
+        record_fire(
+            &db,
+            &a.id,
+            &FireRecord {
+                outcome: "skipped-overlap".to_string(),
+                reason: Some("previous run still active".to_string()),
+                run_id: None,
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // A has both rows; B's history is still empty (no bleed across Triggers).
+        let hist_a = fire_history(&db, &a.id).await.unwrap();
+        assert_eq!(hist_a.len(), 2);
+        assert!(
+            hist_a.iter().all(|f| f.trigger_id == a.id),
+            "every A-history row must be keyed to A"
+        );
+        assert!(
+            fire_history(&db, &b.id).await.unwrap().is_empty(),
+            "firing A must not add rows to B's history"
+        );
+
+        // A's rollup reflects A's fire; B's rollup is untouched (None/None).
+        let a1 = get(&db, &a.id).await.unwrap().unwrap();
+        assert_eq!(a1.last_outcome.as_deref(), Some("skipped-overlap"));
+        assert!(a1.last_fired_at.is_some(), "A fired at least once");
+        let b1 = get(&db, &b.id).await.unwrap().unwrap();
+        assert!(
+            b1.last_fired_at.is_none() && b1.last_outcome.is_none(),
+            "firing A must not roll up onto B"
+        );
+
+        // --- Now fire trigger B once, with a distinct run id. ---
+        record_fire(
+            &db,
+            &b.id,
+            &FireRecord {
+                outcome: "fired".to_string(),
+                reason: None,
+                run_id: Some("run-b-fired".to_string()),
+                guard_stdout: None,
+                guard_stderr: None,
+                guard_exit_code: None,
+                source: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Histories stay disjoint and correctly counted.
+        let hist_a = fire_history(&db, &a.id).await.unwrap();
+        let hist_b = fire_history(&db, &b.id).await.unwrap();
+        assert_eq!(hist_a.len(), 2, "B's fire must not leak into A's history");
+        assert_eq!(hist_b.len(), 1);
+        assert!(hist_b.iter().all(|f| f.trigger_id == b.id));
+        let a_run_ids: Vec<_> = hist_a.iter().filter_map(|f| f.run_id.as_deref()).collect();
+        let b_run_ids: Vec<_> = hist_b.iter().filter_map(|f| f.run_id.as_deref()).collect();
+        assert_eq!(a_run_ids, vec!["run-a-fired"]);
+        assert_eq!(b_run_ids, vec!["run-b-fired"]);
+
+        // B's rollup now reflects B; A's rollup is unchanged by B's fire.
+        let a2 = get(&db, &a.id).await.unwrap().unwrap();
+        let b2 = get(&db, &b.id).await.unwrap().unwrap();
+        assert_eq!(
+            a2.last_outcome.as_deref(),
+            Some("skipped-overlap"),
+            "firing B must not touch A's rollup"
+        );
+        assert_eq!(b2.last_outcome.as_deref(), Some("fired"));
+        assert!(b2.last_fired_at.is_some());
+    }
+
     #[tokio::test]
     async fn set_next_fire_updates_schedule() {
         let db = test_db().await;

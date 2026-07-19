@@ -727,6 +727,98 @@ async fn patch_disable_then_enable_pauses_and_resumes_firing() {
     assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], true);
 }
 
+/// #372, decision B (primary end-to-end proof): re-enabling a Trigger recomputes
+/// `next_fire_at` FORWARD from now and skips the slot missed while disabled — no
+/// hidden catch-up fire. A daily cron keeps the recomputed slot comfortably in
+/// the future so the immediate tick is deterministically not-due.
+#[tokio::test]
+async fn reenable_recomputes_next_fire_forward_no_catchup() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "reenable-forward", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Disable, then force the stored next_fire into the past — the "slot missed
+    // while disabled" the pre-#372 enable path would have caught up on.
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    daemon.force_trigger_due(&trigger_id).await;
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["next_fire_at"].as_str(),
+        Some("2020-01-01T00:00:00.000Z"),
+        "precondition: next_fire is frozen in the past while disabled"
+    );
+
+    // Re-enable: the Enable arm recomputes forward.
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    let next = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .expect("next_fire recomputed on re-enable")
+        .to_string();
+    assert!(
+        next.ends_with('Z'),
+        "next_fire must stay canonical UTC (…Z), got {next}"
+    );
+    assert_ne!(
+        next, "2020-01-01T00:00:00.000Z",
+        "re-enable must recompute next_fire forward, not leave the frozen past slot"
+    );
+
+    // The tick sees a future next_fire → no catch-up fire, no audit row.
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "re-enabling must not fire a catch-up run for the missed slot"
+    );
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "no catch-up means no audit row on re-enable"
+    );
+}
+
+/// #372 anti-overcorrection guard: a re-enabled Trigger still fires when its
+/// (forward) slot actually comes due — the Enable arm must recompute forward,
+/// never clear firing altogether.
+#[tokio::test]
+async fn reenabled_trigger_still_fires_on_next_slot() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "reenable-fires", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Disable then re-enable.
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], true);
+
+    // Its slot arrives (forced due) → it fires exactly once.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "a re-enabled Trigger must fire when its slot comes due"
+    );
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(trigger_id.as_str()));
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+}
+
 #[tokio::test]
 async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();

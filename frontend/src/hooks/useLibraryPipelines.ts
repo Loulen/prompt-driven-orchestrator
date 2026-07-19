@@ -5,6 +5,7 @@ import type { PipelineDef } from "../types";
 import type { OpenPipeline } from "../stores/editStore";
 import { pipelineToYamlObject } from "../stores/editStore";
 import { deepEqual } from "../lib/deepEqual";
+import { stripLayout } from "../lib/layoutFields";
 
 export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -17,44 +18,18 @@ export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 //   - map-key serialization order (variables, frontmatter, when-clauses come
 //     from Rust HashMaps whose JSON order is nondeterministic),
 //   - fields the canvas serializer doesn't round-trip.
-// Layout is stripped from both sides before comparison:
-//   - node `view: { x, y }` — node positions,
-//   - edge `mode` + `waypoints` — orthogonal routing / manual pins (#154),
-//   - edge `target_side` — incoming-edge anchor side / drop position (#168),
-//   - the whole `notes:` block — inert canvas notes (#307 / ADR-0018): a note is
-//     documentation layout, so two pipelines differing only by their notes
-//     compare equal and the synced/diverged star does not move.
-// Library pipelines don't carry layout, and even a starred local pipeline can
-// be freely rearranged (move a node, pin an edge route) without that
-// registering as "diverged". Layout travels in the file (so a shared workflow
-// keeps its arrows) but is never a semantic difference.
+// Layout is then stripped from both sides before comparison, so rearranging a
+// pipeline (move a node, pin an edge route, re-anchor an arrow, add/edit a note)
+// never reads as "diverged". Which fields count as layout is owned by
+// `lib/layoutFields.ts` (`stripLayout`) — the single source of truth, guarded by
+// `layoutFields.test.ts`. Layout travels in the file (so a shared workflow keeps
+// its positions and arrows) but is never a semantic difference.
 export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
   return deepEqual(comparablePipelineObject(a), comparablePipelineObject(b));
 }
 
 function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
-  const obj = pipelineToYamlObject(p);
-  const nodes = obj.nodes as Record<string, unknown>[] | undefined;
-  if (nodes) {
-    for (const node of nodes) {
-      delete node.view;
-    }
-  }
-  const edges = obj.edges as Record<string, unknown>[] | undefined;
-  if (edges) {
-    for (const edge of edges) {
-      delete edge.mode;
-      delete edge.waypoints;
-      // #168: the incoming-edge anchor side is layout, like routing.
-      delete edge.target_side;
-    }
-  }
-  // #307: canvas notes are layout, not semantics — strip the whole block (the
-  // strip half of the emit/strip couple in pipelineToYamlObject). Both content
-  // and position are excluded, so editing/moving/adding/deleting a note never
-  // moves the star (R1 default: full-layout classification).
-  delete obj.notes;
-  return obj;
+  return stripLayout(pipelineToYamlObject(p));
 }
 
 // Prompts live in `<id>.prompts/<node_id>.md` on disk, separate from the

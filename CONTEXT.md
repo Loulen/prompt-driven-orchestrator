@@ -167,6 +167,8 @@ Le tracé d'une edge est **orthogonal** (connecteur à angle droit) : l'auto-rou
 
 `mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur routage ou les positions de leurs nœuds comparent **égaux** (déplacer un nœud ou bouger un waypoint ne marque jamais le pipeline « modifié »). Cf. #154, design screen 14.
 
+Le partitionnement layout/sémantique a un **propriétaire unique** : `frontend/src/lib/layoutFields.ts` (`SEMANTIC_FIELDS` / `LAYOUT_FIELDS` + `stripLayout`). Ajouter un champ au sérialiseur (`pipelineToYamlObject`) sans le classer y fait échouer le build (test d'exhaustivité `layoutFields.test.ts`, qui compare par scope les clés réellement émises à `SEMANTIC ∪ LAYOUT`). `notes` est stripé en **bloc entier** (ADR-0018 R1) ; le côté de port (`side`) reste **sémantique** (#355), au même titre que dans l'étoile du node-library.
+
 ### Ancrage de l'edge entrante — `target_side` (#168)
 
 Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur un dot d'input déclaré mais **sur le corps** du nœud cible. `target_side` mémorise **de quel côté** (`left` / `right` / `top` / `bottom`) la flèche s'ancre : la règle décidée est *le côté de la carte cible le plus proche du point de dépôt*. Le routage orthogonal arrive alors par ce côté (plus de gauche-vers-droite forcé). Absent ⇒ `left` (ancrage historique), jamais écrit.

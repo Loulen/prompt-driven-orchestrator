@@ -439,6 +439,8 @@ Le runtime ne distingue pas (i) de (ii) : il pose le contenu utilisateur tel que
 
 L'input peut aussi être **construit interactivement** via un nœud d'entrée marqué `interactive: true` (cf. principe *Deliberate over autonomous*). Pattern typique : le user écrit un prompt brut court, attache la session du nœud d'entrée, l'agent grille jusqu'à un input structuré, le user "submit", le pipeline démarre vraiment.
 
+- **Saisie persistante de la modale New Run.** Le contenu saisi (prompt, repo cible, pipeline, overrides de variables, images) survit à une fermeture/réouverture de la modale — un `dismiss` accidentel ne le perd pas — et n'est vidé qu'après un **lancement réussi** (`POST /runs`).
+
 #### Images d'input
 
 Le user peut **téléverser des images** à côté du prompt texte (New Run modal). Le runtime les stocke dans `_input/` du Blackboard, à côté de `output.md`, et le préambule du nœud d'entrée les liste. Ces images sont **portées par le nœud Start** : le `StartNodeInfo` projeté expose `input_images` (les noms de fichiers, dans l'ordre de téléversement). L'UI les affiche en bandeau de vignettes sur la carte Start du canvas et en pleine taille (cliquables, lightbox) dans le StartInspector, aux côtés du prompt. Un Run sans image rend le nœud Start et le StartInspector à l'identique (prompt seul).

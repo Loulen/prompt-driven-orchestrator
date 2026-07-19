@@ -16,7 +16,7 @@ import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import RunInfoSidebar from "./components/RunInfoSidebar";
-import NewRunModal from "./components/NewRunModal";
+import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsModal from "./components/SettingsModal";
 import ConflictModal from "./components/ConflictModal";
 import PipelineChangedModal from "./components/PipelineChangedModal";
@@ -37,7 +37,7 @@ import EdgeDetailPanel from "./components/EdgeDetailPanel";
 import RegionInspector from "./components/RegionInspector";
 import NoteInspector from "./components/NoteInspector";
 import TriggerDetailPanel from "./components/TriggerDetailPanel";
-import type { TriggerPrefill } from "./components/NewRunModal";
+import type { OpenIntent } from "./components/NewRunModal";
 import { deriveEdgeTrigger } from "./lib/edgeTrigger";
 import { handleUndoRedoKeydown } from "./lib/undoRedoHotkeys";
 import InspectorTabs from "./components/InspectorTabs";
@@ -164,9 +164,10 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  // When the New Run modal is opened from a Trigger (run-now / edit), this holds
-  // the source Trigger and the intended mode (#162).
-  const [triggerPrefill, setTriggerPrefill] = useState<TriggerPrefill | null>(null);
+  // #386: how the always-mounted New Run modal should open. Drives a one-shot
+  // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
+  // "New run" / "New trigger". Defaults to a plain run.
+  const [openIntent, setOpenIntent] = useState<OpenIntent>(RUN_INTENT);
   // #341: manual "Run now" — a refused fire (409: disabled / broken reference)
   // surfaces here as a dismissible banner.
   const [runNowError, setRunNowError] = useState<string | null>(null);
@@ -291,8 +292,8 @@ export default function App() {
     hasEditTab,
   });
 
-  const openTriggerModal = useCallback((prefill: TriggerPrefill | null) => {
-    setTriggerPrefill(prefill);
+  const openNewRunModal = useCallback((intent: OpenIntent) => {
+    setOpenIntent(intent);
     setNewRunModalOpen(true);
   }, []);
 
@@ -361,7 +362,9 @@ export default function App() {
 
   const handleCloseNewRunModal = useCallback(() => {
     setNewRunModalOpen(false);
-    setTriggerPrefill(null);
+    // Reset the intent to a plain run. Harmless while closed (the modal's reset
+    // only fires on open false→true), but keeps the next default-less open clean.
+    setOpenIntent(RUN_INTENT);
   }, []);
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
@@ -668,16 +671,16 @@ export default function App() {
               runs={runs}
               selectedRunId={selectedRunId}
               onSelectRun={handleSelectRun}
-              onNewRun={() => setNewRunModalOpen(true)}
+              onNewRun={() => openNewRunModal({ kind: "run" })}
               libraryPipelines={libraryPipelines}
               onLibraryPipelinesChanged={refreshLibraryPipelines}
               triggers={triggers}
               selectedTriggerId={selectedTriggerId}
               onSelectTrigger={handleSelectTrigger}
-              onNewTrigger={() => openTriggerModal(null)}
+              onNewTrigger={() => openNewRunModal({ kind: "new-trigger" })}
               onTriggersChanged={refreshTriggers}
               onRunNowTrigger={handleRunNowTrigger}
-              onEditTrigger={(t) => openTriggerModal({ trigger: t, mode: "edit" })}
+              onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
               triggersPaused={triggersPaused}
               onTogglePause={handleTogglePause}
             />
@@ -820,7 +823,7 @@ export default function App() {
           handleCloseNewRunModal();
           handleRunCreated(runId);
         }}
-        prefillTrigger={triggerPrefill}
+        openIntent={openIntent}
         onTriggerSaved={refreshTriggers}
       />
       <SettingsModal

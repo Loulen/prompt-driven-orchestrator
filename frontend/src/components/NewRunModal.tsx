@@ -24,26 +24,41 @@ const GUARD_VERDICT: Record<
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
 /**
- * Open the modal pre-filled from an existing Trigger (#162). `mode: "run"`
- * opens Run-now mode to fire a one-off Run from the Trigger's template (the
- * guard is not executed). `mode: "edit"` opens Trigger mode bound to the
- * Trigger so submitting PATCHes it instead of creating a new one.
+ * How the always-mounted modal should open (#386). Because the modal is never
+ * unmounted (`if (!open) return null` below), its useState survives a close, so
+ * the open intent drives a one-shot reset on every reopen — a stale mode /
+ * trigger can no longer leak into a fresh open.
+ *
+ * - `run` — a plain New Run.
+ * - `new-trigger` — Trigger mode, blank, POSTs a new trigger.
+ * - `edit-trigger` — Trigger mode bound to `trigger`; submitting PATCHes it (#162).
+ *
+ * There is deliberately no "run-from-trigger" variant: since ADR-0027, "Run now"
+ * is a real fire (`POST /triggers/{id}/fire`), not a prefilled modal.
  */
-export interface TriggerPrefill {
-  trigger: Trigger;
-  mode: "run" | "edit";
-}
+export type OpenIntent =
+  | { kind: "run" }
+  | { kind: "new-trigger" }
+  | { kind: "edit-trigger"; trigger: Trigger };
+
+// Module constant: stabilises the `[open, openIntent]` dependency and serves as
+// the default on both sides (prop + destructuring) so a plain open doesn't mint
+// a new identity every render. Exported aside the component (an object constant,
+// so not covered by `allowConstantExport`); it never re-renders, so opting this
+// one line out of the Fast-Refresh rule is safe.
+// eslint-disable-next-line react-refresh/only-export-components
+export const RUN_INTENT: OpenIntent = { kind: "run" };
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: (runId: string) => void;
-  prefillTrigger?: TriggerPrefill | null;
+  openIntent?: OpenIntent;
   /** Called after a trigger is created/edited so the list can refresh. */
   onTriggerSaved?: () => void;
 }
 
-export default function NewRunModal({ open, onClose, onCreated, prefillTrigger = null, onTriggerSaved }: Props) {
+export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved }: Props) {
   const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
   const [runName, setRunName] = useState("");
@@ -93,7 +108,7 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prefillDone = useRef(false);
-  const triggerPrefillDone = useRef(false);
+  const openPrefillDone = useRef(false);
 
   const handleRepoChange = useCallback((value: string) => {
     setTargetRepo(value);
@@ -105,74 +120,127 @@ export default function NewRunModal({ open, onClose, onCreated, prefillTrigger =
     }
   }, []);
 
+  // #386: the modal is always-mounted (`if (!open) return null` below), so its
+  // useState survives a close. This one-shot, ref-gated effect resets the
+  // mode/trigger machine to match the open intent on every `open` false→true
+  // transition, so a stale "Edit trigger" state can't leak into a fresh "New
+  // run" / "New trigger" — and can't silently PATCH the previously edited
+  // trigger. Declared BEFORE the recent-repos effect on purpose.
   useEffect(() => {
-    // Skip the recent-repos default when prefilling from a Trigger — the
-    // Trigger's own repo wins.
-    if (open && !prefillDone.current && !prefillTrigger && recentRepos.length > 0 && !targetRepo) {
+    if (!open) {
+      openPrefillDone.current = false;
+      return;
+    }
+    if (openPrefillDone.current) return;
+    openPrefillDone.current = true;
+
+    // Provenance captured BEFORE any setEditingTriggerId(null): the shared-draft
+    // cleanup (#386 Part 2 / Finding D) must know we came from a trigger edit.
+    // This is complete because the dead run-mode prefill is gone —
+    // editingTriggerId is only ever set by an edit-trigger intent.
+    const cameFromTrigger = editingTriggerId != null;
+
+    // Any open throws away a stale guard verdict / error (#350) and a stale
+    // submit error.
+    setGuardTest(null);
+    setGuardTestError(null);
+    setError(null);
+
+    // One-shot reset: the `openPrefillDone` ref gates this to a single run per
+    // open, so the setState cascade is bounded and does not re-fire. The
+    // conditional setState calls below are deliberate (intent-dependent reset).
+    /* eslint-disable react-hooks/set-state-in-effect */
+    // Trigger-only fields: reset unconditionally on the "fresh" intents.
+    const blankTriggerFields = () => {
+      setTriggerName("");
+      setGuardCommand("");
+      setAllowOverlap(false);
+      setMaxConcurrent("");
+      setCronPresetId("daily");
+      setRawCron("");
+      setDailyHour(9);
+      setDailyMinute(0);
+    };
+    // #386 Part 2 (Finding D): only wipe the SHARED draft when we came from a
+    // trigger edit, so an ordinary New-run→New-run keeps its draft (the tested
+    // persistence). repoValid is cleared too, else the stale valid repo would
+    // auto-reselect the trigger's pipeline on the next render (:251).
+    const clearSharedIfFromTrigger = () => {
+      if (!cameFromTrigger) return;
+      setSelectedPipelineId("");
+      setInput("");
+      setOverrides({});
+      setTargetRepo("");
+      setRepoValid(null);
+      setRepoError(null);
+      setBranches([]);
+      setSourceBranch("");
+    };
+
+    switch (openIntent.kind) {
+      case "run":
+        setMode("run");
+        setEditingTriggerId(null);
+        blankTriggerFields();
+        clearSharedIfFromTrigger();
+        break;
+
+      case "new-trigger":
+        setMode("trigger");
+        setEditingTriggerId(null);
+        blankTriggerFields();
+        clearSharedIfFromTrigger();
+        break;
+
+      case "edit-trigger": {
+        const trigger = openIntent.trigger;
+        setMode("trigger");
+        setEditingTriggerId(trigger.id);
+        setSelectedPipelineId(trigger.pipeline_id);
+        setTargetRepo(trigger.target_repo ?? "");
+        setSourceBranch(trigger.source_branch ?? "");
+        setInput(trigger.input_template ?? "");
+        setOverrides(
+          Object.fromEntries(
+            Object.entries(trigger.variables ?? {}).map(([k, v]) => [k, String(v)]),
+          ),
+        );
+        setTriggerName(trigger.name);
+        setGuardCommand(trigger.guard_command ?? "");
+        // Overlap policy (#239): round-trip the real policy instead of resetting
+        // it to skip. Pre-check the box for an `allow` Trigger and fill its cap.
+        setAllowOverlap(trigger.overlap_policy === "allow");
+        setMaxConcurrent(trigger.max_concurrent != null ? String(trigger.max_concurrent) : "");
+        // Map the stored cron back onto a preset (or the raw escape hatch).
+        const preset = cronToPreset(trigger.cron);
+        setCronPresetId(preset);
+        if (preset === "custom") {
+          setRawCron(trigger.cron);
+        } else if (preset === "daily") {
+          const time = parseDailyTime(trigger.cron);
+          if (time) {
+            setDailyMinute(time.minute);
+            setDailyHour(time.hour);
+          }
+        }
+        break;
+      }
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, openIntent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // Apply the recent-repos default only on the "fresh" intents (run /
+    // new-trigger); an edit-trigger's own repo wins, so it's excluded.
+    const freshEntry = openIntent.kind === "run" || openIntent.kind === "new-trigger";
+    if (open && !prefillDone.current && freshEntry && recentRepos.length > 0 && !targetRepo) {
       prefillDone.current = true;
       handleRepoChange(recentRepos[0]);
     }
     if (!open) {
       prefillDone.current = false;
     }
-  }, [open, recentRepos, targetRepo, handleRepoChange, prefillTrigger]);
-
-  // Prefill the form from a Trigger when opened for run-now or edit (#162).
-  useEffect(() => {
-    if (!open) {
-      triggerPrefillDone.current = false;
-      return;
-    }
-    if (triggerPrefillDone.current || !prefillTrigger) return;
-    triggerPrefillDone.current = true;
-
-    // A prefilled guard command carries no verdict yet (#350).
-    setGuardTest(null);
-    setGuardTestError(null);
-
-    // One-shot prefill: the `triggerPrefillDone` ref gates this to a single run
-    // per open, so the setState cascade is bounded and does not re-fire. The
-    // conditional setState calls below are deliberate (mode-dependent prefill).
-    /* eslint-disable react-hooks/set-state-in-effect */
-    const { trigger, mode: prefillMode } = prefillTrigger;
-    setSelectedPipelineId(trigger.pipeline_id);
-    setTargetRepo(trigger.target_repo ?? "");
-    setSourceBranch(trigger.source_branch ?? "");
-    setInput(trigger.input_template ?? "");
-    setOverrides(
-      Object.fromEntries(
-        Object.entries(trigger.variables ?? {}).map(([k, v]) => [k, String(v)]),
-      ),
-    );
-
-    if (prefillMode === "edit") {
-      setMode("trigger");
-      setEditingTriggerId(trigger.id);
-      setTriggerName(trigger.name);
-      setGuardCommand(trigger.guard_command ?? "");
-      // Overlap policy (#239): round-trip the real policy instead of resetting it
-      // to skip. Pre-check the box for an `allow` Trigger and fill its cap.
-      setAllowOverlap(trigger.overlap_policy === "allow");
-      setMaxConcurrent(trigger.max_concurrent != null ? String(trigger.max_concurrent) : "");
-      // Map the stored cron back onto a preset (or the raw escape hatch).
-      const preset = cronToPreset(trigger.cron);
-      setCronPresetId(preset);
-      if (preset === "custom") {
-        setRawCron(trigger.cron);
-      } else if (preset === "daily") {
-        const time = parseDailyTime(trigger.cron);
-        if (time) {
-          setDailyMinute(time.minute);
-          setDailyHour(time.hour);
-        }
-      }
-    } else {
-      // Run-now: fire a one-off Run from the template; never touch the guard.
-      setMode("run");
-      setEditingTriggerId(null);
-    }
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, prefillTrigger]);
+  }, [open, recentRepos, targetRepo, handleRepoChange, openIntent]);
 
   useEffect(() => {
     if (!open || !targetRepo.trim()) return;

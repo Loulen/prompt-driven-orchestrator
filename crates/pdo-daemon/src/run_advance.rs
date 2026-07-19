@@ -45,6 +45,7 @@
 use tracing::{error, info};
 
 use crate::event_log;
+use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps};
 use crate::pipeline;
 use crate::scheduler;
 use crate::scheduler_dispatcher;
@@ -52,8 +53,7 @@ use crate::transition_guard;
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, effective_repo_root, emit_loop_action, handle_node_completion, load_events,
-    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, spawn_node, AppState,
-    SpawnContext,
+    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, AppState,
 };
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready
@@ -129,7 +129,7 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
             }
             scheduler::SchedulerAction::Spawn { node_id, iter } => {
                 if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                    spawn_node(state, &spawn_ctx, node, *iter).await;
+                    spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
                 }
             }
             _ => {}
@@ -158,7 +158,7 @@ pub(crate) async fn spawn_each(
 ) {
     for rs in ready_set {
         if let Some(node) = spawn_ctx.pipeline.nodes.iter().find(|n| n.id == rs.node_id) {
-            spawn_node(state, spawn_ctx, node, rs.iter).await;
+            spawn_node(SpawnDeps::from_state(state), spawn_ctx, node, rs.iter).await;
         }
     }
 }

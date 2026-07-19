@@ -2925,7 +2925,17 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
+/// Append an event (with the #212 transition-guard backstop) taking only the
+/// two side-effects the append actually touches — the DB pool and the event
+/// broadcast sink — instead of the whole `AppState`. This is the injectable
+/// core (#356): `spawn_node`, which holds a narrow `SpawnDeps` rather than
+/// `&AppState`, appends through it, while the ~130 in-process callers keep using
+/// the [`append_event`] wrapper below (behaviour identical).
+pub(crate) async fn append_event_with(
+    db: &sqlx::SqlitePool,
+    event_tx: &broadcast::Sender<event_log::Event>,
+    event: &event_log::Event,
+) -> Result<()> {
     // Transition guard backstop (#212): every lifecycle append is validated
     // against the freshly projected state, so no emitter — present or future —
     // can bypass the guard. Emitters with side effects (spawn, merge) must
@@ -2939,7 +2949,7 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
             | event_log::EventKind::NodeStale
             | event_log::EventKind::NodeFailed
     ) {
-        let events = load_events(&state.db, &event.run_id).await?;
+        let events = load_events(db, &event.run_id).await?;
         let run_state = event_log::project(&events);
         match transition_guard::validate_transition(run_state.as_ref(), event) {
             transition_guard::Verdict::Allow => {}
@@ -2974,16 +2984,23 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
     .bind(event.iter)
     .bind(&payload_str)
     .bind(&event.run_id)
-    .execute(&state.db)
+    .execute(db)
     .await
     .context("failed to append event")?;
     if result.rows_affected() == 0 {
         anyhow::bail!("run {} has been forgotten", event.run_id);
     }
 
-    let _ = state.event_tx.send(event.clone());
+    let _ = event_tx.send(event.clone());
 
     Ok(())
+}
+
+/// Thin `AppState` wrapper over [`append_event_with`] — the name every
+/// in-process caller already uses. The db-only core exists so `spawn_node`
+/// (#356) can append through a narrow `SpawnDeps` without the full `AppState`.
+async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
+    append_event_with(&state.db, &state.event_tx, event).await
 }
 
 /// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
@@ -5268,6 +5285,24 @@ pub(crate) async fn handle_node_completion(
     }
 }
 
+/// Reload events and re-project the run state, taking only the DB pool it needs
+/// (#356) so `spawn_node`'s narrow `SpawnDeps` can re-project without the full
+/// `AppState`. The [`reload_run_state`] wrapper below is what most callers use.
+pub(crate) async fn reload_run_state_with(
+    db: &sqlx::SqlitePool,
+    run_id: &str,
+) -> Option<(Vec<event_log::Event>, event_log::RunState)> {
+    let events = match load_events(db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("reload_run_state: failed to load events for {run_id}: {e}");
+            return None;
+        }
+    };
+    let run_state = event_log::project(&events)?;
+    Some((events, run_state))
+}
+
 /// Reload events and re-project the run state.
 ///
 /// Use after appending events inside a multi-pass dispatch so the next pass
@@ -5278,15 +5313,7 @@ async fn reload_run_state(
     state: &AppState,
     run_id: &str,
 ) -> Option<(Vec<event_log::Event>, event_log::RunState)> {
-    let events = match load_events(&state.db, run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            error!("reload_run_state: failed to load events for {run_id}: {e}");
-            return None;
-        }
-    };
-    let run_state = event_log::project(&events)?;
-    Some((events, run_state))
+    reload_run_state_with(&state.db, run_id).await
 }
 
 /// Thin shim over the single-pass advancement tick now owned by

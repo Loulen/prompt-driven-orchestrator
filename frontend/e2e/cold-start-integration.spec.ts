@@ -135,12 +135,15 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
   // 5. Select the worker node and reveal the Run inspector details pane.
   await openRunNodeDetails(page, runId, "worker");
 
-  // 6. Open the output modal from the seeded `result` output port card (the one
-  // port-row that is a button; a no-files port renders as a non-interactive div).
+  // 6. Open the output modal from the seeded `result` output port card. Target
+  // it by port name, not `.first()`: since #370 fixed input resolution, the
+  // node's resolved input renders as a clickable `button.port-row` too, so the
+  // first button is no longer guaranteed to be the output. A no-files port still
+  // renders as a non-interactive div. The port name is the button's leading text.
   const portCard = page
     .getByTestId("inspector-pane-run")
     .locator("button.port-row")
-    .first();
+    .filter({ hasText: /^result/ });
   await expect(portCard).toBeVisible({ timeout: 5_000 });
   await portCard.click();
 

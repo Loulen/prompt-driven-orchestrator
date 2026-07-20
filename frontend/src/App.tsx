@@ -197,6 +197,9 @@ export default function App() {
   const pendingSingleTab = useEditStore((s) => s.pendingSingleTab);
   const confirmPendingSingleTab = useEditStore((s) => s.confirmPendingSingleTab);
   const cancelPendingSingleTab = useEditStore((s) => s.cancelPendingSingleTab);
+  // Merged /pipelines list — used to derive the selected trigger's prompt-required
+  // signal for the guard dry-run caveat (#351).
+  const pipelines = useEditStore((s) => s.pipelines);
 
   // Track which library-YAML version we've already prompted about for a given
   // run-scoped tab. Re-prompting only when the library changes again avoids
@@ -282,6 +285,16 @@ export default function App() {
     selectedTriggerId != null
       ? triggers.find((t) => t.id === selectedTriggerId) ?? null
       : null;
+
+  // Prompt-required (#351): default true when the flag is absent (matches the
+  // daemon default); false when the pipeline can't be found, so a dangling
+  // reference shows no false "would be empty" caveat.
+  const triggerPromptRequired = selectedTrigger
+    ? (() => {
+        const p = pipelines.find((pl) => pl.id === selectedTrigger.pipeline_id);
+        return p ? p.prompt_required !== false : false;
+      })()
+    : false;
 
   // Which view owns the right-hand detail pane (#247). A selected Trigger now
   // wins over a persistent run-edit tab; the canvas-focus reconciliation above
@@ -723,6 +736,7 @@ export default function App() {
                 trigger={selectedTrigger}
                 onSelectRun={handleSelectRun}
                 refreshKey={firesRefreshKey}
+                promptRequired={triggerPromptRequired}
               />
             ) : paneOwner === "info" ? (
               <PipelineInfoPanel

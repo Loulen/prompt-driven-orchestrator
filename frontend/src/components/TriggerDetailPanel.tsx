@@ -11,9 +11,11 @@ import {
   Zap,
 } from "lucide-react";
 import type { Trigger, TriggerFire } from "../types";
-import { fetchTriggerFires } from "../api";
+import { fetchTriggerFires, testGuard } from "../api";
+import type { TestGuardResponse } from "../api";
 import { humanizeCron } from "../cronPresets";
 import GuardOutput from "./GuardOutput";
+import GuardTestResult from "./GuardTestResult";
 
 interface Props {
   trigger: Trigger;
@@ -25,6 +27,13 @@ interface Props {
    * (or a cron fire landing mid-view) appears without reselecting.
    */
   refreshKey?: number;
+  /**
+   * Whether the trigger's pipeline requires a prompt (#351). Drives the honest
+   * "resolved input would be empty" caveat on a passing guard dry-run. Derived
+   * by the parent (App.tsx) from the merged pipelines list; optional so callers
+   * that omit it (and tests) still typecheck — absent ⇒ no caveat.
+   */
+  promptRequired?: boolean;
 }
 
 /**
@@ -33,9 +42,21 @@ interface Props {
  * fire history: the answer to "why didn't it fire last night?". Each "fired"
  * entry links to the Run it created.
  */
-export default function TriggerDetailPanel({ trigger, onSelectRun, refreshKey }: Props) {
+export default function TriggerDetailPanel({
+  trigger,
+  onSelectRun,
+  refreshKey,
+  promptRequired,
+}: Props) {
   const [fires, setFires] = useState<TriggerFire[]>([]);
   const [loading, setLoading] = useState(true);
+  // Guard dry-run (#351): the last verdict, an in-flight flag, and an error.
+  // No reset code needed — the panel is remounted per trigger (`key` at the
+  // App.tsx render site), so switching triggers discards this local state for
+  // free. The fire-history effect's `refreshKey` bump must NOT clear it.
+  const [guardTest, setGuardTest] = useState<TestGuardResponse | null>(null);
+  const [guardTesting, setGuardTesting] = useState(false);
+  const [guardTestError, setGuardTestError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +79,24 @@ export default function TriggerDetailPanel({ trigger, onSelectRun, refreshKey }:
       cancelled = true;
     };
   }, [trigger.id, refreshKey]);
+
+  // Guard dry-run (#351): run the trigger's *saved* guard command with zero
+  // side effects and record the verdict — the "why would this fire right now?"
+  // button. Never creates a Run, writes fire history, or bumps next_fire_at.
+  const onTestGuard = async () => {
+    const cmd = trigger.guard_command?.trim();
+    if (!cmd) return; // button only renders when guard_command is set; belt-and-braces for TS
+    setGuardTesting(true);
+    setGuardTestError(null);
+    try {
+      setGuardTest(await testGuard(cmd, trigger.target_repo ?? undefined));
+    } catch (e) {
+      setGuardTest(null);
+      setGuardTestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGuardTesting(false);
+    }
+  };
 
   return (
     <aside className="flex h-full flex-col overflow-y-auto bg-bg-2" data-testid="trigger-detail-panel">
@@ -139,6 +178,47 @@ export default function TriggerDetailPanel({ trigger, onSelectRun, refreshKey }:
             >
               {trigger.guard_command}
             </pre>
+
+            {/* Test guard (dry-run, #351): run the saved guard with zero side
+                effects and show would-fire / would-skip / error. Rendered only
+                inside this block, so it's hidden when there's no guard. */}
+            <button
+              type="button"
+              onClick={onTestGuard}
+              disabled={guardTesting}
+              className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
+              style={{ fontSize: "10.5px" }}
+              data-testid="guard-test-button"
+            >
+              {guardTesting ? "Testing…" : "Test guard"}
+            </button>
+
+            {guardTestError && (
+              <div
+                className="rounded-md border border-st-failed/30 bg-st-failed-bg px-2.5 py-1.5 text-st-failed"
+                style={{ fontSize: "10px" }}
+                data-testid="guard-test-error"
+              >
+                {guardTestError}
+              </div>
+            )}
+
+            {guardTest && (
+              <GuardTestResult
+                result={guardTest}
+                caveat={
+                  guardTest.outcome === "pass" &&
+                  guardTest.stdout.trim() === "" &&
+                  trigger.input_template.trim() === "" &&
+                  promptRequired ? (
+                    <span className="text-st-blocked" style={{ fontSize: "10px" }} data-testid="guard-test-caveat">
+                      Guard passes, but the resolved input would be empty — a prompt-required
+                      pipeline would reject this fire.
+                    </span>
+                  ) : undefined
+                }
+              />
+            )}
           </div>
         )}
 

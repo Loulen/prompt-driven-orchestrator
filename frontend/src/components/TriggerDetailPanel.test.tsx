@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import TriggerDetailPanel from "./TriggerDetailPanel";
 import type { Trigger, TriggerFire } from "../types";
 
 const fetchTriggerFires = vi.fn();
+const testGuard = vi.fn();
 
 vi.mock("../api", () => ({
   fetchTriggerFires: (id: string) => fetchTriggerFires(id),
+  testGuard: (cmd: string, repo?: string) => testGuard(cmd, repo),
 }));
 
 function trigger(overrides: Partial<Trigger> = {}): Trigger {
@@ -51,6 +53,7 @@ describe("TriggerDetailPanel", () => {
   beforeEach(() => {
     fetchTriggerFires.mockReset();
     fetchTriggerFires.mockResolvedValue([]);
+    testGuard.mockReset();
   });
 
   it("shows the trigger's configuration without entering edit mode", async () => {
@@ -227,5 +230,124 @@ describe("TriggerDetailPanel", () => {
     expect(output).toHaveTextContent("3");
     expect(output).not.toHaveTextContent("stdout");
     expect(output).not.toHaveTextContent("stderr");
+  });
+
+  // --- #351: Test guard (dry-run) from a saved trigger's detail panel ---
+
+  const GUARD = "gh issue list --label ready-for-agent";
+
+  it("hides the Test guard button when the trigger has no guard command", () => {
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+    expect(screen.queryByTestId("guard-test-button")).not.toBeInTheDocument();
+  });
+
+  it("shows the Test guard button when the trigger has a guard command", () => {
+    render(<TriggerDetailPanel trigger={trigger({ guard_command: GUARD })} onSelectRun={noop} />);
+    expect(screen.getByTestId("guard-test-button")).toBeInTheDocument();
+  });
+
+  it("runs the SAVED guard command + repo and shows 'Would fire' with the stdout", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "pass",
+      stdout: "issue-123\n",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    render(<TriggerDetailPanel trigger={trigger({ guard_command: GUARD })} onSelectRun={noop} />);
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would fire");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("issue-123");
+    // The #351 twist vs #350: the stored guard_command + target_repo, not live form values.
+    expect(testGuard).toHaveBeenCalledWith(GUARD, "/repos/foo");
+  });
+
+  it("shows 'Would skip' with the exit code and stderr for a non-zero guard", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "skip",
+      stdout: "",
+      stderr: "no work to do",
+      exit_code: 3,
+      detail: null,
+    });
+    render(<TriggerDetailPanel trigger={trigger({ guard_command: GUARD })} onSelectRun={noop} />);
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would skip");
+    const output = screen.getByTestId("guard-test-output");
+    expect(output).toHaveTextContent("3");
+    expect(output).toHaveTextContent("no work to do");
+  });
+
+  it("shows 'Guard error' for an error verdict", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "error",
+      stdout: "",
+      stderr: "",
+      exit_code: null,
+      detail: "guard timed out",
+    });
+    render(<TriggerDetailPanel trigger={trigger({ guard_command: GUARD })} onSelectRun={noop} />);
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Guard error");
+  });
+
+  it("surfaces a request failure inline and renders no verdict card", async () => {
+    testGuard.mockRejectedValue(new Error("boom"));
+    render(<TriggerDetailPanel trigger={trigger({ guard_command: GUARD })} onSelectRun={noop} />);
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-error")).toHaveTextContent("boom");
+    expect(screen.queryByTestId("guard-test-result")).not.toBeInTheDocument();
+  });
+
+  it("shows the would-empty caveat for a prompt-required pipeline with empty input + stdout", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ guard_command: "exit 0", input_template: "" })}
+        onSelectRun={noop}
+        promptRequired
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.getByTestId("guard-test-caveat")).toBeInTheDocument();
+  });
+
+  it("hides the caveat when the pipeline is prompt-optional", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ guard_command: "exit 0", input_template: "" })}
+        onSelectRun={noop}
+        promptRequired={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.queryByTestId("guard-test-caveat")).not.toBeInTheDocument();
   });
 });

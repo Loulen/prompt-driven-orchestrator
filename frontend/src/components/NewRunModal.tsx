@@ -6,20 +6,8 @@ import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipelin
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
-import GuardOutput from "./GuardOutput";
+import GuardTestResult from "./GuardTestResult";
 import { CRON_PRESETS, presetToCron, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
-
-/** Guard dry-run verdict → label + status color (#350). Mirrors the three
- * `GuardResult` variants 1:1: pass → would fire (green), skip → would skip
- * (amber), error → guard error (red). */
-const GUARD_VERDICT: Record<
-  TestGuardResponse["outcome"],
-  { label: string; cls: string }
-> = {
-  pass: { label: "Would fire", cls: "border-st-done/30 bg-st-done-bg text-st-done" },
-  skip: { label: "Would skip", cls: "border-st-paused/30 bg-st-paused-bg text-st-paused" },
-  error: { label: "Guard error", cls: "border-st-failed/30 bg-st-failed-bg text-st-failed" },
-};
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -1009,22 +997,18 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     )}
 
                     {guardTest && (
-                      <div
-                        className={`flex flex-col gap-1.5 rounded-md border px-2.5 py-2 ${GUARD_VERDICT[guardTest.outcome].cls}`}
-                        data-testid="guard-test-result"
-                      >
-                        <span className="font-medium" data-testid="guard-test-verdict" style={{ fontSize: "11.5px" }}>
-                          {GUARD_VERDICT[guardTest.outcome].label}
-                        </span>
-                        {/* Honest caveat: the guard passes, but a real fire of a
-                            prompt-required pipeline with no resolved input would be
-                            rejected. Same rule the server enforces, read off the
-                            actual stdout — not the empty-field reject variable. */}
-                        {guardTest.outcome === "pass" &&
+                      <GuardTestResult
+                        result={guardTest}
+                        caveat={
+                          // Honest caveat: the guard passes, but a real fire of a
+                          // prompt-required pipeline with no resolved input would be
+                          // rejected. Same rule the server enforces, read off the
+                          // actual stdout — not the empty-field reject variable.
+                          guardTest.outcome === "pass" &&
                           guardTest.stdout.trim() === "" &&
                           selectedPipeline &&
                           !promptOptional &&
-                          input.trim() === "" && (
+                          input.trim() === "" ? (
                             <span
                               className="text-st-blocked"
                               style={{ fontSize: "10.5px" }}
@@ -1033,14 +1017,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                               Guard passes, but the resolved input would be empty — a prompt-required
                               pipeline would reject this fire.
                             </span>
-                          )}
-                        <GuardOutput
-                          stdout={guardTest.stdout}
-                          stderr={guardTest.stderr}
-                          exitCode={guardTest.exit_code}
-                          data-testid="guard-test-output"
-                        />
-                      </div>
+                          ) : undefined
+                        }
+                      />
                     )}
                   </div>
                 </div>

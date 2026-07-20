@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Settings } from "lucide-react";
+import { Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
@@ -18,6 +18,7 @@ import NodeDetailPanel from "./components/NodeDetailPanel";
 import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsModal from "./components/SettingsModal";
+import StatsModal from "./components/StatsModal";
 import ConflictModal from "./components/ConflictModal";
 import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
@@ -164,6 +165,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [statsModalOpen, setStatsModalOpen] = useState(false);
   // #386: how the always-mounted New Run modal should open. Drives a one-shot
   // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
   // "New run" / "New trigger". Defaults to a plain run.
@@ -672,7 +674,10 @@ export default function App() {
   return (
     <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
-      <TopBar onOpenSettings={() => setSettingsModalOpen(true)} />
+      <TopBar
+        onOpenSettings={() => setSettingsModalOpen(true)}
+        onOpenStats={() => setStatsModalOpen(true)}
+      />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
           orientation="horizontal"
@@ -846,6 +851,7 @@ export default function App() {
         liveSessions={sessions.live}
         onSaved={refreshSessions}
       />
+      <StatsModal open={statsModalOpen} onClose={() => setStatsModalOpen(false)} />
       <ConflictModal
         open={conflictTab != null}
         pipelineId={conflictTab?.id ?? ""}
@@ -897,7 +903,13 @@ export default function App() {
   );
 }
 
-function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
+function TopBar({
+  onOpenSettings,
+  onOpenStats,
+}: {
+  onOpenSettings: () => void;
+  onOpenStats: () => void;
+}) {
   return (
     <header
       className="flex h-[44px] shrink-0 items-center gap-3 border-b border-line bg-bg-2 px-3"
@@ -918,15 +930,25 @@ function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         PDO
       </div>
 
-      {/* Right-aligned gear → instance settings (#129). */}
-      <button
-        onClick={onOpenSettings}
-        aria-label="Settings"
-        data-testid="open-settings"
-        className="ml-auto grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
-      >
-        <Settings size={15} />
-      </button>
+      {/* Right-aligned action group: stats (#377) then the settings gear (#129). */}
+      <div className="ml-auto flex items-center gap-1">
+        <button
+          onClick={onOpenStats}
+          aria-label="Open stats"
+          data-testid="open-stats"
+          className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+        >
+          <BarChart3 size={15} />
+        </button>
+        <button
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          data-testid="open-settings"
+          className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+        >
+          <Settings size={15} />
+        </button>
+      </div>
     </header>
   );
 }

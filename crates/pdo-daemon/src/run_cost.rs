@@ -27,7 +27,10 @@
 //!   was observed) are skipped line-by-line, never `?`-propagated.
 
 use crate::event_log::CostStat;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 // Source: https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-07-06).
 // Per-MTok list prices `(family_key, input, output)`. UPDATE when Anthropic
@@ -254,6 +257,111 @@ pub fn compute_run_cost(repo_root: &Path, run_id: &str) -> Option<CostStat> {
         return None;
     }
     Some(aggregate(lines.into_iter()))
+}
+
+// --- Read-side memo for the aggregate cost path (#377 / ADR-0029) ------------
+//
+// The Stats modal's `/stats/cost` endpoint fans [`compute_run_cost`] out over
+// every run in the visible period — the exact anti-fan-out ADR-0022 kept off the
+// `/runs` list handler. This memo is ADR-0022's *sanctioned escape hatch*: a
+// derive-on-read RAM cache keyed on `(run_id, max transcript mtime)`, NEVER
+// persisted (no snapshot table, no metric-freezing event). A transcript change
+// bumps the mtime and so invalidates the entry naturally. It is touched ONLY by
+// [`compute_run_cost_cached`] (the aggregate path); `get_run`'s single-run read
+// keeps calling [`compute_run_cost`] directly, so ADR-0022's per-read contract
+// is byte-identical there.
+
+/// Memo key: `(run_id, max transcript mtime in epoch millis)`. A transcript
+/// change bumps the mtime, so the key changes and the old entry is bypassed.
+type CostMemoKey = (String, i64);
+/// The memoized value is exactly what [`compute_run_cost`] returns (`None` = no
+/// transcript dir), so a hit is byte-identical to a recompute.
+type CostMemoMap = HashMap<CostMemoKey, Option<CostStat>>;
+
+static COST_MEMO: OnceLock<Mutex<CostMemoMap>> = OnceLock::new();
+
+/// Soft cap on memo entries. On overflow the whole map is cleared — dropping the
+/// cache is correctness-preserving (a miss just recomputes), so this bounds RAM
+/// without pulling in an `lru` crate. `CostStat` is 16 bytes, so this is roomy.
+const COST_MEMO_CAP: usize = 4096;
+
+fn cost_memo() -> &'static Mutex<CostMemoMap> {
+    COST_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Recurse a project dir, folding the max `*.jsonl` mtime (epoch millis) into
+/// `max_ms`. Mirrors [`collect_jsonl_recursive`]'s traversal but `stat`s only —
+/// no file contents are read.
+fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            max_mtime_recursive(&path, max_ms);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            if let Ok(ms) = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+            {
+                if ms > *max_ms {
+                    *max_ms = ms;
+                }
+            }
+        }
+    }
+}
+
+/// Max mtime (epoch millis) across every `*.jsonl` transcript that contributes
+/// to `run_id`'s cost — the same recursive glob [`compute_run_cost`] aggregates.
+/// `0` when no transcript dir/file exists yet (so a later write bumps the key and
+/// invalidates the memo). A pure `stat` walk: no file contents are read, so it is
+/// far cheaper than the aggregate it guards.
+pub fn max_transcript_mtime_millis(repo_root: &Path, run_id: &str) -> i64 {
+    let Ok(home) = std::env::var("HOME") else {
+        return 0;
+    };
+    let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
+    let prefix = format!("{}-", cc_project_dirname(&run_dir));
+    let projects = Path::new(&home).join(".claude").join("projects");
+    let Ok(entries) = std::fs::read_dir(&projects) else {
+        return 0;
+    };
+    let mut max_ms: i64 = 0;
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(&prefix) {
+            continue;
+        }
+        max_mtime_recursive(&entry.path(), &mut max_ms);
+    }
+    max_ms
+}
+
+/// Memoized [`compute_run_cost`]: byte-identical result, cached on
+/// `(run_id, max transcript mtime)` (see the module memo above). Used only by
+/// the `/stats/cost` aggregate (period-bounded fan-out); `get_run`'s single-run
+/// path is deliberately left calling [`compute_run_cost`] directly so ADR-0022's
+/// per-read contract is unchanged.
+pub fn compute_run_cost_cached(repo_root: &Path, run_id: &str) -> Option<CostStat> {
+    let key = (
+        run_id.to_string(),
+        max_transcript_mtime_millis(repo_root, run_id),
+    );
+    {
+        let guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = guard.get(&key) {
+            return hit.clone();
+        }
+    }
+    let value = compute_run_cost(repo_root, run_id);
+    let mut guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() >= COST_MEMO_CAP {
+        guard.clear();
+    }
+    guard.insert(key, value.clone());
+    value
 }
 
 #[cfg(test)]
@@ -576,6 +684,129 @@ mod tests {
         let _home = TempHome::new();
         let repo = tempfile::tempdir().unwrap();
         assert!(compute_run_cost(repo.path(), "no-such-run").is_none());
+    }
+
+    // --- compute_run_cost_cached / memo (#377) ---
+
+    /// Write a single-line transcript for `run_id`'s worktree and return the
+    /// `.jsonl` path so the test can manipulate its mtime.
+    fn seed_transcript(home: &Path, repo: &Path, run_id: &str, line: &str) -> std::path::PathBuf {
+        let worktree = repo.join(".pdo").join("runs").join(run_id).join("worktree");
+        let proj = home
+            .join(".claude")
+            .join("projects")
+            .join(cc_project_dirname(&worktree));
+        std::fs::create_dir_all(&proj).unwrap();
+        let file = proj.join("s.jsonl");
+        std::fs::write(&file, format!("{line}\n")).unwrap();
+        file
+    }
+
+    #[test]
+    fn cached_matches_uncached() {
+        let home = TempHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "memo-eq";
+        seed_transcript(
+            home.path(),
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        let direct = compute_run_cost(repo.path(), run_id);
+        let cached = compute_run_cost_cached(repo.path(), run_id);
+        assert_eq!(direct, cached);
+        assert!((cached.unwrap().usd - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cached_re_serves_from_memo_when_mtime_is_unchanged() {
+        let home = TempHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "memo-hit";
+        let file = seed_transcript(
+            home.path(),
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        let orig =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
+
+        // First call: memoize $5 under (run_id, mtime).
+        let first = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        assert!((first.usd - 5.0).abs() < 1e-9);
+
+        // Rewrite with a DIFFERENT cost ($10) but force the mtime back — the key
+        // is unchanged, so the memo must re-serve the stale $5.
+        std::fs::write(
+            &file,
+            format!(
+                "{}\n",
+                assistant("m2", "r2", "claude-opus-4-8", 2_000_000, 0)
+            ),
+        )
+        .unwrap();
+        filetime::set_file_mtime(&file, orig).unwrap();
+        let hit = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        assert!((hit.usd - 5.0).abs() < 1e-9, "memo hit should re-serve $5");
+        // But the uncached path sees the new content ($10) — proving the file
+        // really changed and the hit above was the cache, not a recompute.
+        let direct = compute_run_cost(repo.path(), run_id).unwrap();
+        assert!((direct.usd - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cached_recomputes_when_mtime_bumps() {
+        let home = TempHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "memo-bump";
+        let file = seed_transcript(
+            home.path(),
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        let orig =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
+        let first = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        assert!((first.usd - 5.0).abs() < 1e-9);
+
+        // New content AND a bumped mtime → new key → recompute picks up $10.
+        std::fs::write(
+            &file,
+            format!(
+                "{}\n",
+                assistant("m2", "r2", "claude-opus-4-8", 2_000_000, 0)
+            ),
+        )
+        .unwrap();
+        let bumped = filetime::FileTime::from_unix_time(orig.unix_seconds() + 10, 0);
+        filetime::set_file_mtime(&file, bumped).unwrap();
+        let recomputed = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        assert!(
+            (recomputed.usd - 10.0).abs() < 1e-9,
+            "a bumped mtime must invalidate the memo"
+        );
+    }
+
+    #[test]
+    fn max_transcript_mtime_is_zero_without_a_transcript_and_positive_with_one() {
+        let home = TempHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        assert_eq!(
+            max_transcript_mtime_millis(repo.path(), "no-such-run"),
+            0,
+            "no transcript dir → 0 (so a later write bumps the key)"
+        );
+        let run_id = "mtime-run";
+        seed_transcript(
+            home.path(),
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1000, 0),
+        );
+        assert!(max_transcript_mtime_millis(repo.path(), run_id) > 0);
     }
 
     #[test]

@@ -37,6 +37,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 pub mod stale_detector;
+mod stats;
 mod switch_router;
 pub mod tmux_session_manager;
 pub mod transition_guard;
@@ -2888,6 +2889,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the
         // stored tier (fail-fast validation).
         .route("/settings", get(get_settings).put(put_settings))
+        // Instance stats cockpit (#377, ADR-0029). New top-level `/stats` prefix
+        // → added to the vite dev proxy whitelist so a dev-mode GET hits the
+        // daemon instead of the SPA fallback. `overview` is cheap indexed SQL;
+        // `cost` fans the memoized per-run cost over the visible period (lazy,
+        // fetched only when the cost tab is shown).
+        .route("/stats/overview", get(stats::stats_overview))
+        .route("/stats/cost", get(stats::stats_cost))
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -2915,6 +2923,16 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     .execute(db)
     .await
     .context("failed to create events table")?;
+
+    // #377 / ADR-0029: the daemon's first index. `GET /stats/overview` runs
+    // `WHERE kind = ? AND ts >= ? AND ts < ? GROUP BY strftime(...)` over
+    // `events`; the composite `(kind, ts)` is leftmost-prefix optimal for it.
+    // `CREATE INDEX IF NOT EXISTS` is natively idempotent, so it needs no PRAGMA
+    // guard (unlike the `ALTER … ADD COLUMN` migrations in `trigger_store`).
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts)")
+        .execute(db)
+        .await
+        .context("failed to create idx_events_kind_ts")?;
 
     // #328 / ADR-0024: tombstones for forgotten runs — a run_id present here
     // can never receive events again (guard in `append_event`).
@@ -5664,6 +5682,15 @@ async fn create_run_inner(
     if let Some(ref trigger_id) = req.triggered_by {
         if !trigger_id.is_empty() {
             run_payload["triggered_by"] = serde_json::json!(trigger_id);
+        }
+    }
+    // #377: carry the library pipeline id in the payload (mirrors `triggered_by`)
+    // so aggregated "by pipeline" stats survive a pipeline rename (#230). The
+    // consumer falls back to `pipeline_name` when this is absent (historical
+    // runs, bare-API/multipart creates without a library id, retries).
+    if let Some(ref pid) = req.pipeline_id {
+        if !pid.is_empty() {
+            run_payload["pipeline_id"] = serde_json::json!(pid);
         }
     }
     if !images.is_empty() {
@@ -9319,7 +9346,10 @@ async fn run_command(
                 pipeline: pipeline_name,
                 input,
                 variables,
-                pipeline_id: None,
+                // #377: preserve the library pipeline id (when the original run
+                // carried one) so the retried run stays in the same "by pipeline"
+                // stats bucket rather than falling back to the name.
+                pipeline_id: run_state.pipeline_id.clone(),
                 target_repo,
                 source_branch,
                 name: None,

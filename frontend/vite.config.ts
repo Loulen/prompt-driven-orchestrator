@@ -28,6 +28,9 @@ export default defineConfig({
       '/triggers': daemonTarget,
       '/stale': daemonTarget,
       '/settings': daemonTarget,
+      // #377: instance stats cockpit. New top-level `/stats` prefix, so it needs
+      // its own proxy entry (else dev GET /stats/* lies with a SPA 200).
+      '/stats': daemonTarget,
     },
   },
   test: {

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost } from "./types";
 
 const BASE = "";
 
@@ -148,6 +148,32 @@ export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
   return request<InstanceSettings>("PUT", "/settings", { body: patch });
+}
+
+/**
+ * Cheap instance stats over `[from, to)` bucketed by `bucket` (#377): runs,
+ * errors (`run_failed`), sessions, fires-per-pipeline, and the "triggers that
+ * created a run" KPI. Indexed SQL — safe to fetch on modal open.
+ */
+export function fetchStatsOverview(
+  from: string,
+  to: string,
+  bucket: string,
+): Promise<StatsOverview> {
+  return request<StatsOverview>("GET", "/stats/overview", { query: { from, to, bucket } });
+}
+
+/**
+ * Estimated cost over `[from, to)`, folded by period/pipeline/project (#377,
+ * ADR-0022/0029). Heavy (memoized per-run cost fanned over the window) — fetch
+ * lazily, only when the cost tab is shown.
+ */
+export function fetchStatsCost(
+  from: string,
+  to: string,
+  bucket: string,
+): Promise<StatsCost> {
+  return request<StatsCost>("GET", "/stats/cost", { query: { from, to, bucket } });
 }
 
 export function fetchRun(runId: string): Promise<RunState> {

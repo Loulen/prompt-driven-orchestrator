@@ -496,6 +496,28 @@ Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100, #272). **Qua
 - **LOC** (lignes changées par le Run) : `git diff --numstat` en **trois-points** (`HEAD...pdo/run-<run-id>`) — la base est le **point de fork** (merge-base), donc stable même si `main` avance (un diff deux-points dériverait). **Exclut `.pdo/`** (artefacts/prompts générés ne sont pas du code produit ; protégé par `.gitignore` mais un pathspec `:(exclude).pdo/` défensif couvre les repos cibles externes). **Dérivé du git, live-only** : la branche `pdo/run-<run-id>` est supprimée au cleanup → la stat affiche **« — »** pour un Run archivé/nettoyé (branche absente = `None`), à distinguer de **« 0 »** (diff réellement vide). Même schéma que le snapshot de pane qui survit au reap.
 - **Coût (est.)** : `Some { usd, partial }` **dérivé à la lecture**, jamais persisté (comme LOC), dans `run_cost::compute_run_cost`. Agrège TOUTES les sessions du Run (nœuds, manager, merge-resolver, subagents) via prefix-glob sur `~/.claude/projects/`. `None` → « — » quand aucun transcript n'est trouvé. **Plus durable que LOC** : le cleanup supprime la branche (LOC → « — ») mais **pas** `~/.claude/projects/`, donc un Run archivé garde son coût. `partial: true` (un modèle non tarifé a contribué, donc exclu) → borne basse, signalée par un « † » dans l'UI. Encodeur de chemin **propre** (`cc_project_dirname`), volontairement distinct de `stale_detector::encode_working_dir` (bogué, à corriger séparément — cf. ADR-0022 et le doc-comment).
 
+### Statistiques d'instance (cockpit, #377)
+
+Modale **Stats** (sœur de Settings, icône dédiée dans le TopBar) : agrégats **transverses** filtrables
+par période, à distinguer des **Statistiques de Run** (par-run, panneau d'info). Dérivés à la lecture,
+**jamais matérialisés** (ADR-0029, préserve ADR-0022) :
+
+- **Deux endpoints** : `GET /stats/overview` (SQL bon marché, index `events(kind,ts)` +
+  `trigger_fires(ts)`) et `GET /stats/cost` (lourd, lazy, memo RAM `(run_id, mtime-max)`).
+- **Runs/erreurs/sessions par période** : `GROUP BY strftime` sur `events` — erreurs = `run_failed`
+  (`run_skipped` **exclu**), sessions = `node_started` (démarrages, re-spawns inclus, manager exclu).
+- **Fires par pipeline** : `LEFT JOIN triggers` sur `pipeline_id` — un fire orphelin (trigger
+  supprimé, pas de cascade) tombe dans « (deleted trigger) ». **Triggers ayant créé un run** =
+  `outcome='fired'` (⟺ `run_id` non-null) ; KPI = N distincts sur M activés.
+- **Coût par période/pipeline/projet** : scalaire par-run (ADR-0022) **plié côté app** — « par
+  pipeline » via `pipeline_id` (sinon `pipeline_name`), « par projet » via `effective_repo` (pas de
+  bucket « Unassigned », cf. *Repo cible*). **Somme de bornes basses** : un bucket avec ≥ 1 run
+  `partial` est borne-basse (`†`) ; les runs sans transcript sont exclus de la somme mais comptés
+  (`null`), un bucket sans coût calculable affiche « — » (jamais `$0`).
+- **`pipeline_id` dans `RunStarted`** (fallback `pipeline_name`) : « par pipeline » survit à un
+  renommage (cf. #230). La période est un état de vue **côté client** (pas `instance_config`). La
+  bibliothèque de graphes (recharts) est **lazy-loaded** (premier `React.lazy` du repo).
+
 ### Diff de Run (surface de relecture)
 
 Le panneau d'info d'un Run expose une section **Diff** repliable (#116, #376) qui rend le patch git du Run comme surface de relecture — distincte de la stat **LOC** (qui n'en compte que les lignes) et du **diff sémantique** (comparaison de pipelines, star synced/diverged). Trois portées :

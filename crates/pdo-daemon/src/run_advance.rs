@@ -49,10 +49,11 @@ use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps};
 use crate::pipeline;
 use crate::scheduler;
 use crate::scheduler_dispatcher;
+use crate::scheduler_interpreter::{self, SpawnDedup};
 use crate::transition_guard;
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
-    append_event, effective_repo_root, emit_loop_action, handle_node_completion, load_events,
+    append_event, effective_repo_root, handle_node_completion, load_events,
     resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, AppState,
 };
 
@@ -123,17 +124,20 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
     spawn_each(state, &spawn_ctx, &ready).await;
 
     for action in &loop_seed_actions {
-        match action {
-            scheduler::SchedulerAction::LoopIterStarted { .. } => {
-                emit_loop_action(state, run_id, action).await;
-            }
-            scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                    spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
-                }
-            }
-            _ => {}
-        }
+        // `seed_pending_loops` only emits LoopIterStarted + Spawn; the total
+        // `interpret` covers both and makes the old `_ => {}` catch-all a full
+        // match. InternalOnly (no scheduler dedup — a loop seed is a fresh
+        // iter-1) on the pass snapshot (INV-2); source_iter is irrelevant (no
+        // SwitchRouted) → 1.
+        let _ = scheduler_interpreter::interpret(
+            state,
+            &spawn_ctx,
+            &run_state,
+            SpawnDedup::InternalOnly,
+            1,
+            action,
+        )
+        .await;
     }
 
     info!(

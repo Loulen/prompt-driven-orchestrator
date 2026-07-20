@@ -34,6 +34,7 @@ mod run_cost;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
+mod scheduler_interpreter;
 mod service_unit;
 pub mod stale_detector;
 mod switch_router;
@@ -84,6 +85,7 @@ use crate::worktree_ops::{
 // `spawn_node` call sites, and `record_spawn`'s `SpawnOutcome` match need no
 // per-site path churn; `SpawnDeps::from_state` wraps each call's `&AppState`.
 use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
+use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
@@ -4730,57 +4732,28 @@ pub(crate) async fn handle_node_completion(
         repo_root: &repo_root,
     };
 
+    // Pass 1 runs on the caller's `run_state` snapshot (INV-2) under
+    // `InternalOnly`: the completion path applies NO scheduler-side dedup — a
+    // same-iter-live spawn is a legal restart inside `spawn_node`'s own guard.
+    // This freezes the latent double-spawn (INV-1); it is not a fix.
     for action in &actions {
-        match action {
-            scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                    spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
-                }
-            }
-            scheduler::SchedulerAction::Halt { message } => {
-                emit_run_event(
-                    state,
-                    run_id,
-                    event_log::EventKind::RunHalted,
-                    Some(serde_json::json!({ "message": message })),
-                )
-                .await;
-                return;
-            }
-            scheduler::SchedulerAction::Complete => {
-                emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                return;
-            }
-            scheduler::SchedulerAction::SwitchRouted {
-                node_id,
-                chosen_branch,
-            } => {
-                emit_run_event(
-                    state,
-                    run_id,
-                    event_log::EventKind::SwitchRouted,
-                    Some(serde_json::json!({
-                        "node_id": node_id,
-                        "chosen_branch": chosen_branch,
-                    })),
-                )
-                .await;
-                passthrough_switch_artifact(&spawn_ctx, node_id, chosen_branch, source_iter);
-            }
-            scheduler::SchedulerAction::LoopIterStarted { .. }
-            | scheduler::SchedulerAction::LoopBreakReceived { .. }
-            | scheduler::SchedulerAction::LoopMaxReached { .. }
-            | scheduler::SchedulerAction::LoopDone { .. } => {
-                emit_loop_action(state, run_id, action).await;
-            }
-            scheduler::SchedulerAction::CollectionStarted { entry, items, .. } => {
-                emit_collection_action(state, run_id, action).await;
-                deposit_collection_items(&artifacts_dir, entry, items);
-            }
-            scheduler::SchedulerAction::CollectionEmpty { .. }
-            | scheduler::SchedulerAction::CollectionDone { .. } => {
-                emit_collection_action(state, run_id, action).await;
-            }
+        match scheduler_interpreter::interpret(
+            state,
+            &spawn_ctx,
+            run_state,
+            SpawnDedup::InternalOnly,
+            source_iter,
+            action,
+        )
+        .await
+        {
+            // INV-4: a terminal action unwinds the WHOLE driver, not just this loop.
+            ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+            // Fire-and-forget: the spawn outcome is dropped. `SpawnSkipped` is
+            // unreachable under `InternalOnly` (`admit_spawn` always admits).
+            ActionOutcome::Spawned { .. }
+            | ActionOutcome::Progressed
+            | ActionOutcome::SpawnSkipped { .. } => {}
         }
     }
 
@@ -4814,19 +4787,27 @@ pub(crate) async fn handle_node_completion(
             &loop_node.id,
             &fresh_resolved_vars,
         );
+        // Pass 2 runs on the reloaded `fresh_run_state` (INV-2).
+        // `evaluate_loop_body_completion` only emits Spawn / Loop* today, so the
+        // total `interpret` routes each to the right sink and the old
+        // `_ => emit_loop_action` fallthrough is subsumed (and made strictly more
+        // correct). `source_iter` is irrelevant here (SwitchRouted is never
+        // produced); it is forwarded verbatim.
         for action in &loop_actions {
-            match action {
-                scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
-                            .await;
-                    }
-                }
-                scheduler::SchedulerAction::Complete => {
-                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                    return;
-                }
-                _ => emit_loop_action(state, run_id, action).await,
+            match scheduler_interpreter::interpret(
+                state,
+                &fresh_spawn_ctx,
+                &fresh_run_state,
+                SpawnDedup::InternalOnly,
+                source_iter,
+                action,
+            )
+            .await
+            {
+                ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+                ActionOutcome::Spawned { .. }
+                | ActionOutcome::Progressed
+                | ActionOutcome::SpawnSkipped { .. } => {}
             }
         }
     }
@@ -4839,19 +4820,24 @@ pub(crate) async fn handle_node_completion(
     {
         let collection_actions =
             scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+        // `evaluate_collection_barrier` only emits CollectionDone today; the total
+        // `interpret` routes it through `emit_collection_action` exactly as the
+        // old `_ => emit_collection_action` fallthrough did.
         for action in &collection_actions {
-            match action {
-                scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
-                            .await;
-                    }
-                }
-                scheduler::SchedulerAction::Complete => {
-                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
-                    return;
-                }
-                _ => emit_collection_action(state, run_id, action).await,
+            match scheduler_interpreter::interpret(
+                state,
+                &fresh_spawn_ctx,
+                &fresh_run_state,
+                SpawnDedup::InternalOnly,
+                source_iter,
+                action,
+            )
+            .await
+            {
+                ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+                ActionOutcome::Spawned { .. }
+                | ActionOutcome::Progressed
+                | ActionOutcome::SpawnSkipped { .. } => {}
             }
         }
     }
@@ -9538,68 +9524,37 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
         );
 
         for action in &actions {
-            match action {
-                scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    // Transition guard (#212, ex-#201 dead already_active
-                    // check): a re-evaluation only schedules MISSING work —
-                    // never a node with a live iteration, never a completed
-                    // iteration.
-                    if let Some(reason) =
-                        transition_guard::spawn_superfluous(&run_state, node_id, *iter)
-                    {
-                        info!("re_evaluate_after_command: skip spawn — {reason}");
-                        summary.skipped.push(reason);
-                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome =
-                            spawn_node(SpawnDeps::from_state(state), &spawn_ctx, node, *iter).await;
-                        summary.record_spawn(node_id, *iter, outcome);
-                    }
+            // Re-evaluation applies `GuardSuperfluous` (#212): schedule only
+            // MISSING work — never a node with a live iteration, never a
+            // completed one — on the pass-1 `run_state` snapshot (INV-2).
+            match scheduler_interpreter::interpret(
+                state,
+                &spawn_ctx,
+                &run_state,
+                SpawnDedup::GuardSuperfluous,
+                source_iter,
+                action,
+            )
+            .await
+            {
+                ActionOutcome::Spawned {
+                    node_id,
+                    iter,
+                    outcome,
+                } => summary.record_spawn(&node_id, iter, outcome),
+                ActionOutcome::SpawnSkipped { reason } => {
+                    // Skip log stays driver-side (INV-6): pass-1 prefix.
+                    info!("re_evaluate_after_command: skip spawn — {reason}");
+                    summary.skipped.push(reason);
                 }
-                scheduler::SchedulerAction::Halt { message } => {
-                    emit_run_event(
-                        state,
-                        run_id,
-                        event_log::EventKind::RunHalted,
-                        Some(serde_json::json!({ "message": message })),
-                    )
-                    .await;
-                    summary.terminal = Some(ReEvalTerminal::Halted(message.clone()));
-                    return summary;
-                }
-                scheduler::SchedulerAction::Complete => {
-                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                ActionOutcome::Progressed => {}
+                ActionOutcome::Completed => {
                     summary.terminal = Some(ReEvalTerminal::Completed);
                     return summary;
                 }
-                scheduler::SchedulerAction::SwitchRouted {
-                    node_id,
-                    chosen_branch,
-                } => {
-                    emit_run_event(
-                        state,
-                        run_id,
-                        event_log::EventKind::SwitchRouted,
-                        Some(serde_json::json!({
-                            "node_id": node_id,
-                            "chosen_branch": chosen_branch,
-                        })),
-                    )
-                    .await;
-                    passthrough_switch_artifact(&spawn_ctx, node_id, chosen_branch, source_iter);
-                }
-                scheduler::SchedulerAction::LoopIterStarted { .. }
-                | scheduler::SchedulerAction::LoopBreakReceived { .. }
-                | scheduler::SchedulerAction::LoopMaxReached { .. }
-                | scheduler::SchedulerAction::LoopDone { .. } => {
-                    emit_loop_action(state, run_id, action).await;
-                }
-                scheduler::SchedulerAction::CollectionStarted { entry, items, .. } => {
-                    emit_collection_action(state, run_id, action).await;
-                    deposit_collection_items(&artifacts_dir, entry, items);
-                }
-                scheduler::SchedulerAction::CollectionEmpty { .. }
-                | scheduler::SchedulerAction::CollectionDone { .. } => {
-                    emit_collection_action(state, run_id, action).await;
+                ActionOutcome::Halted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Halted(message));
+                    return summary;
                 }
             }
         }
@@ -9643,28 +9598,39 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
             &loop_node.id,
             &fresh_resolved_vars,
         );
+        // `evaluate_loop_body_completion` only emits Spawn / Loop* today; the
+        // total `interpret` subsumes the old `_ => emit_loop_action`
+        // fallthrough. GuardSuperfluous on the reloaded snapshot (INV-2);
+        // source_iter is irrelevant here (no SwitchRouted) — pass 1 (INV-3).
         for action in &loop_actions {
-            match action {
-                scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    // Transition guard (#212): schedule only missing work.
-                    if let Some(reason) =
-                        transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
-                    {
-                        info!("re_evaluate_after_command(loop): skip spawn — {reason}");
-                        summary.skipped.push(reason);
-                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome =
-                            spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
-                                .await;
-                        summary.record_spawn(node_id, *iter, outcome);
-                    }
+            match scheduler_interpreter::interpret(
+                state,
+                &fresh_spawn_ctx,
+                &fresh_run_state,
+                SpawnDedup::GuardSuperfluous,
+                1,
+                action,
+            )
+            .await
+            {
+                ActionOutcome::Spawned {
+                    node_id,
+                    iter,
+                    outcome,
+                } => summary.record_spawn(&node_id, iter, outcome),
+                ActionOutcome::SpawnSkipped { reason } => {
+                    info!("re_evaluate_after_command(loop): skip spawn — {reason}");
+                    summary.skipped.push(reason);
                 }
-                scheduler::SchedulerAction::Complete => {
-                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                ActionOutcome::Progressed => {}
+                ActionOutcome::Completed => {
                     summary.terminal = Some(ReEvalTerminal::Completed);
                     return summary;
                 }
-                _ => emit_loop_action(state, run_id, action).await,
+                ActionOutcome::Halted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Halted(message));
+                    return summary;
+                }
             }
         }
     }
@@ -9677,28 +9643,39 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
     {
         let collection_actions =
             scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+        // `evaluate_collection_barrier` only emits CollectionDone today; the
+        // total `interpret` routes it through `emit_collection_action` exactly as
+        // the old `_ => emit_collection_action` fallthrough did. GuardSuperfluous
+        // on the reloaded snapshot; source_iter irrelevant (no SwitchRouted).
         for action in &collection_actions {
-            match action {
-                scheduler::SchedulerAction::Spawn { node_id, iter } => {
-                    // Transition guard (#212): schedule only missing work.
-                    if let Some(reason) =
-                        transition_guard::spawn_superfluous(&fresh_run_state, node_id, *iter)
-                    {
-                        info!("re_evaluate_after_command(collection): skip spawn — {reason}");
-                        summary.skipped.push(reason);
-                    } else if let Some(node) = pipeline.nodes.iter().find(|n| n.id == *node_id) {
-                        let outcome =
-                            spawn_node(SpawnDeps::from_state(state), &fresh_spawn_ctx, node, *iter)
-                                .await;
-                        summary.record_spawn(node_id, *iter, outcome);
-                    }
+            match scheduler_interpreter::interpret(
+                state,
+                &fresh_spawn_ctx,
+                &fresh_run_state,
+                SpawnDedup::GuardSuperfluous,
+                1,
+                action,
+            )
+            .await
+            {
+                ActionOutcome::Spawned {
+                    node_id,
+                    iter,
+                    outcome,
+                } => summary.record_spawn(&node_id, iter, outcome),
+                ActionOutcome::SpawnSkipped { reason } => {
+                    info!("re_evaluate_after_command(collection): skip spawn — {reason}");
+                    summary.skipped.push(reason);
                 }
-                scheduler::SchedulerAction::Complete => {
-                    emit_run_event(state, run_id, event_log::EventKind::RunCompleted, None).await;
+                ActionOutcome::Progressed => {}
+                ActionOutcome::Completed => {
                     summary.terminal = Some(ReEvalTerminal::Completed);
                     return summary;
                 }
-                _ => emit_collection_action(state, run_id, action).await,
+                ActionOutcome::Halted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Halted(message));
+                    return summary;
+                }
             }
         }
     }

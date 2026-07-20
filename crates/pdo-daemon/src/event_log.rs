@@ -371,6 +371,13 @@ pub struct RunState {
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
+    /// The library pipeline id this Run was created from (#377). Written to the
+    /// `RunStarted` payload going forward; consumers (aggregated "by pipeline"
+    /// stats) fall back to `pipeline_name` when it is absent — historical runs,
+    /// bare-API/multipart creates, retries — so grouping survives a rename
+    /// (#230). Additive and backward-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline_id: Option<String>,
     /// Cumulative count of `NodeStarted` events for this Run — i.e. how many
     /// Claude Code NodeRun sessions it spawned (issue #100). A **raw** count,
     /// not deduplicated by `(node, iter)`: a legal re-spawn at the same
@@ -415,6 +422,7 @@ impl RunState {
             target_repo: None,
             source_branch: None,
             triggered_by: None,
+            pipeline_id: None,
             sessions_spawned: 0,
             loc: None,
             cost: None,
@@ -670,6 +678,9 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
                     state.triggered_by = Some(tb.to_string());
+                }
+                if let Some(pid) = payload.get("pipeline_id").and_then(|v| v.as_str()) {
+                    state.pipeline_id = Some(pid.to_string());
                 }
 
                 let input_images = payload
@@ -4005,6 +4016,7 @@ mod tests {
                 "2026-02-01T00:00:00.000Z",
                 Some(serde_json::json!({
                     "pipeline_name": "golden-pipe",
+                    "pipeline_id": "lib-golden-pipe",
                     "name": "Golden Run",
                     "input": "exercise every concern",
                     "image_filenames": ["screenshot.png"],
@@ -4468,6 +4480,7 @@ mod tests {
                     "node_id": "worker", "started_at": "2026-02-01T00:02:02.000Z", "status": "completed"
                 }
             },
+            "pipeline_id": "lib-golden-pipe",
             "pipeline_name": "golden-pipe",
             "run_id": "run-golden",
             "sessions_spawned": 8,

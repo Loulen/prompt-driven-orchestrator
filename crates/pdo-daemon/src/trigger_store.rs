@@ -209,6 +209,19 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
+    // #377 / ADR-0029: back the `GET /stats/overview` fires-per-period query
+    // (`WHERE ts >= ? AND ts < ? GROUP BY strftime`) and the fires-per-pipeline
+    // `LEFT JOIN triggers`. `CREATE INDEX IF NOT EXISTS` is natively idempotent,
+    // so it needs no PRAGMA guard (cf. the `CREATE TABLE IF NOT EXISTS` above).
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_trigger_fires_ts ON trigger_fires(ts)")
+        .execute(db)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_trigger_fires_trigger ON trigger_fires(trigger_id)",
+    )
+    .execute(db)
+    .await?;
+
     Ok(())
 }
 

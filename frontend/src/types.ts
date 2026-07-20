@@ -542,3 +542,67 @@ export interface PipelineDetail {
   prompts: Record<string, string>;
   diagnostics: string[];
 }
+
+// --- Instance stats cockpit (#377, ADR-0029) --------------------------------
+// Mirrors the daemon's `GET /stats/overview` (cheap indexed SQL) and
+// `GET /stats/cost` (memoized per-run cost, app-folded) payloads.
+
+export interface StatsBucketCount {
+  /** Period label (e.g. `2026-07-15`), as produced by SQLite `strftime`. */
+  bucket: string;
+  count: number;
+}
+
+export interface StatsPipelineFireCount {
+  /** Trigger's `pipeline_id`, or `"(deleted trigger)"` for an orphan fire. */
+  pipeline_id: string;
+  count: number;
+}
+
+export interface StatsTriggersCreatedRuns {
+  /** Fires whose outcome was `fired` (⟺ a run was created) in the window. */
+  fired: number;
+  /** Distinct triggers that fired at least once in the window. */
+  distinct_triggers: number;
+  /** Triggers currently enabled (point-in-time, not windowed). */
+  enabled_triggers: number;
+}
+
+export interface StatsOverview {
+  /** Sorted union of period labels across runs/errors/sessions (the x-axis). */
+  buckets: string[];
+  runs: StatsBucketCount[];
+  /** `run_failed` only — `run_skipped` is NOT an error. */
+  errors: StatsBucketCount[];
+  /** `node_started` starts (re-spawns and loop laps included, manager excluded). */
+  sessions: StatsBucketCount[];
+  fires_by_pipeline: StatsPipelineFireCount[];
+  triggers_created_runs: StatsTriggersCreatedRuns;
+}
+
+/** A cost breakdown row. Cost is a **sum of lower bounds**: `partial` runs and
+ *  `null` runs (no transcript, excluded from `usd`) are counted separately so
+ *  the number is never silently undercounted (ADR-0001 / ADR-0022). */
+export interface StatsCostBucket {
+  usd: number;
+  /** Runs whose cost is a lower bound (an unpriced model was excluded). */
+  partial: number;
+  /** Runs with no transcript, excluded from `usd` but surfaced. */
+  null: number;
+  /** Total runs folded here (priced + partial + null). */
+  runs: number;
+}
+
+export interface StatsCostPeriodBucket extends StatsCostBucket {
+  bucket: string;
+}
+
+export interface StatsCostKeyBucket extends StatsCostBucket {
+  key: string;
+}
+
+export interface StatsCost {
+  by_period: StatsCostPeriodBucket[];
+  by_pipeline: StatsCostKeyBucket[];
+  by_project: StatsCostKeyBucket[];
+}

@@ -6753,6 +6753,58 @@ fn gather_session_death_diagnostics(
     }
 }
 
+/// Sweep-time [`stale_detector::NodeProbes`] adapter (#373): binds one running
+/// node's tmux + filesystem context so [`stale_detector::assess_node`] can run
+/// the whole detection pipeline with real I/O injected. Every method is a
+/// side-effect-free read; the sweep itself performs the reap/spawn side effects
+/// keyed off the returned detection.
+struct SweepNodeProbes<'a> {
+    socket: &'a str,
+    session_name: &'a str,
+    working_dir: &'a Path,
+    pipeline_path: &'a Path,
+    artifacts_dir: &'a Path,
+    run_id: &'a str,
+    node_id: &'a str,
+    iter: i64,
+    running: &'a [(String, i64)],
+}
+
+impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
+    fn session_alive(&self) -> bool {
+        tmux_session_manager::session_exists(self.socket, self.session_name)
+    }
+
+    fn jsonl_mtime(&self) -> Option<std::time::SystemTime> {
+        stale_detector::find_session_jsonl(self.working_dir)
+            .and_then(|p| std::fs::metadata(&p).ok())
+            .and_then(|m| m.modified().ok())
+    }
+
+    fn validate_outputs(&self) -> bool {
+        stale_detector::validate_outputs(
+            self.pipeline_path,
+            self.node_id,
+            self.iter,
+            self.artifacts_dir,
+        )
+    }
+
+    fn capture_pane(&self) -> Option<String> {
+        tmux_session_manager::capture(self.socket, self.session_name)
+    }
+
+    fn session_death_diagnostics(&self) -> stale_detector::SessionDeathDiagnostics {
+        gather_session_death_diagnostics(
+            self.socket,
+            self.run_id,
+            self.node_id,
+            self.iter,
+            self.running,
+        )
+    }
+}
+
 async fn run_stale_detection(state: &AppState) {
     // Record liveness at sweep start (#251): a wedged sweep freezes this value
     // while an isolated panic still advances it, so `GET /stale/health` answers
@@ -6824,97 +6876,57 @@ async fn run_stale_detection(state: &AppState) {
             };
 
             let session_name = tmux_session_manager::node_session_name(run_id, node_id, *iter);
-            let session_alive = tmux_session_manager::session_exists(&socket, &session_name);
 
-            let jsonl_mtime = stale_detector::find_session_jsonl(&working_dir)
-                .and_then(|p| std::fs::metadata(&p).ok())
-                .and_then(|m| m.modified().ok());
-
-            let artifacts_valid = if jsonl_mtime
-                .and_then(|mt| now.duration_since(mt).ok())
-                .is_some_and(|age| age >= stale_detector::STALE_THRESHOLD)
-            {
-                Some(stale_detector::validate_outputs(
-                    &pipeline_path,
-                    node_id,
-                    *iter,
-                    &artifacts_dir,
-                ))
-            } else {
-                None
+            // #373: the whole probe → gate → decide → events → diagnostics →
+            // usage-limit-dedup pipeline lives in `assess_node`, with all tmux +
+            // filesystem I/O injected via this adapter. The sweep only appends
+            // the returned events and runs the reap/spawn side effects below.
+            let probes = SweepNodeProbes {
+                socket: &socket,
+                session_name: &session_name,
+                working_dir: &working_dir,
+                pipeline_path: &pipeline_path,
+                artifacts_dir: &artifacts_dir,
+                run_id,
+                node_id,
+                iter: *iter,
+                running: &running,
             };
 
-            let probe = stale_detector::NodeProbe {
-                session_alive,
-                jsonl_mtime,
+            // #373 Unit A: auto-complete is OBSERVE-ONLY. Re-arming the terminal
+            // reap/advance is the trust-gated Unit B decision (ADR-0012) — it can
+            // fire falsely on a node mid a legitimate >STALE_THRESHOLD tool call
+            // whose outputs already validate. `Stale` (recoverable, session stays
+            // alive) and `SessionDied` ship live.
+            let assessment = stale_detector::assess_node(
+                &probes,
+                &events,
+                run_id,
+                node_id,
+                *iter,
                 now,
-                artifacts_valid,
-            };
+                stale_detector::AutoCompletePolicy::Observe,
+            );
 
-            let detection = stale_detector::decide(&probe);
-            if detection == stale_detector::Detection::Ok {
-                // #290 (Slice 1, observability only): a node can be alive &
-                // non-stale yet stuck on Claude Code's usage-limit menu (a
-                // host-level prompt, no progress). Detect it, flag it, and KEEP
-                // THE NODE RUNNING — no recovery here (deferred to Slice 2/3).
-                if let Some(pane) = tmux_session_manager::capture(&socket, &session_name) {
-                    if stale_detector::detect_usage_limit(&pane) {
-                        blocked_on_limit_count += 1;
-                        // Rising-edge de-dup: emit once per (node, iter) episode,
-                        // else a held menu would emit every ~30 s sweep tick. The
-                        // durable event log (reloaded fresh each sweep) is the
-                        // dedup key, so this also survives a daemon restart.
-                        let already = events.iter().any(|e| {
-                            e.kind == event_log::EventKind::NodeBlockedOnLimit
-                                && e.node_id.as_deref() == Some(node_id.as_str())
-                                && e.iter == Some(*iter)
-                        });
-                        if !already {
-                            let ev = event_log::Event {
-                                id: None,
-                                run_id: run_id.to_string(),
-                                ts: event_log::now_iso(),
-                                kind: event_log::EventKind::NodeBlockedOnLimit,
-                                node_id: Some(node_id.to_string()),
-                                iter: Some(*iter),
-                                payload: Some(serde_json::json!({ "signal": "usage_limit_menu" })),
-                            };
-                            if let Err(e) = append_event(state, &ev).await {
-                                error!("Stale detector: failed to append NodeBlockedOnLimit: {e}");
-                            }
-                        }
-                    }
-                }
-                continue;
+            if assessment.blocked_on_limit {
+                blocked_on_limit_count += 1;
             }
 
-            let mut events = stale_detector::detection_events(&detection, run_id, node_id, *iter);
-
-            // #234: when a node's session is found dead, capture the diagnostic
-            // context *now* (cheaply available, gone moments later) and fold it
-            // into the NodeFailed payload. Otherwise the daemon records only the
-            // symptom and every occurrence forces from-scratch RCA.
-            let session_death_diag =
-                (detection == stale_detector::Detection::SessionDied).then(|| {
-                    let diag =
-                        gather_session_death_diagnostics(&socket, run_id, node_id, *iter, &running);
-                    stale_detector::attach_diagnostics(&mut events, &diag);
-                    diag
-                });
-
-            for event in &events {
-                // Transition guard (#212): append_event re-validates against
-                // the freshly projected state, so a node that terminated
-                // organically since this loop's snapshot never receives a
-                // late NodeStale / NodeAutoCompleted (dropped as a no-op).
+            for event in &assessment.events {
+                // Transition guard (#212): append_event re-validates against the
+                // freshly projected state, so a node that terminated organically
+                // since this loop's snapshot never receives a late
+                // NodeStale/NodeFailed (dropped as a no-op). The informational
+                // markers (NodeBlockedOnLimit, NodeAutoCompleteObserved) are not
+                // lifecycle transitions and pass straight through.
                 if let Err(e) = append_event(state, event).await {
                     error!("Stale detector: failed to append event: {e}");
                 }
             }
 
-            match detection {
+            match assessment.detection {
                 stale_detector::Detection::SessionDied => {
-                    let diag = session_death_diag.unwrap_or_default();
+                    let diag = assessment.session_death_diagnostics.unwrap_or_default();
                     info!(
                         "Stale detector: node {node_id} in run {run_id} — session died \
                          (tmux_server_alive={:?}, correlated_deaths={}, \
@@ -6931,17 +6943,15 @@ async fn run_stale_detection(state: &AppState) {
                     retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
+                    // #373 Unit A observe-only: `assess_node` emitted the
+                    // non-terminal NodeAutoCompleteObserved marker (node stays
+                    // Running); we deliberately do NOT reap / spawn / retry. Under
+                    // `AutoCompletePolicy::Act` (Unit B) this arm would reap the
+                    // idle session and advance the pipeline.
                     info!(
-                        "Stale detector: node {node_id} in run {run_id} — auto-completing (idle + valid outputs)"
+                        "Stale detector: node {node_id} in run {run_id} — WOULD auto-complete \
+                         (idle + valid outputs); observe-only (#373 Unit A), node left Running"
                     );
-                    // Reap on terminal state (#205): the idle session is still
-                    // live — snapshot its pane then kill it so it never lingers
-                    // toward the tmux-collapse point (#77/#78).
-                    reap_node_session(state, &repo_root, run_id, node_id, *iter);
-                    spawn_ready_after_event(state, run_id).await;
-                    // The node completed: its slot freed. Re-drive throttled
-                    // `waiting` nodes across all runs (#159).
-                    retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::Stale => {
                     info!(

@@ -17,13 +17,17 @@ async function dismissConflictIfPresent(page: Page): Promise<void> {
   }
 }
 
-// Layer 3b — Pipeline info panel (refs #56, #69, ADR 0004).
+// Layer 3b — Pipeline info panel (refs #56, #69, #385, ADR 0004).
 // Verifies:
 // 1. Clicking the toolbar `i` icon opens the PipelineInfoPanel.
 // 2. The panel shows pipeline metadata (name).
 // 3. During a Run, a terminal element is present for the manager session.
 // 4. Clicking a node in the canvas auto-closes the info panel (#69).
 // 5. YAML tab shows serialized pipeline and updates on canvas mutation (#69).
+// 6. Selecting a DIFFERENT run auto-closes the info panel (#385), including two
+//    runs of the same pipeline; reselecting the already-active run is a no-op.
+// 7. Selecting a Trigger closes the info panel and surfaces the Trigger detail
+//    from behind it (#385 — info outranks trigger in rightPaneOwner until closed).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -291,4 +295,137 @@ test("library tab after a run: panel shows template, not the previous run", asyn
       // ok
     }
   }
+});
+
+// Shared tmux cleanup for a run created by the #385 cases below.
+async function killRunSessions(runId: string): Promise<void> {
+  const { execSync } = await import("node:child_process");
+  for (const session of [`pdo-${runId}-worker-iter-1`, `pdo-mgr-${runId}`]) {
+    try {
+      execSync(`tmux kill-session -t ${session}`, { stdio: "ignore" });
+    } catch {
+      // ok
+    }
+  }
+}
+
+test("selecting a different run closes the pipeline info panel (#385)", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Two runs of the SAME pipeline — run tabs are keyed __run__<id>, so switching
+  // between them still moves activeTabId (the make-or-break edge case for #385).
+  const mkRun = async (): Promise<string> => {
+    const r = await page.request.post(`${baseURL}/runs`, {
+      multipart: { pipeline: PIPELINE_NAME, input: "e2e #385" },
+    });
+    expect(r.status()).toBe(201);
+    return (await r.json()).run_id as string;
+  };
+  const runA = await mkRun();
+  const runB = await mkRun();
+
+  // Select run A and open the info overlay on it.
+  await page
+    .getByText(runA.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  await page.waitForTimeout(500);
+  const infoBtn = page.getByTestId("toolbar-info");
+  await expect(infoBtn).toBeVisible({ timeout: 3_000 });
+  await infoBtn.click();
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+
+  // Select the OTHER run → the overlay must auto-close (#385).
+  await page
+    .getByText(runB.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  await expect(infoPanel).not.toBeVisible({ timeout: 3_000 });
+
+  // Reselecting the SAME (now-active) run must NOT reopen the overlay (no-op):
+  // activeTabId is unchanged, so #385 does not fire.
+  await page
+    .getByText(runB.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  await page.waitForTimeout(300);
+  await expect(infoPanel).not.toBeVisible();
+
+  await killRunSessions(runA);
+  await killRunSessions(runB);
+});
+
+test("selecting a Trigger surfaces its detail from behind the open info panel (#385)", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Seed a Trigger for PIPELINE_NAME. `input_template` is required because the
+  // seeded pipeline is prompt_required by default (a cron-only trigger would be
+  // rejected). cron never fires within the test window.
+  const trigResp = await page.request.post(`${baseURL}/triggers`, {
+    data: {
+      name: `e2e-385-${process.pid}`,
+      pipeline_id: PIPELINE_NAME,
+      cron: "0 0 1 1 *",
+      input_template: "e2e #385 trigger",
+    },
+  });
+  expect(trigResp.status()).toBe(201);
+  const triggerId = (await trigResp.json()).id as string;
+
+  // A run gives the info overlay a tab (__run__<id>) that is DIFFERENT from the
+  // Trigger's pipeline template tab, so selecting the Trigger genuinely moves
+  // activeTabId (avoids the "pipeline already active" no-op).
+  const runResp = await page.request.post(`${baseURL}/runs`, {
+    multipart: { pipeline: PIPELINE_NAME, input: "e2e #385 trigger-run" },
+  });
+  expect(runResp.status()).toBe(201);
+  const runId = (await runResp.json()).run_id as string;
+
+  // Reload so the mount refresh picks up the seeded trigger + run.
+  await page.reload();
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Open the info overlay on the run tab.
+  await page
+    .getByText(runId.slice(0, 20))
+    .first()
+    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  await page.waitForTimeout(500);
+  const infoBtn = page.getByTestId("toolbar-info");
+  await expect(infoBtn).toBeVisible({ timeout: 3_000 });
+  await infoBtn.click();
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+
+  // Switch the LEFT panel to the Triggers tab (does NOT touch activeTabId, so
+  // the overlay stays open) and click the Trigger row.
+  await page.getByRole("tab", { name: "Triggers" }).click();
+  const triggerRow = page.getByTestId("trigger-row").first();
+  await expect(triggerRow).toBeVisible({ timeout: 3_000 });
+  await triggerRow.click();
+
+  // The overlay must close AND the Trigger detail must surface (before the fix
+  // the detail stayed hidden behind the overlay — info outranks trigger).
+  await expect(infoPanel).not.toBeVisible({ timeout: 3_000 });
+  await expect(page.getByTestId("trigger-detail-panel")).toBeVisible({
+    timeout: 3_000,
+  });
+
+  await page.request.delete(`${baseURL}/triggers/${triggerId}`);
+  await killRunSessions(runId);
 });

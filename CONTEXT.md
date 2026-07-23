@@ -815,6 +815,73 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 
 ---
 
+## Sandbox (exécution isolée d'un Run)
+
+> Section seedée par #404 (slice A du PRD #403). Périmètre : **staging fs pur, zéro
+> Docker**. Le modèle d'exécution (conteneur, identity mounts, réseau, image) est
+> **différé à ADR-0030 / #407** et complété par les slices suivantes — ne pas dupliquer ici.
+
+**Sandbox** :
+Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
+dans l'état du Run). Tri-état `off` | `copy` | `pure` : `off` = comportement historique (sessions
+sur l'hôte, défaut) ; `copy` / `pure` = toutes les tails du Run s'exécutent dans un conteneur dédié.
+C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
+reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
+hôte, trou réseau/auth) → **ADR-0030 / #407**.
+_Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confondre avec l'attribut
+`sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport.
+
+**Staging dir (répertoire de staging)** :
+Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
+`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling. Le vrai `~/.claude` n'est
+**jamais** monté. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
+fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
+
+**Staged Claude home (`claude-home/`)** :
+Sous-répertoire `~/.pdo/sandbox/<run-id>/claude-home/` qui tient lieu de `.claude` aux sessions du
+Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le mode (voir `prepare`).
+Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté séparément vers
+`$HOME/.claude.json`. _Éviter_ : « fake home », « home miroir ».
+
+**`prepare(mode, run_id)`** :
+Seede le *staged Claude home* selon le mode. **`copy`** : recopie une **liste explicite** de
+`~/.claude` (skills, plugins, agents, commands, output-styles, settings[.local].json, credentials,
+`*.md` global) + `~/.claude.json` verbatim ; **exclut `projects/`** et tout état hôte volumineux
+(`history.jsonl`, `session-env/`, …). **`pure`** : uniquement `.credentials.json` + un `.claude.json`
+minimal (onboarding validé + confiance pré-accordée à la racine du Run). Dans les deux modes,
+`projects/` est créé **vide** (puits de transcripts runtime). Symlinks et bits exécutables préservés.
+_Éviter_ : « init », « seed » seul.
+
+**`merge_back(run_id)`** :
+À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de
+`projects/` du staging vers `~/.claude/projects/`, **récursivement** (transcripts de sessions **et**
+de sous-agents `<uuid>/subagents/*.jsonl`), sous le **même dirname encodé** (cwd identique côté
+conteneur, garanti par les identity mounts, ADR-0030). **Idempotent** : copie ssi le fichier hôte est
+absent ou plus court (transcripts append-only) ; ne réécrit jamais un fichier hôte. Aucune autre
+écriture vers l'hôte. **Jeté délibérément (v1)** : settings, statsig, todos, `history.jsonl`,
+shell-snapshots — tout sauf les transcripts (#403 US-29). _Éviter_ : « sync », « flush », « commit ».
+
+**`teardown(run_id)`** :
+Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
+`cleanup_run`, niveau Run) et « destroy » (réservé à la destruction du conteneur, #406).
+
+### Relations
+- Une **Sandbox** `copy`/`pure` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
+  **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
+- `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
+  supprime le staging dir.
+- **Différé (ne pas définir dans #404)** : préfixe `docker exec` des tails, conteneur
+  `pdo-sbx-<run-id>`, identity mounts (#406, ADR-0030) ; précédence des sources du mode
+  (run → trigger → `default_sandbox` d'instance, pattern ADR-0015) (#410) ; seam `transcripts_root`
+  pointant stale-detection/coût vers le staging (#408).
+
+### Ambiguïté signalée
+« sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;
+(2) l'attribut `sandbox=""` de l'iframe du port `html` (#333, ADR-0028). Le contexte tranche ;
+ne jamais fusionner.
+
+---
+
 ## UX — un seul mode d'édition unifié
 
 PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. ADR-0007. L'ancienne dichotomie "mode Run" vs "mode Edit (toggle crayon)" est **obsolète** — un seul mode, le canvas est toujours interactif, et son comportement s'adapte à l'état de la pipeline (running ou pas).

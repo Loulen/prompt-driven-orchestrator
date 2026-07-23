@@ -31,6 +31,7 @@ mod prompt_augmenter;
 mod pty_bridge;
 mod run_advance;
 mod run_cost;
+mod sandbox_staging;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;

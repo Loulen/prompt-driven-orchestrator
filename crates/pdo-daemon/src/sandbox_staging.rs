@@ -45,7 +45,8 @@ pub(crate) enum Mode {
 /// Fichiers de config top-level de `~/.claude` recopiés en mode `copy` (en plus
 /// des `*.md` captés par glob). `.credentials.json` préserve son mode 0600 via
 /// [`std::fs::copy`].
-const COPY_ALLOWLIST_FILES: &[&str] = &["settings.json", "settings.local.json", ".credentials.json"];
+const COPY_ALLOWLIST_FILES: &[&str] =
+    &["settings.json", "settings.local.json", ".credentials.json"];
 
 /// Dossiers de `~/.claude` recopiés en mode `copy` (walk préservant symlinks +
 /// bits exécutables). `projects/` est délibérément absent : jamais copié.
@@ -275,22 +276,20 @@ fn set_mode_0600(path: &Path) -> Result<()> {
 /// symlink-aware (`std::fs::copy` déréférence).
 fn copy_tree_preserving(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
-    let entries =
-        std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))?;
+    let entries = std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))?;
     for entry in entries.flatten() {
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        let md = std::fs::symlink_metadata(&from)
-            .with_context(|| format!("stat {}", from.display()))?;
+        let md =
+            std::fs::symlink_metadata(&from).with_context(|| format!("stat {}", from.display()))?;
         let ft = md.file_type();
         if ft.is_symlink() {
-            let target =
-                std::fs::read_link(&from).with_context(|| format!("read_link {}", from.display()))?;
+            let target = std::fs::read_link(&from)
+                .with_context(|| format!("read_link {}", from.display()))?;
             // Idempotence : une exécution antérieure a pu laisser un lien/fichier.
             let _ = std::fs::remove_file(&to);
-            std::os::unix::fs::symlink(&target, &to).with_context(|| {
-                format!("symlink {} -> {}", to.display(), target.display())
-            })?;
+            std::os::unix::fs::symlink(&target, &to)
+                .with_context(|| format!("symlink {} -> {}", to.display(), target.display()))?;
         } else if ft.is_dir() {
             copy_tree_preserving(&from, &to)?;
         } else if ft.is_file() {
@@ -374,7 +373,11 @@ mod tests {
     const UUID: &str = "0f1e2d3c-aaaa-bbbb-cccc-ddddeeeeffff";
 
     fn mode_of(path: &Path) -> u32 {
-        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
     }
 
     fn write(path: &Path, content: &str) {
@@ -394,7 +397,11 @@ mod tests {
         let claude = home.join(".claude");
         // Allowlist dirs.
         write(&claude.join("skills/foo/skill.md"), "# skill\n");
-        write_mode(&claude.join("skills/foo/run.sh"), "#!/bin/sh\necho hi\n", 0o755);
+        write_mode(
+            &claude.join("skills/foo/run.sh"),
+            "#!/bin/sh\necho hi\n",
+            0o755,
+        );
         // Symlink relatif à l'intérieur de skills/foo → skill.md.
         std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
         write(&claude.join("plugins/bar/plugin.json"), "{}\n");
@@ -404,7 +411,11 @@ mod tests {
         // Allowlist files.
         write(&claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
         write(&claude.join("settings.local.json"), r#"{"local":true}"#);
-        write_mode(&claude.join(".credentials.json"), r#"{"token":"secret"}"#, 0o600);
+        write_mode(
+            &claude.join(".credentials.json"),
+            r#"{"token":"secret"}"#,
+            0o600,
+        );
         write(&claude.join("CLAUDE.md"), "# global\n");
         write(&claude.join("RTK.md"), "# rtk\n");
         // État hôte volumineux — DOIT rester exclu.
@@ -412,9 +423,15 @@ mod tests {
         write(&claude.join("file-history/big.bin"), "xxxxxxxxxx");
         write(&claude.join("session-env/env-1/data"), "junk");
         // Transcripts hôte pré-existants — NE doivent PAS être copiés par prepare.
-        write(&claude.join(format!("projects/{ENC}/old.jsonl")), "{\"host\":1}\n");
+        write(
+            &claude.join(format!("projects/{ENC}/old.jsonl")),
+            "{\"host\":1}\n",
+        );
         // Sibling `.claude.json`.
-        write(&home.join(".claude.json"), r#"{"host":"profile","oauthAccount":{"x":1}}"#);
+        write(
+            &home.join(".claude.json"),
+            r#"{"host":"profile","oauthAccount":{"x":1}}"#,
+        );
     }
 
     // -- path math -----------------------------------------------------------
@@ -444,8 +461,14 @@ mod tests {
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
 
-        let staging =
-            prepare(home_dir.path(), sandbox_dir.path(), Mode::Copy, "run1", None).unwrap();
+        let staging = prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
         assert_eq!(staging, staging_dir_for_run(sandbox_dir.path(), "run1"));
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
@@ -457,11 +480,17 @@ mod tests {
         assert!(home.join("output-styles/s.md").is_file());
         // Allowlist files présents (dont hooks-via-settings).
         let settings = std::fs::read_to_string(home.join("settings.json")).unwrap();
-        assert!(settings.contains("hooks"), "hooks vivent dans settings.json");
+        assert!(
+            settings.contains("hooks"),
+            "hooks vivent dans settings.json"
+        );
         assert!(home.join("settings.local.json").is_file());
         assert!(home.join(".credentials.json").is_file());
         assert!(home.join("CLAUDE.md").is_file());
-        assert!(home.join("RTK.md").is_file(), "*.md siblings captés par glob");
+        assert!(
+            home.join("RTK.md").is_file(),
+            "*.md siblings captés par glob"
+        );
 
         // `.claude.json` sibling copié verbatim (hors claude-home/).
         let staged_json = staged_claude_json(sandbox_dir.path(), "run1");
@@ -492,14 +521,27 @@ mod tests {
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
 
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Copy, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
         // Symlink recréé COMME lien, cible verbatim.
         let link = home.join("skills/foo/link.md");
         let md = std::fs::symlink_metadata(&link).unwrap();
-        assert!(md.file_type().is_symlink(), "le lien doit rester un symlink");
-        assert_eq!(std::fs::read_link(&link).unwrap(), PathBuf::from("skill.md"));
+        assert!(
+            md.file_type().is_symlink(),
+            "le lien doit rester un symlink"
+        );
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            PathBuf::from("skill.md")
+        );
 
         // Exec bit conservé.
         assert_eq!(mode_of(&home.join("skills/foo/run.sh")), 0o755);
@@ -515,7 +557,14 @@ mod tests {
         write(&home_dir.path().join(".claude/settings.json"), "{}");
 
         // Ne doit pas paniquer / échouer sur les entrées absentes.
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Copy, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
         assert!(home.join("settings.json").is_file());
         assert!(!home.join("skills").exists());
@@ -532,7 +581,14 @@ mod tests {
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path()); // skills/settings existent → prouvent l'exclusion
 
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Pure, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Pure,
+            "run1",
+            None,
+        )
+        .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
         // claude-home ne contient QUE `.credentials.json` + `projects/` (vide).
@@ -541,7 +597,10 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();
-        assert_eq!(names, vec![".credentials.json".to_string(), "projects".to_string()]);
+        assert_eq!(
+            names,
+            vec![".credentials.json".to_string(), "projects".to_string()]
+        );
         assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
         assert!(!home.join("skills").exists());
         assert!(!home.join("settings.json").exists());
@@ -554,14 +613,21 @@ mod tests {
         .unwrap();
         assert_eq!(json["hasCompletedOnboarding"], serde_json::json!(true));
         assert!(json.get("projects").is_none(), "None → objet nu");
-        assert_eq!(mode_of(&staged_claude_json(sandbox_dir.path(), "run1")), 0o600);
+        assert_eq!(
+            mode_of(&staged_claude_json(sandbox_dir.path(), "run1")),
+            0o600
+        );
     }
 
     #[test]
     fn prepare_pure_seeds_trust_when_root_given() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
-        write_mode(&home_dir.path().join(".claude/.credentials.json"), "{}", 0o600);
+        write_mode(
+            &home_dir.path().join(".claude/.credentials.json"),
+            "{}",
+            0o600,
+        );
         let trusted = Path::new("/repo/root");
 
         prepare(
@@ -580,7 +646,10 @@ mod tests {
         assert_eq!(json["hasCompletedOnboarding"], serde_json::json!(true));
         let entry = &json["projects"]["/repo/root"];
         assert_eq!(entry["hasTrustDialogAccepted"], serde_json::json!(true));
-        assert_eq!(entry["hasCompletedProjectOnboarding"], serde_json::json!(true));
+        assert_eq!(
+            entry["hasCompletedProjectOnboarding"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]
@@ -588,7 +657,14 @@ mod tests {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
 
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Pure, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Pure,
+            "run1",
+            None,
+        )
+        .unwrap();
 
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(staged_claude_json(sandbox_dir.path(), "run1")).unwrap(),
@@ -602,7 +678,9 @@ mod tests {
 
     /// Écrit un transcript de staging (projects/<ENC>/...).
     fn stage_transcript(sandbox: &Path, run_id: &str, rel: &str, content: &str) {
-        let p = staged_claude_home(sandbox, run_id).join("projects").join(rel);
+        let p = staged_claude_home(sandbox, run_id)
+            .join("projects")
+            .join(rel);
         write(&p, content);
     }
 
@@ -624,15 +702,24 @@ mod tests {
             &format!("{ENC}/{UUID}/subagents/agent.jsonl"),
             "a\n",
         );
-        stage_transcript(sandbox, "run1", &format!("{ENC}/notes.md"), "not a transcript");
+        stage_transcript(
+            sandbox,
+            "run1",
+            &format!("{ENC}/notes.md"),
+            "not a transcript",
+        );
         stage_transcript(sandbox, "run1", &format!("{ENC}/.meta.json"), "{}");
 
         merge_back(home, sandbox, "run1").unwrap();
 
         let hp = host_projects(home);
-        assert_eq!(std::fs::read_to_string(hp.join(format!("{ENC}/sess.jsonl"))).unwrap(), "s\n");
         assert_eq!(
-            std::fs::read_to_string(hp.join(format!("{ENC}/{UUID}/subagents/agent.jsonl"))).unwrap(),
+            std::fs::read_to_string(hp.join(format!("{ENC}/sess.jsonl"))).unwrap(),
+            "s\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(hp.join(format!("{ENC}/{UUID}/subagents/agent.jsonl")))
+                .unwrap(),
             "a\n"
         );
         // Non-`.jsonl` jetés.
@@ -681,12 +768,18 @@ mod tests {
         // Resume (--continue) : le staging grossit → 2e merge capte la croissance.
         stage_transcript(sandbox, "run1", &rel, "l1\nl2\nl3\nl4\n");
         merge_back(home, sandbox, "run1").unwrap();
-        assert_eq!(std::fs::read_to_string(&host_file).unwrap(), "l1\nl2\nl3\nl4\n");
+        assert_eq!(
+            std::fs::read_to_string(&host_file).unwrap(),
+            "l1\nl2\nl3\nl4\n"
+        );
 
         // 3e appel sans changement → no-op (sentinelle de taille égale survit).
         std::fs::write(&host_file, "X1\nX2\nX3\nX4\n").unwrap();
         merge_back(home, sandbox, "run1").unwrap();
-        assert_eq!(std::fs::read_to_string(&host_file).unwrap(), "X1\nX2\nX3\nX4\n");
+        assert_eq!(
+            std::fs::read_to_string(&host_file).unwrap(),
+            "X1\nX2\nX3\nX4\n"
+        );
     }
 
     #[test]
@@ -720,7 +813,9 @@ mod tests {
         stage_transcript(sandbox, "run1", &format!("{ENC}/sess.jsonl"), "s\n");
 
         merge_back(home, sandbox, "run1").unwrap();
-        assert!(host_projects(home).join(format!("{ENC}/sess.jsonl")).is_file());
+        assert!(host_projects(home)
+            .join(format!("{ENC}/sess.jsonl"))
+            .is_file());
     }
 
     #[test]
@@ -768,7 +863,9 @@ mod tests {
             std::fs::read_to_string(home.join(".claude/history.jsonl")).unwrap(),
             "HOST-HISTORY"
         );
-        assert!(host_projects(home).join(format!("{ENC}/sess.jsonl")).is_file());
+        assert!(host_projects(home)
+            .join(format!("{ENC}/sess.jsonl"))
+            .is_file());
     }
 
     // -- teardown ------------------------------------------------------------
@@ -812,6 +909,8 @@ mod tests {
         teardown(sandbox, "run1").unwrap();
         assert!(!staging_dir_for_run(sandbox, "run1").exists());
         // Le transcript mergé côté hôte survit au teardown.
-        assert!(host_projects(home).join(format!("{ENC}/sess.jsonl")).is_file());
+        assert!(host_projects(home)
+            .join(format!("{ENC}/sess.jsonl"))
+            .is_file());
     }
 }

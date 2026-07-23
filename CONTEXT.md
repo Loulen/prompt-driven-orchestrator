@@ -818,9 +818,9 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 ## Sandbox (exécution isolée d'un Run)
 
 > Section seedée par #404, complétée par les slices suivantes du PRD #403. Couvert **ici** :
-> staging fs (#404) + **fourniture de l'image** (#405, cf. *Image (fourniture)*). Le modèle
-> d'**exécution** (conteneur, identity mounts, réseau) reste **différé à ADR-0030 / #406-#407**
-> — ne pas dupliquer ici.
+> staging fs (#404) + **fourniture de l'image** (#405, *Image (fourniture)*) + **exécution /
+> conteneur** (#406, *Exécution (conteneur)*). Le **câblage** dans le run-advance et le modèle
+> d'exécution formel (réseau/auth) restent **différés à ADR-0030 / #407** — ne pas les fixer ici.
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -894,18 +894,73 @@ fail-fast du Run). Ne tire **rien** d'un registry en #405 (chemin pull/GHCR + pr
 `image_source` → #411). _Éviter_ : « pull », « build » seul (ensure = build-**si-absent**),
 « warm-up ».
 
+### Exécution (conteneur)
+
+Périmètre **exécution** de l'image (instanciation, mounts, cycle de vie du conteneur), landé par
+#406 (`sandbox_container`). Le **câblage** run-advance et l'ADR-0030 qui fixe le modèle → #407.
+
+**Conteneur sandbox (`pdo-sbx-<run-id>`)** :
+Le conteneur **unique et long-vécu** d'un Run sandboxé, nommé de façon déterministe d'après le
+run-id, dormant (`sleep infinity`, PID 1 = `tini` via `--init`). Toutes les tails du Run y entrent
+par `docker exec` ; il naît au premier nœud, meurt au `cleanup_run`. Un nom par-Run rend kill et
+destruction **ciblés** (jamais un balayage global). _Éviter_ : « la sandbox » (= la feature/le
+mode), « VM », « image du conteneur » (l'image est le template, #405).
+
+**Identity mounts** :
+Les bind-mounts qui **répliquent l'identité de l'hôte** pour que le chemin de travail soit identique
+des deux côtés : repo cible monté rw à son **chemin absolu hôte** (couvre tous les worktrees de
+nœuds, sous `.pdo/runs/`), *staged Claude home* → `$HOME/.claude`, `.claude.json` sibling →
+`$HOME/.claude.json`, binaire `pdo` hôte monté ro dans le PATH, **uid/gid hôte** adoptés par le
+process (`--user`). C'est ce qui garantit le **même dirname encodé** que `merge_back`. _Éviter_ :
+« volumes » seul, « partage de fichiers ».
+
+**Préfixe `docker exec` (`exec_prefix`)** :
+La séquence d'arguments préposée à la tail d'un nœud pour la faire tourner **dans** le conteneur
+(`docker exec -it -e PDO_SBX_SESSION=… --user <uid>:<gid> -w <cwd> pdo-sbx-<run-id> …`) au lieu de
+l'hôte. En mode `off` le préfixe est **vide** (exécution hôte). Pur : construction d'argv, sans
+effet de bord. Ne re-passe jamais `PDO_DAEMON_URL` (posé au create vers `host.docker.internal`).
+_Éviter_ : « wrapper », « shim ».
+
+**Marqueur de session (`PDO_SBX_SESSION`)** :
+La **variable d'environnement** (`PDO_SBX_SESSION=<nom-de-session>`) posée sur **chaque** `docker
+exec`, **héritée par `claude` et toute sa descendance**. C'est la clé du **kill ciblé** : un scan
+`/proc/*/environ` la retrouve sur l'arbre de process de la session. Ce n'est **pas** un label Docker
+(réservé, non utilisé en v1). _Éviter_ : « tag » (réservé à l'image, #405), « label ».
+
+**`ensure_running(run_id)`** :
+Provisionneur **idempotent** du conteneur (miroir de `ensure_image`) : sonde `docker container
+inspect` → absent → `docker create` + `start` ; présent arrêté → `start` ; déjà up → no-op. La sonde
+**ne confond jamais** une erreur transitoire (daemon Docker down, permission) avec une absence.
+_Éviter_ : « launch », « boot », « run » seul.
+
+**Kill ciblé** :
+Arrêt du **seul** arbre de process porteur d'un **marqueur de session** donné, **dans** le conteneur
+partagé (`docker exec` séparé qui scanne `/proc`, `TERM` puis `KILL`) — les sessions sœurs du même
+Run **survivent**. Nécessaire car le client `docker exec` tué côté tmux ne tue pas le process
+conteneur (reparenté sur PID 1). Best-effort. Distinct de `remove` (destruction du conteneur
+entier). _Éviter_ : « stop all », « docker kill » (large).
+
+**`remove` / destruction du conteneur** :
+Suppression du conteneur (`docker rm -f pdo-sbx-<run-id>`) à `cleanup_run` ; sans effet s'il est déjà
+absent (idempotent). C'est **le** verbe « destroy / destruction » réservé par `teardown`. _Éviter_ :
+« teardown » (= purge du staging dir, #404), « cleanup » (= niveau Run).
+
 ### Relations
 - Une **Sandbox** `copy`/`pure` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
   **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
 - `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
   supprime le staging dir.
-- Une **Sandbox** `copy`/`pure` s'exécute dans l'**image sandbox** `pdo-sandbox:h-<hash>`, garantie
-  présente par `ensure_image` (#405) ; l'instanciation d'un conteneur à partir d'elle → #406/ADR-0030.
-- **Différé (ne pas définir dans #404)** : préfixe `docker exec` des tails, conteneur
-  `pdo-sbx-<run-id>`, identity mounts (#406, ADR-0030) ; précédence des sources du mode
-  (run → trigger → `default_sandbox` d'instance, pattern ADR-0015) (#410) ; seam `transcripts_root`
-  pointant stale-detection/coût vers le staging (#408) ; **fourniture par registry** (pull GHCR +
-  précédence `image_source`) (#411) — #405 ne couvre que le build local.
+- Une **Sandbox** `copy`/`pure` s'exécute dans un **conteneur sandbox** (`pdo-sbx-<run-id>`)
+  instancié depuis l'**image sandbox** `pdo-sandbox:h-<hash>` (garantie par `ensure_image`, #405) via
+  `ensure_running` (#406) ; ses **identity mounts** rendent le chemin de travail identique
+  hôte/conteneur (d'où le même dirname encodé pour `merge_back`), et toutes les tails y entrent par le
+  **préfixe `docker exec`** portant un **marqueur de session**. Kill ciblé + `remove` au `cleanup_run`.
+- **Différé (hors #404-#406)** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
+  Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
+  `default_sandbox`, pattern ADR-0015) (#410) ; seam `transcripts_root` (#408) ; **fourniture par
+  registry** (pull GHCR + `image_source`) (#411) ; **câblage** de
+  `prepare`/`ensure_image`/`ensure_running`/`exec_prefix`/`merge_back` dans le run-advance +
+  **ADR-0030** (modèle d'exécution : réseau/auth) (#407).
 
 ### Ambiguïté signalée
 « sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;

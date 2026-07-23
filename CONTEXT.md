@@ -817,9 +817,10 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 
 ## Sandbox (exécution isolée d'un Run)
 
-> Section seedée par #404 (slice A du PRD #403). Périmètre : **staging fs pur, zéro
-> Docker**. Le modèle d'exécution (conteneur, identity mounts, réseau, image) est
-> **différé à ADR-0030 / #407** et complété par les slices suivantes — ne pas dupliquer ici.
+> Section seedée par #404, complétée par les slices suivantes du PRD #403. Couvert **ici** :
+> staging fs (#404) + **fourniture de l'image** (#405, cf. *Image (fourniture)*). Le modèle
+> d'**exécution** (conteneur, identity mounts, réseau) reste **différé à ADR-0030 / #406-#407**
+> — ne pas dupliquer ici.
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -865,15 +866,46 @@ shell-snapshots — tout sauf les transcripts (#403 US-29). _Éviter_ : « sync 
 Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
 `cleanup_run`, niveau Run) et « destroy » (réservé à la destruction du conteneur, #406).
 
+### Image (fourniture)
+
+Périmètre **provisionnement** (fabrication + nommage de l'image), landé par #405 (`sandbox_image`).
+L'**exécution** de l'image (instanciation en conteneur, mounts, réseau) → #406/#407, ADR-0030.
+
+**Image sandbox (`pdo-sandbox:h-<hash>`)** :
+L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son tag est le **hash du
+contenu du Dockerfile** (`h-<hash>`), pas une version : deux Dockerfiles identiques → même tag, une
+édition → tag différent. Identité **adressée par contenu** — c'est elle qui rendra plus tard une
+image tirée d'un registry et une image buildée localement interchangeables sous le même nom (#411).
+_Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le
+conteneur, #406).
+
+**Dockerfile embarqué / seedé** :
+Le Dockerfile est **embarqué dans le binaire** (contenu minimal : Ubuntu, git, ripgrep, Claude Code
+auto-update off, sudo NOPASSWD ; ni tmux ni `pdo`, fournis par l'hôte). Au premier usage il est
+**seedé** sur disque à `~/.pdo/sandbox/Dockerfile`, puis **jamais écrasé** : l'utilisateur peut
+l'éditer, et l'édition change le hash donc le tag donc déclenche un rebuild. _Éviter_ : confondre le
+Dockerfile **embarqué** (source de vérité dans le binaire) et le **seedé** (copie éditable sur
+disque) ; « image de base ».
+
+**`ensure_image()`** :
+Garantit que `pdo-sandbox:h-<hash>` existe **localement** : présente → réutilise ; absente →
+`docker build` depuis le Dockerfile sur disque ; échec → erreur explicite (consommée par le
+fail-fast du Run). Ne tire **rien** d'un registry en #405 (chemin pull/GHCR + précédence
+`image_source` → #411). _Éviter_ : « pull », « build » seul (ensure = build-**si-absent**),
+« warm-up ».
+
 ### Relations
 - Une **Sandbox** `copy`/`pure` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
   **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
 - `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
   supprime le staging dir.
+- Une **Sandbox** `copy`/`pure` s'exécute dans l'**image sandbox** `pdo-sandbox:h-<hash>`, garantie
+  présente par `ensure_image` (#405) ; l'instanciation d'un conteneur à partir d'elle → #406/ADR-0030.
 - **Différé (ne pas définir dans #404)** : préfixe `docker exec` des tails, conteneur
   `pdo-sbx-<run-id>`, identity mounts (#406, ADR-0030) ; précédence des sources du mode
   (run → trigger → `default_sandbox` d'instance, pattern ADR-0015) (#410) ; seam `transcripts_root`
-  pointant stale-detection/coût vers le staging (#408).
+  pointant stale-detection/coût vers le staging (#408) ; **fourniture par registry** (pull GHCR +
+  précédence `image_source`) (#411) — #405 ne couvre que le build local.
 
 ### Ambiguïté signalée
 « sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;

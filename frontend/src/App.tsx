@@ -9,6 +9,7 @@ import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth,
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { rightPaneOwner } from "./lib/rightPaneOwner";
 import { shouldClearTriggerOnCanvasFocus } from "./lib/triggerCanvasReconcile";
+import { shouldCloseInfoOnTabChange } from "./lib/infoPanelReconcile";
 import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
 import { isLiveRun } from "./types";
 import SessionCounter from "./components/SessionCounter";
@@ -281,6 +282,32 @@ export default function App() {
     ) {
       setSelectedTriggerId(null);
     }
+  }
+
+  // #385: the Pipeline Info peek overlay is tab-scoped and shadows the right
+  // pane while open (rightPaneOwner gives it top precedence). Close it when the
+  // active tab changes — selecting a different run/library-pipeline (left
+  // panel), a Trigger opening its pipeline, or a TabBar switch all move
+  // `editActiveTabId`. Canvas node/edge/note clicks already close it via
+  // EditCanvas.onCloseInfo.
+  //
+  // Same render-time reset-on-change idiom as the #320 block above (adjust
+  // state during render, not in an effect, to avoid painting one stale frame).
+  // CRITICAL: advance `lastInfoTabId` UNCONDITIONALLY — if the advance were
+  // gated on `infoPanelOpen`, the tracker would go stale while the overlay is
+  // closed and spuriously close the NEXT overlay one frame after it opens on a
+  // new tab (and gating would also re-fire this block every render). `useState`
+  // (not a ref): the value is read during render, which react-hooks/refs
+  // forbids — the same reason `triggerOpenedTabId` above is state.
+  const [lastInfoTabId, setLastInfoTabId] = useState<string | null>(editActiveTabId);
+  if (lastInfoTabId !== editActiveTabId) {
+    const closeInfo = shouldCloseInfoOnTabChange({
+      prevTabId: lastInfoTabId,
+      nextTabId: editActiveTabId,
+      infoOpen: infoPanelOpen,
+    });
+    setLastInfoTabId(editActiveTabId); // UNCONDITIONAL — mirrors the #320 block
+    if (closeInfo) setInfoPanelOpen(false);
   }
 
   const selectedTrigger =

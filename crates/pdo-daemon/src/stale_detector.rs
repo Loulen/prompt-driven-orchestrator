@@ -82,6 +82,16 @@ pub struct NodeProbe {
     pub artifacts_valid: Option<bool>,
 }
 
+/// Whether a node's transcript is idle past [`STALE_THRESHOLD`] as of `now`.
+///
+/// The **single source** of the threshold comparison (#373): both [`decide`]
+/// (the staleness authority) and [`assess_node`] (which consults it only to
+/// gate the costly outputs validation) go through here, so the gate is never
+/// re-implemented. A future `mtime` (clock skew) counts as not-idle.
+fn idle_past_threshold(mtime: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(mtime).unwrap_or(Duration::ZERO) >= STALE_THRESHOLD
+}
+
 /// Pure decision logic: given the probe results, determine the detection.
 pub fn decide(probe: &NodeProbe) -> Detection {
     if !probe.session_alive {
@@ -92,8 +102,7 @@ pub fn decide(probe: &NodeProbe) -> Detection {
         return Detection::Ok;
     };
 
-    let age = probe.now.duration_since(mtime).unwrap_or(Duration::ZERO);
-    if age < STALE_THRESHOLD {
+    if !idle_past_threshold(mtime, probe.now) {
         return Detection::Ok;
     }
 
@@ -103,24 +112,26 @@ pub fn decide(probe: &NodeProbe) -> Detection {
     }
 }
 
-/// Encode a working directory path the same way Claude Code does for its
-/// projects directory.
+/// Encode a working directory path exactly as Claude Code names its
+/// `~/.claude/projects/` directory: every non-`[A-Za-z0-9]` char maps to `-`
+/// (case preserved, runs NOT collapsed). So a leading `/` becomes a leading `-`
+/// and `.pdo`/`.claude` become `--pdo`/`--claude`.
 ///
-/// Example: `/home/user/project` → `home-user-project`
+/// Example: `/home/user/project` → `-home-user-project`; a PDO node dir like
+/// `/home/u/.pdo/runs/X/worktree` → `-home-u--pdo-runs-X-worktree`.
 ///
-/// KNOWN BUG (do not fix here in a cost slice): this strips the leading `/` and
-/// does not map `.`, so a PDO node dir like `/home/u/.pdo/runs/X/worktree`
-/// encodes to `home-u--pdo-runs-X-worktree` **without** the leading `-` CC
-/// actually uses — [`find_session_jsonl`] then returns `None` for every PDO
-/// node, leaving the mtime-based stale/auto-complete probe effectively dead.
-/// Fixing it re-activates that probe (a real behavioral change, #251-adjacent),
-/// so it needs its own tests/validation. Cost estimation (#272) needs the
-/// correct dir name and therefore uses its own [`crate::run_cost::cc_project_dirname`]
-/// to stay isolated from this fix.
+/// This is the single source of truth for the CC project-dir encoding;
+/// [`crate::run_cost::cc_project_dirname`] delegates here.
+///
+/// History (#373): this previously stripped the leading `/` and left `.`
+/// intact, so [`find_session_jsonl`] resolved `None` for *every* PDO node and
+/// the mtime-based `Stale`/`AutoComplete` branches of [`decide`] were dead in
+/// production. Fixed and verified against real on-disk dirs.
 pub fn encode_working_dir(dir: &Path) -> String {
-    let s = dir.to_string_lossy();
-    let stripped = s.strip_prefix('/').unwrap_or(&s);
-    stripped.replace('/', "-")
+    dir.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Find the most recently modified `.jsonl` file in the Claude Code projects
@@ -217,6 +228,245 @@ pub fn detection_events(
         iter: Some(iter),
         payload: Some(serde_json::json!({ "reason": reason })),
     }]
+}
+
+/// Injected I/O for [`assess_node`]. The impure sweep layer ([`crate::lib`])
+/// implements this against tmux + the filesystem for one running node; unit
+/// tests supply a fake so the whole probe → gate → decide → events →
+/// diagnostics → dedup pipeline runs without a daemon.
+///
+/// Every method is a side-effect-free *read*: the reap/spawn side effects stay
+/// in the sweep, keyed off [`Assessment::detection`].
+pub trait NodeProbes {
+    /// Is the node's tmux session still alive?
+    fn session_alive(&self) -> bool;
+
+    /// mtime of the newest Claude Code transcript for this node's working dir,
+    /// or `None` when no transcript dir/file resolves.
+    fn jsonl_mtime(&self) -> Option<SystemTime>;
+
+    /// Do the node's declared outputs validate against the pipeline? Consulted
+    /// by [`assess_node`] **only** once the idle threshold is crossed, so the
+    /// (relatively costly) validation never runs on a fresh node.
+    fn validate_outputs(&self) -> bool;
+
+    /// Best-effort capture of the node's tmux pane, for the usage-limit menu
+    /// probe (#290). Only called on the `Ok` path (an alive, non-stale node).
+    fn capture_pane(&self) -> Option<String>;
+
+    /// Best-effort session-death forensics (#234). Gathered lazily — only when
+    /// the session is found dead — so no tmux/proc I/O runs on a healthy node.
+    fn session_death_diagnostics(&self) -> SessionDeathDiagnostics;
+}
+
+/// Whether the mtime-based auto-complete path is allowed to *act* (reap the
+/// idle session and advance the pipeline) or only to be *observed* (#373).
+///
+/// Auto-complete is irreversible and can fire falsely on a node mid a
+/// legitimate >[`STALE_THRESHOLD`] tool call whose outputs already validate, so
+/// re-arming the terminal action is trust-gated (ADR-0012). Unit A ships
+/// [`Observe`](Self::Observe): [`assess_node`] emits the non-terminal
+/// [`event_log::EventKind::NodeAutoCompleteObserved`] marker (node stays
+/// Running) instead of the terminal `NodeAutoCompleted`. Flipping the sweep to
+/// [`Act`](Self::Act) is the Unit B change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCompletePolicy {
+    /// Emit an observe-only marker; never reap/advance. (#373 Unit A.)
+    Observe,
+    /// Emit the terminal `NodeAutoCompleted`; the sweep reaps + advances.
+    Act,
+}
+
+/// Outcome of [`assess_node`]: the raw detection plus the events to append and
+/// the observability the sweep needs. The impure caller appends
+/// [`Self::events`] and runs any reap/spawn side effects keyed off
+/// [`Self::detection`].
+///
+/// Not `PartialEq`/`Eq`: [`event_log::Event`]'s payload is a
+/// `serde_json::Value` (no `Eq`), and callers/tests inspect the fields
+/// individually rather than compare a whole `Assessment`.
+#[derive(Debug, Clone)]
+pub struct Assessment {
+    /// Raw detection from [`decide`] (before the [`AutoCompletePolicy`] is
+    /// applied to the auto-complete event shape). The sweep drives its
+    /// reap/spawn side effects off this.
+    pub detection: Detection,
+    /// Events to append. A `SessionDied` failure already carries its
+    /// diagnostics; an `Observe`-policy auto-complete carries a non-terminal
+    /// `NodeAutoCompleteObserved`; a usage-limit menu carries a (deduped)
+    /// `NodeBlockedOnLimit`. Empty for a nominal `Ok` node.
+    pub events: Vec<event_log::Event>,
+    /// True when the node is alive & non-stale but its pane shows Claude Code's
+    /// usage-limit menu — feeds the per-sweep `blocked_on_limit` gauge (#290).
+    /// Set on every sweep the menu is visible, independent of event dedup.
+    pub blocked_on_limit: bool,
+    /// The session-death forensics gathered on the `SessionDied` path (`None`
+    /// otherwise), surfaced so the sweep can log the structured fields (#234)
+    /// without re-running the probe or re-parsing the event payload.
+    pub session_death_diagnostics: Option<SessionDeathDiagnostics>,
+}
+
+/// True when an event of `kind` for `(node_id, iter)` already exists in
+/// `prior_events` — the rising-edge de-dup key for the informational markers
+/// (`NodeBlockedOnLimit`, `NodeAutoCompleteObserved`). Pure over the event log
+/// snapshot the sweep already loaded, so a held condition emits one event, not
+/// one per ~30 s sweep tick, and the dedup survives a daemon restart.
+fn episode_has_event(
+    prior_events: &[event_log::Event],
+    kind: &EventKind,
+    node_id: &str,
+    iter: i64,
+) -> bool {
+    prior_events
+        .iter()
+        .any(|e| &e.kind == kind && e.node_id.as_deref() == Some(node_id) && e.iter == Some(iter))
+}
+
+fn informational_event(
+    kind: EventKind,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    payload: serde_json::Value,
+) -> event_log::Event {
+    event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: Some(payload),
+    }
+}
+
+/// The stale-detection policy for a single running node, with all I/O injected
+/// via `probes` (#373). This is the one place the whole pipeline lives:
+///
+/// ```text
+/// probes → STALE_THRESHOLD gate → decide → detection_events
+///        → attach_diagnostics (SessionDied) → usage-limit-dedup (Ok)
+/// ```
+///
+/// so [`crate::lib`]'s sweep is reduced to a loop that builds a [`NodeProbes`]
+/// adapter, calls this, appends [`Assessment::events`], and runs the reap/spawn
+/// side effects keyed off [`Assessment::detection`].
+///
+/// The `STALE_THRESHOLD` gate has a **single source**: [`decide`].
+/// `assess_node` consults [`NodeProbes::validate_outputs`] only once the idle
+/// age has (potentially) crossed the threshold, so a fresh node never pays for
+/// outputs validation — but the gating *decision* itself is not duplicated
+/// here, it is [`decide`]'s.
+///
+/// `prior_events` is the run's event-log snapshot, used purely for the
+/// rising-edge de-dup of the informational markers (see [`episode_has_event`]).
+pub fn assess_node(
+    probes: &impl NodeProbes,
+    prior_events: &[event_log::Event],
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    now: SystemTime,
+    auto_complete_policy: AutoCompletePolicy,
+) -> Assessment {
+    let session_alive = probes.session_alive();
+    let jsonl_mtime = probes.jsonl_mtime();
+
+    // Validate outputs only once the transcript is idle past the threshold,
+    // via the SAME [`idle_past_threshold`] gate `decide` uses — this avoids the
+    // validation I/O on a fresh node without re-implementing the gate. `decide`
+    // remains the sole authority on the Ok/Stale/AutoComplete partition.
+    let threshold_crossed = jsonl_mtime.is_some_and(|mt| idle_past_threshold(mt, now));
+    let artifacts_valid = threshold_crossed.then(|| probes.validate_outputs());
+
+    let probe = NodeProbe {
+        session_alive,
+        jsonl_mtime,
+        now,
+        artifacts_valid,
+    };
+    let detection = decide(&probe);
+
+    match detection {
+        Detection::Ok => {
+            // Alive & non-stale, but maybe wedged on Claude Code's usage-limit
+            // menu (#290): observability only — the node keeps running. The
+            // gauge counts every sweep the menu is visible; the event is emitted
+            // once per (node, iter) episode.
+            let blocked_on_limit = probes
+                .capture_pane()
+                .is_some_and(|pane| detect_usage_limit(&pane));
+            let events = if blocked_on_limit
+                && !episode_has_event(prior_events, &EventKind::NodeBlockedOnLimit, node_id, iter)
+            {
+                vec![informational_event(
+                    EventKind::NodeBlockedOnLimit,
+                    run_id,
+                    node_id,
+                    iter,
+                    serde_json::json!({ "signal": "usage_limit_menu" }),
+                )]
+            } else {
+                vec![]
+            };
+            Assessment {
+                detection,
+                events,
+                blocked_on_limit,
+                session_death_diagnostics: None,
+            }
+        }
+        Detection::SessionDied => {
+            let mut events = detection_events(&detection, run_id, node_id, iter);
+            let diag = probes.session_death_diagnostics();
+            attach_diagnostics(&mut events, &diag);
+            Assessment {
+                detection,
+                events,
+                blocked_on_limit: false,
+                session_death_diagnostics: Some(diag),
+            }
+        }
+        Detection::AutoComplete => {
+            // #373 Unit A: re-arming the terminal auto-complete (reap + advance)
+            // is trust-gated. Under `Observe`, emit a deduped non-terminal marker
+            // so the node stays Running and the "would auto-complete" moment is
+            // durably visible; under `Act`, emit the real terminal event.
+            let events = match auto_complete_policy {
+                AutoCompletePolicy::Act => detection_events(&detection, run_id, node_id, iter),
+                AutoCompletePolicy::Observe => {
+                    if episode_has_event(
+                        prior_events,
+                        &EventKind::NodeAutoCompleteObserved,
+                        node_id,
+                        iter,
+                    ) {
+                        vec![]
+                    } else {
+                        vec![informational_event(
+                            EventKind::NodeAutoCompleteObserved,
+                            run_id,
+                            node_id,
+                            iter,
+                            serde_json::json!({ "reason": "idle_valid_outputs_observe_only" }),
+                        )]
+                    }
+                }
+            };
+            Assessment {
+                detection,
+                events,
+                blocked_on_limit: false,
+                session_death_diagnostics: None,
+            }
+        }
+        Detection::Stale => Assessment {
+            events: detection_events(&detection, run_id, node_id, iter),
+            detection,
+            blocked_on_limit: false,
+            session_death_diagnostics: None,
+        },
+    }
 }
 
 /// Best-effort diagnostic context captured the moment a node's session is found
@@ -370,24 +620,53 @@ mod tests {
         assert_eq!(strip_ansi("\x1b[1m❯\x1b[0m x"), "❯ x");
     }
 
-    // --- encode_working_dir ---
+    // --- encode_working_dir (#373: matches Claude Code's real scheme) ---
 
     #[test]
-    fn encode_basic_path() {
+    fn encode_basic_path_keeps_leading_dash() {
+        // Every non-alphanumeric maps to `-`, so a leading `/` becomes `-`.
         assert_eq!(
             encode_working_dir(Path::new("/home/user/project")),
-            "home-user-project"
+            "-home-user-project"
         );
     }
 
     #[test]
     fn encode_root() {
-        assert_eq!(encode_working_dir(Path::new("/")), "");
+        assert_eq!(encode_working_dir(Path::new("/")), "-");
     }
 
     #[test]
     fn encode_deeply_nested() {
-        assert_eq!(encode_working_dir(Path::new("/a/b/c/d/e")), "a-b-c-d-e");
+        assert_eq!(encode_working_dir(Path::new("/a/b/c/d/e")), "-a-b-c-d-e");
+    }
+
+    #[test]
+    fn encode_maps_dot_to_dash() {
+        // #373 root cause: a real PDO node dir carries `.pdo` (→ `--pdo`) and a
+        // leading `-`. Before the fix this produced `home-...-.pdo-...` and
+        // resolved nothing under ~/.claude/projects.
+        assert_eq!(
+            encode_working_dir(Path::new("/home/u/.pdo/runs/X/worktree")),
+            "-home-u--pdo-runs-X-worktree"
+        );
+    }
+
+    #[test]
+    fn encode_matches_cc_project_dirname() {
+        // The two encoders are unified on one implementation (#373): they must
+        // never drift again.
+        for dir in [
+            "/home/llenoir/Documents/perso/Maestro/.pdo/runs/2026-abc/nodes/n1/iter-1",
+            "/home/u/.claude",
+            "/tmp/x.y.z",
+        ] {
+            assert_eq!(
+                encode_working_dir(Path::new(dir)),
+                crate::run_cost::cc_project_dirname(Path::new(dir)),
+                "encode_working_dir and cc_project_dirname must agree for {dir}"
+            );
+        }
     }
 
     // --- decide (pure logic) ---
@@ -805,6 +1084,42 @@ SwapFree:         204800 kB
         assert!(find_session_jsonl(Path::new("/tmp/testdir")).is_none());
     }
 
+    #[test]
+    fn find_jsonl_resolves_a_real_pdo_node_dir() {
+        // #373 regression: a representative PDO node working dir (absolute,
+        // carries `.pdo`) must resolve to the transcript CC actually writes —
+        // i.e. under the leading-dash, `--pdo` name. Pre-fix this looked up
+        // `home-...-.pdo-...` and found nothing, so the mtime probe was dead.
+        let home_guard = TempHome::new();
+        let home = home_guard.path();
+
+        let node_dir =
+            Path::new("/home/llenoir/Documents/perso/Maestro/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1");
+
+        // The transcript dir CC writes: leading `-`, `.pdo` → `--pdo`.
+        let cc_name = home
+            .join(".claude")
+            .join("projects")
+            .join("-home-llenoir-Documents-perso-Maestro--pdo-runs-20260623-100032-9b8331b-nodes-gzpYZA2m-iter-1");
+        std::fs::create_dir_all(&cc_name).unwrap();
+        std::fs::write(cc_name.join("session.jsonl"), "{}").unwrap();
+
+        // The encoder now produces exactly that name …
+        assert_eq!(
+            home.join(".claude")
+                .join("projects")
+                .join(encode_working_dir(node_dir)),
+            cc_name
+        );
+        // … so the probe resolves the transcript.
+        let found = find_session_jsonl(node_dir);
+        assert!(
+            found.is_some(),
+            "find_session_jsonl must resolve a real PDO node transcript after the #373 fix"
+        );
+        assert_eq!(found.unwrap().file_name().unwrap(), "session.jsonl");
+    }
+
     // --- validate_outputs (integration with outputs_validator) ---
 
     #[test]
@@ -847,5 +1162,276 @@ SwapFree:         204800 kB
             1,
             &artifacts_dir
         ));
+    }
+
+    // --- assess_node (#373: whole sweep-policy pipeline with fake I/O) ---
+
+    /// A fully controllable [`NodeProbes`] fake. `validate_calls` records how
+    /// many times `validate_outputs` ran so a test can prove the threshold gate
+    /// short-circuits the (costly) validation on a fresh node.
+    struct FakeProbes {
+        session_alive: bool,
+        jsonl_mtime: Option<SystemTime>,
+        outputs_valid: bool,
+        pane: Option<String>,
+        diagnostics: SessionDeathDiagnostics,
+        validate_calls: std::cell::Cell<usize>,
+    }
+
+    impl FakeProbes {
+        /// Alive, transcript idle `age` old, outputs `valid`, no pane.
+        fn idle(age: Duration, valid: bool) -> Self {
+            Self {
+                session_alive: true,
+                jsonl_mtime: Some(SystemTime::now() - age),
+                outputs_valid: valid,
+                pane: None,
+                diagnostics: SessionDeathDiagnostics::default(),
+                validate_calls: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl NodeProbes for FakeProbes {
+        fn session_alive(&self) -> bool {
+            self.session_alive
+        }
+        fn jsonl_mtime(&self) -> Option<SystemTime> {
+            self.jsonl_mtime
+        }
+        fn validate_outputs(&self) -> bool {
+            self.validate_calls.set(self.validate_calls.get() + 1);
+            self.outputs_valid
+        }
+        fn capture_pane(&self) -> Option<String> {
+            self.pane.clone()
+        }
+        fn session_death_diagnostics(&self) -> SessionDeathDiagnostics {
+            self.diagnostics.clone()
+        }
+    }
+
+    fn assess(probes: &FakeProbes, policy: AutoCompletePolicy) -> Assessment {
+        assess_node(probes, &[], "run1", "worker", 1, SystemTime::now(), policy)
+    }
+
+    #[test]
+    fn assess_dead_session_fails_with_diagnostics() {
+        let probes = FakeProbes {
+            session_alive: false,
+            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(300)),
+            outputs_valid: true, // must be ignored: dead session wins
+            pane: None,
+            diagnostics: SessionDeathDiagnostics {
+                tmux_server_alive: Some(false),
+                correlated_deaths: 2,
+                ..Default::default()
+            },
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::SessionDied);
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeFailed);
+        // #234: diagnostics folded into the failure payload AND surfaced for the
+        // sweep's structured log.
+        assert_eq!(
+            a.events[0].payload.as_ref().unwrap()["diagnostics"]["correlated_deaths"],
+            serde_json::json!(2)
+        );
+        assert_eq!(a.session_death_diagnostics.unwrap().correlated_deaths, 2);
+        assert!(!a.blocked_on_limit);
+    }
+
+    #[test]
+    fn assess_fresh_node_is_ok_and_skips_validation() {
+        // Alive, transcript touched 60 s ago (< threshold): Ok, no events, and —
+        // the single-source gate — outputs validation is never invoked.
+        let probes = FakeProbes::idle(Duration::from_secs(60), true);
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(a.events.is_empty());
+        assert_eq!(
+            probes.validate_calls.get(),
+            0,
+            "validate_outputs must NOT run before the threshold is crossed"
+        );
+    }
+
+    #[test]
+    fn assess_no_transcript_is_ok_and_skips_validation() {
+        let probes = FakeProbes {
+            session_alive: true,
+            jsonl_mtime: None,
+            outputs_valid: true,
+            pane: None,
+            diagnostics: SessionDeathDiagnostics::default(),
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(a.events.is_empty());
+        assert_eq!(probes.validate_calls.get(), 0);
+    }
+
+    #[test]
+    fn assess_idle_invalid_outputs_is_stale() {
+        let probes = FakeProbes::idle(Duration::from_secs(200), false);
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::Stale);
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeStale);
+        assert_eq!(
+            probes.validate_calls.get(),
+            1,
+            "validate_outputs must run once past the threshold"
+        );
+    }
+
+    #[test]
+    fn assess_idle_valid_outputs_observe_only_is_non_terminal() {
+        // The core #373 Unit A guard: idle + valid outputs would auto-complete,
+        // but under Observe it must NOT emit the terminal NodeAutoCompleted —
+        // only the non-terminal observed marker.
+        let probes = FakeProbes::idle(Duration::from_secs(200), true);
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::AutoComplete);
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeAutoCompleteObserved);
+        assert_ne!(a.events[0].kind, EventKind::NodeAutoCompleted);
+    }
+
+    #[test]
+    fn assess_idle_valid_outputs_act_emits_terminal_auto_completed() {
+        // Unit B shape (behind the policy): the same detection, but Act emits the
+        // real terminal event the sweep would reap/advance on.
+        let probes = FakeProbes::idle(Duration::from_secs(200), true);
+        let a = assess(&probes, AutoCompletePolicy::Act);
+        assert_eq!(a.detection, Detection::AutoComplete);
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeAutoCompleted);
+    }
+
+    #[test]
+    fn assess_observe_marker_is_deduped_per_episode() {
+        // A held idle+valid node must emit the observed marker once, not once
+        // per sweep: a prior marker for this (node, iter) suppresses re-emission.
+        let probes = FakeProbes::idle(Duration::from_secs(200), true);
+        let prior = vec![event_log::Event {
+            id: None,
+            run_id: "run1".to_string(),
+            ts: event_log::now_iso(),
+            kind: EventKind::NodeAutoCompleteObserved,
+            node_id: Some("worker".to_string()),
+            iter: Some(1),
+            payload: None,
+        }];
+        let a = assess_node(
+            &probes,
+            &prior,
+            "run1",
+            "worker",
+            1,
+            SystemTime::now(),
+            AutoCompletePolicy::Observe,
+        );
+        assert_eq!(a.detection, Detection::AutoComplete);
+        assert!(
+            a.events.is_empty(),
+            "a second observe marker for the same episode must be suppressed"
+        );
+    }
+
+    #[test]
+    fn assess_usage_limit_menu_flags_blocked_and_emits_once() {
+        let probes = FakeProbes {
+            session_alive: true,
+            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)), // fresh → Ok
+            outputs_valid: false,
+            pane: Some("❯ 1. Stop and wait for limit to reset".to_string()),
+            diagnostics: SessionDeathDiagnostics::default(),
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(
+            a.blocked_on_limit,
+            "usage-limit menu must set the gauge flag"
+        );
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeBlockedOnLimit);
+    }
+
+    #[test]
+    fn assess_usage_limit_gauge_set_but_event_deduped() {
+        // On a subsequent sweep the menu is still up: the gauge still counts it,
+        // but the event is not re-emitted (rising-edge dedup).
+        let probes = FakeProbes {
+            session_alive: true,
+            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)),
+            outputs_valid: false,
+            pane: Some("Stop and wait for limit to reset".to_string()),
+            diagnostics: SessionDeathDiagnostics::default(),
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let prior = vec![event_log::Event {
+            id: None,
+            run_id: "run1".to_string(),
+            ts: event_log::now_iso(),
+            kind: EventKind::NodeBlockedOnLimit,
+            node_id: Some("worker".to_string()),
+            iter: Some(1),
+            payload: None,
+        }];
+        let a = assess_node(
+            &probes,
+            &prior,
+            "run1",
+            "worker",
+            1,
+            SystemTime::now(),
+            AutoCompletePolicy::Observe,
+        );
+        assert!(
+            a.blocked_on_limit,
+            "gauge counts every sweep the menu is up"
+        );
+        assert!(
+            a.events.is_empty(),
+            "the blocked event is emitted only once"
+        );
+    }
+
+    #[test]
+    fn assess_ok_node_without_menu_is_silent() {
+        let probes = FakeProbes {
+            session_alive: true,
+            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)),
+            outputs_valid: false,
+            pane: Some("● Running: cargo test".to_string()),
+            diagnostics: SessionDeathDiagnostics::default(),
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(!a.blocked_on_limit);
+        assert!(a.events.is_empty());
+    }
+
+    #[test]
+    fn assess_dead_session_takes_precedence_over_idle_mtime() {
+        // A dead session with an idle transcript must resolve SessionDied, never
+        // Stale/AutoComplete — decide checks liveness first, and assess_node must
+        // preserve that ordering.
+        let probes = FakeProbes {
+            session_alive: false,
+            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(500)),
+            outputs_valid: false,
+            pane: None,
+            diagnostics: SessionDeathDiagnostics::default(),
+            validate_calls: std::cell::Cell::new(0),
+        };
+        let a = assess(&probes, AutoCompletePolicy::Observe);
+        assert_eq!(a.detection, Detection::SessionDied);
     }
 }

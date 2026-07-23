@@ -16,11 +16,12 @@
 //!   transcript. We dedup by `(message.id, requestId)`, keeping the first — the
 //!   `usage` is byte-identical within a group, so keep-one is exact (matches
 //!   `ccusage`). Without it the number is 2–3× too high.
-//! - **Own path encoder.** [`crate::stale_detector::encode_working_dir`] is buggy
-//!   for PDO dirs (strips the leading `/`, doesn't map `.`), so it returns `None`
-//!   for every node. Cost uses its own correct [`cc_project_dirname`] and does
-//!   NOT touch the shared fn (fixing it re-activates dead stale-detection logic
-//!   — a separate, riskier change; see the doc-comment there).
+//! - **Path encoder.** [`cc_project_dirname`] maps a working dir to the name CC
+//!   writes under `~/.claude/projects/`. Since #373 it delegates to the (now
+//!   correct) [`crate::stale_detector::encode_working_dir`] — one source of
+//!   truth. Historically it reimplemented the mapping to route around a bug in
+//!   that function (it stripped the leading `/` and left `.` unmapped, so the
+//!   stale-detector's mtime probe resolved `None` for every node).
 //! - **Cache tokens don't overlap `input_tokens`.** CC's `input_tokens` excludes
 //!   cache tokens, so the four buckets sum without subtraction (matches ccusage).
 //! - **Tolerant parsing.** Torn writes (an interleaved-flush `clauclaude-opus-4-8`
@@ -197,13 +198,11 @@ fn aggregate(lines: impl Iterator<Item = Line>) -> CostStat {
 /// Verified against real dirs: `/home/u/.pdo/runs/X/worktree` →
 /// `-home-u--pdo-runs-X-worktree`.
 ///
-/// This deliberately does NOT reuse [`crate::stale_detector::encode_working_dir`],
-/// which is buggy (see module docs and the cross-reference there).
+/// Delegates to [`crate::stale_detector::encode_working_dir`], the single source
+/// of truth for this encoding. (Historically this reimplemented the mapping to
+/// route around a bug in that function; #373 fixed and unified them.)
 pub fn cc_project_dirname(path: &Path) -> String {
-    path.to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+    crate::stale_detector::encode_working_dir(path)
 }
 
 /// Recursively collect every parseable cost line from `*.jsonl` under `dir`.

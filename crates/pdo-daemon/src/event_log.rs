@@ -93,6 +93,13 @@ pub enum EventKind {
     /// Behaviour-preserving no-op in projection — the node stays Running;
     /// recovery is deferred (Slice 2/3). Wire form: `"node_blocked_on_limit"`.
     NodeBlockedOnLimit,
+    /// Informational (#373 Unit A): the stale sweep found a node idle past the
+    /// threshold with valid outputs — it *would* auto-complete, but the terminal
+    /// reap/advance is trust-gated (Unit B / ADR-0012), so under the `Observe`
+    /// policy this non-terminal marker is emitted instead of `NodeAutoCompleted`.
+    /// Behaviour-preserving no-op in projection — the node stays Running.
+    /// Wire form: `"node_auto_complete_observed"`.
+    NodeAutoCompleteObserved,
     PipelineLint,
     PipelineModified,
     RunCompleted,
@@ -609,10 +616,13 @@ pub fn project(events: &[Event]) -> Option<RunState> {
                 apply_pipeline_event(&mut state, event)
             }
 
-            // #290: informational only — the node stays in its current status
-            // (Running). Behaviour-preserving no-op, exactly like `PipelineLint`;
-            // recovery/unblocking is deferred (Slice 2/3). No node/run state touched.
-            EventKind::NodeBlockedOnLimit => {}
+            // #290 / #373: informational only — the node stays in its current
+            // status (Running). Behaviour-preserving no-op, exactly like
+            // `PipelineLint`. `NodeBlockedOnLimit` recovery is deferred (Slice
+            // 2/3); `NodeAutoCompleteObserved` is the observe-only marker whose
+            // terminal counterpart (`NodeAutoCompleted`) is trust-gated to Unit
+            // B (#373 / ADR-0012). No node/run state touched.
+            EventKind::NodeBlockedOnLimit | EventKind::NodeAutoCompleteObserved => {}
 
             EventKind::CommandIssued => apply_command_event(&mut state, event),
         }
@@ -3263,6 +3273,7 @@ mod tests {
             EventKind::NodeAutoCompleted,
             EventKind::NodeStale,
             EventKind::NodeBlockedOnLimit,
+            EventKind::NodeAutoCompleteObserved,
             EventKind::RunPaused,
             EventKind::RunResumed,
         ];
@@ -3271,6 +3282,7 @@ mod tests {
             "\"node_auto_completed\"",
             "\"node_stale\"",
             "\"node_blocked_on_limit\"",
+            "\"node_auto_complete_observed\"",
             "\"run_paused\"",
             "\"run_resumed\"",
         ];

@@ -1878,6 +1878,7 @@ dependencies = [
  "filetime",
  "futures-util",
  "insta",
+ "libc",
  "mime_guess",
  "notify",
  "notify-debouncer-mini",

@@ -37,6 +37,7 @@ notify.workspace = true
 notify-debouncer-mini.workspace = true
 portable-pty.workspace = true
 futures-util = "0.3"
+libc = "0.2"
 sha2.workspace = true
 # TLS via rustls (pure-Rust, `ring`) instead of the default native-tls/OpenSSL:
 # openssl-sys can't cross-compile to aarch64-unknown-linux-gnu in the release

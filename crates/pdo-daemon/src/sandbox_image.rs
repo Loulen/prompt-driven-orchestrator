@@ -37,7 +37,9 @@ pub const DOCKER_CMD_OVERRIDE_ENV: &str = "PDO_DOCKER_CMD_OVERRIDE";
 
 /// Message d'erreur unique quand le binaire `docker` est introuvable sur le PATH. Devient la
 /// `reason` d'un `RunFailed` (US-16) : jamais d'exécution silencieuse sur l'hôte.
-const DOCKER_NOT_FOUND_MSG: &str =
+/// `pub(crate)` : réutilisé verbatim par [`crate::sandbox_container`] (#406) — un seul message
+/// canonique docker-absent partagé par les deux modules sandbox.
+pub(crate) const DOCKER_NOT_FOUND_MSG: &str =
     "sandbox run requires Docker, but the `docker` binary was not found on PATH — \
      install Docker or set this run's sandbox to `off`";
 
@@ -106,8 +108,9 @@ pub(crate) fn image_exists(docker_bin: &str, tag: &str) -> Result<bool> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err(anyhow::Error::new(e)).context(DOCKER_NOT_FOUND_MSG)
         }
-        Err(e) => Err(e)
-            .context("failed to run `docker image inspect` while probing the sandbox image"),
+        Err(e) => {
+            Err(e).context("failed to run `docker image inspect` while probing the sandbox image")
+        }
     }
 }
 
@@ -133,8 +136,7 @@ pub(crate) fn build_image(
             return Err(anyhow::Error::new(e)).context(DOCKER_NOT_FOUND_MSG);
         }
         Err(e) => {
-            return Err(e)
-                .context("failed to run `docker build` while building the sandbox image");
+            return Err(e).context("failed to run `docker build` while building the sandbox image");
         }
     };
     if !output.status.success() {
@@ -161,7 +163,10 @@ pub(crate) fn ensure_image(docker_bin: &str, sandbox_root: &Path) -> Result<Stri
     // 2. Octets bruts sur disque = entrée EXACTE du hash ET du build (jamais normaliser).
     let dockerfile = dockerfile_path(sandbox_root);
     let bytes = std::fs::read(&dockerfile).with_context(|| {
-        format!("failed to read sandbox Dockerfile at {}", dockerfile.display())
+        format!(
+            "failed to read sandbox Dockerfile at {}",
+            dockerfile.display()
+        )
     })?;
     // 3. Tag adressé par contenu.
     let tag = local_image_ref(&bytes);
@@ -172,7 +177,10 @@ pub(crate) fn ensure_image(docker_bin: &str, sandbox_root: &Path) -> Result<Stri
     // 5. Contexte de build dédié VIDE (D8 : jamais sandbox_root, siblings = staging par-run).
     let context_dir = build_context_dir(sandbox_root);
     std::fs::create_dir_all(&context_dir).with_context(|| {
-        format!("failed to create sandbox build context at {}", context_dir.display())
+        format!(
+            "failed to create sandbox build context at {}",
+            context_dir.display()
+        )
     })?;
     // 6. Build. v1: double-build concurrent premier-run accepté (deux `docker build -t <même
     //    tag>` sont sûrs — daemon sérialise + cache, la sonde court-circuite le 2e run) ;
@@ -400,7 +408,9 @@ mod tests {
 
         let h = dockerfile_hash(base);
         assert_eq!(h.len(), 12);
-        assert!(h.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(h
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         assert!(local_image_ref(base).starts_with("pdo-sandbox:h-"));
 
         // GARDE-FOU PARITÉ CI : figer l'algo canonique. Épingle la sortie Rust au préfixe que

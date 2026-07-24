@@ -46,10 +46,21 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    arbre porteur ; les sessions sœurs survivent (le client `docker exec` tué côté tmux ne tue pas le
    process conteneur, reparenté sur PID 1).
 
-7. **Tag image adressé par contenu.** `pdo-sandbox:h-<hash>` où `<hash>` = SHA-256[..12] des octets
-   exacts du Dockerfile sur disque. Deux Dockerfiles identiques → même tag ; une édition → rebuild.
-   C'est l'identité qui rendra plus tard image tirée d'un registry et image buildée localement
-   interchangeables sous le même nom (#411). `.gitattributes` épingle `eol=lf` pour la reproductibilité.
+7. **Tag image adressé par contenu + fourniture hybride (#411).** `pdo-sandbox:h-<hash>` où
+   `<hash>` = SHA-256[..12] des octets exacts du Dockerfile sur disque. Deux Dockerfiles identiques →
+   même tag ; une édition → rebuild. `.gitattributes` épingle `eol=lf` pour la reproductibilité.
+   C'est l'identité qui rend une image **tirée d'un registry** et une image **buildée localement**
+   interchangeables sous le même nom. Un réglage **par-daemon** `image_source`
+   (`registry` défaut | `dockerfile`, précédence `stored → env → default`, ADR-0015) pilote
+   `ensure_image` : en `registry`, si l'image n'est pas déjà locale, `docker pull
+   ghcr.io/loulen/pdo-sandbox:h-<hash>` puis **retag** sous le ref local, avec **fallback build** si
+   le pull échoue (offline / 404 tag absent / registry down) ; en `dockerfile`, build direct, jamais
+   de pull. La valeur de retour est **toujours le ref local** → `sandbox_container` inchangé (reçoit
+   `pdo-sandbox:h-<hash>` que l'image vienne d'un pull ou d'un build). Le pull est **anonyme** sur une
+   image **publique** : aucune nouvelle surface d'auth, le trou d'auth #260 reste **inchangé**. La
+   release publie l'image sur GHCR (job additif indépendant, multi-arch `amd64`+`arm64`, tags
+   `h-<hash>` + `latest` informatif) ; le hash CI (bash `sha256sum | cut`) est byte-identique au Rust,
+   gardé par un self-check de parité.
 
 8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
    muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne

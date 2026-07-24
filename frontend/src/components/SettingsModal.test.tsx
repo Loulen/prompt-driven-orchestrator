@@ -22,6 +22,8 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    // Image source (#411): built-in default `registry`, nothing stored/env.
+    image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -180,6 +182,67 @@ describe("SettingsModal", () => {
     render(<SettingsModal open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-default-model");
     expect(note).toHaveTextContent("PDO_DEFAULT_MODEL=sonnet");
+    expect(note).toHaveTextContent(/overridden/i);
+  });
+
+  it("seeds the image-source select from the effective value (#411)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const select = (await screen.findByTestId("setting-image-source")) as HTMLSelectElement;
+    expect(select.value).toBe("registry");
+  });
+
+  it("saves the picked image source (#411)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        image_source: {
+          effective: "dockerfile",
+          source: "stored",
+          stored: "dockerfile",
+          env: null,
+          default: "registry",
+        },
+      }),
+    );
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    const select = await screen.findByTestId("setting-image-source");
+    fireEvent.change(select, { target: { value: "dockerfile" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    // Only the image source changed; the numeric knobs stay at their effective values.
+    expect(updateSettingsMock).toHaveBeenCalledWith({ image_source: "dockerfile" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("does not send image_source when left unchanged (#411)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+    await screen.findByTestId("setting-image-source");
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("discloses a shadowed env source for the image source (#411)", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        image_source: {
+          effective: "dockerfile",
+          source: "stored",
+          stored: "dockerfile",
+          env: "registry",
+          default: "registry",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-source-image-source");
+    expect(note).toHaveTextContent("PDO_SANDBOX_IMAGE_SOURCE=registry");
     expect(note).toHaveTextContent(/overridden/i);
   });
 });

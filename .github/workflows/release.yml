@@ -106,3 +106,64 @@ jobs:
             artifacts/pdo-*.tar.gz \
             artifacts/pdo-*-SHA256SUMS.txt \
             install.sh
+
+  image:
+    name: Sandbox image (GHCR)
+    runs-on: ubuntu-latest
+    # Job ADDITIF : PAS de `needs:` — un hoquet registry ne doit jamais faire échouer/retarder
+    # la release binaire. Tourne en parallèle, échoue indépendamment. La landmine rustls des
+    # jobs `build`/`release` est intacte : ce job ne partage aucun step avec eux (#411 D13).
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute content-addressed tag + image ref
+        id: meta
+        run: |
+          set -euo pipefail
+          DF="crates/pdo-daemon/assets/sandbox/Dockerfile"
+          # Hash canonique — byte-identique à sandbox_image.rs::dockerfile_hash.
+          # sha256sum imprime "<64hex>  <file>" ; cut -c1-12 = 12 premiers hex.
+          HASH="$(sha256sum "$DF" | cut -c1-12)"
+          # Self-check parité (§2.9) : prouve que le sha256sum|cut de CE runner matche la
+          # constante figée dans sandbox_image.rs (test dockerfile_tag_stable_and_edit_sensitive).
+          # Attrape une dérive bash/coreutils invisible au test Rust. ~1 ms, sans cargo.
+          EXPECT="5804eefb8f92"
+          GOT="$(printf 'FROM ubuntu:24.04\nRUN apt-get update\n' | sha256sum | cut -c1-12)"
+          if [ "$GOT" != "$EXPECT" ]; then
+            echo "::error::sandbox hash-algo drift: bash=$GOT rust-pinned=$EXPECT"; exit 1
+          fi
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"   # GHCR exige un chemin lowercase (Loulen→loulen).
+          IMAGE="ghcr.io/${OWNER}/pdo-sandbox"
+          echo "hash=${HASH}"   >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${IMAGE}:h-${HASH} (+ :latest)"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: crates/pdo-daemon/assets/sandbox
+          file: crates/pdo-daemon/assets/sandbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          # `--label` (annotation de manifest) lie le package au repo SANS toucher les octets
+          # du Dockerfile → hash invariant (D2). Le 1er push auto-linke via GITHUB_TOKEN.
+          labels: |
+            org.opencontainers.image.source=https://github.com/Loulen/prompt-driven-orchestrator
+          # `latest` est INFORMATIF : le daemon ne tire QUE `h-<hash>` (content-addressed). L'AC
+          # coche « aux deux tags » ; un reviewer peut retirer `latest` (pointeur mutable que le
+          # content-hash évite, cf. CONTEXT.md « Éviter : latest »).
+          tags: |
+            ${{ steps.meta.outputs.image }}:h-${{ steps.meta.outputs.hash }}
+            ${{ steps.meta.outputs.image }}:latest

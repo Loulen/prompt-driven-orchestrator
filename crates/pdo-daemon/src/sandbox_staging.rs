@@ -10,7 +10,8 @@
 //! (purger). Les slices sœurs le **consomment** mais ne sont **pas** ici :
 //! - #406 monte `claude-home/` → `$HOME/.claude` et `.claude.json` → `$HOME/.claude.json` ;
 //! - #407 câble `prepare`/`teardown` dans le run-advance (ADR-0030) ;
-//! - #408 câble `merge_back` + pointe stale-detection/coût vers le staging (seam `transcripts_root`).
+//! - #408 câble `merge_back` (transition terminale + `cleanup_run`) + pointe
+//!   stale-detection/coût vers le staging (seam [`crate::sandbox_run::transcripts_root`]).
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
 //! - **`copy` = allowlist, jamais denylist.** Copier « tout `~/.claude` sauf
@@ -25,7 +26,8 @@
 //!   désarme l'onboarding mais PAS le dialogue « trust this folder ? » — un agent
 //!   non surveillé se bloquerait. On pré-approuve la racine du Run.
 
-#![allow(dead_code)] // Tracer bullet : consommé par #406/#407, non câblé dans cette slice.
+// #408: `merge_back` is now wired; the rest of the module (path-math + effects)
+// is consumed by #406/#407.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

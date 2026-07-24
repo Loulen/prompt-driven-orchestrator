@@ -8,18 +8,22 @@
 //! only reader of `AppState`), then the core ([`ensure_ready`], [`cleanup`]) works
 //! from explicit values only — mirroring the pure-module discipline.
 //!
-//! What #407 wires (and what it does NOT):
+//! What this module wires:
 //! - [`ensure_ready`] — stage the Claude home once, ensure the image, ensure the
 //!   container is up. Called at create-time (eager fail-fast), `boot_recovery`
-//!   (reconcile a live sandboxed Run), and `open_run_shell` (resurrect). Sync and
+//!   (reconcile a live sandboxed Run), `open_run_shell` (resurrect), and
+//!   `resume_run` (re-arm a terminal Run after a host reboot, #408 D5). Sync and
 //!   possibly long (`docker build` on the first machine run) → async callers wrap
 //!   it in `spawn_blocking`.
-//! - [`cleanup`] — destroy the container + purge the staging at `cleanup_run`.
-//!   **`merge_back` is NOT wired here** — it belongs to the observability slice
-//!   #408 (together with the `transcripts_root` seam), so a `pure`/`copy` Run is
-//!   deliberately blind to cost / stale-detection until then. That is an
-//!   *observability* gap, not a correctness/liveness one: session-death detection
-//!   is transcript-independent and stays alive.
+//! - [`cleanup`] — merge the transcripts back, destroy the container, then purge
+//!   the staging at `cleanup_run`.
+//! - [`transcripts_root`] / [`merge_back_best_effort`] — the observability seam
+//!   (#408, ADR-0030 pt 9): cost ([`crate::run_cost`]) and stale-detection
+//!   ([`crate::stale_detector`]) read a sandboxed Run's transcripts from its
+//!   staged home while it is live, and `merge_back` lands them in `~/.claude`
+//!   at the terminal transition (via [`merge_back_best_effort`], the
+//!   `append_event` chokepoint) and again at `cleanup_run` (via [`cleanup`],
+//!   before `teardown`). session-death detection stays transcript-independent.
 
 use std::path::{Path, PathBuf};
 
@@ -119,6 +123,70 @@ pub(crate) fn docker_bin(state: &AppState) -> String {
         .unwrap_or_else(|| "docker".to_string())
 }
 
+/// The `projects/` root where cost ([`crate::run_cost`]) and stale-detection
+/// ([`crate::stale_detector`]) read a Run's Claude Code transcripts (#408). The
+/// SINGLE seam shared by both consumers.
+///
+/// - A sandboxed Run whose **staging still exists** (live / reapable / resumed)
+///   → its staged home (`<sandbox_root>/<run_id>/claude-home/projects/`), where
+///   `claude` writes in real time through the identity mount.
+/// - `off`, OR a sandboxed Run whose staging was purged by `cleanup_run` → the
+///   host `~/.claude/projects/`, where `merge_back` flushed the transcripts.
+///
+/// Dispatch is keyed on the **existence of the staging dir** (not the Run's
+/// terminal status): it stays correct even if the best-effort terminal
+/// `merge_back` failed, as long as the staging lives (cf. plan #408 D-1). The cwd
+/// encoding is unchanged — the caller still resolves the encoded dirname from
+/// this base via [`crate::stale_detector::encode_working_dir`], the single source
+/// of truth (#373); the seam only swaps the base `projects/` root.
+pub(crate) fn transcripts_root(
+    mode: SandboxMode,
+    run_id: &str,
+    home_root: &Path,
+    sandbox_root: &Path,
+) -> PathBuf {
+    if !mode.is_off() && sandbox_staging::staging_dir_for_run(sandbox_root, run_id).exists() {
+        sandbox_staging::staged_claude_home(sandbox_root, run_id).join("projects")
+    } else {
+        home_root.join(".claude").join("projects")
+    }
+}
+
+/// Merge a Run's staged transcripts back to `~/.claude/projects/` at its terminal
+/// transition (#408), so cost + stale-detection see them at the standard encoded
+/// dirname once the staging is eventually purged. No-op for `off`.
+///
+/// Never fails / slows the caller: it re-projects the Run (to read the final
+/// `sandbox` mode), resolves the roots, then fires the filesystem walk on a
+/// **detached** `spawn_blocking` — the terminal transition must not depend on
+/// this merge (ADR-0023). Idempotent (`merge_back` is copy-if-absent-or-larger),
+/// so a second terminal event or the later `cleanup_run` merge is safe. The
+/// caller (`append_event`) gates on the 4 terminal kinds first, so only terminal
+/// events pay the re-projection.
+pub(crate) async fn merge_back_best_effort(state: &AppState, run_id: &str) {
+    let Some((_, run_state)) = crate::reload_run_state(state, run_id).await else {
+        return;
+    };
+    if run_state.sandbox.is_off() {
+        return;
+    }
+    let (home_root, sandbox_root) = match sandbox_home_roots(state) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("merge_back: cannot resolve roots for run {run_id}: {e:#}");
+            return;
+        }
+    };
+    let rid = run_id.to_string();
+    // Fire-and-forget: capture owned values, do NOT `.await` (that would recouple
+    // the terminal transition to the merge's latency + JoinError).
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = sandbox_staging::merge_back(&home_root, &sandbox_root, &rid) {
+            warn!("sandbox merge_back for run {rid} failed (best-effort): {e:#}");
+        }
+    });
+}
+
 /// Guarantee the Run's sandbox is ready to accept `docker exec` tails: staged
 /// home present, image built, container up. Idempotent — safe to call at
 /// create-time, boot recovery, spawn-time, and run-shell open.
@@ -178,13 +246,19 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     Ok(())
 }
 
-/// Destroy the Run's container and purge its staging (`cleanup_run`, #407 D9).
+/// Merge the transcripts back, destroy the Run's container, then purge its
+/// staging (`cleanup_run`, #407 D9 + #408 D-4).
 ///
-/// Best-effort: never fails the archival. **The caller must invoke this BEFORE
-/// `git worktree remove`** — the container bind-mounts the repo, so removing a
-/// live worktree under it would hit a busy mount. `merge_back` is intentionally
-/// absent (→ #408).
-pub(crate) fn cleanup(docker_bin: &str, sandbox_root: &Path, run_id: &str) {
+/// Best-effort throughout: never fails the archival. **The caller must invoke
+/// this BEFORE `git worktree remove`** — the container bind-mounts the repo, so
+/// removing a live worktree under it would hit a busy mount. `merge_back` runs
+/// **first** ("harvest before purge" is an unskippable invariant): it is
+/// idempotent (copy-if-absent-or-larger), so this final pass — which captures any
+/// post-terminal growth (resume, late subagent flushes) the detached terminal
+/// merge missed — is safe even after that merge already ran.
+pub(crate) fn cleanup(docker_bin: &str, home_root: &Path, sandbox_root: &Path, run_id: &str) {
+    // Harvest BEFORE teardown wipes the staging. Best-effort (swallow the error).
+    let _ = sandbox_staging::merge_back(home_root, sandbox_root, run_id);
     if let Err(e) = sandbox_container::remove(docker_bin, run_id) {
         warn!("sandbox cleanup: failed to remove container for run {run_id} (best-effort): {e:#}");
     }
@@ -384,6 +458,7 @@ mod tests {
     fn cleanup_removes_container_and_staging() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
+        let home_root = tmp.path().join("home");
         let sandbox_root = tmp.path().join("sandbox");
         // Seed a staging dir to be torn down.
         std::fs::create_dir_all(sandbox_staging::staged_claude_home(&sandbox_root, "r1")).unwrap();
@@ -392,7 +467,7 @@ mod tests {
         // `cleanup` is idempotent + best-effort (swallows ETXTBSY); retry until the
         // container-remove is logged.
         let logged = retry_side_effect(
-            || cleanup(&docker, &sandbox_root, "r1"),
+            || cleanup(&docker, &home_root, &sandbox_root, "r1"),
             || {
                 let l = log_lines(&log);
                 l.len() >= 3 && l[..3] == ["rm", "-f", "pdo-sbx-r1"]
@@ -435,6 +510,119 @@ mod tests {
             logged,
             "targeted kill must exec with the session marker; log: {:?}",
             log_lines(&log)
+        );
+    }
+
+    // --- #408: cleanup harvests transcripts before teardown --------------------
+
+    #[test]
+    fn cleanup_merges_transcripts_before_purging_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _log) = write_fake_docker(tmp.path());
+        let home_root = tmp.path().join("home");
+        let sandbox_root = tmp.path().join("sandbox");
+        // Seed a staged transcript under one encoded project dir.
+        let staged_projects = sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects");
+        let proj = staged_projects.join("-enc-worktree");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("s.jsonl"), "{\"line\":1}\n").unwrap();
+
+        retry_side_effect(
+            || cleanup(&docker, &home_root, &sandbox_root, "r1"),
+            || home_root.join(".claude/projects/-enc-worktree/s.jsonl").is_file(),
+        );
+
+        // merge_back landed the transcript in the host projects dir …
+        assert!(
+            home_root.join(".claude/projects/-enc-worktree/s.jsonl").is_file(),
+            "cleanup must merge transcripts to the host BEFORE teardown"
+        );
+        // … and teardown then purged the staging.
+        assert!(
+            !sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists(),
+            "cleanup purges the staging after the merge"
+        );
+    }
+
+    // --- #408: transcripts_root seam (3 arms + root-invariance) ----------------
+
+    #[test]
+    fn transcripts_root_off_is_always_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let sandbox_root = tmp.path().join("sandbox");
+        // Even if a staging dir happens to exist, `off` reads the host.
+        std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
+        assert_eq!(
+            transcripts_root(SandboxMode::Off, "r1", &home, &sandbox_root),
+            home.join(".claude").join("projects")
+        );
+    }
+
+    #[test]
+    fn transcripts_root_sandboxed_live_is_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let sandbox_root = tmp.path().join("sandbox");
+        // Staging present → live/reapable Run → read the staged home.
+        std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
+        assert_eq!(
+            transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root),
+            sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
+        );
+        // `copy` behaves identically.
+        assert_eq!(
+            transcripts_root(SandboxMode::Copy, "r1", &home, &sandbox_root),
+            sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
+        );
+    }
+
+    #[test]
+    fn transcripts_root_sandboxed_after_cleanup_is_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let sandbox_root = tmp.path().join("sandbox");
+        // No staging dir (post-`cleanup_run`) → read the host, where merge_back
+        // flushed. Keyed on staging EXISTENCE, not the Run's terminal status.
+        assert!(!sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists());
+        assert_eq!(
+            transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root),
+            home.join(".claude").join("projects")
+        );
+    }
+
+    #[test]
+    fn transcripts_root_encoding_is_root_invariant() {
+        // AC5: the seam only swaps the base `projects/` root — the per-cwd encoded
+        // segment stays the single source of truth (`encode_working_dir`, #373),
+        // never re-derived by the seam. So for a given cwd, appending the encoded
+        // segment to the seam-resolved root yields the same dirname regardless of
+        // which base (host vs staging) the seam picked.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let sandbox_root = tmp.path().join("sandbox");
+        let cwd = std::path::Path::new("/home/u/.pdo/runs/r1/worktree");
+        let enc = crate::stale_detector::encode_working_dir(cwd);
+
+        // Host arm (no staging).
+        let host = transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root);
+        assert_eq!(host.join(&enc), home.join(".claude/projects").join(&enc));
+
+        // Staging arm (staging materialised) — same encoded segment appended.
+        std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
+        let staged = transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root);
+        assert_eq!(
+            staged.join(&enc),
+            sandbox_staging::staged_claude_home(&sandbox_root, "r1")
+                .join("projects")
+                .join(&enc)
+        );
+        // The bases differ, but the trailing encoded segment is identical.
+        assert_eq!(host.file_name(), staged.file_name()); // both end in "projects"
+        assert_eq!(
+            host.join(&enc).file_name(),
+            staged.join(&enc).file_name(),
+            "the encoded cwd segment is root-invariant"
         );
     }
 }

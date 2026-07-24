@@ -821,8 +821,9 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > staging fs (#404) + **fourniture de l'image** (#405, *Image (fourniture)*) + **exécution /
 > conteneur** (#406, *Exécution (conteneur)*) + **câblage run-advance** (#407 : prep eager fail-fast,
 > wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
-> d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260). Reste **différé** : `merge_back` +
-> observabilité (#408), précédence des sources du mode (#410), fourniture par registry (#411).
+> d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260) + **observabilité** (#408 : `merge_back`
+> câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale). Reste
+> **différé** : précédence des sources du mode (#410), fourniture par registry (#411).
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -862,9 +863,19 @@ de sous-agents `<uuid>/subagents/*.jsonl`), sous le **même dirname encodé** (c
 conteneur, garanti par les identity mounts, ADR-0030). **Idempotent** : copie ssi le fichier hôte est
 absent ou plus court (transcripts append-only) ; ne réécrit jamais un fichier hôte. Aucune autre
 écriture vers l'hôte. **Jeté délibérément (v1)** : settings, statsig, todos, `history.jsonl`,
-shell-snapshots — tout sauf les transcripts (#403 US-29). **Câblage dans le run-advance = #408**
-(pas #407) : d'ici là un Run sandboxé est aveugle pour le coût/stale, trou d'observabilité assumé
-(ADR-0030). _Éviter_ : « sync », « flush », « commit ».
+shell-snapshots — tout sauf les transcripts (#403 US-29). **Câblé dans le run-advance (#408)** : à la
+transition terminale (chokepoint `append_event`, tâche détachée) **et** à `cleanup_run` (avant
+`teardown`, synchrone), via le seam `transcripts_root` qui rend coût/stale sandbox-conscients. Double
+merge = état identique (idempotence). _Éviter_ : « sync », « flush », « commit ».
+
+**`transcripts_root(run_id)` (seam d'observabilité)** :
+La racine `projects/` que le coût (`run_cost`) et la stale-detection (`stale_detector`) lisent pour un
+Run. `off` → `~/.claude/projects/`. Sandboxé **vivant** → le staging
+(`~/.pdo/sandbox/<run-id>/claude-home/projects/`, transcripts en direct via l'identity mount) ;
+**après `cleanup_run`** → `~/.claude/projects/` (où `merge_back` a flushé). Dispatch keyé sur
+l'**existence du staging dir**, pas le statut terminal du Run (reste correct même si le merge terminal
+best-effort a échoué). L'encodage du cwd reste la source unique de vérité (`encode_working_dir`,
+#373) — le seam ne fait que substituer la base. _Éviter_ : « home », « projects dir » seul.
 
 **`teardown(run_id)`** :
 Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
@@ -964,8 +975,12 @@ absent (idempotent). C'est **le** verbe « destroy / destruction » réservé pa
   wrapping des tails au chokepoint `build_tmux_script` (`off` byte-identique), kill ciblé dans
   `reap_node_session`/`kill_node`/`restart_node`, `remove`+`teardown` au `cleanup_run`,
   `ensure_running` à `boot_recovery` (Run live) et `open_run_shell` (ressuscite-ou-échoue).
-- **Différé** : `merge_back` **dans le run-advance** + observabilité coût/stale (seam
-  `transcripts_root`) (#408) ; injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
+- **Câblé (#408, ADR-0030)** : `merge_back` dans le run-advance — transition terminale (chokepoint
+  `append_event`, détaché) **et** `cleanup_run` (avant `teardown`, synchrone) ; observabilité coût
+  (`run_cost`) + stale (`stale_detector`) via le seam `transcripts_root` (staging si Run sandboxé
+  vivant, `~/.claude/projects/` sinon) ; garde `ensure_ready`-ou-échec ajouté à `resume_run` (re-arme
+  le conteneur après reboot hôte).
+- **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
   `default_sandbox`, pattern ADR-0015) (#410) ; **fourniture par registry** (pull GHCR +
   `image_source`) (#411).

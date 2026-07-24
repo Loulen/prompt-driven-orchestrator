@@ -86,6 +86,17 @@ persisté, et l'UI l'étiquette explicitement « est. ».
   N'ajoute **pas** le coût au handler de **liste** (`GET /runs`) : il éviterait un scan de
   transcripts fan-out par poll.
 
+## Amendement — Runs sandboxés (#408)
+
+Le read-source `~/.claude/projects/` n'est plus figé : `compute_run_cost` (et son memo
+`compute_run_cost_cached`) prennent un `transcripts_root` **injectable** — le seam
+`sandbox_run::transcripts_root` (ADR-0030 pt 9). Un Run sandboxé **vivant** lit son *staged home*
+(`~/.pdo/sandbox/<run-id>/claude-home/projects/`, alimenté en direct par l'identity mount) ; après
+`cleanup_run`, `merge_back` a flushé les transcripts vers `~/.claude/projects/` et la racine
+redevient le défaut hôte. Un Run `off` lit **toujours** `~/.claude/projects/` — invariant inchangé.
+Le memo garde la **même** racine pour la clé (`max mtime`) et la valeur (agrégat), donc pas de désync.
+La dédup `(message.id, requestId)` reste la garantie anti-double-comptage, quelle que soit la racine.
+
 ## Alternatives rejetées
 
 - **Embarquer / shell-out `ccusage`** — dépendance binaire/Node + réseau ; daemon network-free.

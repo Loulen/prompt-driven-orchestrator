@@ -258,7 +258,10 @@ fn write_node_output(daemon: &TestDaemon, run_id: &str, content: &str) {
 
 async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
     let resp = reqwest::Client::new()
-        .post(format!("{}/runs/{run_id}/nodes/{NODE_ID}/done", daemon.url()))
+        .post(format!(
+            "{}/runs/{run_id}/nodes/{NODE_ID}/done",
+            daemon.url()
+        ))
         .json(&serde_json::json!({}))
         .send()
         .await
@@ -348,7 +351,11 @@ async fn cost_reads_staging_during_pure_run() {
     // seeded by the eager prep.
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
-        wait_until(|| staging_projects(&daemon, &run_id).parent().unwrap().exists()).await,
+        wait_until(|| staging_projects(&daemon, &run_id)
+            .parent()
+            .unwrap()
+            .exists())
+        .await,
         "the staging home must exist during a live sandboxed run"
     );
 
@@ -400,7 +407,11 @@ async fn stale_detection_reads_staging_during_pure_run() {
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
-        wait_until(|| staging_projects(&daemon, &run_id).parent().unwrap().exists()).await,
+        wait_until(|| staging_projects(&daemon, &run_id)
+            .parent()
+            .unwrap()
+            .exists())
+        .await,
         "the staging home must exist during a live sandboxed run"
     );
 
@@ -445,11 +456,21 @@ async fn terminal_merges_staging_into_host_claude_projects() {
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
-        wait_until(|| staging_projects(&daemon, &run_id).parent().unwrap().exists()).await,
+        wait_until(|| staging_projects(&daemon, &run_id)
+            .parent()
+            .unwrap()
+            .exists())
+        .await,
         "staging must exist before the terminal merge"
     );
     let body = format!("{}\n", priced_line("m1", "r1", 1_000_000));
-    plant_transcript(&staging_projects(&daemon, &run_id), &daemon, &run_id, &body, None);
+    plant_transcript(
+        &staging_projects(&daemon, &run_id),
+        &daemon,
+        &run_id,
+        &body,
+        None,
+    );
 
     // Drive the run terminal (worker output present → run completes).
     write_node_output(&daemon, &run_id, "done\n");
@@ -499,11 +520,21 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
-        wait_until(|| staging_projects(&daemon, &run_id).parent().unwrap().exists()).await,
+        wait_until(|| staging_projects(&daemon, &run_id)
+            .parent()
+            .unwrap()
+            .exists())
+        .await,
         "staging must exist"
     );
     let body = format!("{}\n", priced_line("m1", "r1", 1_000_000));
-    plant_transcript(&staging_projects(&daemon, &run_id), &daemon, &run_id, &body, None);
+    plant_transcript(
+        &staging_projects(&daemon, &run_id),
+        &daemon,
+        &run_id,
+        &body,
+        None,
+    );
 
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
@@ -519,7 +550,12 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
     let after_terminal = std::fs::read(&host_file).unwrap();
 
     // Second merge at cleanup_run (before teardown), then archive.
-    let resp = post_command(&daemon, &run_id, serde_json::json!({ "kind": "cleanup_run" })).await;
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "cleanup_run" }),
+    )
+    .await;
     assert!(resp.status().is_success(), "cleanup_run should archive");
     wait_run_status(&daemon, &run_id, "archived").await;
 
@@ -578,7 +614,12 @@ async fn resume_reengages_seam_and_ensures_container() {
     // always probes the container), so the count strictly increases.
     let probes_before = log_text(&log).lines().filter(|l| *l == "container").count();
 
-    let resp = post_command(&daemon, &run_id, serde_json::json!({ "kind": "resume_run" })).await;
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "resume_run" }),
+    )
+    .await;
     assert_eq!(
         resp.status(),
         200,
@@ -611,7 +652,12 @@ async fn resume_fails_loud_when_docker_unavailable() {
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_run_status(&daemon, &run_id, "failed").await;
 
-    let resp = post_command(&daemon, &run_id, serde_json::json!({ "kind": "resume_run" })).await;
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "resume_run" }),
+    )
+    .await;
     assert_eq!(
         resp.status(),
         500,

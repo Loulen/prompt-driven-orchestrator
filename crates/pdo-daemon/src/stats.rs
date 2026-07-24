@@ -381,8 +381,8 @@ pub async fn stats_cost(
 
     // #408: resolve the sandbox home roots once for the whole fold. HOME absent →
     // degrade to the host `~/.claude` root (never fail the aggregate).
-    let (home_root, sandbox_root) = crate::sandbox_run::sandbox_home_roots(&state)
-        .unwrap_or_else(|_| {
+    let (home_root, sandbox_root) =
+        crate::sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)

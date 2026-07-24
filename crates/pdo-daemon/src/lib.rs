@@ -6512,8 +6512,8 @@ async fn get_run(
             // #408: read the cost transcripts from the sandboxed Run's staged home
             // while it is live, `~/.claude/projects/` otherwise. HOME absent →
             // degrade to the host root (never fail a read).
-            let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(&state)
-                .unwrap_or_else(|_| {
+            let (home_root, sandbox_root) =
+                sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
                     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
                     let sandbox = home.join(".pdo").join("sandbox");
                     (home, sandbox)
@@ -7038,7 +7038,9 @@ async fn run_stale_detection(state: &AppState) {
     let (home_root, sandbox_root) = match sandbox_run::sandbox_home_roots(state) {
         Ok(r) => r,
         Err(e) => {
-            warn!("stale sweep: cannot resolve sandbox home roots, treating all runs as host ({e:#})");
+            warn!(
+                "stale sweep: cannot resolve sandbox home roots, treating all runs as host ({e:#})"
+            );
             let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)

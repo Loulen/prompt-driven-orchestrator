@@ -522,19 +522,26 @@ mod tests {
         let home_root = tmp.path().join("home");
         let sandbox_root = tmp.path().join("sandbox");
         // Seed a staged transcript under one encoded project dir.
-        let staged_projects = sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects");
+        let staged_projects =
+            sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects");
         let proj = staged_projects.join("-enc-worktree");
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join("s.jsonl"), "{\"line\":1}\n").unwrap();
 
         retry_side_effect(
             || cleanup(&docker, &home_root, &sandbox_root, "r1"),
-            || home_root.join(".claude/projects/-enc-worktree/s.jsonl").is_file(),
+            || {
+                home_root
+                    .join(".claude/projects/-enc-worktree/s.jsonl")
+                    .is_file()
+            },
         );
 
         // merge_back landed the transcript in the host projects dir …
         assert!(
-            home_root.join(".claude/projects/-enc-worktree/s.jsonl").is_file(),
+            home_root
+                .join(".claude/projects/-enc-worktree/s.jsonl")
+                .is_file(),
             "cleanup must merge transcripts to the host BEFORE teardown"
         );
         // … and teardown then purged the staging.

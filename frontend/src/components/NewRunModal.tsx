@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, Star, X } from "lucide-react";
-import type { PipelineListEntry, Trigger } from "../types";
+import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
-import { createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, validateRepo, listBranches, testGuard } from "../api";
+import { createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, promotePipeline, validateRepo, listBranches, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
@@ -90,6 +90,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [branchesLoading, setBranchesLoading] = useState(false);
 
   const [images, setImages] = useState<File[]>([]);
+
+  // Sandbox (#410). `settings` carries the instance `default_sandbox` (prefill) and
+  // the advisory `sandbox_docker` probe (greying). `sandbox` is the selector value:
+  // a concrete `off`/`copy`/`pure` in run mode; also `""` in trigger mode, meaning
+  // "inherit the instance default".
+  const [settings, setSettings] = useState<InstanceSettings | null>(null);
+  const [sandbox, setSandbox] = useState<string>("off");
+  const sandboxSeeded = useRef(false);
+
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
   const refreshRecentRepos = useRecentReposStore((s) => s.refresh);
 
@@ -285,6 +294,49 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     loadPipelines();
   }, [loadPipelines]);
 
+  // #410: fetch instance settings on open — the `default_sandbox` prefill AND the
+  // `sandbox_docker` availability probe arrive in one round-trip (the modal did not
+  // fetch settings before this slice).
+  useEffect(() => {
+    if (!open) return;
+    fetchSettings()
+      .then(setSettings)
+      .catch(() => {});
+  }, [open]);
+
+  // #410: seed the sandbox selector once per open, matched to the intent. Edit/new
+  // trigger seed synchronously (from the trigger / the "inherit" sentinel); a plain
+  // run waits for the settings fetch to prefill the instance default, CLAMPED to
+  // `off` when Docker is unavailable (availability wins over a `copy`/`pure` prefill
+  // so we never mint a Run doomed to a RunFailed the UI could have prevented).
+  useEffect(() => {
+    if (!open) {
+      sandboxSeeded.current = false;
+      return;
+    }
+    if (sandboxSeeded.current) return;
+    // One-shot seeding gated by the ref (bounded, does not re-fire) — the same
+    // pattern as the intent reset above, so the rule is opted out here too.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (openIntent.kind === "edit-trigger") {
+      setSandbox(openIntent.trigger.sandbox ?? "");
+      sandboxSeeded.current = true;
+      return;
+    }
+    if (openIntent.kind === "new-trigger") {
+      setSandbox(""); // "" = inherit the instance default
+      sandboxSeeded.current = true;
+      return;
+    }
+    // run: prefill from the instance default once settings are loaded.
+    if (!settings) return;
+    const def = settings.default_sandbox.effective ?? "off";
+    const dockerOk = settings.sandbox_docker.available;
+    setSandbox(!dockerOk && def !== "off" ? "off" : def);
+    sandboxSeeded.current = true;
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, openIntent, settings]);
+
   const repoPipelines = useMemo(
     () => pipelines.filter((p) => p.scope === "repo"),
     [pipelines],
@@ -419,6 +471,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         target_repo: targetRepo.trim() || undefined,
         source_branch: sourceBranch || undefined,
         name: autoName ? undefined : runName.trim() || undefined,
+        // #410: the explicit run-level mode. Always concrete in run mode
+        // (off/copy/pure); sent explicitly so it wins the create-chokepoint
+        // precedence over any instance/trigger default.
+        sandbox: sandbox || undefined,
         images: images.length > 0 ? images : undefined,
       });
       onCreated(resp.run_id);
@@ -434,9 +490,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, sandbox, refreshRecentRepos]);
 
   const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt;
+
+  // #410: advisory Docker greying. Only gate `copy`/`pure` once we KNOW Docker is
+  // unavailable (settings loaded && probe false); while settings load, stay
+  // optimistic. `sandboxReason` explains the greying (title + help text).
+  const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
+  const sandboxReason = settings?.sandbox_docker.reason ?? undefined;
 
   // The cron expression the Trigger will be created with: a compiled preset or
   // the raw escape-hatch expression.
@@ -501,6 +563,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           // `null` clears a stale cap when overlap is off or the input is blank.
           overlap_policy: allowOverlap ? "allow" : "skip",
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : null,
+          // #410: `""` (Use instance default) clears back to inheriting (`null`);
+          // a concrete mode sets it.
+          sandbox: sandbox || null,
           variables,
         });
       } else {
@@ -514,6 +579,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           source_branch: sourceBranch || undefined,
           overlap_policy: allowOverlap ? "allow" : "skip",
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
+          // #410: `""` (Use instance default) → `null` (inherit); a concrete mode sets it.
+          sandbox: sandbox || null,
           variables,
         });
       }
@@ -551,6 +618,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     maxConcurrent,
     targetRepo,
     sourceBranch,
+    sandbox,
     flushPendingSaves,
     onTriggerSaved,
     onClose,
@@ -836,6 +904,50 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               {selectedPipeline?.scope === "library" && selectedPipeline.drifted && (
                 <span className="text-st-blocked" style={{ fontSize: "10.5px" }} data-testid="drift-warning">
                   Source pipeline has changed — re-promote to update library copy
+                </span>
+              )}
+            </div>
+
+            {/* Sandbox (#410): the isolation mode. Run mode offers a concrete
+                off/copy/pure (prefilled from the instance default); Trigger mode adds
+                a leading "Use instance default" option. `copy`/`pure` are disabled
+                when the daemon reports Docker unavailable (advisory greying — the
+                run-advance fail-fast remains authoritative). */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="sandbox-select"
+                className="font-medium text-fg-2"
+                style={{ fontSize: "11.5px" }}
+              >
+                Sandbox
+              </label>
+              <select
+                id="sandbox-select"
+                data-testid="sandbox-select"
+                value={sandbox}
+                onChange={(e) => setSandbox(e.target.value)}
+                title={dockerUnavailable ? sandboxReason : undefined}
+                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
+                style={{ fontSize: "12px" }}
+              >
+                {mode === "trigger" && (
+                  <option value="">Use instance default</option>
+                )}
+                <option value="off">off (run on the host)</option>
+                <option value="copy" disabled={dockerUnavailable}>
+                  {dockerUnavailable ? "copy (Docker unavailable)" : "copy (Docker sandbox)"}
+                </option>
+                <option value="pure" disabled={dockerUnavailable}>
+                  {dockerUnavailable ? "pure (Docker unavailable)" : "pure (Docker sandbox)"}
+                </option>
+              </select>
+              {dockerUnavailable && (
+                <span
+                  className="text-fg-4"
+                  style={{ fontSize: "10.5px" }}
+                  data-testid="sandbox-docker-warning"
+                >
+                  {sandboxReason}
                 </span>
               )}
             </div>

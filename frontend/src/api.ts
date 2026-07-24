@@ -344,6 +344,9 @@ export interface CreateRunRequest {
   target_repo?: string;
   source_branch?: string;
   name?: string;
+  /** Explicit sandbox mode (#410): `"off"` | `"copy"` | `"pure"`. Omitted → the
+   *  server defers to the trigger/instance default at the create chokepoint. */
+  sandbox?: string;
   images?: File[];
 }
 
@@ -363,6 +366,10 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.target_repo) form.append("target_repo", req.target_repo);
     if (req.source_branch) form.append("source_branch", req.source_branch);
     if (req.name) form.append("name", req.name);
+    // #410: thread the explicit sandbox mode through the multipart path too, so a
+    // sandboxed Run created WITH attached images keeps its mode (the daemon's
+    // multipart parser reads this field).
+    if (req.sandbox) form.append("sandbox", req.sandbox);
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
@@ -388,6 +395,9 @@ export interface CreateTriggerRequest {
   overlap_policy?: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; omit/undefined = unbounded. */
   max_concurrent?: number | null;
+  /** Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or null/omit to
+   *  inherit the instance default. */
+  sandbox?: string | null;
 }
 
 export function fetchTriggers(): Promise<Trigger[]> {
@@ -421,6 +431,9 @@ export interface UpdateTriggerRequest {
   variables?: Record<string, unknown>;
   /** Bounded-`allow` ceiling (#239): number sets, null clears to unbounded, undefined leaves unchanged. */
   max_concurrent?: number | null;
+  /** Per-Trigger sandbox mode (#410): a mode string sets it, `null` clears back to
+   *  inheriting the instance default, `undefined` leaves it unchanged. */
+  sandbox?: string | null;
 }
 
 export function updateTrigger(

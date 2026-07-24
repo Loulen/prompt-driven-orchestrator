@@ -90,6 +90,24 @@ export interface InstanceSettings {
    * {@link StringSettingField} (a superset) even though it is never null.
    */
   image_source: StringSettingField;
+  /**
+   * Instance-wide default sandbox mode (#410): `"off"` (host, default), `"copy"`,
+   * or `"pure"`. A closed enum with a built-in `off` default, so every tier is a
+   * present string — reuses {@link StringSettingField} (a superset) though it is
+   * never null. The create-run chokepoint resolves precedence run → trigger → this.
+   */
+  default_sandbox: StringSettingField;
+  /**
+   * Advisory Docker availability probe (#410), folded into `GET /settings` so the
+   * NewRunModal learns the default AND whether Docker can run a sandbox in one fetch.
+   * `available: false` grays out `copy`/`pure` (`reason` explains why); the
+   * run-advance fail-fast stays the authoritative gate.
+   */
+  sandbox_docker: {
+    available: boolean;
+    reason: string | null;
+    checked_at: string;
+  };
   updated_at: string;
 }
 
@@ -108,6 +126,10 @@ export interface UpdateSettingsRequest {
   /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
    *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
   image_source?: string;
+  /** Default sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or `""` to clear
+   *  back to the built-in default (`off`). Same `""`-sentinel discipline as
+   *  `default_model`/`image_source`. */
+  default_sandbox?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old
@@ -162,6 +184,9 @@ export interface Trigger {
   overlap_policy: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; null = unbounded. */
   max_concurrent?: number | null;
+  /** Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or null/absent
+   *  to inherit the instance default. Read at fire time. */
+  sandbox?: string | null;
   enabled: boolean;
   next_fire_at?: string | null;
   last_fired_at?: string | null;
@@ -312,6 +337,19 @@ export interface RunState {
   foreach_states?: Record<string, ForEachStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
+  /**
+   * Isolation mode for this Run (#403 / #407 / #410). Absent on host/historical
+   * runs (projected as `off` server-side and skipped from the payload when off).
+   * Immutable once the Run started.
+   */
+  sandbox?: "off" | "copy" | "pure";
+  /**
+   * One-time image-prep visibility for a sandboxed Run (#410). `"pending"` while
+   * the image is pulled/built at first use; `"ready"` once the container is about
+   * to run; absent for host/off runs. Additive — `status` stays `"running"`
+   * throughout, so this drives a banner only.
+   */
+  sandbox_prep?: "pending" | "ready";
   /**
    * Cumulative count of NodeRun sessions this run spawned — raw `NodeStarted`
    * count, not distinct `(node, iter)`; manager excluded (#100). Defaults to 0

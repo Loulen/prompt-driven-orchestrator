@@ -24,6 +24,10 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     // Image source (#411): built-in default `registry`, nothing stored/env.
     image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
+    // Default sandbox (#410): built-in default `off`, nothing stored/env.
+    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+    // Advisory Docker probe (#410): available by default in the fixture.
+    sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -243,6 +247,76 @@ describe("SettingsModal", () => {
     render(<SettingsModal open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-image-source");
     expect(note).toHaveTextContent("PDO_SANDBOX_IMAGE_SOURCE=registry");
+    expect(note).toHaveTextContent(/overridden/i);
+  });
+
+  it("seeds the default-sandbox select from the effective value (#410)", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_sandbox: {
+          effective: "pure",
+          source: "stored",
+          stored: "pure",
+          env: null,
+          default: "off",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
+    expect(select.value).toBe("pure");
+  });
+
+  it("saves the picked default sandbox (#410)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        default_sandbox: {
+          effective: "copy",
+          source: "stored",
+          stored: "copy",
+          env: null,
+          default: "off",
+        },
+      }),
+    );
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    const select = await screen.findByTestId("setting-default-sandbox");
+    fireEvent.change(select, { target: { value: "copy" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ default_sandbox: "copy" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("does not send default_sandbox when left unchanged (#410)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+    await screen.findByTestId("setting-default-sandbox");
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("discloses a shadowed env source for the default sandbox (#410)", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_sandbox: {
+          effective: "pure",
+          source: "stored",
+          stored: "pure",
+          env: "copy",
+          default: "off",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-source-default-sandbox");
+    expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=copy");
     expect(note).toHaveTextContent(/overridden/i);
   });
 });

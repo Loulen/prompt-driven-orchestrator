@@ -64,8 +64,16 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
 
 8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
    muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne
-   retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrive que par le
-   paramètre de l'API `POST /runs` ; les fires de Trigger passent `off` (précédence des sources #410).
+   retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrivait que par
+   le paramètre de l'API `POST /runs`. Depuis **#410** il est **résolu** au chokepoint unique de
+   création (`create_run_inner`, où les trois parcours — JSON, multipart, fire de Trigger —
+   convergent) par le résolveur **pur** `event_log::effective_sandbox(explicit, trigger,
+   instance_default)`, précédence **choix explicite du Run → défaut par-Trigger → `default_sandbox`
+   d'instance** (plancher `off`). Le paramètre filaire devient `Option<SandboxMode>` (absent = `None`,
+   **distinct** d'un `off` explicite qu'un défaut `copy`/`pure` ne doit jamais surclasser).
+   `default_sandbox` est lu **frais** en base au bord (précédence `stored → env → default(off)`,
+   ADR-0015, miroir d'`image_source`). L'invariant `off` byte-identique tient : un mode résolu `off`
+   n'injecte rien dans le payload (chokepoint inchangé).
 
 9. **Observabilité (câblée #408).** `merge_back` est câblé dans le run-advance — à la **transition
    terminale** (chokepoint `append_event`, tâche détachée pour ne pas coupler la latence/l'échec de la
@@ -79,6 +87,21 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    a échoué). `resume_run` re-arme d'abord le conteneur (`ensure_ready`-ou-échec, miroir du run-shell)
    car sans `--restart` il est down après un reboot hôte. **session-died** reste
    transcript-indépendante.
+
+10. **Visibilité de la préparation (#410).** La fenêtre de prep eager (point 4) devient observable via
+    deux événements **additifs et informationnels** — `SandboxPrepStarted` (en tête de la tâche
+    détachée, avant `ensure_ready`) / `SandboxPrepReady` (juste avant le 1er spawn) — émis au
+    chokepoint `append_event` (donc broadcast WS + `refreshRun` gratuits, aucune allowlist à toucher),
+    **jamais** pour un Run `off` (invariant `off` byte-identique préservé). Ils se projettent dans un
+    champ **additif** `RunState.sandbox_prep` (`pending`|`ready`) **sans** toucher `status` (qui reste
+    `running` : `is_live`/overlap/admission/reconcilers inchangés — même grain que `NodeBlockedOnLimit`
+    / `NodeAutoCompleteObserved`). On **écarte** un statut `Preparing` (blast radius sur toute la
+    machine à états + tous les consommateurs de statut) et l'**inférence client** (`running` + 0
+    session vive ⇒ preparing : faux positifs pendant la fenêtre d'advance détaché ADR-0023, le
+    throttling #159, et l'attente d'un successeur). L'échec de prep reste porté par `RunFailed`
+    (`fail_run_sandbox_prep`), **sans** événement de prep dédié. Fast-path (image locale) : la paire
+    Started/Ready bascule instantanément. **Non émis** au ré-armement (`resume_run`/`open_run_shell`) :
+    hors « premier usage ». Le marqueur `ready` survit à un restart daemon par replay du log.
 
 ## Pourquoi (le trou d'auth assumé v1)
 
@@ -133,8 +156,13 @@ l'hôte qu'un Run hôte.
   effet atomique qui ne réentre jamais le scheduler.
 - **ADR-0012** (autonomie gagnée) : la sandbox réduit le blast radius par défaut du travail autonome ;
   le cap global reste la primitive de sûreté.
-- **ADR-0015** (précédence config) : la source du mode (run → trigger → `default_sandbox`) est #410 ;
-  #407 n'accepte que le param API.
+- **ADR-0015** (précédence config) : la source du mode est **réalisée en #410** — résolveur pur
+  `effective_sandbox` (run → trigger → `default_sandbox`, plancher `off`), `default_sandbox` = nouvelle
+  colonne nullable d'`instance_config` (`stored → env → default`, résolveur `default_sandbox_with`
+  partagé create/`GET /settings`, 0 drift #373) ; défaut par-Trigger = colonne nullable `sandbox` sur
+  `triggers`, clearable via `deserialize_double_option` (précédent `max_concurrent` #239). La **sonde
+  Docker** (`docker version`, TTL-cachée, `GET /settings.sandbox_docker`) est **advisory** : le
+  fail-fast (point 4) reste le gate autoritaire.
 - **ADR-0020 / ADR-0021** (archivage / run-shell) : le conteneur vit de la création au `cleanup_run`
   (= archive), coextensif à la fenêtre d'éligibilité du run-shell ; après un reboot hôte,
   `open_run_shell` ressuscite le conteneur (`ensure_running`-or-fail), car `boot_recovery` saute les

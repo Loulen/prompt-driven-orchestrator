@@ -822,7 +822,10 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > conteneur** (#406, *Exécution (conteneur)*) + **câblage run-advance** (#407 : prep eager fail-fast,
 > wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
 > d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260) + **observabilité** (#408 : `merge_back`
-> câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale). Reste
+> câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale) +
+> **mode `copy` de bout en bout** (#409 : vérifie `prepare`(allowlist copy) → conteneur →
+> `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `pure` que par le seed de
+> `prepare` — deref des symlinks échappants + walk best-effort en sus). Reste
 > **différé** : précédence des sources du mode (#410), fourniture par registry (#411).
 
 **Sandbox** :
@@ -850,11 +853,20 @@ Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté
 **`prepare(mode, run_id)`** :
 Seede le *staged Claude home* selon le mode. **`copy`** : recopie une **liste explicite** de
 `~/.claude` (skills, plugins, agents, commands, output-styles, settings[.local].json, credentials,
-`*.md` global) + `~/.claude.json` verbatim ; **exclut `projects/`** et tout état hôte volumineux
-(`history.jsonl`, `session-env/`, …). **`pure`** : uniquement `.credentials.json` + un `.claude.json`
-minimal (onboarding validé + confiance pré-accordée à la racine du Run). Dans les deux modes,
-`projects/` est créé **vide** (puits de transcripts runtime). Symlinks et bits exécutables préservés.
-_Éviter_ : « init », « seed » seul.
+`*.md` global) + `~/.claude.json` verbatim, **avec la confiance de la racine du Run mergée** dedans
+(#409 D5 — sinon un Run autonome se bloquerait sur le dialogue « trust this folder ? ») ; **exclut
+`projects/`** et tout état hôte volumineux (`history.jsonl`, `session-env/`, …). Les symlinks qui
+**sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
+dangleraient dans le conteneur) ; les liens intra-arbre (`node_modules/.bin`) restent des liens. Walk
+**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. **`pure`** :
+uniquement `.credentials.json` + un `.claude.json` minimal (onboarding validé + confiance
+pré-accordée à la racine du Run). Dans les deux modes, `projects/` est créé **vide** (puits de
+transcripts runtime). Bits exécutables préservés. **Volume/PII (#409)** : `copy` pèse **~1 Go/run**
+(dominé par `plugins/*/node_modules`, requis par les serveurs MCP *in-container* — délibérément non
+strippés) et expose en plus le profil PII (`oauthAccount`/`userID`/`emailAddress`) + settings + `.md`
+globaux que `pure` retient (choix conscient, aligné sur le trou d'auth d'ADR-0030). Dette disque : le
+staging n'est purgé qu'au `cleanup_run` (surveiller vs la récurrence disque connue). _Éviter_ :
+« init », « seed » seul.
 
 **`merge_back(run_id)`** :
 À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de
@@ -980,6 +992,12 @@ absent (idempotent). C'est **le** verbe « destroy / destruction » réservé pa
   (`run_cost`) + stale (`stale_detector`) via le seam `transcripts_root` (staging si Run sandboxé
   vivant, `~/.claude/projects/` sinon) ; garde `ensure_ready`-ou-échec ajouté à `resume_run` (re-arme
   le conteneur après reboot hôte).
+- **Vérifié e2e (#409)** : le mode `copy` tourne le **même câblage mode-agnostique** que #407 (aucun
+  net-new run-advance) ; il ne diffère de `pure` que par le seed de `prepare` — deref des symlinks
+  **échappants** (les skills liés à `~/.agents` ne danglent plus), walk **best-effort**, et confiance
+  `repo_root` mergée dans le `.claude.json` copié (D5). Aucune écriture de config ne revient vers
+  l'hôte (`merge_back` reste jsonl-only). Couvert par unit + 4 tests layer-3 (`sandbox_tracer`) + le
+  Feature Path agentique L5 (Docker réel).
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
   `default_sandbox`, pattern ADR-0015) (#410) ; **fourniture par registry** (pull GHCR +

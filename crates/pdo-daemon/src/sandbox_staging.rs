@@ -15,9 +15,20 @@
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
 //! - **`copy` = allowlist, jamais denylist.** Copier « tout `~/.claude` sauf
-//!   `projects/` » embarquerait ~98 Mo d'état hôte (`history.jsonl`,
+//!   `projects/` » embarquerait tout l'état hôte transitoire (`history.jsonl`,
 //!   `session-env/`, `file-history/`…) — fuite d'isolation + fragile aux futures
 //!   versions de Claude Code. On copie une liste explicite.
+//! - **Volume assumé ~1 Go/run** (#409, mesuré ; dominé par `plugins/*/node_modules`,
+//!   requis par les serveurs MCP *dans* le conteneur — délibérément non strippés).
+//!   Dette disque : le staging n'est purgé qu'au `cleanup_run` → à surveiller au
+//!   regard de la récurrence disque connue (recette janitor pour l'usage massif).
+//! - **Symlinks échappants déréférencés** (#409). Une part notable des skills sont
+//!   des liens relatifs vers `~/.agents` (hors `~/.claude`, ni copié ni monté) :
+//!   recréés verbatim ils dangleraient dans le conteneur (skills invisibles).
+//!   [`copy_tree_preserving`] copie donc le CONTENU réel des liens qui **sortent** de
+//!   l'arbre `~/.claude` ; les liens **intra-arbre** (cycles `node_modules/.bin`)
+//!   restent des liens. Walk **best-effort par entrée** : un `~/.claude` volumineux
+//!   que d'autres process Claude mutent ne doit jamais faire échouer le Run.
 //! - **`merge_back` récurse.** ~42 % des transcripts vivent dans
 //!   `projects/<enc>/<uuid>/subagents/*.jsonl` (profondeur 9). Le copy-set doit
 //!   *égaler* le read-set de [`crate::run_cost`] (`collect_jsonl_recursive`),
@@ -33,6 +44,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
 /// Comment le *staged Claude home* d'un Run est seedé. `off` (PRD) n'est PAS une
 /// variante : le caller skippe simplement [`prepare`] (pas de branche no-op dans
@@ -81,8 +93,11 @@ pub(crate) fn staged_claude_json(sandbox_root: &Path, run_id: &str) -> PathBuf {
 /// Seede le *staged Claude home* et renvoie sa racine (`<sandbox_root>/<run_id>`).
 ///
 /// Idempotent (`create_dir_all` ; copy-or-overwrite). `trusted_root` : racine à
-/// pré-approuver dans le `.claude.json` en mode `pure` (`None` = objet nu). En
-/// mode `copy`, `trusted_root` est ignoré (la confiance hôte est copiée verbatim).
+/// pré-approuver dans le `.claude.json`. En mode `pure`, `None` = objet nu. En
+/// mode `copy` (#409), une racine fournie est **mergée** dans le `.claude.json`
+/// hôte copié (les autres clés/projets préservés, 0600 réappliqué) — le repo du
+/// Run est ainsi trusté même si l'hôte ne l'avait jamais ouvert (sinon un Run
+/// autonome se bloquerait sur le dialogue « trust this folder ? »).
 pub(crate) fn prepare(
     home_root: &Path,
     sandbox_root: &Path,
@@ -105,11 +120,16 @@ pub(crate) fn prepare(
             for name in COPY_ALLOWLIST_FILES {
                 copy_file_if_present(&src.join(name), &home.join(name))?;
             }
-            // Allowlist dirs : walk préservant symlinks + mode. `projects/` EXCLU.
+            // Allowlist dirs : walk préservant les symlinks intra-arbre + mode,
+            // déréférençant les liens échappants (#409). `projects/` EXCLU.
+            // `copy_root` = la racine canonique `~/.claude` : tout symlink dont la
+            // cible sort de cet arbre est copié déréférencé (sa cible réelle n'est
+            // ni copiée ni montée → danglerait). Best-effort par entrée.
+            let copy_root = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
             for name in COPY_ALLOWLIST_DIRS {
                 let dir_src = src.join(name);
                 if dir_src.is_dir() {
-                    copy_tree_preserving(&dir_src, &home.join(name))?;
+                    copy_tree_preserving(&dir_src, &home.join(name), &copy_root, 0);
                 }
             }
             // `.claude.json` sibling, verbatim (mode préservé). Chemin explicite :
@@ -118,6 +138,12 @@ pub(crate) fn prepare(
                 &home_root.join(".claude.json"),
                 &staged_claude_json(sandbox_root, run_id),
             )?;
+            // D5 (#409) : garantir que le repo du Run est trusté. `copy` s'appuie
+            // sur le `.claude.json` hôte, qui peut n'avoir jamais ouvert ce repo →
+            // Run autonome bloqué sur le dialogue de confiance. Merge non-destructif.
+            if let Some(root) = trusted_root {
+                seed_trust_in_claude_json(&staged_claude_json(sandbox_root, run_id), root)?;
+            }
         }
         Mode::Pure => {
             // Auth = `.credentials.json` seul (`oauthAccount`/`userID` de
@@ -266,40 +292,190 @@ fn set_mode_0600(path: &Path) -> Result<()> {
         .with_context(|| format!("chmod 0600 {}", path.display()))
 }
 
-/// Walk `src` → `dst` en **préservant symlinks et bits exécutables**. Marche par
-/// entrée via [`std::fs::symlink_metadata`] (ne suit PAS les liens) :
-/// - symlink → recréé verbatim (jamais déréférencé : cycles `node_modules/.bin`,
-///   liens cassés, bloat `~/.agents` inlinés) ;
+/// Profondeur de récursion max du walk `copy` — garde-fou défensif contre un cycle
+/// pathologique de symlinks **échappants** (les liens intra-arbre sont recréés,
+/// jamais suivis, donc ne peuvent pas boucler ; seuls les échappants déréférencés
+/// récursent dans un arbre étranger). Un vrai `~/.claude` fait quelques niveaux.
+const MAX_COPY_DEPTH: u32 = 64;
+
+/// Walk `src` → `dst` en **préservant les bits exécutables** et en traitant les
+/// symlinks selon qu'ils **restent dans** l'arbre copié ou en **sortent** (voir
+/// [`stage_symlink`]). Marche par entrée via [`std::fs::symlink_metadata`] (ne suit
+/// PAS les liens) :
+/// - symlink → [`stage_symlink`] (verbatim si intra-`copy_root`, déréférencé sinon) ;
 /// - dir → `create_dir_all` + récursion ;
 /// - file → [`std::fs::copy`] (préserve le mode/exec bit gratis sous Unix) ;
 /// - autre (socket/fifo/device) → skip.
 ///
+/// **Best-effort par entrée** (#409, D3) : toute op ratée (`create_dir`, `read_dir`,
+/// `stat`, `copy`, `symlink`) est loggée en `warn!` et **sautée** — la fonction ne
+/// remonte jamais d'erreur. Un `~/.claude` volumineux et volatil (autres process
+/// Claude qui mutent `node_modules`) ne doit pas faire échouer le Run.
+///
+/// `copy_root` = racine (canonique) au-delà de laquelle une cible de symlink est
+/// jugée « échappante ». `depth` = profondeur courante ([`MAX_COPY_DEPTH`]).
+///
 /// N.B. : ne PAS réutiliser `copy_dir_all` de `lib.rs` — il n'est pas
 /// symlink-aware (`std::fs::copy` déréférence).
-fn copy_tree_preserving(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
-    let entries = std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))?;
+fn copy_tree_preserving(src: &Path, dst: &Path, copy_root: &Path, depth: u32) {
+    if depth > MAX_COPY_DEPTH {
+        warn!(
+            "sandbox copy: max depth {MAX_COPY_DEPTH} exceeded at {}, skipping subtree",
+            src.display()
+        );
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(dst) {
+        warn!(
+            "sandbox copy: cannot create {} ({e:#}); skipping subtree",
+            dst.display()
+        );
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(src) else {
+        warn!(
+            "sandbox copy: cannot read dir {}; skipping subtree",
+            src.display()
+        );
+        return;
+    };
     for entry in entries.flatten() {
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        let md =
-            std::fs::symlink_metadata(&from).with_context(|| format!("stat {}", from.display()))?;
+        let Ok(md) = std::fs::symlink_metadata(&from) else {
+            warn!(
+                "sandbox copy: cannot stat {}; skipping entry",
+                from.display()
+            );
+            continue;
+        };
         let ft = md.file_type();
         if ft.is_symlink() {
-            let target = std::fs::read_link(&from)
-                .with_context(|| format!("read_link {}", from.display()))?;
-            // Idempotence : une exécution antérieure a pu laisser un lien/fichier.
-            let _ = std::fs::remove_file(&to);
-            std::os::unix::fs::symlink(&target, &to)
-                .with_context(|| format!("symlink {} -> {}", to.display(), target.display()))?;
+            stage_symlink(&from, &to, copy_root, depth);
         } else if ft.is_dir() {
-            copy_tree_preserving(&from, &to)?;
+            copy_tree_preserving(&from, &to, copy_root, depth + 1);
         } else if ft.is_file() {
-            std::fs::copy(&from, &to)
-                .with_context(|| format!("copy {} -> {}", from.display(), to.display()))?;
+            if let Err(e) = std::fs::copy(&from, &to) {
+                warn!(
+                    "sandbox copy: skip file {} -> {} ({e:#})",
+                    from.display(),
+                    to.display()
+                );
+            }
         }
         // else : socket/fifo/device → skip silencieux.
     }
+}
+
+/// Traite une entrée symlink d'un walk `copy`. Une cible **intra-arbre** (toujours
+/// sous `copy_root`, ex. `../semver/bin/x` ou un sibling) est recréée **verbatim** —
+/// préserve les cycles `node_modules/.bin` et les liens relatifs. Une cible qui
+/// **échappe** `copy_root` (ex. un skill lié à `~/.agents/…`, ou un lien absolu)
+/// **danglerait** dans le conteneur (sa cible réelle n'est ni copiée ni montée) →
+/// on **déréférence** : le contenu réel est copié à la place. La cible déréférencée
+/// devient son propre `copy_root` pour que ses liens internes qui y restent restent
+/// des liens. Cible cassée / illisible → skip (best-effort, jamais d'échec).
+fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
+    let Ok(link_target) = std::fs::read_link(from) else {
+        warn!("sandbox copy: skip unreadable symlink {}", from.display());
+        return;
+    };
+    // Résoudre la cible en chemin absolu (relatif → joint au parent du lien) puis
+    // canonicaliser : sert à tester l'échappement ET à atteindre le contenu réel.
+    // Un lien cassé/bouclant fait échouer `canonicalize` → skip (jamais d'échec).
+    let resolved = if link_target.is_absolute() {
+        link_target.clone()
+    } else {
+        match from.parent() {
+            Some(parent) => parent.join(&link_target),
+            None => link_target.clone(),
+        }
+    };
+    let Ok(canonical) = std::fs::canonicalize(&resolved) else {
+        warn!(
+            "sandbox copy: skip broken symlink {} -> {}",
+            from.display(),
+            link_target.display()
+        );
+        return;
+    };
+    if canonical.starts_with(copy_root) {
+        // Intra-arbre → recréer le lien verbatim (cible d'origine, non résolue).
+        let _ = std::fs::remove_file(to);
+        if let Err(e) = std::os::unix::fs::symlink(&link_target, to) {
+            warn!(
+                "sandbox copy: skip symlink {} -> {} ({e:#})",
+                to.display(),
+                link_target.display()
+            );
+        }
+    } else if canonical.is_dir() {
+        // Échappant (dossier) → déréférencer ; la cible réelle est son copy_root.
+        copy_tree_preserving(&canonical, to, &canonical, depth + 1);
+    } else if canonical.is_file() {
+        // Échappant (fichier) → copier le contenu déréférencé (mode préservé).
+        let _ = std::fs::remove_file(to);
+        if let Err(e) = std::fs::copy(&canonical, to) {
+            warn!(
+                "sandbox copy: skip deref file {} -> {} ({e:#})",
+                canonical.display(),
+                to.display()
+            );
+        }
+    }
+    // else : échappant non-régulier (socket/fifo) → skip.
+}
+
+/// Merge non-destructif d'une confiance pour `trusted_root` dans le `.claude.json`
+/// (existant ou frais) du staging `copy` (#409, D5). Préserve toutes les autres
+/// clés/projets (profil `oauthAccount`, autres repos trustés…) et réapplique 0600
+/// (le fichier peut porter un token). Un `.claude.json` illisible/corrompu est
+/// remplacé par un objet nu + la confiance (dégradation gracieuse, pas d'échec dur).
+fn seed_trust_in_claude_json(path: &Path, trusted_root: &Path) -> Result<()> {
+    let mut value = match std::fs::read_to_string(path) {
+        Ok(body) => serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    let obj = value.as_object_mut().expect("value forced to object above");
+    // Onboarding : défensif, aligne `copy` sur la garantie `pure` sans écraser une
+    // valeur hôte existante.
+    obj.entry("hasCompletedOnboarding")
+        .or_insert_with(|| serde_json::json!(true));
+    let projects = obj
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    if !projects.is_object() {
+        *projects = serde_json::json!({});
+    }
+    let projects = projects.as_object_mut().expect("projects forced to object");
+    let key = trusted_root.to_string_lossy().into_owned();
+    let entry = projects.entry(key).or_insert_with(|| serde_json::json!({}));
+    if !entry.is_object() {
+        *entry = serde_json::json!({});
+    }
+    let entry = entry
+        .as_object_mut()
+        .expect("project entry forced to object");
+    entry.insert(
+        "hasTrustDialogAccepted".to_string(),
+        serde_json::json!(true),
+    );
+    entry.insert(
+        "hasCompletedProjectOnboarding".to_string(),
+        serde_json::json!(true),
+    );
+
+    let body = serde_json::to_string_pretty(&value).context("serialize copy .claude.json")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create parent {}", parent.display()))?;
+    }
+    std::fs::write(path, body)
+        .with_context(|| format!("write copy .claude.json {}", path.display()))?;
+    set_mode_0600(path)?;
     Ok(())
 }
 
@@ -404,8 +580,15 @@ mod tests {
             "#!/bin/sh\necho hi\n",
             0o755,
         );
-        // Symlink relatif à l'intérieur de skills/foo → skill.md.
+        // Symlink relatif à l'intérieur de skills/foo → skill.md (INTRA-arbre).
         std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
+        // Symlink ÉCHAPPANT : ~/.claude/skills/esc → ~/.agents/skills/esc (hors
+        // ~/.claude). `../../.agents/…` depuis ~/.claude/skills/ résout à <home>/.agents.
+        write(
+            &home.join(".agents/skills/esc/SKILL.md"),
+            "# escaped skill\n",
+        );
+        std::os::unix::fs::symlink("../../.agents/skills/esc", claude.join("skills/esc")).unwrap();
         write(&claude.join("plugins/bar/plugin.json"), "{}\n");
         write(&claude.join("agents/a.md"), "agent\n");
         write(&claude.join("commands/c.md"), "cmd\n");
@@ -573,6 +756,117 @@ mod tests {
         assert!(!home.join(".credentials.json").exists());
         assert!(!staged_claude_json(sandbox_dir.path(), "run1").exists());
         assert!(home.join("projects").is_dir());
+    }
+
+    #[test]
+    fn prepare_copy_dereferences_escaping_symlink() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path());
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
+        let home = staged_claude_home(sandbox_dir.path(), "run1");
+
+        // Le skill lié à ~/.agents (hors ~/.claude) est DÉRÉFÉRENCÉ : son contenu
+        // atterrit comme fichier régulier, jamais un symlink dangling (sa cible
+        // n'étant ni copiée ni montée, un lien verbatim disparaîtrait du conteneur).
+        let esc = home.join("skills/esc/SKILL.md");
+        let esc_md = std::fs::symlink_metadata(&esc).unwrap();
+        assert!(
+            esc_md.file_type().is_file(),
+            "le skill échappant doit être déréférencé en fichier régulier"
+        );
+        assert_eq!(std::fs::read_to_string(&esc).unwrap(), "# escaped skill\n");
+        assert!(
+            !std::fs::symlink_metadata(home.join("skills/esc"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "le dossier déréférencé ne doit pas être un lien"
+        );
+
+        // Non-régression : le lien INTRA-arbre reste un symlink (cible verbatim).
+        let intra = home.join("skills/foo/link.md");
+        assert!(
+            std::fs::symlink_metadata(&intra)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "le lien intra-arbre doit rester un symlink"
+        );
+        assert_eq!(
+            std::fs::read_link(&intra).unwrap(),
+            PathBuf::from("skill.md")
+        );
+    }
+
+    #[test]
+    fn prepare_copy_is_best_effort_on_unreadable_entry() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let claude = home_dir.path().join(".claude");
+        // Un bon fichier + un symlink CASSÉ (cible inexistante) dans le même dir.
+        write(&claude.join("skills/good/skill.md"), "# good\n");
+        std::os::unix::fs::symlink("/nonexistent/pdo-broken-xyz", claude.join("skills/broken"))
+            .unwrap();
+
+        // Ne panique pas / n'échoue pas malgré l'entrée cassée (D3).
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
+        let home = staged_claude_home(sandbox_dir.path(), "run1");
+
+        // Le bon fichier est copié ; l'entrée cassée est sautée (rien de staged).
+        assert!(home.join("skills/good/skill.md").is_file());
+        assert!(
+            std::fs::symlink_metadata(home.join("skills/broken")).is_err(),
+            "le symlink cassé doit être sauté, pas recréé"
+        );
+    }
+
+    #[test]
+    fn prepare_copy_seeds_trust_for_repo_root() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path()); // `.claude.json` hôte porte `oauthAccount`
+        let trusted = Path::new("/repo/root");
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            Some(trusted),
+        )
+        .unwrap();
+
+        let staged = staged_claude_json(sandbox_dir.path(), "run1");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+        // Merge NON-destructif : les clés hôte survivent.
+        assert_eq!(json["host"], serde_json::json!("profile"));
+        assert_eq!(json["oauthAccount"]["x"], serde_json::json!(1));
+        // Confiance seedée pour le repo du Run.
+        let entry = &json["projects"]["/repo/root"];
+        assert_eq!(entry["hasTrustDialogAccepted"], serde_json::json!(true));
+        assert_eq!(
+            entry["hasCompletedProjectOnboarding"],
+            serde_json::json!(true)
+        );
+        // 0600 réappliqué (le fichier peut porter un token).
+        assert_eq!(mode_of(&staged), 0o600);
     }
 
     // -- prepare (pure) ------------------------------------------------------

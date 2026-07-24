@@ -200,15 +200,18 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         return Ok(()); // off: gated by callers; no docker touched.
     };
 
-    // 1. Stage the Claude home ONCE. The ~98 MB `copy` walk (and the `pure` seed)
+    // 1. Stage the Claude home ONCE. The ~1 GB `copy` walk (and the `pure` seed)
     //    must not repeat on every ensure_ready — gate on the staging dir already
-    //    existing. `pure` pre-approves the trust dialog on `repo_root`, the common
-    //    ancestor of the pipeline worktree AND every node sub-worktree.
+    //    existing. BOTH sandboxed modes pre-approve the trust dialog on `repo_root`,
+    //    the common ancestor of the pipeline worktree AND every node sub-worktree:
+    //    `pure` writes a minimal `.claude.json`; `copy` (#409, D5) merges the trust
+    //    into the copied host `.claude.json` (else a repo the host never opened
+    //    would block an autonomous Run on the "trust this folder?" dialog).
     let staging_dir = sandbox_staging::staging_dir_for_run(&ctx.sandbox_root, &ctx.run_id);
     if !staging_dir.exists() {
         let trusted_root = match ctx.mode {
-            SandboxMode::Pure => Some(ctx.repo_root.as_path()),
-            _ => None,
+            SandboxMode::Pure | SandboxMode::Copy => Some(ctx.repo_root.as_path()),
+            SandboxMode::Off => None,
         };
         sandbox_staging::prepare(
             &ctx.home_root,
@@ -451,6 +454,29 @@ mod tests {
         assert!(
             sentinel.exists(),
             "staging must not be re-prepared when present"
+        );
+    }
+
+    #[test]
+    fn ensure_ready_copy_seeds_trust_for_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _log) = write_fake_docker(tmp.path());
+        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Copy);
+
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+
+        // #409 D5: copy stages a `.claude.json`, and ensure_ready pre-approves the
+        // Run's repo_root trust dialog in it — even when the host had no
+        // `.claude.json` (an autonomous Run must not block on "trust this folder?").
+        let staged = sandbox_staging::staged_claude_json(&ctx.sandbox_root, "r1");
+        assert!(staged.is_file(), "copy staging writes a .claude.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+        let key = ctx.repo_root.to_string_lossy().into_owned();
+        assert_eq!(
+            json["projects"][&key]["hasTrustDialogAccepted"],
+            serde_json::json!(true),
+            "copy must pre-approve the repo_root trust dialog: {json}"
         );
     }
 

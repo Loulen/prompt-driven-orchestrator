@@ -60,6 +60,10 @@ pub(crate) struct SandboxContext {
     pub(crate) gid: u32,
     /// Host `pdo` binary, bind-mounted read-only at `/usr/local/bin/pdo`.
     pub(crate) pdo_bin: PathBuf,
+    /// Where to source the image (#411): resolved once at the edge from
+    /// `instance_config` (stored → env → default Registry). Passed to
+    /// `sandbox_image::ensure_image` in the sync path — no DB access in the core.
+    pub(crate) image_source: sandbox_image::ImageSource,
 }
 
 impl SandboxContext {
@@ -76,9 +80,17 @@ impl SandboxContext {
 /// Resolve a [`SandboxContext`] from the daemon state + a projected Run. The one
 /// edge function that reads `AppState` / the environment; the core is pure values.
 ///
+/// **Async** (#411): reads a fresh `instance_config` at the boundary to resolve the
+/// image source (stored → env → default Registry), so a `PUT /settings` takes effect
+/// at the next ensure — consistent with the cap/TTL/model seams. A DB read error is
+/// swallowed (falls back env→default), never failing the prep.
+///
 /// Fails (loud) when `$HOME` is unset or the current exe path can't be resolved —
 /// a sandboxed Run must never fall back to a half-configured container silently.
-pub(crate) fn context_from_state(state: &AppState, run_state: &RunState) -> Result<SandboxContext> {
+pub(crate) async fn context_from_state(
+    state: &AppState,
+    run_state: &RunState,
+) -> Result<SandboxContext> {
     let repo_root = crate::effective_repo_root(state, run_state);
     let run_worktree = crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_state.run_id);
     // Home root: the per-daemon override (layer-3 harness) wins; else the real
@@ -87,6 +99,14 @@ pub(crate) fn context_from_state(state: &AppState, run_state: &RunState) -> Resu
     let (home_root, sandbox_root) = sandbox_home_roots(state)?;
     let host_home = home_root.clone();
     let pdo_bin = sandbox_container::pdo_bin_path()?;
+    // Read fresh at each prep → a PUT /settings takes effect at the next ensure
+    // (ADR-0015), like the cap/TTL/model seams. A DB error falls back env→default,
+    // never failing the prep.
+    let stored_image_source = crate::instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.image_source);
+    let image_source = sandbox_image::image_source_with(stored_image_source);
     Ok(SandboxContext {
         docker_bin: docker_bin(state),
         run_id: run_state.run_id.clone(),
@@ -100,6 +120,7 @@ pub(crate) fn context_from_state(state: &AppState, run_state: &RunState) -> Resu
         uid: sandbox_container::host_uid(),
         gid: sandbox_container::host_gid(),
         pdo_bin,
+        image_source,
     })
 }
 
@@ -223,10 +244,12 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         .with_context(|| format!("failed to stage the sandbox home for run {}", ctx.run_id))?;
     }
 
-    // 2. Ensure the content-addressed image (`pdo-sandbox:h-<hash>`) exists,
-    //    building it from the seeded Dockerfile on the first machine run.
-    let image_ref = sandbox_image::ensure_image(&ctx.docker_bin, &ctx.sandbox_root)
-        .context("failed to ensure the sandbox image")?;
+    // 2. Ensure the content-addressed image (`pdo-sandbox:h-<hash>`) exists —
+    //    pull-then-retag from GHCR (registry, default), or build it from the seeded
+    //    Dockerfile (dockerfile mode / pull fallback), per `ctx.image_source` (#411).
+    let image_ref =
+        sandbox_image::ensure_image(&ctx.docker_bin, &ctx.sandbox_root, ctx.image_source)
+            .context("failed to ensure the sandbox image")?;
 
     // 3. Assemble the container spec + ensure the long-lived container is up.
     let staged_home = sandbox_staging::staged_claude_home(&ctx.sandbox_root, &ctx.run_id);
@@ -390,6 +413,9 @@ mod tests {
             uid: 1000,
             gid: 1000,
             pdo_bin: tmp.join("pdo"),
+            // Dockerfile → build-probe path (network-free); keeps the existing
+            // ensure_ready assertions (image inspect + build/create) intact (#411).
+            image_source: sandbox_image::ImageSource::Dockerfile,
         }
     }
 

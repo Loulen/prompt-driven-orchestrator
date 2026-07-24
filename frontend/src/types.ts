@@ -77,12 +77,19 @@ export interface StringSettingField {
   default: string | null;
 }
 
-/** The full `GET /settings` view (#129, ADR-0015; default_model #347). */
+/** The full `GET /settings` view (#129, ADR-0015; default_model #347; image_source #411). */
 export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
   default_model: StringSettingField;
+  /**
+   * Sandbox image source (#411): `"registry"` (pull from GHCR, default) or
+   * `"dockerfile"` (build locally). A closed enum with a built-in `registry`
+   * default, so every tier (`effective`/`default`) is a present string — it reuses
+   * {@link StringSettingField} (a superset) even though it is never null.
+   */
+  image_source: StringSettingField;
   updated_at: string;
 }
 
@@ -98,6 +105,9 @@ export interface UpdateSettingsRequest {
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
   default_model?: string;
+  /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
+   *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
+  image_source?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

@@ -5854,7 +5854,7 @@ async fn create_run_inner(
             // Build the sandbox context from the just-projected Run (mode is
             // immutable). A vanished/half-projected state → fail loud.
             let ctx = match reload_run_state(&task_state, &task_run_id).await {
-                Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs) {
+                Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs).await {
                     Ok(ctx) => ctx,
                     Err(e) => {
                         fail_run_sandbox_prep(
@@ -6074,6 +6074,26 @@ fn settings_field_str(
     })
 }
 
+/// String sibling of [`settings_field`] for an *enum* knob with a built-in NON-null
+/// default (#411 `image_source`). Same `{effective, source, stored, env, default}`
+/// shape as [`settings_field_str`], but `effective`/`default` are always present
+/// strings (there is a meaningful built-in default, unlike `default_model`).
+fn settings_field_enum(
+    effective: &str,
+    source: &str,
+    stored: Option<&str>,
+    env: Option<&str>,
+    default: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
 /// Build the `GET /settings` view: per knob, the effective value, the winning
 /// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
 /// computed by each knob's own resolver, so it can never drift from what the
@@ -6137,11 +6157,33 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
         "default"
     };
 
+    // --- sandbox image source (enum ; built-in default `registry`) (#411) ---
+    // The empty-string filter mirrors the resolver: a stored `""` is treated as
+    // unset. `effective` is computed by the SAME resolver ensure_image consumes, so
+    // the disclosed value can never drift from what the daemon actually uses (#373).
+    let img_stored = cfg.image_source.as_deref().filter(|s| !s.is_empty());
+    let img_env = sandbox_image::env_image_source();
+    let img_effective = sandbox_image::image_source_with(cfg.image_source.clone());
+    let img_source = if img_stored.is_some() {
+        "stored"
+    } else if img_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
+        "image_source": settings_field_enum(
+            img_effective.as_str(),
+            img_source,
+            img_stored,
+            img_env.as_deref(),
+            sandbox_image::ImageSource::DEFAULT.as_str(),
+        ),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -6190,6 +6232,13 @@ async fn put_settings(
     if let Some(g) = req.guard_timeout_secs {
         if !(1..=600).contains(&g) {
             return bad("guard_timeout_secs must be between 1 and 600 seconds");
+        }
+    }
+    if let Some(s) = req.image_source.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
+        // non-variant → 400 (fail-fast, no silent default) (#411).
+        if !s.is_empty() && sandbox_image::ImageSource::parse(s).is_none() {
+            return bad("image_source must be `registry` or `dockerfile`");
         }
     }
 
@@ -9278,7 +9327,7 @@ async fn run_command(
             // `docker build`) or fail EXPLICITLY — never a silent host fallback.
             // Mirrors the run-shell guard (#407 D11).
             if !run_state.sandbox.is_off() {
-                let prep = match sandbox_run::context_from_state(&state, &run_state) {
+                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
                     Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
                         .await
                         .unwrap_or_else(|je| {
@@ -10265,7 +10314,7 @@ async fn open_run_shell(
     // runs, so the container may be down. Resurrect it here, or fail EXPLICITLY —
     // never fall back to a silent host bash.
     if !run_state.sandbox.is_off() {
-        let prep = match sandbox_run::context_from_state(&state, &run_state) {
+        let prep = match sandbox_run::context_from_state(&state, &run_state).await {
             Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
                 .await
                 .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
@@ -22455,6 +22504,27 @@ edges:
         // `env` reads the process-global PDO_DEFAULT_MODEL; a concurrent
         // env-mutating unit test could transiently shadow it, so we assert the
         // effective/source pairing only in the stored-wins tests below.
+
+        // image_source (#411): enum knob with a built-in default `registry`. On a
+        // fresh row (and no PDO_SANDBOX_IMAGE_SOURCE — no test ever sets it) the
+        // stored tier is null and the resolver falls through to the built-in default.
+        let img = &view["image_source"];
+        assert!(
+            img["stored"].is_null(),
+            "image_source.stored must be null on a fresh row: {img}"
+        );
+        assert_eq!(
+            img["default"], "registry",
+            "built-in default is registry: {img}"
+        );
+        assert_eq!(
+            img["effective"], "registry",
+            "effective falls to default: {img}"
+        );
+        assert_eq!(
+            img["source"], "default",
+            "source is the built-in default: {img}"
+        );
     }
 
     #[tokio::test]
@@ -22564,5 +22634,56 @@ edges:
         // The second edit must not clear the cap set by the first.
         assert_eq!(view["session_cap"]["stored"], 7);
         assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
+    }
+
+    #[tokio::test]
+    async fn put_settings_persists_image_source() {
+        // Stored always wins over env/default, so the effective/source assertions
+        // are race-free (#411).
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["image_source"]["stored"], "dockerfile");
+        assert_eq!(view["image_source"]["source"], "stored");
+        assert_eq!(view["image_source"]["effective"], "dockerfile");
+        assert_eq!(view["image_source"]["default"], "registry");
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["image_source"]["stored"], "dockerfile");
+        assert_eq!(reget["image_source"]["effective"], "dockerfile");
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_image_source_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to
+        // null so the resolver falls back to the built-in default `registry` (#411).
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"image_source": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["image_source"]["stored"].is_null(),
+            "empty string clears the stored image source: {}",
+            view["image_source"]
+        );
+        assert_eq!(view["image_source"]["source"], "default");
+        assert_eq!(view["image_source"]["effective"], "registry");
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_invalid_image_source() {
+        // A non-variant token is rejected 400 before anything is persisted (#411).
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"image_source": "ecr"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].is_string(), "400 must carry an error: {body}");
+        // Store untouched (still the default).
+        let view = get_settings_json(&state).await;
+        assert!(view["image_source"]["stored"].is_null());
     }
 }

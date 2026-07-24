@@ -138,7 +138,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         // downstream spawn would fail loud on a still-missing container. No-op for
         // `off`.
         if !run_state.sandbox.is_off() {
-            match crate::sandbox_run::context_from_state(state, &run_state) {
+            match crate::sandbox_run::context_from_state(state, &run_state).await {
                 Ok(ctx) => {
                     match tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
                         .await

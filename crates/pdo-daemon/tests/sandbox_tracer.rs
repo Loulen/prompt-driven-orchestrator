@@ -826,3 +826,106 @@ async fn copy_completes_without_host_config_writeback() {
         "cleanup must purge the staging dir: {staging:?}"
     );
 }
+
+// -- #411: image_source drives the acquisition path (pull vs build) ----------
+//
+// Like `write_fake_docker` but cans `image inspect` → ABSENT (exit 1), so
+// `ensure_image` proceeds past the fast-path to acquire the image: a `docker pull`
+// in registry mode (which the fake succeeds → retag, no build), or a `docker build`
+// in dockerfile mode (never a pull). Every other subcommand — `pull`, `tag`,
+// `build`, `container`(create+start), `exec`, `rm` — exits 0. Lets the tracer
+// observe, on a real daemon, which acquisition path the stored `image_source` picks.
+fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-docker");
+    let log = dir.path().join("argv.log");
+    let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         printf '%s\\n' \"$@\" >> {log}\n\
+         case \"$1\" in\n\
+         image) exit 1 ;;\n\
+         container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         *) exit 0 ;;\n\
+         esac\n",
+        log = sq(&log.display().to_string()),
+    );
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, bin.to_str().unwrap().to_string(), log)
+}
+
+/// `PUT /settings {"image_source": <source>}` against the real daemon.
+async fn put_image_source(daemon: &TestDaemon, source: &str) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "image_source": source }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "PUT /settings image_source={source} should succeed: {}",
+        resp.status()
+    );
+}
+
+/// Whether a docker subcommand keyword appears as a standalone argv line (`$1`).
+fn log_has_subcommand(log: &Path, name: &str) -> bool {
+    log_text(log).lines().any(|l| l == name)
+}
+
+// -- Test 11: registry mode pulls the image (no build on a successful pull) --
+
+#[tokio::test]
+async fn registry_mode_pulls_the_sandbox_image() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker_image_absent();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    // Store registry mode BEFORE starting the run — eager prep reads it fresh.
+    put_image_source(&daemon, "registry").await;
+    let _run_id = start_run(&daemon, Some("pure")).await;
+
+    // ensure_image (image absent) attempts a pull before any build.
+    assert!(
+        wait_until(|| log_has_subcommand(&log, "pull")).await,
+        "registry mode must `docker pull` the sandbox image; log:\n{}",
+        log_text(&log)
+    );
+    // The fake pull succeeds (exit 0) → retag → NO fallback build.
+    assert!(
+        !log_has_subcommand(&log, "build"),
+        "a successful pull must NOT fall back to a local build; log:\n{}",
+        log_text(&log)
+    );
+}
+
+// -- Test 12: dockerfile mode builds locally, never pulls --------------------
+
+#[tokio::test]
+async fn dockerfile_mode_builds_never_pulls() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker_image_absent();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    put_image_source(&daemon, "dockerfile").await;
+    let _run_id = start_run(&daemon, Some("pure")).await;
+
+    assert!(
+        wait_until(|| log_has_subcommand(&log, "build")).await,
+        "dockerfile mode must `docker build` the sandbox image; log:\n{}",
+        log_text(&log)
+    );
+    assert!(
+        !log_has_subcommand(&log, "pull"),
+        "dockerfile mode must NEVER pull; log:\n{}",
+        log_text(&log)
+    );
+}

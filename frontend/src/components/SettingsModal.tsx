@@ -164,6 +164,11 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
   // Model is `null` when unset (account default); ModelPicker speaks the same
   // `string | null` contract as the per-node inspector (#296/#324/#347).
   const [model, setModel] = useState<string | null>(() => settings.default_model.effective);
+  // Sandbox image source (#411): a closed enum with a built-in `registry` default,
+  // so `effective` is always a present string (the `?? "registry"` is belt-and-braces).
+  const [imageSource, setImageSource] = useState<string>(
+    () => settings.image_source.effective ?? "registry",
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,6 +212,12 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
     // sent when it actually changed (avoids a needless clear/no-op PUT).
     if (model !== settings.default_model.effective) {
       patch.default_model = model ?? "";
+    }
+
+    // Image source (#411): a concrete enum variant, only sent when it changed. The
+    // select never emits "" — the clear path is backend-only.
+    if (imageSource !== settings.image_source.effective) {
+      patch.image_source = imageSource;
     }
 
     // Nothing changed → close without a round-trip.
@@ -305,6 +316,44 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
             data-testid="setting-source-default-model"
           >
             {modelSourceNote(settings.default_model)}
+          </div>
+        </div>
+
+        {/* Sandbox image source (#411): where a sandboxed run's image comes from —
+            pull from GHCR (default) or build locally. A closed enum → native
+            <select> (NOT the free-text ModelPicker). It only ever emits a concrete
+            variant; the "" clear sentinel is backend-only. */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="setting-image-source"
+            className="font-medium text-fg-2"
+            style={{ fontSize: "11.5px" }}
+          >
+            Sandbox image source
+          </label>
+          <select
+            id="setting-image-source"
+            data-testid="setting-image-source"
+            value={imageSource}
+            onChange={(e) => setImageSource(e.target.value)}
+            className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none"
+            style={{ fontSize: "12px" }}
+          >
+            <option value="registry">registry (pull from GHCR)</option>
+            <option value="dockerfile">dockerfile (build locally)</option>
+          </select>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Where a sandboxed run's image comes from.{" "}
+            <span className="font-mono">registry</span> pulls the content-addressed image from
+            GHCR and falls back to a local build; <span className="font-mono">dockerfile</span>{" "}
+            always builds it locally from the seeded Dockerfile.
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-image-source"
+          >
+            {imageSourceSourceNote(settings.image_source)}
           </div>
         </div>
 
@@ -433,4 +482,19 @@ function modelSourceNote(field: StringSettingField): string {
     return `Source: env ${envDisplay ?? "PDO_DEFAULT_MODEL"}.`;
   }
   return `Source: your Claude account default (no --model).`;
+}
+
+/** Which tier the sandbox image source comes from (#411). Unlike default_model there
+ *  IS a built-in default (`registry`). Discloses a shadowed env var too. */
+function imageSourceSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_SANDBOX_IMAGE_SOURCE=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
+      : `Source: stored value (overrides env and default).`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_SANDBOX_IMAGE_SOURCE"}.`;
+  }
+  return `Source: built-in default (${field.default ?? "registry"}).`;
 }

@@ -825,8 +825,9 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale) +
 > **mode `copy` de bout en bout** (#409 : vérifie `prepare`(allowlist copy) → conteneur →
 > `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `pure` que par le seed de
-> `prepare` — deref des symlinks échappants + walk best-effort en sus). Reste
-> **différé** : précédence des sources du mode (#410), fourniture par registry (#411).
+> `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
+> l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`,
+> job release GHCR). Reste **différé** : précédence des sources du mode (#410).
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -901,8 +902,8 @@ L'**exécution** de l'image (instanciation en conteneur, mounts, réseau) → #4
 **Image sandbox (`pdo-sandbox:h-<hash>`)** :
 L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son tag est le **hash du
 contenu du Dockerfile** (`h-<hash>`), pas une version : deux Dockerfiles identiques → même tag, une
-édition → tag différent. Identité **adressée par contenu** — c'est elle qui rendra plus tard une
-image tirée d'un registry et une image buildée localement interchangeables sous le même nom (#411).
+édition → tag différent. Identité **adressée par contenu** — c'est elle qui rend une image tirée
+d'un registry et une image buildée localement **interchangeables sous le même nom** (#411).
 _Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le
 conteneur, #406).
 
@@ -915,11 +916,33 @@ Dockerfile **embarqué** (source de vérité dans le binaire) et le **seedé** (
 disque) ; « image de base ».
 
 **`ensure_image()`** :
-Garantit que `pdo-sandbox:h-<hash>` existe **localement** : présente → réutilise ; absente →
-`docker build` depuis le Dockerfile sur disque ; échec → erreur explicite (consommée par le
-fail-fast du Run). Ne tire **rien** d'un registry en #405 (chemin pull/GHCR + précédence
-`image_source` → #411). _Éviter_ : « pull », « build » seul (ensure = build-**si-absent**),
-« warm-up ».
+Garantit que `pdo-sandbox:h-<hash>` existe **localement** et retourne **toujours** le ref local
+(invariant `sandbox_container`) : présente → réutilise (**fast-path**, zéro réseau) ; absente et
+`image_source=registry` (défaut) → `docker pull` le ref GHCR puis **retag** sous le ref local, avec
+**fallback build** si le pull échoue (offline / 404 / registry down) ; `image_source=dockerfile` →
+`docker build` direct depuis le Dockerfile sur disque, **jamais** de pull ; échec de build → erreur
+explicite (consommée par le fail-fast du Run). _Éviter_ : « ensure = build-**seul** » (c'est
+build-**si-absent**, et pull-**d'abord** en registry), « warm-up ».
+
+**`image_source` (par-daemon)** :
+Le réglage qui pilote d'où `ensure_image` tire l'image : `registry` (défaut, pull GHCR-puis-retag +
+fallback build) | `dockerfile` (build local direct). **Par-daemon**, jamais par-Run (à la différence
+du **mode** sandbox porté par `RunStarted`) : colonne additive `instance_config`, précédence
+`stored → env (PDO_SANDBOX_IMAGE_SOURCE) → default(registry)` (ADR-0015), éditable dans la Settings
+UI. _Éviter_ : « mode registry » (le mode = off/copy/pure), « image_source par run ».
+
+**`registry_image_ref` / `ghcr.io/loulen/pdo-sandbox`** :
+Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` — **même hash** que le ref
+local, d'où l'interchangeabilité. Owner **lowercasé** (`Loulen`→`loulen` : GHCR rejette l'uppercase).
+Poussé par un job release additif (multi-arch, tags `h-<hash>` + `latest`). _Éviter_ : « latest »
+(le daemon ne tire que `h-<hash>` ; `latest` est informatif), « tag de version ».
+
+**`pull_image` / `tag_image`** :
+Les deux effets docker du chemin registry : `pull_image` = `docker pull <registry_ref>` (`Ok(true)`
+si tiré, `Ok(false)` si non-zéro → fallback build ; le stderr de progression n'est **pas** un
+signal d'échec, seul l'exit code compte) ; `tag_image` = `docker tag <registry_ref> <local_ref>`
+(le retag qui garde `sandbox_container` inchangé). _Éviter_ : confondre `pull` (réseau) et
+`ensure`/`build` (local).
 
 ### Exécution (conteneur)
 
@@ -998,10 +1021,21 @@ absent (idempotent). C'est **le** verbe « destroy / destruction » réservé pa
   `repo_root` mergée dans le `.claude.json` copié (D5). Aucune écriture de config ne revient vers
   l'hôte (`merge_back` reste jsonl-only). Couvert par unit + 4 tests layer-3 (`sandbox_tracer`) + le
   Feature Path agentique L5 (Docker réel).
+- **Fourniture hybride de l'image (#411)** : `ensure_image` devient hybride — fast-path local, puis
+  en `registry` (défaut) `pull_image` GHCR + `tag_image` sous le ref local, **fallback build** si le
+  pull rate ; en `dockerfile`, build direct. Valeur de retour **toujours le ref local** → aucun
+  changement dans `sandbox_container`. Réglage **par-daemon** `image_source` (`instance_config`,
+  résolveur `stored → env → default(registry)` partagé par `ensure_image` **et** `GET /settings`,
+  0 drift #373), éditable dans la Settings UI (`<select>`). `context_from_state` devient **async**
+  (lit `instance_config` frais au bord) ; `ensure_ready` reste sync. La release publie l'image sur
+  GHCR (job additif, multi-arch, tags `h-<hash>` + `latest`) avec parité hash bash/Rust. Pull anonyme
+  sur image publique → trou d'auth #260 inchangé. Couvert par unit (`sandbox_image`/`instance_config`
+  /settings) + 2 tests layer-3 (`sandbox_tracer` : pull vs build selon `image_source`) + FP-411 (L5,
+  Docker réel).
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
-  `default_sandbox`, pattern ADR-0015) (#410) ; **fourniture par registry** (pull GHCR +
-  `image_source`) (#411).
+  `default_sandbox`, pattern ADR-0015) (#410) ; auto-flip de la visibilité publique du package GHCR
+  (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).
 
 ### Ambiguïté signalée
 « sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;

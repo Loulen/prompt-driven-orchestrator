@@ -123,6 +123,84 @@ fn sh_single_quote(s: &str) -> String {
     out
 }
 
+/// Single-quote a shell word only when it contains a character that isn't safe
+/// bare. Keeps the emitted `docker exec …` argv readable (and its golden stable):
+/// simple tokens (`docker`, `exec`, `-i`, `PDO_OUTPUT_out=/a/b`, `1000:1000`) stay
+/// bare; anything with a space / quote / `$` / glob char is quoted. Used only to
+/// splice the `docker exec` argv into the `bash -c` tail string.
+fn sh_quote_arg(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'_' | b'-' | b'.' | b'/' | b'=' | b':' | b',' | b'@' | b'+'
+                )
+        });
+    if safe {
+        s.to_string()
+    } else {
+        sh_single_quote(s)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox wrapping (#407)
+// ---------------------------------------------------------------------------
+
+/// Threaded into [`build_tmux_script`] / [`build_resume_script`] when a Run is
+/// sandboxed (`sandbox != off`, #407). When present, the node's tail is wrapped in
+/// a `docker exec … pdo-sbx-<run_id> bash -lc '<tail>'` so it runs **inside** the
+/// Run's long-lived container instead of on the host.
+///
+/// The base `PDO_*` env exports still run on the *host* side of the wrapper
+/// (harmless), so `off` byte-identity is preserved when this is `None`.
+/// `PDO_DAEMON_URL=localhost` is therefore **not** re-forwarded into the container
+/// (the create posted `host.docker.internal`); the dynamic per-node catalogue (a
+/// `script` node's `PDO_INPUT_*`/`PDO_OUTPUT_*`/…) is forwarded as explicit
+/// `-e K=V` on the exec, since a bare host export wouldn't cross the exec.
+pub struct SandboxWrap<'a> {
+    /// The `docker` binary to invoke (per-daemon override → `"docker"`).
+    pub docker_bin: &'a str,
+    pub uid: u32,
+    pub gid: u32,
+    /// The session marker: **MUST** equal the tmux session name the kill path uses
+    /// (`PDO_SBX_SESSION`), or the targeted `/proc` kill misses its tree.
+    pub marker: &'a str,
+    /// The node's working dir → `docker exec -w <workdir>` (the load-bearing cwd
+    /// inside the container).
+    pub workdir: &'a Path,
+}
+
+/// Splice the container-exec prefix (from [`crate::sandbox_container`]) around a
+/// base tail: `docker <exec argv incl. -e K=V> pdo-sbx-<run> bash -lc '<tail>'`.
+/// The base tail is single-quoted as one `bash -lc` argument; `wrap_with_env`
+/// then single-quotes the whole thing again for its outer `bash -c` (the same
+/// double-quoting the `--model` path already relies on).
+fn wrap_tail_in_docker_exec(
+    run_id: &str,
+    wrap: &SandboxWrap<'_>,
+    extra_env: &[(String, String)],
+    base_tail: &str,
+) -> String {
+    let mut argv = vec![wrap.docker_bin.to_string()];
+    argv.extend(crate::sandbox_container::exec_prefix_with_env(
+        run_id,
+        wrap.uid,
+        wrap.gid,
+        wrap.workdir,
+        wrap.marker,
+        extra_env,
+    ));
+    argv.push("bash".to_string());
+    argv.push("-lc".to_string());
+    argv.push(base_tail.to_string());
+    argv.iter()
+        .map(|a| sh_quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // ---------------------------------------------------------------------------
 // Script builder (pub for assertion in layer-3a tests)
 // ---------------------------------------------------------------------------
@@ -225,6 +303,10 @@ fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
 ///
 /// `tail` selects the launch: [`SessionTail::Agent`] with the per-node `model`
 /// (#296), or [`SessionTail::Script`] with its `timeout` and I/O env catalogue.
+// Every argument is an irreducible input to the script the session runs (identity,
+// working context, launch selector, sandbox wrap); a struct would only move the
+// list, not shorten it — same rationale as `spawn`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_tmux_script(
     run_id: &str,
     node_id: &str,
@@ -233,6 +315,7 @@ pub fn build_tmux_script(
     prompt_path: &Path,
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
+    sandbox: Option<&SandboxWrap<'_>>,
 ) -> String {
     const NO_ENV: &[(String, String)] = &[];
     let (tail_cmd, extra_env): (String, &[(String, String)]) = match tail {
@@ -273,7 +356,19 @@ pub fn build_tmux_script(
         }
     };
 
-    wrap_with_env(run_id, node_id, iter, daemon_port, extra_env, &tail_cmd)
+    // #407: when sandboxed, the node's tail runs INSIDE the container via a
+    // `docker exec … bash -lc '<tail>'`. The per-node catalogue is forwarded on
+    // the exec as explicit `-e K=V` (never PDO_DAEMON_URL); the host-side base env
+    // exports still run (harmless) so `PDO_DAEMON_URL=localhost` is not carried
+    // in. `wrap_with_env` then gets an EMPTY `extra_env` — the catalogue crossed
+    // the exec, not the host export — keeping the host wrapper minimal.
+    match sandbox {
+        Some(wrap) => {
+            let docker_tail = wrap_tail_in_docker_exec(run_id, wrap, extra_env, &tail_cmd);
+            wrap_with_env(run_id, node_id, iter, daemon_port, NO_ENV, &docker_tail)
+        }
+        None => wrap_with_env(run_id, node_id, iter, daemon_port, extra_env, &tail_cmd),
+    }
 }
 
 /// Build a resume script that uses `claude --continue` in the same working_dir.
@@ -292,13 +387,24 @@ fn build_resume_script(
     iter: i64,
     daemon_port: u16,
     tmux_cmd_override: Option<&str>,
+    sandbox: Option<&SandboxWrap<'_>>,
 ) -> String {
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
         None => "exec claude --dangerously-skip-permissions --continue".to_string(),
     };
 
-    wrap_with_env(run_id, node_id, iter, daemon_port, &[], &tail_cmd)
+    // #407: the 6th tail path (`claude --continue`) is wrapped identically — a
+    // resumed sandboxed session re-enters the same container. `--continue` matches
+    // its transcript by working-dir path; the container mounts the repo at the
+    // same host path, so the path (hence the transcript) still matches.
+    match sandbox {
+        Some(wrap) => {
+            let docker_tail = wrap_tail_in_docker_exec(run_id, wrap, &[], &tail_cmd);
+            wrap_with_env(run_id, node_id, iter, daemon_port, &[], &docker_tail)
+        }
+        None => wrap_with_env(run_id, node_id, iter, daemon_port, &[], &tail_cmd),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +449,7 @@ pub fn spawn(
     daemon_port: u16,
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
+    sandbox: Option<&SandboxWrap<'_>>,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
@@ -357,6 +464,7 @@ pub fn spawn(
         &prompt_path,
         tmux_cmd_override,
         tail,
+        sandbox,
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -389,6 +497,7 @@ pub fn spawn_shell(
     working_dir: &Path,
     run_id: &str,
     daemon_port: u16,
+    sandbox: Option<&SandboxWrap<'_>>,
 ) -> Result<()> {
     // prompt_path is unused for `SessionTail::Shell` (bash has no prompt);
     // pass the working_dir as a harmless placeholder.
@@ -400,6 +509,7 @@ pub fn spawn_shell(
         working_dir,
         None,
         SessionTail::Shell,
+        sandbox,
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -422,6 +532,7 @@ pub fn spawn_shell(
 }
 
 /// Resume a dead session via `claude --continue` in the original working_dir.
+#[allow(clippy::too_many_arguments)]
 pub fn resume(
     session_name: &str,
     working_dir: &Path,
@@ -430,8 +541,16 @@ pub fn resume(
     iter: i64,
     daemon_port: u16,
     tmux_cmd_override: Option<&str>,
+    sandbox: Option<&SandboxWrap<'_>>,
 ) -> Result<()> {
-    let script = build_resume_script(run_id, node_id, iter, daemon_port, tmux_cmd_override);
+    let script = build_resume_script(
+        run_id,
+        node_id,
+        iter,
+        daemon_port,
+        tmux_cmd_override,
+        sandbox,
+    );
     let socket = tmux_socket_name(daemon_port);
 
     let output = tmux(&socket)
@@ -911,6 +1030,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent { model: None },
+            None,
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
@@ -927,6 +1047,7 @@ mod tests {
             prompt_path,
             Some("exec sleep 60"),
             SessionTail::Agent { model: None },
+            None,
         );
         assert!(script.contains("exec sleep 60"));
         assert!(!script.contains("claude"));
@@ -947,6 +1068,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent { model: None },
+            None,
         );
         assert!(
             !script.contains("--model"),
@@ -979,6 +1101,7 @@ mod tests {
             SessionTail::Agent {
                 model: Some("opus"),
             },
+            None,
         );
         assert!(script.contains("--model"), "model flag present: {script}");
         assert!(
@@ -1013,6 +1136,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent { model: Some("") },
+            None,
         );
         assert!(
             !script.contains("--model"),
@@ -1106,6 +1230,7 @@ mod tests {
                 timeout_secs: 42,
                 env: &[],
             },
+            None,
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(
@@ -1154,6 +1279,7 @@ mod tests {
                 timeout_secs: 60,
                 env: &[],
             },
+            None,
         );
         assert!(
             !script.contains("sleep 99"),
@@ -1192,6 +1318,7 @@ mod tests {
                 timeout_secs: 60,
                 env: &env,
             },
+            None,
         );
         assert!(
             script.contains("export PDO_INPUT_TASK="),
@@ -1226,6 +1353,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Shell,
+            None,
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(
@@ -1261,6 +1389,7 @@ mod tests {
             prompt_path,
             Some("exec sleep 600"),
             SessionTail::Shell,
+            None,
         );
         assert!(
             !script.contains("sleep 600"),
@@ -1317,6 +1446,191 @@ mod tests {
         assert_eq!(
             manager_session_name("20260506-143000-a3f1b2c"),
             "pdo-mgr-20260506-143000-a3f1b2c"
+        );
+    }
+
+    // -- #407 sandbox wrapping goldens --------------------------------------
+
+    fn sample_wrap<'a>(marker: &'a str, workdir: &'a Path) -> SandboxWrap<'a> {
+        SandboxWrap {
+            docker_bin: "docker",
+            uid: 1000,
+            gid: 1000,
+            marker,
+            workdir,
+        }
+    }
+
+    #[test]
+    fn sandbox_wraps_agent_tail_in_docker_exec() {
+        // #407 D5: a sandboxed agent tail runs INSIDE `pdo-sbx-<run>` via a
+        // `docker exec … bash -lc '<exec claude …>'`. The host env exports still
+        // run (harmless); the marker equals the session name (the kill target).
+        let prompt_path = Path::new("/repo/.pdo/runs/r1/worktree/.pdo/prompts/solo-iter-1.md");
+        let wt = Path::new("/repo/.pdo/runs/r1/nodes/solo/iter-1");
+        let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
+        let script = build_tmux_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            prompt_path,
+            None,
+            SessionTail::Agent { model: None },
+            Some(&wrap),
+        );
+        // Host wrapper preserved.
+        assert!(script.starts_with("exec bash -c "), "{script}");
+        assert!(script.contains("export PDO_RUN_ID="), "{script}");
+        // The container-exec prefix, in canonical order.
+        assert!(
+            script.contains(
+                "docker exec -i -t -e PDO_SBX_SESSION=pdo-r1-solo-iter-1 \
+                 -e PDO_NODE_ID -e PDO_NODE_ITER --user 1000:1000 \
+                 -w /repo/.pdo/runs/r1/nodes/solo/iter-1 pdo-sbx-r1 bash -lc"
+            ),
+            "docker exec prefix missing/wrong: {script}"
+        );
+        // The claude tail runs inside the container.
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions"),
+            "{script}"
+        );
+        // PDO_DAEMON_URL appears ONCE (the host export), never re-forwarded on the
+        // exec (would clobber the host-gateway URL posted at create).
+        assert_eq!(
+            script.matches("PDO_DAEMON_URL").count(),
+            1,
+            "PDO_DAEMON_URL must not be re-forwarded into the container: {script}"
+        );
+    }
+
+    #[test]
+    fn sandbox_wraps_script_tail_with_env_catalogue() {
+        // #407 D6: a `script` node's dynamic catalogue crosses the exec as
+        // explicit `-e K=V` (a bare host export wouldn't cross), NOT as a host
+        // export — so each catalogue key appears exactly once (on the exec).
+        let prompt_path = Path::new("/repo/.pdo/runs/r1/worktree/.pdo/prompts/solo-iter-1.md");
+        let wt = Path::new("/repo/.pdo/runs/r1/worktree");
+        let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
+        let env = vec![
+            (
+                "PDO_ARTIFACTS_DIR".to_string(),
+                "/repo/.pdo/runs/r1/worktree/.pdo/artifacts".to_string(),
+            ),
+            (
+                "PDO_OUTPUT_out".to_string(),
+                "/repo/.pdo/runs/r1/worktree/.pdo/artifacts/solo/iter-1/out/output.md".to_string(),
+            ),
+            ("PDO_VAR_x".to_string(), "hello".to_string()),
+        ];
+        let script = build_tmux_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            prompt_path,
+            None,
+            SessionTail::Script {
+                timeout_secs: 60,
+                env: &env,
+            },
+            Some(&wrap),
+        );
+        assert!(
+            script.contains("-e PDO_ARTIFACTS_DIR=/repo/.pdo/runs/r1/worktree/.pdo/artifacts"),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                "-e PDO_OUTPUT_out=/repo/.pdo/runs/r1/worktree/.pdo/artifacts/solo/iter-1/out/output.md"
+            ),
+            "{script}"
+        );
+        assert!(script.contains("-e PDO_VAR_x=hello"), "{script}");
+        // The catalogue is NOT host-exported (only the base four are): each key
+        // appears exactly once, on the exec.
+        assert_eq!(
+            script.matches("PDO_ARTIFACTS_DIR").count(),
+            1,
+            "catalogue must cross the exec once, not also host-exported: {script}"
+        );
+        // The body runs under timeout, self-signalling — inside the container.
+        assert!(script.contains("timeout 60s bash"), "{script}");
+        assert!(script.contains("pdo complete"), "{script}");
+        assert_eq!(script.matches("PDO_DAEMON_URL").count(), 1, "{script}");
+    }
+
+    #[test]
+    fn sandbox_wraps_shell_tail() {
+        // #407: the run shell family is wrapped too — the respawn loop runs in the
+        // container.
+        let wt = Path::new("/repo/.pdo/runs/r1/worktree");
+        let wrap = sample_wrap("pdo-shell-r1", wt);
+        let script = build_tmux_script(
+            "r1",
+            "__shell__",
+            0,
+            6172,
+            wt,
+            None,
+            SessionTail::Shell,
+            Some(&wrap),
+        );
+        assert!(
+            script.contains("-e PDO_SBX_SESSION=pdo-shell-r1"),
+            "shell marker = shell session name: {script}"
+        );
+        assert!(
+            script.contains("while true; do bash -i; sleep 0.2; done"),
+            "shell respawn loop preserved inside the container: {script}"
+        );
+    }
+
+    #[test]
+    fn sandbox_none_is_byte_identical() {
+        // #407 invariant: with no `SandboxWrap`, the emitted bytes are exactly the
+        // legacy (host) command — no docker anywhere on the `off` parcours.
+        let prompt_path = Path::new("/tmp/p.md");
+        let with_none = build_tmux_script(
+            "r",
+            "n",
+            1,
+            5172,
+            prompt_path,
+            None,
+            SessionTail::Agent { model: None },
+            None,
+        );
+        assert!(
+            !with_none.contains("docker"),
+            "off path must not mention docker: {with_none}"
+        );
+        assert!(!with_none.contains("pdo-sbx-"), "{with_none}");
+        assert!(
+            with_none.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail preserved byte-for-byte: {with_none}"
+        );
+    }
+
+    #[test]
+    fn build_resume_script_wraps_continue_in_docker_exec() {
+        // #407: the 6th tail path (`claude --continue`) is wrapped identically.
+        let wt = Path::new("/repo/.pdo/runs/r1/nodes/solo/iter-1");
+        let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
+        let wrapped = build_resume_script("r1", "solo", 1, 6172, None, Some(&wrap));
+        assert!(
+            wrapped.contains("docker exec -i -t -e PDO_SBX_SESSION=pdo-r1-solo-iter-1"),
+            "{wrapped}"
+        );
+        assert!(wrapped.contains("pdo-sbx-r1 bash -lc"), "{wrapped}");
+        assert!(wrapped.contains("--continue"), "{wrapped}");
+        // off path unchanged.
+        let off = build_resume_script("r1", "solo", 1, 6172, None, None);
+        assert!(!off.contains("docker"), "{off}");
+        assert!(
+            off.contains("exec claude --dangerously-skip-permissions --continue"),
+            "{off}"
         );
     }
 }

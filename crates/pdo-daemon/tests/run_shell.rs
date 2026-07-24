@@ -407,6 +407,7 @@ async fn reaper_kills_shell_of_absent_run() {
         daemon.repo_root(),
         bogus_run,
         daemon.addr.port(),
+        None,
     )
     .unwrap();
     assert!(pdo_daemon::tmux_session_manager::session_exists(
@@ -451,6 +452,7 @@ async fn reaper_kills_shell_of_archived_run() {
         daemon.repo_root(),
         &run_id,
         daemon.addr.port(),
+        None,
     )
     .unwrap();
     assert!(pdo_daemon::tmux_session_manager::session_exists(

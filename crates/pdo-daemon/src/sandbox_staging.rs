@@ -9,8 +9,8 @@
 //! [`prepare`] (seeder), [`merge_back`] (récupérer les transcripts), [`teardown`]
 //! (purger). Les slices sœurs le **consomment** mais ne sont **pas** ici :
 //! - #406 monte `claude-home/` → `$HOME/.claude` et `.claude.json` → `$HOME/.claude.json` ;
-//! - #407 câble `prepare`/`merge_back`/`teardown` dans le run-advance (ADR-0030) ;
-//! - #408 pointe stale-detection/coût vers le staging (seam `transcripts_root`).
+//! - #407 câble `prepare`/`teardown` dans le run-advance (ADR-0030) ;
+//! - #408 câble `merge_back` + pointe stale-detection/coût vers le staging (seam `transcripts_root`).
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
 //! - **`copy` = allowlist, jamais denylist.** Copier « tout `~/.claude` sauf

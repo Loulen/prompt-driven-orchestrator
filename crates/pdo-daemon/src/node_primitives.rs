@@ -40,6 +40,10 @@ pub struct StartNodeParams<'a> {
     /// Per-daemon override for the `claude …` tail of the spawned tmux script.
     /// Threaded from `AppState.tmux_cmd_override`; `None` → real claude (#181).
     pub tmux_cmd_override: Option<&'a str>,
+    /// Per-daemon `docker` binary override for the sandbox wiring (#407), threaded
+    /// from `AppState.docker_cmd_override`; `None` → real `docker`. Used only when
+    /// `run_state.sandbox != off` to wrap the tail into the Run's container.
+    pub docker_cmd_override: Option<&'a str>,
     /// Instance-wide default model, already resolved `stored → env → None` by the
     /// caller (#347). `start_node` is sync and DB-less, so the async force-spawn
     /// / retry callers resolve it and pass it in; the node's own `model:` still
@@ -215,6 +219,16 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let session_name =
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
+    // #407: wrap the tail into the Run's container when sandboxed (manual
+    // force-spawn / restart door, #204). Marker = the session name (kill target).
+    let sandbox_wrap =
+        (!params.run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+            docker_bin: params.docker_cmd_override.unwrap_or("docker"),
+            uid: crate::sandbox_container::host_uid(),
+            gid: crate::sandbox_container::host_gid(),
+            marker: &session_name,
+            workdir: &working_dir,
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         spawn_prompt,
@@ -225,6 +239,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         params.daemon_port,
         params.tmux_cmd_override,
         tail,
+        sandbox_wrap.as_ref(),
     ) {
         return StartNodeResult {
             outcome: PrimitiveOutcome::Rejected {
@@ -701,6 +716,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -739,6 +755,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -797,6 +814,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -854,6 +872,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -897,6 +916,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -964,6 +984,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -1053,6 +1074,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -1116,6 +1138,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -1179,6 +1202,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 
@@ -1438,6 +1462,7 @@ mod tests {
             resolved_vars: &HashMap::new(),
             daemon_port: 5172,
             tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
             default_model: None,
         };
 

@@ -172,7 +172,34 @@ pub(crate) fn exec_prefix(
     workdir: &Path,
     marker: &str,
 ) -> Vec<String> {
-    vec![
+    // Delegate with an empty catalogue: the output stays byte-identical to the
+    // #406 golden (the base three `-e` only, no per-node values).
+    exec_prefix_with_env(run_id, uid, gid, workdir, marker, &[])
+}
+
+/// Like [`exec_prefix`] but forwards a **dynamic per-node env catalogue** into the
+/// container as explicit `-e KEY=VALUE` (#407, D6). A `script` node's I/O arrives
+/// as env vars (`PDO_ARTIFACTS_DIR`, `PDO_INPUT_<port>`, `PDO_OUTPUT_<port>`,
+/// `PDO_VAR_<name>`), whose values are known at spawn time but are **not** among
+/// the statically-forwarded `-e PDO_NODE_ID`/`-e PDO_NODE_ITER` — a bare `-e KEY`
+/// only forwards a host-shell value, and the host shell exports none of the
+/// catalogue in sandbox mode (D6). So they must be passed as valued `-e KEY=VALUE`
+/// inserted **before** the container name.
+///
+/// **Never `PDO_DAEMON_URL`** (a valued or bare `-e` would clobber the
+/// host-gateway URL posted at `create`): it is filtered here as a belt-and-braces
+/// invariant, even though the catalogue should never contain it. Order is FIGÉ by
+/// the golden test: the base three `-e` first, then each catalogue `-e K=V` in
+/// order, then `--user`, `-w`, container.
+pub(crate) fn exec_prefix_with_env(
+    run_id: &str,
+    uid: u32,
+    gid: u32,
+    workdir: &Path,
+    marker: &str,
+    extra_env: &[(String, String)],
+) -> Vec<String> {
+    let mut args = vec![
         "exec".to_string(),
         "-i".to_string(),
         "-t".to_string(),
@@ -182,12 +209,22 @@ pub(crate) fn exec_prefix(
         "PDO_NODE_ID".to_string(),
         "-e".to_string(),
         "PDO_NODE_ITER".to_string(),
-        "--user".to_string(),
-        format!("{uid}:{gid}"),
-        "-w".to_string(),
-        workdir.display().to_string(),
-        container_name(run_id),
-    ]
+    ];
+    for (k, v) in extra_env {
+        // Invariant: PDO_DAEMON_URL is posed at create → host.docker.internal; a
+        // re-passed `-e` (bare or valued) would clobber the gateway.
+        if k == "PDO_DAEMON_URL" {
+            continue;
+        }
+        args.push("-e".to_string());
+        args.push(format!("{k}={v}"));
+    }
+    args.push("--user".to_string());
+    args.push(format!("{uid}:{gid}"));
+    args.push("-w".to_string());
+    args.push(workdir.display().to_string());
+    args.push(container_name(run_id));
+    args
 }
 
 // -- effets docker (sync std::process::Command, anyhow + .context) -----------
@@ -695,6 +732,74 @@ mod tests {
         assert!(
             !args.iter().any(|a| a.contains("PDO_DAEMON_URL")),
             "exec_prefix ne doit jamais re-passer PDO_DAEMON_URL"
+        );
+    }
+
+    // -- 2b. exec_prefix_with_env golden : catalogue script (#407, D6) --------
+
+    #[test]
+    fn exec_prefix_with_env_golden() {
+        let wt = Path::new("/repo/.pdo/runs/r1/nodes/n1/iter-1");
+        // A realistic `script` node catalogue (order preserved), plus a
+        // PDO_DAEMON_URL that MUST be filtered out (invariant).
+        let env = vec![
+            (
+                "PDO_ARTIFACTS_DIR".to_string(),
+                "/repo/.pdo/runs/r1/worktree/.pdo/artifacts".to_string(),
+            ),
+            (
+                "PDO_OUTPUT_out".to_string(),
+                "/repo/.pdo/runs/r1/worktree/.pdo/artifacts/n1/iter-1/out/output.md".to_string(),
+            ),
+            ("PDO_VAR_x".to_string(), "hello".to_string()),
+            // Adversarial: must be dropped, never forwarded.
+            (
+                "PDO_DAEMON_URL".to_string(),
+                "http://localhost:6172".to_string(),
+            ),
+        ];
+        let args = exec_prefix_with_env("r1", 1000, 1000, wt, "pdo-r1-n1-iter-1", &env);
+        let expected = strings(&[
+            "exec",
+            "-i",
+            "-t",
+            "-e",
+            "PDO_SBX_SESSION=pdo-r1-n1-iter-1",
+            "-e",
+            "PDO_NODE_ID",
+            "-e",
+            "PDO_NODE_ITER",
+            "-e",
+            "PDO_ARTIFACTS_DIR=/repo/.pdo/runs/r1/worktree/.pdo/artifacts",
+            "-e",
+            "PDO_OUTPUT_out=/repo/.pdo/runs/r1/worktree/.pdo/artifacts/n1/iter-1/out/output.md",
+            "-e",
+            "PDO_VAR_x=hello",
+            "--user",
+            "1000:1000",
+            "-w",
+            "/repo/.pdo/runs/r1/nodes/n1/iter-1",
+            "pdo-sbx-r1",
+        ]);
+        assert_eq!(
+            args, expected,
+            "catalogue `-e K=V` inséré avant le conteneur"
+        );
+        // Invariant : PDO_DAEMON_URL jamais re-passé, même présent dans le catalogue.
+        assert!(
+            !args.iter().any(|a| a.contains("PDO_DAEMON_URL")),
+            "PDO_DAEMON_URL doit être filtré du catalogue"
+        );
+    }
+
+    #[test]
+    fn exec_prefix_empty_env_equals_bare_prefix() {
+        // exec_prefix (délégation `&[]`) == exec_prefix_with_env(&[]) : garde de
+        // non-régression du golden #406.
+        let wt = Path::new("/repo/.pdo/runs/r1/nodes/n1/iter-1");
+        assert_eq!(
+            exec_prefix("r1", 1000, 1000, wt, "m"),
+            exec_prefix_with_env("r1", 1000, 1000, wt, "m", &[]),
         );
     }
 

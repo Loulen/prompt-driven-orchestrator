@@ -33,6 +33,7 @@ mod run_advance;
 mod run_cost;
 mod sandbox_container;
 mod sandbox_image;
+mod sandbox_run;
 mod sandbox_staging;
 #[allow(dead_code)]
 mod scheduler;
@@ -217,6 +218,15 @@ struct AppState {
     /// [`DaemonConfig`] by `TestDaemon::spawn`, so no test ever launches real
     /// claude and no `std::env::set_var` race can clobber it (#181).
     tmux_cmd_override: Option<String>,
+    /// Per-daemon override for the `docker` binary the sandbox wiring shells out
+    /// to (#407). `None` in production (real `docker`); `Some(cmd)` in the
+    /// layer-3 harness. Seeded via [`DaemonConfig`], mirroring `tmux_cmd_override`
+    /// (#181) — never a process-global `std::env` read in the hot path.
+    docker_cmd_override: Option<String>,
+    /// Per-daemon sandbox home-root override (#407). `None` in production (real
+    /// `$HOME`); `Some(dir)` in the layer-3 harness so staging lands under the
+    /// test's tempdir. Seeded via [`DaemonConfig`].
+    sandbox_home_override: Option<PathBuf>,
     /// Epoch-millis of the **start** of the most recent Trigger scheduler tick,
     /// or `0` if it has never ticked. Process-lifetime only (a restart resets it
     /// *and* revives the scheduler). Surfaced by `GET /triggers/health` so a
@@ -326,6 +336,12 @@ struct CreateRunRequest {
     /// the trigger scheduler; absent for manual runs.
     #[serde(default)]
     triggered_by: Option<String>,
+    /// Isolation mode for this Run (#403 / #407). `#[serde(default)]` → `Off`, so
+    /// an absent field means the historical host path. Trigger fires pass `Off`
+    /// (source precedence run → trigger → default_sandbox is #410); this slice
+    /// only accepts the mode via the `POST /runs` parameter.
+    #[serde(default)]
+    sandbox: event_log::SandboxMode,
 }
 
 #[derive(Serialize)]
@@ -1443,6 +1459,20 @@ pub struct DaemonConfig {
     /// detection). Armed by `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|
     /// `unknown`); tests set it directly.
     pub service_health_override: Option<ServiceHealthOverride>,
+    /// Per-daemon override for the `docker` binary invoked by the sandbox wiring
+    /// (#407). Mirrors `tmux_cmd_override` (#181): `None` in production (real
+    /// `docker`); `Some(cmd)` in the layer-3 harness points every sandbox docker
+    /// call at a fake executable, so no test needs a real daemon or a global
+    /// `std::env::set_var` race. Read once at boot from
+    /// [`sandbox_image::DOCKER_CMD_OVERRIDE_ENV`].
+    pub docker_cmd_override: Option<String>,
+    /// Per-daemon override for the sandbox **home root** (#407 testability seam).
+    /// `None` in production → the real `$HOME` (staging under `$HOME/.pdo/sandbox`,
+    /// `.claude` copied from `$HOME/.claude`). `Some(dir)` points staging + the
+    /// `.claude` source + the container-home mount at `dir` instead, so a layer-3
+    /// test stages under its own tempdir and never touches the real home. Read
+    /// once at boot from `PDO_SANDBOX_HOME_OVERRIDE`.
+    pub sandbox_home_override: Option<PathBuf>,
 }
 
 impl DaemonConfig {
@@ -1472,6 +1502,14 @@ impl DaemonConfig {
             service_health_override: std::env::var("PDO_SERVICE_HEALTH")
                 .ok()
                 .and_then(|v| ServiceHealthOverride::parse(&v)),
+            // Sandbox docker seam (#407), sibling of PDO_TMUX_CMD_OVERRIDE — read
+            // once at boot, `None`/unset in prod (real docker).
+            docker_cmd_override: std::env::var(sandbox_image::DOCKER_CMD_OVERRIDE_ENV).ok(),
+            // Sandbox home-root seam (#407) — `None`/unset in prod (real $HOME).
+            sandbox_home_override: std::env::var("PDO_SANDBOX_HOME_OVERRIDE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -1563,6 +1601,8 @@ pub async fn serve_with_config(
         recent_writes,
         run_watcher: run_watcher.clone(),
         tmux_cmd_override: config.tmux_cmd_override,
+        docker_cmd_override: config.docker_cmd_override,
+        sandbox_home_override: config.sandbox_home_override,
         last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_trigger_name: config.panic_on_trigger_name,
         last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -3458,7 +3498,7 @@ fn detach_terminal_tail<F>(
 
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
-async fn run_trigger_scheduler_tick(state: &AppState) {
+async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     // At most one tick in flight: see `AppState::trigger_tick_lock`.
     let _tick = state.trigger_tick_lock.lock().await;
     let now = chrono::Utc::now();
@@ -3545,7 +3585,7 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
 /// Returns the persisted audit record (with `run_id` filled on a fire), or
 /// `None` when the evaluation was a silent no-op.
 async fn fire_one_trigger(
-    state: &AppState,
+    state: &Arc<AppState>,
     trigger: &trigger_store::Trigger,
     now: chrono::DateTime<chrono::Utc>,
     source: trigger_scheduler::FireSource,
@@ -3619,6 +3659,9 @@ async fn fire_one_trigger(
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
+                // #407: trigger fires run on the host. Source precedence
+                // (run → trigger → default_sandbox) is #410.
+                sandbox: event_log::SandboxMode::Off,
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -5399,6 +5442,9 @@ async fn parse_multipart_create_run(
         source_branch,
         name,
         triggered_by: None,
+        // #407: the multipart (browser) create path runs on the host; the UI
+        // sandbox selector is #410. The tracer bullet drives `pure` via JSON.
+        sandbox: event_log::SandboxMode::Off,
     };
     Ok((req, images))
 }
@@ -5499,7 +5545,7 @@ fn run_name_hint(name: Option<&str>, input: &str) -> prompt_augmenter::RunNameHi
 }
 
 async fn create_run_core(
-    state: &AppState,
+    state: &Arc<AppState>,
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Response {
@@ -5514,7 +5560,7 @@ async fn create_run_core(
 /// `Response`; the trigger scheduler calls it directly to learn the run id for
 /// `triggered_by` provenance.
 async fn create_run_inner(
-    state: &AppState,
+    state: &Arc<AppState>,
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Result<String, (StatusCode, serde_json::Value)> {
@@ -5666,6 +5712,11 @@ async fn create_run_inner(
     if let Some(ref target) = req.target_repo {
         run_payload["target_repo"] = serde_json::json!(target);
     }
+    // #407: carry the isolation mode only when it is NOT `off`, so `off` payloads
+    // stay byte-identical to the historical shape (back-compat: absence → Off).
+    if !req.sandbox.is_off() {
+        run_payload["sandbox"] = serde_json::json!(req.sandbox);
+    }
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
@@ -5766,13 +5817,102 @@ async fn create_run_inner(
         }
     }
 
-    spawn_ready_after_event(state, &run_id).await;
-
-    spawn_manager_session(state, &run_id, &worktree_dir, name_hint);
+    if req.sandbox.is_off() {
+        // Historical host path — inline, byte-identical to pre-#407. NO docker.
+        spawn_ready_after_event(state, &run_id).await;
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, req.sandbox);
+    } else {
+        // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
+        // (mirror ADR-0023 — the 201 must not block on a first-run `docker
+        // build`). Image + container + staging are guaranteed BEFORE the first
+        // node/manager spawn; any Docker unavailability → `RunFailed`, ZERO host
+        // spawn (never a silent host fallback for a sandboxed Run's work, US-16).
+        let sandbox = req.sandbox;
+        let task_state = state.clone();
+        let task_run_id = run_id.clone();
+        let task_worktree = worktree_dir.clone();
+        tokio::spawn(async move {
+            // Build the sandbox context from the just-projected Run (mode is
+            // immutable). A vanished/half-projected state → fail loud.
+            let ctx = match reload_run_state(&task_state, &task_run_id).await {
+                Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        fail_run_sandbox_prep(
+                            &task_state,
+                            &task_run_id,
+                            &format!("sandbox prep failed: {e:#}"),
+                        )
+                        .await;
+                        return;
+                    }
+                },
+                None => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        "sandbox prep failed: run state disappeared before prep",
+                    )
+                    .await;
+                    return;
+                }
+            };
+            // `ensure_ready` is blocking (docker build/probe) → run it under
+            // `spawn_blocking`, which also isolates its panic into a `JoinError`.
+            match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
+                Ok(Ok(())) => {
+                    spawn_ready_after_event(&task_state, &task_run_id).await;
+                    spawn_manager_session(
+                        &task_state,
+                        &task_run_id,
+                        &task_worktree,
+                        name_hint,
+                        sandbox,
+                    );
+                }
+                Ok(Err(e)) => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        &format!("sandbox prep failed: {e:#}"),
+                    )
+                    .await;
+                }
+                Err(join_err) => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        &format!("sandbox prep panicked: {join_err}"),
+                    )
+                    .await;
+                }
+            }
+        });
+    }
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
     Ok(run_id)
+}
+
+/// Fail a sandboxed Run *loud* when its eager prep can't complete (#407 D4).
+/// `RunFailed` is terminal + unguarded (mirror `fail_spawn_before_start`): a Run
+/// whose container never came up must move terminal, never wedge `Running` with
+/// no live node — and NEVER fall back to a host spawn.
+async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason: &str) {
+    error!("Run {run_id}: sandbox prep failed — {reason}");
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    if let Err(e) = append_event(state, &run_failed).await {
+        error!("Run {run_id}: failed to append RunFailed after sandbox prep failure: {e}");
+    }
 }
 
 fn spawn_manager_session(
@@ -5780,6 +5920,7 @@ fn spawn_manager_session(
     run_id: &str,
     worktree_dir: &std::path::Path,
     name_hint: prompt_augmenter::RunNameHint,
+    sandbox: event_log::SandboxMode,
 ) {
     let daemon_url = format!("http://localhost:{}", state.port);
 
@@ -5796,6 +5937,15 @@ fn spawn_manager_session(
         prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
+    // #407: the manager runs inside the Run's container too when sandboxed. Marker
+    // = the manager session name; workdir = the pipeline worktree.
+    let sandbox_wrap = (!sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: worktree_dir,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -5807,6 +5957,7 @@ fn spawn_manager_session(
         state.tmux_cmd_override.as_deref(),
         // manager has no NodeDef — always an agent at the account default (#296)
         tmux_session_manager::SessionTail::Agent { model: None },
+        sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -6942,7 +7093,7 @@ async fn run_stale_detection(state: &AppState) {
                     // The session is already gone; reaping captures whatever
                     // remains (usually nothing) and is a no-op otherwise. Its
                     // slot freed. Re-drive throttled `waiting` nodes (#159).
-                    reap_node_session(state, &repo_root, run_id, node_id, *iter);
+                    reap_node_session(state, &repo_root, run_id, node_id, *iter, run_state.sandbox);
                     retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
@@ -7167,6 +7318,16 @@ async fn node_pane(
         );
 
         if working_dir.exists() {
+            // #407: a resumed sandboxed session re-enters its container (6th tail
+            // path). Marker = the session name; workdir = the node's working dir.
+            let sandbox_wrap =
+                (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+                    docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                    uid: sandbox_container::host_uid(),
+                    gid: sandbox_container::host_gid(),
+                    marker: &session_name,
+                    workdir: &working_dir,
+                });
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -7175,6 +7336,7 @@ async fn node_pane(
                 iter,
                 state.port,
                 state.tmux_cmd_override.as_deref(),
+                sandbox_wrap.as_ref(),
             ) {
                 warn!("Failed to resume session {session_name}: {e}");
                 return Json(PaneResponse {
@@ -7423,6 +7585,13 @@ async fn spawn_merge_resolver(
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
+    // #407: the merge resolver runs inside the Run's container when sandboxed.
+    // Project the (immutable) mode; default `off` if the state can't be reloaded.
+    let sandbox_mode = reload_run_state(state, run_id)
+        .await
+        .map(|(_, s)| s.sandbox)
+        .unwrap_or_default();
+
     let resolver_started = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -7438,6 +7607,13 @@ async fn spawn_merge_resolver(
     };
     let _ = append_event(state, &resolver_started).await;
 
+    let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: worktree_dir,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -7449,6 +7625,7 @@ async fn spawn_merge_resolver(
         state.tmux_cmd_override.as_deref(),
         // __merge_resolver__ has no NodeDef — agent at the account default (#296)
         tmux_session_manager::SessionTail::Agent { model: None },
+        sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -7859,11 +8036,20 @@ async fn node_done(
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
+    // #407: the Run's (immutable) sandbox mode for the targeted container kill.
+    let tail_sandbox = pre_run_state.sandbox;
     detach_terminal_tail("node_done", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session,
         // so a completed node never holds a live session toward the tmux-collapse
         // point (#77/#78). Post-mortem inspection survives via the snapshot.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
         // run, re-drive throttled waiters, then the single completion gate. Everything
@@ -7917,13 +8103,22 @@ async fn node_fail(
     detach_terminal_tail("node_fail", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
         // Post-mortem inspection of the failed node survives via the snapshot.
-        let repo_root = match load_events(&tail_state.db, &tail_run).await {
+        // #407: capture repo_root AND the immutable sandbox mode from the same
+        // projection (the targeted container kill needs the mode).
+        let (repo_root, tail_sandbox) = match load_events(&tail_state.db, &tail_run).await {
             Ok(evs) => event_log::project(&evs)
-                .map(|s| effective_repo_root(&tail_state, &s))
-                .unwrap_or_else(|| tail_state.repo_root.clone()),
-            Err(_) => tail_state.repo_root.clone(),
+                .map(|s| (effective_repo_root(&tail_state, &s), s.sandbox))
+                .unwrap_or_else(|| (tail_state.repo_root.clone(), event_log::SandboxMode::Off)),
+            Err(_) => (tail_state.repo_root.clone(), event_log::SandboxMode::Off),
         };
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Mark the run as failed
         let run_failed = event_log::Event {
@@ -8016,9 +8211,17 @@ async fn node_skip(
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
     let reason = req.reason.clone();
+    let tail_sandbox = pre_run_state.sandbox;
     detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // End the run as a graceful no-op (#245) — distinct from RunFailed. This
         // short-circuits downstream: `spawn_ready_after_event` only spawns for a
@@ -8178,6 +8381,7 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: resolve fresh so a force-spawn honours the instance default too
         // (wiring only one seam would leave this path at the account default —
         // a silent bug visible only on a manual force-spawn).
@@ -8280,7 +8484,14 @@ async fn node_stop(
     // killed, so the stopped node's post-mortem pane survives. `stop_node`
     // kills the session too (idempotent — reap already killed it).
     let repo_root = effective_repo_root(&state, &run_state);
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+    reap_node_session(
+        &state,
+        &repo_root,
+        &run_id,
+        &node_id,
+        iter,
+        run_state.sandbox,
+    );
 
     let params = node_primitives::StopNodeParams {
         run_id: &run_id,
@@ -8428,6 +8639,7 @@ async fn node_retry(
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: retry honours the instance default like the live scheduler path.
         default_model: stored_default_model(&state.db).await,
     };
@@ -9010,6 +9222,19 @@ async fn run_command(
 
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            // #407: also kill the process tree inside the container (best-effort,
+            // no-op for `off`). The tmux-side `docker exec` client death leaves the
+            // reparented container process alive.
+            let kill_sandbox = reload_run_state(&state, &run_id)
+                .await
+                .map(|(_, s)| s.sandbox)
+                .unwrap_or_default();
+            sandbox_run::kill_session_best_effort(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                kill_sandbox,
+                &run_id,
+                &session_name,
+            );
 
             let fail_event = event_log::Event {
                 id: None,
@@ -9094,6 +9319,19 @@ async fn run_command(
             // Kill existing session
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            // #407: also kill the in-container process tree before the re-spawn
+            // (best-effort, no-op for `off`) so the old session's container
+            // process doesn't linger alongside the new one.
+            let restart_sandbox = reload_run_state(&state, &run_id)
+                .await
+                .map(|(_, s)| s.sandbox)
+                .unwrap_or_default();
+            sandbox_run::kill_session_best_effort(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                restart_sandbox,
+                &run_id,
+                &session_name,
+            );
 
             let cmd_event = event_log::Event {
                 id: None,
@@ -9367,6 +9605,9 @@ async fn run_command(
                 source_branch,
                 name: None,
                 triggered_by: None,
+                // #407: a retry preserves the original Run's isolation mode
+                // (immutable per-Run property projected from RunStarted).
+                sandbox: run_state.sandbox,
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -9926,7 +10167,45 @@ async fn open_run_shell(
             .into_response();
     }
 
-    match tmux_session_manager::spawn_shell(&session, &worktree, &run_id, state.port) {
+    // #407 D11: a sandboxed run's shell must enter its container. The container
+    // lives from create to cleanup_run (= archive), coextensive with shell
+    // eligibility — EXCEPT after a host reboot, where boot_recovery skips terminal
+    // runs, so the container may be down. Resurrect it here, or fail EXPLICITLY —
+    // never fall back to a silent host bash.
+    if !run_state.sandbox.is_off() {
+        let prep = match sandbox_run::context_from_state(&state, &run_state) {
+            Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                .await
+                .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = prep {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("sandbox container unavailable: {e:#}")
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // #407: the run shell enters the Run's container when sandboxed. Marker =
+    // the shell session name; workdir = the pipeline worktree.
+    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session,
+        workdir: &worktree,
+    });
+    match tmux_session_manager::spawn_shell(
+        &session,
+        &worktree,
+        &run_id,
+        state.port,
+        sandbox_wrap.as_ref(),
+    ) {
         Ok(()) => {
             info!("Opened run shell {session} in {}", worktree.display());
             (
@@ -10095,6 +10374,24 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     // #316: kill any ad-hoc run shell before the worktree is torn down.
     let shell_session = tmux_session_manager::shell_session_name(run_id);
     tmux_session_manager::kill(&socket, &shell_session);
+
+    // #407 D9: destroy the sandbox container + purge its staging BEFORE any
+    // `git worktree remove` below — the container bind-mounts the repo, so a live
+    // worktree removal under it would hit a busy mount. Best-effort. `merge_back`
+    // is intentionally NOT wired here (→ observability slice #408). No-op for
+    // `off`.
+    if !run_state.sandbox.is_off() {
+        match sandbox_run::sandbox_home_roots(state) {
+            Ok((_, sandbox_root)) => sandbox_run::cleanup(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                &sandbox_root,
+                run_id,
+            ),
+            Err(e) => {
+                warn!("cleanup_run: cannot purge sandbox staging for run {run_id}: {e:#}")
+            }
+        }
+    }
 
     let repo_root = effective_repo_root(state, &run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
@@ -11083,6 +11380,7 @@ fn reap_node_session(
     run_id: &str,
     node_id: &str,
     iter: i64,
+    sandbox: event_log::SandboxMode,
 ) {
     let socket = state.tmux_socket();
     let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
@@ -11098,6 +11396,16 @@ fn reap_node_session(
     }
 
     tmux_session_manager::kill(&socket, &session);
+    // #407 D8: killing the tmux-side `docker exec` client leaves the container
+    // process (reparented onto PID 1) alive — double it with a targeted in-
+    // container kill that scans `/proc` for this session's marker. Best-effort,
+    // no-op for `off`. Marker == the session name (so the /proc scan hits it).
+    sandbox_run::kill_session_best_effort(
+        state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        sandbox,
+        run_id,
+        &session,
+    );
     info!("Reaped tmux session {session} on terminal transition");
 }
 
@@ -11464,6 +11772,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -11504,6 +11814,8 @@ mod tests {
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -14960,6 +15272,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -19282,6 +19596,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -19469,6 +19785,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),

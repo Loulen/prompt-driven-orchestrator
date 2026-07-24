@@ -184,7 +184,7 @@ export function segHandleStyle(
  * Removes the waypoint at `index` from a manual route's waypoint list (#169),
  * returning a new array. An out-of-range index is a no-op. When the result is
  * empty the caller reverts the edge to `auto` (an empty manual route is
- * meaningless — see `editStore` serialization).
+ * meaningless — see `lib/serializePipeline`).
  */
 export function deleteWaypoint(waypoints: Point[], index: number): Point[] {
   if (index < 0 || index >= waypoints.length) {

@@ -827,7 +827,9 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `pure` que par le seed de
 > `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
 > l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`,
-> job release GHCR). Reste **différé** : précédence des sources du mode (#410).
+> job release GHCR) + **exposition run-level + sources de config** (#410 : sélecteur tri-état du
+> NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
+> `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`).
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -835,7 +837,9 @@ dans l'état du Run). Tri-état `off` | `copy` | `pure` : `off` = comportement h
 sur l'hôte, défaut) ; `copy` / `pure` = toutes les tails du Run s'exécutent dans un conteneur dédié.
 C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
 reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
-hôte, trou réseau/auth) → **ADR-0030 / #407**.
+hôte, trou réseau/auth) → **ADR-0030 / #407**. La **source** du mode suit la précédence **choix
+explicite du Run → défaut par-Trigger → `default_sandbox` d'instance** (résolveur pur
+`effective_sandbox`, #410) ; `off` reste le plancher.
 _Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confondre avec l'attribut
 `sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport.
 
@@ -995,6 +999,52 @@ Suppression du conteneur (`docker rm -f pdo-sbx-<run-id>`) à `cleanup_run` ; sa
 absent (idempotent). C'est **le** verbe « destroy / destruction » réservé par `teardown`. _Éviter_ :
 « teardown » (= purge du staging dir, #404), « cleanup » (= niveau Run).
 
+### Exposition run-level + sources de config (#410)
+
+Périmètre **utilisateur** : d'où vient le mode d'un Run, comment on le choisit/le voit. L'exécution
+elle-même est inchangée (#406/#407). Landé par #410.
+
+**`effective_sandbox` (résolveur de précédence)** :
+Fonction **pure** (`event_log`) `(explicit: Option<SandboxMode>, trigger: Option<SandboxMode>,
+instance_default: SandboxMode) → SandboxMode` : le **premier `Some` gagne**, `instance_default` est le
+plancher. Appelée **une fois** au chokepoint `create_run_inner` (où JSON, multipart et fire de Trigger
+convergent), juste avant le gel du mode dans `RunStarted` (immuable, ADR-0030 pt 8). _Éviter_ :
+« merge », « override », « fusion des modes ».
+
+**`default_sandbox` (défaut d'instance)** :
+Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`copy`/`pure`,
+`""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
+→ default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
+/settings` (0 drift #373, miroir exact d'`image_source`). Éditable dans la Settings UI (`<select>`).
+_Éviter_ : confondre avec `image_source` (provisionnement d'image, orthogonal) ; « mode d'instance ».
+
+**Défaut par-Trigger (`Trigger.sandbox`)** :
+Mode par défaut d'un **Trigger** : colonne **nullable** `sandbox` sur `triggers`. `None` = **déférer**
+à `default_sandbox`. Édité dans le NewRunModal en mode Trigger, **clearable** via
+`deserialize_double_option` (présent-`null` = repasse à l'héritage ; précédent `max_concurrent` #239 —
+**pas** les frères `guard_command`/`target_repo` en `serde(default)` qui ne savent pas clear).
+_Éviter_ : « sandbox du trigger » comme si le trigger s'exécutait (les guards restent hôte, ADR-0030).
+
+**Sonde Docker (`sandbox_docker`)** :
+Check de disponibilité host (`docker version`, exit 0 = disponible ; binaire absent →
+`DOCKER_NOT_FOUND_MSG` ; daemon injoignable → message dédié). **TTL-cachée** (~10 s) par-daemon,
+surfacée sur `GET /settings` comme `sandbox_docker {available, reason, checked_at}` (pas un
+`settings_field` : aucun tier stored/env/default) à côté du knob `default_sandbox`, pour un **seul**
+fetch du modal. Affordance **advisory** : grise les options `copy`/`pure` du sélecteur tri-état et
+clamp sur `off` ; le fail-fast du run-advance (ADR-0030 pt 4) reste le gate **autoritaire**. Passe par
+le seam `docker_cmd_override`. _Éviter_ : « Docker health », « sandbox available » (ambigu avec le
+mode), confondre avec `ensure_image`/`probe_state` (provisionnement/liveness par-Run).
+
+**Préparation du sandbox (`sandbox_prep`)** :
+État **additif** projeté sur le Run (`pending`|`ready`) qui rend visible la fenêtre de prep eager
+(ADR-0030 pt 4/10) : `SandboxPrepStarted` (avant `ensure_ready`) → `pending`, `SandboxPrepReady`
+(avant le 1er spawn) → `ready`. Événements **informationnels** (même grain que `NodeBlockedOnLimit` /
+`NodeAutoCompleteObserved`), émis au chokepoint `append_event`, **jamais** pour un Run `off`. N'altère
+**pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié). L'UI du Run
+affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge** `sandbox :
+copy|pure` persistant. _Éviter_ : « statut preparing » (écarté, pas un état de la machine à statut) ;
+l'inférence client (écartée : faux positifs advance-détaché/#159).
+
 ### Relations
 - Une **Sandbox** `copy`/`pure` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
   **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
@@ -1032,9 +1082,17 @@ absent (idempotent). C'est **le** verbe « destroy / destruction » réservé pa
   sur image publique → trou d'auth #260 inchangé. Couvert par unit (`sandbox_image`/`instance_config`
   /settings) + 2 tests layer-3 (`sandbox_tracer` : pull vs build selon `image_source`) + FP-411 (L5,
   Docker réel).
+- **Câblé (#410, ADR-0030 pt 8+10)** : **exposition run-level + sources de config**. Précédence
+  **réalisée** — résolveur pur `effective_sandbox(explicit, trigger, instance_default)` (run → trigger
+  → `default_sandbox`, plancher `off`) au chokepoint `create_run_inner` ; param filaire
+  `Option<SandboxMode>` (absent ≠ `off` explicite) ; `default_sandbox` colonne `instance_config`
+  (résolveur `default_sandbox_with`, `stored → env → default(off)`) ; défaut par-Trigger colonne
+  nullable `sandbox` (clearable `deserialize_double_option`, précédent #239). **Sonde Docker** advisory
+  (`GET /settings.sandbox_docker`, TTL-cachée) → grise `copy`/`pure` du sélecteur. **Visibilité prep**
+  via événements additifs `SandboxPrepStarted`/`Ready` → `RunState.sandbox_prep` (badge + bannière).
+  Testé layer-1 (résolveur pur) + unit (settings/probe) + FE (vitest) + FP-410 (L5, Docker réel).
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
-  Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
-  `default_sandbox`, pattern ADR-0015) (#410) ; auto-flip de la visibilité publique du package GHCR
+  Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
   (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).
 
 ### Ambiguïté signalée

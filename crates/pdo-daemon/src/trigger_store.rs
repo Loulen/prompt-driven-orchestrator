@@ -1270,7 +1270,12 @@ mod tests {
         let created = create(&db, sandboxed).await.unwrap();
         assert_eq!(created.sandbox.as_deref(), Some("pure"));
         assert_eq!(
-            get(&db, &created.id).await.unwrap().unwrap().sandbox.as_deref(),
+            get(&db, &created.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .sandbox
+                .as_deref(),
             Some("pure")
         );
 

@@ -974,7 +974,11 @@ async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "POST /triggers should create the trigger");
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers should create the trigger"
+    );
     resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .unwrap()

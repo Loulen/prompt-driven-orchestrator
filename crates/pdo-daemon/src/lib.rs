@@ -22981,7 +22981,10 @@ edges:
         let sd = &view["sandbox_docker"];
         assert!(sd.get("available").is_some(), "available missing: {sd}");
         assert!(sd["available"].is_boolean(), "available must be bool: {sd}");
-        assert!(sd.get("reason").is_some(), "reason key must be present: {sd}");
+        assert!(
+            sd.get("reason").is_some(),
+            "reason key must be present: {sd}"
+        );
         assert!(
             sd["checked_at"].is_string(),
             "checked_at must be a string: {sd}"

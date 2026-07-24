@@ -1666,7 +1666,11 @@ mod tests {
     #[test]
     fn explicit_wins_over_trigger_and_default() {
         assert_eq!(
-            effective_sandbox(Some(SandboxMode::Pure), Some(SandboxMode::Copy), SandboxMode::Off),
+            effective_sandbox(
+                Some(SandboxMode::Pure),
+                Some(SandboxMode::Copy),
+                SandboxMode::Off
+            ),
             SandboxMode::Pure
         );
     }
@@ -1704,7 +1708,10 @@ mod tests {
         // empty sentinel → unset → default (Off) (env not set in this harness).
         assert_eq!(default_sandbox_with(Some(String::new())), SandboxMode::Off);
         // garbage → unset → default.
-        assert_eq!(default_sandbox_with(Some("garbage".into())), SandboxMode::Off);
+        assert_eq!(
+            default_sandbox_with(Some("garbage".into())),
+            SandboxMode::Off
+        );
         // absent → default.
         assert_eq!(default_sandbox_with(None), SandboxMode::Off);
     }

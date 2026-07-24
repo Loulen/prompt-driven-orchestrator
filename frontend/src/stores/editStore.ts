@@ -675,6 +675,16 @@ export const useEditStore = create<EditState>((set, get) => ({
       // (ADR-0011 / #166): a drawn cycle is never accidentally unbounded. Only
       // cycles not already covered by an existing `loops:` entry add a region;
       // acyclic edges add nothing.
+      //
+      // This is the ONLY store-side materialization, and it is deliberate (#396):
+      // it covers the cycle the user just drew on a canvas the daemon has not
+      // parsed yet. A pipeline that *arrives* carrying a cycle is already
+      // reconciled by the daemon's mirror in `parse_pipeline`, so none of the six
+      // load paths below (`openPipeline`, `openRunPipeline`, conflict record,
+      // "take theirs", `reloadPipeline`, `reloadFromLibrary`) needs its own call —
+      // and the library twin the star compares against is reconciled the same
+      // way, which a frontend-only fix would have desynced into a false
+      // "diverged".
       const newRegions = materializeMissingRegions(
         tab.pipeline.nodes,
         tab.pipeline.edges,

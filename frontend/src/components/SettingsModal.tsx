@@ -169,6 +169,11 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
   const [imageSource, setImageSource] = useState<string>(
     () => settings.image_source.effective ?? "registry",
   );
+  // Default sandbox mode (#410): a closed enum with a built-in `off` default, so
+  // `effective` is always present (the `?? "off"` is belt-and-braces).
+  const [defaultSandbox, setDefaultSandbox] = useState<string>(
+    () => settings.default_sandbox.effective ?? "off",
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -218,6 +223,12 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
     // select never emits "" — the clear path is backend-only.
     if (imageSource !== settings.image_source.effective) {
       patch.image_source = imageSource;
+    }
+
+    // Default sandbox mode (#410): a concrete enum variant, only sent when it
+    // changed. Like image_source, the select never emits "" (clear is backend-only).
+    if (defaultSandbox !== settings.default_sandbox.effective) {
+      patch.default_sandbox = defaultSandbox;
     }
 
     // Nothing changed → close without a round-trip.
@@ -354,6 +365,45 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
             data-testid="setting-source-image-source"
           >
             {imageSourceSourceNote(settings.image_source)}
+          </div>
+        </div>
+
+        {/* Default sandbox mode (#410): the isolation mode a Run uses when neither
+            the NewRunModal nor a firing Trigger specifies one. A closed enum →
+            native <select> (mirror of image_source). It only emits a concrete
+            variant; the "" clear sentinel is backend-only. */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="setting-default-sandbox"
+            className="font-medium text-fg-2"
+            style={{ fontSize: "11.5px" }}
+          >
+            Default sandbox
+          </label>
+          <select
+            id="setting-default-sandbox"
+            data-testid="setting-default-sandbox"
+            value={defaultSandbox}
+            onChange={(e) => setDefaultSandbox(e.target.value)}
+            className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none"
+            style={{ fontSize: "12px" }}
+          >
+            <option value="off">off (run on the host)</option>
+            <option value="copy">copy (Docker, copy your Claude home)</option>
+            <option value="pure">pure (Docker, credentials + trust only)</option>
+          </select>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            The isolation mode a Run uses when neither the launch dialog nor a firing
+            Trigger picks one. <span className="font-mono">off</span> runs on the host;{" "}
+            <span className="font-mono">copy</span> and <span className="font-mono">pure</span>{" "}
+            run inside a Docker sandbox (require Docker).
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-default-sandbox"
+          >
+            {defaultSandboxSourceNote(settings.default_sandbox)}
           </div>
         </div>
 
@@ -497,4 +547,19 @@ function imageSourceSourceNote(field: StringSettingField): string {
     return `Source: env ${envDisplay ?? "PDO_SANDBOX_IMAGE_SOURCE"}.`;
   }
   return `Source: built-in default (${field.default ?? "registry"}).`;
+}
+
+/** Which tier the instance default_sandbox comes from (#410). Like image_source there
+ *  IS a built-in default (`off`). Discloses a shadowed env var too. */
+function defaultSandboxSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_DEFAULT_SANDBOX=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
+      : `Source: stored value (overrides env and default).`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_DEFAULT_SANDBOX"}.`;
+  }
+  return `Source: built-in default (${field.default ?? "off"}).`;
 }

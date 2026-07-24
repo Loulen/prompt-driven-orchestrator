@@ -48,6 +48,60 @@ pub(crate) const DOCKER_NOT_FOUND_MSG: &str =
     "sandbox run requires Docker, but the `docker` binary was not found on PATH — \
      install Docker or set this run's sandbox to `off`";
 
+/// Message when the `docker` binary IS present but its daemon is unreachable (#410).
+/// The precise reason the availability probe grays out `copy`/`pure` in the UI. This
+/// case and `DOCKER_NOT_FOUND_MSG` both collapse to `available: false` — no action is
+/// gated on the distinction (the probe is advisory; the run-advance fail-fast, ADR-0030
+/// pt 4, stays the authoritative gate) — so the cause survives only in `reason`.
+pub(crate) const DOCKER_DAEMON_UNREACHABLE_MSG: &str =
+    "the `docker` binary is present but the Docker daemon is unreachable — \
+     start Docker or set this run's sandbox to `off`";
+
+/// Advisory availability of a usable Docker for sandboxed Runs (#410). `available`
+/// gates nothing on its own (the run-advance fail-fast is authoritative); it drives
+/// the NewRunModal's greying of `copy`/`pure`. `reason` carries the human-readable
+/// cause when unavailable (one of the two messages above), `None` when available.
+#[derive(Debug, Clone)]
+pub(crate) struct DockerProbe {
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+/// Probe whether this host can launch a sandboxed Run, by forcing a round-trip to the
+/// Docker daemon: `docker version --format '{{.Server.Version}}'` (exit 0 ⇔ the daemon
+/// answered). Three signals collapse to two states: spawn `NotFound` → not installed
+/// (`DOCKER_NOT_FOUND_MSG`); any other spawn error or a non-zero exit → daemon
+/// unreachable (`DOCKER_DAEMON_UNREACHABLE_MSG`); exit 0 → available.
+///
+/// Sync `std::process`, mirror of the rest of this leaf module: `docker_bin` is
+/// threaded in (never read from `std::env` here), so the caller owns the env/timeout
+/// at the edge (`spawn_blocking` + `tokio::time::timeout`, never the runtime thread).
+/// Rejected alternatives (see plan D2): "binary on PATH" alone misses a stopped daemon
+/// — precisely the case to gray out; an `ensure_image` dry-run costs minutes + network.
+pub(crate) fn probe_docker(docker_bin: &str) -> DockerProbe {
+    match Command::new(docker_bin)
+        .args(["version", "--format", "{{.Server.Version}}"])
+        .output()
+    {
+        Ok(o) if o.status.success() => DockerProbe {
+            available: true,
+            reason: None,
+        },
+        Ok(_) => DockerProbe {
+            available: false,
+            reason: Some(DOCKER_DAEMON_UNREACHABLE_MSG.to_string()),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DockerProbe {
+            available: false,
+            reason: Some(DOCKER_NOT_FOUND_MSG.to_string()),
+        },
+        Err(_) => DockerProbe {
+            available: false,
+            reason: Some(DOCKER_NOT_FOUND_MSG.to_string()),
+        },
+    }
+}
+
 // -- path math (pur, sans IO) ------------------------------------------------
 
 /// `<sandbox_root>/Dockerfile` — emplacement canonique du Dockerfile seedé/buildé.
@@ -977,5 +1031,69 @@ mod tests {
             image_source_with(Some("registry".to_string())),
             ImageSource::Registry
         );
+    }
+
+    // -- Slice D (#410): Docker availability probe ---------------------------
+
+    /// Write a fake `docker` whose `version` subcommand exits with `version_exit`.
+    /// Threaded as `docker_bin` (no `std::env` mutation, D2 discipline).
+    fn write_fake_docker_version(dir: &Path, version_exit: i32) -> PathBuf {
+        let bin = dir.join("fake-docker-version");
+        let script = format!(
+            "#!/usr/bin/env bash\n\
+             case \"$1\" in\n\
+             version) echo '27.0.0'; exit {version_exit} ;;\n\
+             *) exit 0 ;;\n\
+             esac\n",
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// Probe a freshly-written fake `docker`, retrying past a transient `NotFound`.
+    /// Exec-ing a just-written binary under `cargo test --workspace` can hit
+    /// `ETXTBSY` (rust-lang#45719), which `probe_docker` collapses to the
+    /// "not installed" verdict — indistinguishable, for an existing binary, from a
+    /// transient race. Since the binary IS on disk, a `NotFound` here means the
+    /// race; retry until the real verdict settles. (The genuinely-absent test uses a
+    /// path that never exists, so it does NOT go through this helper.)
+    fn probe_stable(bin: &Path) -> DockerProbe {
+        for _ in 0..100 {
+            let p = probe_docker(&docker_str(bin));
+            if p.reason.as_deref() != Some(DOCKER_NOT_FOUND_MSG) {
+                return p;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        probe_docker(&docker_str(bin))
+    }
+
+    #[test]
+    fn probe_docker_reports_available_on_exit_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let docker = write_fake_docker_version(tmp.path(), 0);
+        let probe = probe_stable(&docker);
+        assert!(probe.available, "exit 0 must report available");
+        assert!(probe.reason.is_none());
+    }
+
+    #[test]
+    fn probe_docker_reports_daemon_unreachable_on_nonzero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let docker = write_fake_docker_version(tmp.path(), 1);
+        let probe = probe_stable(&docker);
+        assert!(!probe.available, "a non-zero exit must report unavailable");
+        assert_eq!(probe.reason.as_deref(), Some(DOCKER_DAEMON_UNREACHABLE_MSG));
+    }
+
+    #[test]
+    fn probe_docker_reports_not_found_when_binary_absent() {
+        // A path that does not exist → spawn `NotFound` → the "not installed" message.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("no-such-docker");
+        let probe = probe_docker(missing.to_str().unwrap());
+        assert!(!probe.available);
+        assert_eq!(probe.reason.as_deref(), Some(DOCKER_NOT_FOUND_MSG));
     }
 }

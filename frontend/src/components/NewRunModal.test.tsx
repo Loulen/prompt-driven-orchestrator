@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import NewRunModal from "./NewRunModal";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineListEntry } from "../types";
+import type { InstanceSettings, PipelineListEntry } from "../types";
 
 const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListEntry => ({
   id: "test-pipe",
@@ -17,6 +17,18 @@ const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListE
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
+  // #410: the modal fetches settings on open (default_sandbox prefill +
+  // sandbox_docker greying). Default: off + Docker available. Tests override per case.
+  fetchSettings: vi.fn().mockResolvedValue({
+    session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+    reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+    guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
+    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+    sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+    updated_at: "2026-07-01T10:00:00.000Z",
+  }),
   createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
@@ -32,7 +44,7 @@ vi.mock("../api", () => ({
   }),
 }));
 
-const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, promotePipeline, testGuard } = await import("../api");
+const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, promotePipeline, testGuard } = await import("../api");
 
 const noop = () => {};
 
@@ -1298,5 +1310,131 @@ describe("NewRunModal — open-intent reset (#386)", () => {
       expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
     });
     expect((screen.getByTestId("pipeline-select") as HTMLSelectElement).value).not.toBe("p1");
+  });
+});
+
+describe("NewRunModal — sandbox selector (#410)", () => {
+  function settingsFixture(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("prefills the run selector from the instance default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: { effective: "copy", source: "stored", stored: "copy", env: null, default: "off" },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    await waitFor(() => {
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("copy");
+    });
+  });
+
+  it("disables copy/pure and clamps to off when Docker is unavailable (availability wins over prefill)", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        // The instance default is `pure`, but Docker is down: greying wins.
+        default_sandbox: { effective: "pure", source: "stored", stored: "pure", env: null, default: "off" },
+        sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    // Clamped to off (never mints a Run doomed to RunFailed).
+    await waitFor(() => expect(select.value).toBe("off"));
+    // copy/pure options are disabled; the reason is surfaced.
+    const options = Array.from(select.options);
+    expect(options.find((o) => o.value === "copy")?.disabled).toBe(true);
+    expect(options.find((o) => o.value === "pure")?.disabled).toBe(true);
+    expect(screen.getByTestId("sandbox-docker-warning")).toHaveTextContent(/unreachable/i);
+  });
+
+  it("passes the chosen sandbox mode to createRun", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: { effective: "copy", source: "stored", stored: "copy", env: null, default: "off" },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    // The prefill lands "copy".
+    await waitFor(() => {
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("copy");
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ sandbox: "copy" }));
+    });
+  });
+
+  it("offers a 'use instance default' option in trigger mode and sends null when picked", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    // A trigger whose sandbox is set to `pure` — prefills the select to `pure`.
+    const trigger = {
+      id: "trg-sbx",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: null,
+      overlap_policy: "skip",
+      sandbox: "pure",
+      enabled: true,
+      next_fire_at: null,
+      last_fired_at: null,
+      last_outcome: null,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("pure"));
+    // Trigger mode exposes the inherit option.
+    expect(Array.from(select.options).some((o) => o.value === "")).toBe(true);
+
+    // Repo validation must resolve so Save is enabled.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Reset to "use instance default" → the PATCH must clear it (null).
+    fireEvent.change(select, { target: { value: "" } });
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-sbx",
+        expect.objectContaining({ sandbox: null }),
+      );
+    });
   });
 });

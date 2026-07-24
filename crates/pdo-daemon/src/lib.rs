@@ -288,6 +288,14 @@ struct AppState {
     /// Surfaced as the `service` object on `/sessions`; drives the status bar's
     /// `ephemeral` pill.
     service_health: Arc<ServiceHealth>,
+    /// TTL cache (~10 s) of the Docker availability probe (#410), surfaced as
+    /// `sandbox_docker` on `GET /settings` so the NewRunModal can gray out
+    /// `copy`/`pure` when Docker is unreachable. Lazily refreshed by
+    /// `build_settings_view` when stale — never boot-once (a user may start Docker
+    /// mid-session) and never per-fetch (a `PUT` of an unrelated knob would pay a
+    /// docker round-trip). The refresh runs under `spawn_blocking` + a short
+    /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
+    docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
 }
 
 impl AppState {
@@ -336,12 +344,14 @@ struct CreateRunRequest {
     /// the trigger scheduler; absent for manual runs.
     #[serde(default)]
     triggered_by: Option<String>,
-    /// Isolation mode for this Run (#403 / #407). `#[serde(default)]` → `Off`, so
-    /// an absent field means the historical host path. Trigger fires pass `Off`
-    /// (source precedence run → trigger → default_sandbox is #410); this slice
-    /// only accepts the mode via the `POST /runs` parameter.
+    /// Isolation mode for this Run (#403 / #407 / #410). `Option`, NOT
+    /// `SandboxMode`: `#[serde(default)]` → `None` distinguishes an **omitted** field
+    /// (defer to trigger/instance default) from an **explicit** `"off"` (which nothing
+    /// may override upward). This distinction is the fix that makes the "précédence"
+    /// AC satisfiable — see [`event_log::effective_sandbox`]. The chokepoint
+    /// (`create_run_inner`) resolves it once against the fresh instance default.
     #[serde(default)]
-    sandbox: event_log::SandboxMode,
+    sandbox: Option<event_log::SandboxMode>,
 }
 
 #[derive(Serialize)]
@@ -1614,6 +1624,7 @@ pub async fn serve_with_config(
         node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
+        docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -2066,10 +2077,27 @@ struct CreateTriggerRequest {
     /// unbounded. Inert unless `overlap_policy == "allow"`.
     #[serde(default)]
     max_concurrent: Option<i64>,
+    /// Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or absent/`null`
+    /// to inherit the instance default. Read at fire time and folded into the create
+    /// request's explicit tier.
+    #[serde(default)]
+    sandbox: Option<String>,
 }
 
 fn default_overlap_policy() -> String {
     "skip".to_string()
+}
+
+/// Validate a per-Trigger `sandbox` mode (#410): `None` (inherit) is always valid;
+/// a present value must be a known variant. Shared by create and patch so the rule
+/// cannot drift. Mirror of the `put_settings` `default_sandbox` validator.
+fn validate_trigger_sandbox(v: Option<&str>) -> Result<(), &'static str> {
+    match v {
+        Some(s) if event_log::SandboxMode::parse(s).is_none() => {
+            Err("sandbox must be `off`, `copy`, or `pure`")
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Validate a `max_concurrent` cap (#239): when present it must be >= 1. `None`
@@ -2250,6 +2278,15 @@ async fn create_trigger(
             .into_response();
     }
 
+    // A per-Trigger sandbox mode, when present, must be a known variant (#410).
+    if let Err(msg) = validate_trigger_sandbox(req.sandbox.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
     // Resolve the target pipeline and its prompt_required flag.
     let yaml =
         library_store::pipelines::get_yaml(&state.repo_root, &req.pipeline_id).or_else(|| {
@@ -2335,6 +2372,9 @@ async fn create_trigger(
             "skip".to_string()
         },
         max_concurrent: req.max_concurrent,
+        // #410: normalise `Some("")` to `None` (inherit the instance default), so an
+        // empty selector value never persists as a bogus stored mode.
+        sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
         next_fire_at,
     };
 
@@ -2474,6 +2514,12 @@ struct PatchTriggerRequest {
     /// where present-`null` collapses to `None` and cannot clear).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     max_concurrent: Option<Option<i64>>,
+    /// Per-Trigger sandbox mode (#410), double-wrapped like `max_concurrent`: absent =
+    /// leave, present `null` = clear back to inheriting the instance default, `"mode"`
+    /// = set. The custom deserializer makes present-`null` → `Some(None)` reachable
+    /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    sandbox: Option<Option<String>>,
 }
 
 async fn patch_trigger(
@@ -2634,6 +2680,17 @@ async fn patch_trigger(
         }
     }
 
+    // Validate a sandbox edit (Some(Some(mode)) sets; Some(None) clears to inherit) (#410).
+    if let Some(Some(ref mode)) = req.sandbox {
+        if let Err(msg) = validate_trigger_sandbox(Some(mode)) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
     // Re-apply the fire_decision reject rule against the *resulting* config: if
     // the pipeline requires a prompt and the edit would leave neither a guard
     // nor an input template, refuse (mirrors create-time validation).
@@ -2683,6 +2740,10 @@ async fn patch_trigger(
             }
         }),
         max_concurrent: req.max_concurrent,
+        // #410: `Some(Some(mode))` sets, `Some(None)` clears back to inheriting the
+        // instance default, `None` leaves it. The FE maps the "use instance default"
+        // option to `null`, so an empty string never reaches here.
+        sandbox: req.sandbox,
         next_fire_at,
         // Fold the enable/disable toggle into the single UpdateTrigger write
         // (#372): the enable bit and the forward next_fire_at land in one atomic
@@ -3678,9 +3739,16 @@ async fn fire_one_trigger(
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
-                // #407: trigger fires run on the host. Source precedence
-                // (run → trigger → default_sandbox) is #410.
-                sandbox: event_log::SandboxMode::Off,
+                // #410: fold the Trigger's stored mode into the request's explicit
+                // tier. A Run has a single origin (a trigger fire is never also a
+                // run-level choice), so this is the sole non-`None` tier here; the
+                // chokepoint's `effective_sandbox(req.sandbox, None, default)` then
+                // resolves it against the instance default. A `None`/unparseable
+                // stored mode defers to the instance default.
+                sandbox: trigger
+                    .sandbox
+                    .as_deref()
+                    .and_then(event_log::SandboxMode::parse),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -5365,6 +5433,11 @@ async fn parse_multipart_create_run(
     let mut target_repo = None;
     let mut source_branch = None;
     let mut name = None;
+    // #410: an explicit sandbox mode may ride the multipart (browser) create when
+    // images are attached. Parsed into `Option<SandboxMode>` so an omitted field
+    // defers to the trigger/instance default at the chokepoint. An unknown token is
+    // treated as unset (defensive; the FE only ever sends valid variants).
+    let mut sandbox: Option<event_log::SandboxMode> = None;
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -5432,6 +5505,17 @@ async fn parse_multipart_create_run(
                     name = Some(v);
                 }
             }
+            "sandbox" => {
+                // #410: parse the explicit mode off the multipart form. Empty or
+                // unknown → leave `None` (defer to trigger/instance default).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field sandbox: {e}"))?;
+                if !v.is_empty() {
+                    sandbox = event_log::SandboxMode::parse(&v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -5461,9 +5545,10 @@ async fn parse_multipart_create_run(
         source_branch,
         name,
         triggered_by: None,
-        // #407: the multipart (browser) create path runs on the host; the UI
-        // sandbox selector is #410. The tracer bullet drives `pure` via JSON.
-        sandbox: event_log::SandboxMode::Off,
+        // #410: the explicit sandbox mode threaded off the multipart form (browser
+        // create with attached images). `None` when the field is absent — the
+        // chokepoint then defers to the trigger/instance default.
+        sandbox,
     };
     Ok((req, images))
 }
@@ -5707,6 +5792,26 @@ async fn create_run_inner(
 
     let run_id = event_log::generate_run_id();
 
+    // #410 CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
+    // multipart, and trigger-fire create paths converge — just before the mode is
+    // frozen into `RunStarted`. `req.sandbox` already carries either the explicit
+    // run-level choice (JSON/multipart) OR the trigger's mode (folded in at fire time,
+    // Slice C — a Run has a single origin), so the trigger arm stays `None` in
+    // production; the 3-arg resolver is still the canonical precedence chain, exercised
+    // by the layer-1 test. `default_sandbox` is read FRESH from the DB at the edge
+    // (mirror `image_source`, `sandbox_run.rs`), so a `PUT /settings` bites on the very
+    // next create with no restart. Absent everywhere → `Off` → the payload and events
+    // stay byte-identical to the legacy host path.
+    let stored_default = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.default_sandbox);
+    let sandbox = event_log::effective_sandbox(
+        req.sandbox,
+        None,
+        event_log::default_sandbox_with(stored_default),
+    );
+
     let edge_infos: Vec<event_log::EdgeInfo> =
         pipeline.edges.iter().map(edge_info_from_pipeline).collect();
 
@@ -5731,10 +5836,10 @@ async fn create_run_inner(
     if let Some(ref target) = req.target_repo {
         run_payload["target_repo"] = serde_json::json!(target);
     }
-    // #407: carry the isolation mode only when it is NOT `off`, so `off` payloads
-    // stay byte-identical to the historical shape (back-compat: absence → Off).
-    if !req.sandbox.is_off() {
-        run_payload["sandbox"] = serde_json::json!(req.sandbox);
+    // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
+    // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
+    if !sandbox.is_off() {
+        run_payload["sandbox"] = serde_json::json!(sandbox);
     }
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
@@ -5836,21 +5941,33 @@ async fn create_run_inner(
         }
     }
 
-    if req.sandbox.is_off() {
+    if sandbox.is_off() {
         // Historical host path — inline, byte-identical to pre-#407. NO docker.
         spawn_ready_after_event(state, &run_id).await;
-        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, req.sandbox);
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, sandbox);
     } else {
         // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
         // (mirror ADR-0023 — the 201 must not block on a first-run `docker
         // build`). Image + container + staging are guaranteed BEFORE the first
         // node/manager spawn; any Docker unavailability → `RunFailed`, ZERO host
         // spawn (never a silent host fallback for a sandboxed Run's work, US-16).
-        let sandbox = req.sandbox;
         let task_state = state.clone();
         let task_run_id = run_id.clone();
         let task_worktree = worktree_dir.clone();
         tokio::spawn(async move {
+            // #410: image-prep visibility. Informational, non-terminal — emitted at
+            // the HEAD of the detached task (before the long `ensure_ready`) so the UI
+            // shows "préparation du sandbox…" instead of a seemingly-stuck Run. Only
+            // reachable in this `sandbox != off` branch, so the `off` path stays
+            // byte-identical. Broadcast + `refreshRun` ride the `append_event`
+            // chokepoint for free.
+            emit_run_event(
+                &task_state,
+                &task_run_id,
+                event_log::EventKind::SandboxPrepStarted,
+                None,
+            )
+            .await;
             // Build the sandbox context from the just-projected Run (mode is
             // immutable). A vanished/half-projected state → fail loud.
             let ctx = match reload_run_state(&task_state, &task_run_id).await {
@@ -5880,6 +5997,17 @@ async fn create_run_inner(
             // `spawn_blocking`, which also isolates its panic into a `JoinError`.
             match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
                 Ok(Ok(())) => {
+                    // #410: image ready, container about to receive the first session.
+                    // Emitted just before the spawn so the prep banner clears exactly
+                    // when work can start. A failed prep emits `RunFailed` instead (no
+                    // dedicated failed-prep event).
+                    emit_run_event(
+                        &task_state,
+                        &task_run_id,
+                        event_log::EventKind::SandboxPrepReady,
+                        None,
+                    )
+                    .await;
                     spawn_ready_after_event(&task_state, &task_run_id).await;
                     spawn_manager_session(
                         &task_state,
@@ -6094,11 +6222,61 @@ fn settings_field_enum(
     })
 }
 
+/// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
+/// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
+/// round-trip, short enough that a user who starts Docker mid-session sees `copy`/
+/// `pure` un-gray within seconds.
+const DOCKER_PROBE_TTL: Duration = Duration::from_secs(10);
+/// Hard cap on how long the probe may block the `/settings` response (#410). A cold
+/// or wedged Docker daemon must never hang the settings page — on timeout we report
+/// `available: false` for this fetch and re-probe on the next.
+const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Return the cached Docker availability probe, refreshing it under `spawn_blocking`
+/// with a short `timeout` when the cache is empty or older than [`DOCKER_PROBE_TTL`]
+/// (#410). Never shells out on the runtime thread; a timeout yields an
+/// `available: false` result (advisory only — the run-advance fail-fast stays the
+/// authoritative gate). Mirrors the `docker_bin` edge-resolution of the rest of the
+/// sandbox wiring.
+async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
+    let mut guard = state.docker_probe_cache.lock().await;
+    if let Some((at, probe)) = guard.as_ref() {
+        if at.elapsed() < DOCKER_PROBE_TTL {
+            return probe.clone();
+        }
+    }
+    let docker_bin = state
+        .docker_cmd_override
+        .as_deref()
+        .unwrap_or("docker")
+        .to_string();
+    let probe = match tokio::time::timeout(
+        DOCKER_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || sandbox_image::probe_docker(&docker_bin)),
+    )
+    .await
+    {
+        Ok(Ok(p)) => p,
+        // Timed out or the blocking task panicked/joined-error: treat as unavailable
+        // for this fetch (advisory), and don't cache the transient failure long — a
+        // fresh probe runs next time the TTL check sees an entry we still stamp now.
+        _ => sandbox_image::DockerProbe {
+            available: false,
+            reason: Some(sandbox_image::DOCKER_DAEMON_UNREACHABLE_MSG.to_string()),
+        },
+    };
+    *guard = Some((Instant::now(), probe.clone()));
+    probe
+}
+
 /// Build the `GET /settings` view: per knob, the effective value, the winning
 /// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
 /// computed by each knob's own resolver, so it can never drift from what the
-/// daemon uses at spawn / sweep / tick time.
-async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value, sqlx::Error> {
+/// daemon uses at spawn / sweep / tick time. Also folds in the advisory
+/// `sandbox_docker` probe (#410) so the NewRunModal fetches the default AND Docker
+/// availability in one round-trip.
+async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx::Error> {
+    let db = &state.db;
     let cfg = instance_config::get(db).await?;
 
     // --- session cap (count) ---
@@ -6172,6 +6350,33 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
         "default"
     };
 
+    // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
+    // Same discipline as `image_source`: the empty-string filter treats a stored `""`
+    // as unset, and `effective` is computed by the SAME resolver the create-run
+    // chokepoint consumes, so the disclosed value can never drift (#373).
+    let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
+    let sbx_env = event_log::DEFAULT_SANDBOX_ENV;
+    let sbx_env_val = std::env::var(sbx_env)
+        .ok()
+        .as_deref()
+        .and_then(event_log::SandboxMode::parse)
+        .map(|m| m.as_str().to_string());
+    let sbx_effective = event_log::default_sandbox_with(cfg.default_sandbox.clone());
+    let sbx_source = if sbx_stored.is_some() {
+        "stored"
+    } else if sbx_env_val.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
+    // --- advisory Docker availability probe (#410) ---
+    // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
+    // so the modal learns the default AND whether Docker can run a sandbox in ONE
+    // fetch. Advisory: it grays out `copy`/`pure`, but the run-advance fail-fast
+    // (ADR-0030 pt 4) stays the authoritative gate.
+    let docker_probe = docker_probe_cached(state).await;
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
@@ -6184,6 +6389,18 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
             img_env.as_deref(),
             sandbox_image::ImageSource::DEFAULT.as_str(),
         ),
+        "default_sandbox": settings_field_enum(
+            sbx_effective.as_str(),
+            sbx_source,
+            sbx_stored,
+            sbx_env_val.as_deref(),
+            event_log::SandboxMode::DEFAULT.as_str(),
+        ),
+        "sandbox_docker": {
+            "available": docker_probe.available,
+            "reason": docker_probe.reason,
+            "checked_at": event_log::now_iso(),
+        },
         "updated_at": cfg.updated_at,
     }))
 }
@@ -6192,7 +6409,7 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
 /// `{effective, source, stored, env, default}` (#129, ADR-0015). `GET /sessions`
 /// stays the lean status-bar view; this is the settings page's rich view.
 async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
-    match build_settings_view(&state.db).await {
+    match build_settings_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6241,9 +6458,16 @@ async fn put_settings(
             return bad("image_source must be `registry` or `dockerfile`");
         }
     }
+    if let Some(s) = req.default_sandbox.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
+        // non-variant → 400 (fail-fast, no silent default) (#410).
+        if !s.is_empty() && event_log::SandboxMode::parse(s).is_none() {
+            return bad("default_sandbox must be `off`, `copy`, or `pure`");
+        }
+    }
 
     match instance_config::update(&state.db, req).await {
-        Ok(_) => match build_settings_view(&state.db).await {
+        Ok(_) => match build_settings_view(&state).await {
             Ok(view) => Json(view).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -9746,9 +9970,12 @@ async fn run_command(
                 source_branch,
                 name: None,
                 triggered_by: None,
-                // #407: a retry preserves the original Run's isolation mode
-                // (immutable per-Run property projected from RunStarted).
-                sandbox: run_state.sandbox,
+                // #407/#410: a retry preserves the original Run's isolation mode
+                // (immutable per-Run property projected from RunStarted). Wrapped in
+                // `Some` so it is treated as EXPLICIT at the chokepoint — the resolver
+                // must honour it exactly, never letting a changed instance default
+                // silently re-sandbox (or un-sandbox) a retried Run.
+                sandbox: Some(run_state.sandbox),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -11939,6 +12166,7 @@ mod tests {
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -11976,6 +12204,7 @@ mod tests {
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -15528,6 +15757,7 @@ mod tests {
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -19852,6 +20082,7 @@ edges: []
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let app = build_router(state);
 
@@ -20041,6 +20272,7 @@ edges: []
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let app = build_router(state);
 
@@ -22685,5 +22917,74 @@ edges:
         // Store untouched (still the default).
         let view = get_settings_json(&state).await;
         assert!(view["image_source"]["stored"].is_null());
+    }
+
+    // --- #410: default_sandbox settings knob + sandbox_docker probe ---
+
+    #[tokio::test]
+    async fn put_settings_persists_default_sandbox() {
+        // Stored always wins over env/default, so the effective/source assertions are
+        // race-free (mirror of image_source, #411).
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "pure"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["default_sandbox"]["stored"], "pure");
+        assert_eq!(view["default_sandbox"]["source"], "stored");
+        assert_eq!(view["default_sandbox"]["effective"], "pure");
+        assert_eq!(view["default_sandbox"]["default"], "off");
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["default_sandbox"]["stored"], "pure");
+        assert_eq!(reget["default_sandbox"]["effective"], "pure");
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_default_sandbox_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null
+        // so the resolver falls back to the built-in default `off` (#410).
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"default_sandbox": "pure"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["default_sandbox"]["stored"].is_null(),
+            "empty string clears the stored default sandbox: {}",
+            view["default_sandbox"]
+        );
+        assert_eq!(view["default_sandbox"]["source"], "default");
+        assert_eq!(view["default_sandbox"]["effective"], "off");
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_invalid_default_sandbox() {
+        // A non-variant token is rejected 400 before anything is persisted (#410).
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"default_sandbox": "vm"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].is_string(), "400 must carry an error: {body}");
+        let view = get_settings_json(&state).await;
+        assert!(view["default_sandbox"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_settings_surfaces_sandbox_docker_probe() {
+        // The advisory probe is folded into GET /settings (#410). `test_state` has no
+        // docker_cmd_override, so the real `docker` (absent in CI) → available:false
+        // with a reason. The shape must always be present regardless of the verdict.
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+        let sd = &view["sandbox_docker"];
+        assert!(sd.get("available").is_some(), "available missing: {sd}");
+        assert!(sd["available"].is_boolean(), "available must be bool: {sd}");
+        assert!(sd.get("reason").is_some(), "reason key must be present: {sd}");
+        assert!(
+            sd["checked_at"].is_string(),
+            "checked_at must be a string: {sd}"
+        );
     }
 }

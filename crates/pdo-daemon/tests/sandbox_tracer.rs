@@ -929,3 +929,164 @@ async fn dockerfile_mode_builds_never_pulls() {
         log_text(&log)
     );
 }
+
+// -- #410: run-level exposure + sources of config ----------------------------
+
+async fn get_settings_json(daemon: &TestDaemon) -> serde_json::Value {
+    reqwest::get(format!("{}/settings", daemon.url()))
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()
+}
+
+/// `PUT /settings {"default_sandbox": <mode>}` against the real daemon.
+async fn put_default_sandbox(daemon: &TestDaemon, mode: &str) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "default_sandbox": mode }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "PUT /settings default_sandbox={mode} should succeed: {}",
+        resp.status()
+    );
+}
+
+/// `POST /triggers` with an optional per-Trigger `sandbox` mode. Returns the id.
+/// A non-empty `input_template` keeps the prompt-required reject rule satisfied.
+async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
+    let mut body = serde_json::json!({
+        "name": "sbx-trigger",
+        "pipeline_id": "sbx-cycle",
+        "cron": "0 9 * * *",
+        "input_template": "fired input",
+    });
+    if let Some(mode) = sandbox {
+        body["sandbox"] = serde_json::json!(mode);
+    }
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /triggers should create the trigger");
+    resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Fire a trigger by forcing it due and running one scheduler tick, then return the
+/// resulting Run's id (the run whose `triggered_by` matches). Polls `GET /runs`.
+async fn fire_trigger_and_get_run(daemon: &TestDaemon, trigger_id: &str) -> String {
+    daemon.force_trigger_due(trigger_id).await;
+    daemon.run_trigger_tick().await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let runs = reqwest::get(format!("{}/runs", daemon.url()))
+            .await
+            .unwrap()
+            .json::<Vec<serde_json::Value>>()
+            .await
+            .unwrap();
+        if let Some(run) = runs.iter().find(|r| r["triggered_by"] == trigger_id) {
+            return run["run_id"].as_str().unwrap().to_string();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("trigger {trigger_id} must have produced a Run within the deadline");
+}
+
+// -- Test 13: GET /settings surfaces Docker availability (advisory probe) -----
+
+#[tokio::test]
+async fn get_settings_reports_docker_available_with_working_fake() {
+    ensure_pdo_on_path();
+    // The standard fake docker answers `version` (via the `*) exit 0` arm) → the
+    // probe reports available.
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let view = get_settings_json(&daemon).await;
+    let sd = &view["sandbox_docker"];
+    assert_eq!(
+        sd["available"], true,
+        "a working docker must probe available: {sd}"
+    );
+    assert!(sd["reason"].is_null(), "available → no reason: {sd}");
+    assert!(sd["checked_at"].is_string(), "checked_at present: {sd}");
+}
+
+#[tokio::test]
+async fn get_settings_reports_docker_unavailable_when_binary_absent() {
+    ensure_pdo_on_path();
+    let daemon = TestDaemon::spawn_with_docker_override(
+        seed("#!/usr/bin/env bash\ntrue\n"),
+        "/nonexistent/pdo-fake-docker-probe".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let view = get_settings_json(&daemon).await;
+    let sd = &view["sandbox_docker"];
+    assert_eq!(
+        sd["available"], false,
+        "an absent docker binary must probe unavailable: {sd}"
+    );
+    assert!(
+        sd["reason"].as_str().unwrap_or("").contains("docker"),
+        "unavailable must carry a human-readable reason: {sd}"
+    );
+}
+
+// -- Test 14: a per-Trigger sandbox mode fires sandboxed Runs -----------------
+
+#[tokio::test]
+async fn trigger_with_sandbox_pure_fires_pure_run() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let trigger_id = create_trigger(&daemon, Some("pure")).await;
+    let run_id = fire_trigger_and_get_run(&daemon, &trigger_id).await;
+
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(
+        run["sandbox"], "pure",
+        "a trigger with sandbox=pure must fire a pure Run: {run}"
+    );
+}
+
+// -- Test 15: a null-sandbox Trigger defers to the instance default -----------
+
+#[tokio::test]
+async fn trigger_without_sandbox_defers_to_instance_default() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    // Instance default = copy; the Trigger carries no sandbox → it inherits.
+    put_default_sandbox(&daemon, "copy").await;
+    let trigger_id = create_trigger(&daemon, None).await;
+    let run_id = fire_trigger_and_get_run(&daemon, &trigger_id).await;
+
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(
+        run["sandbox"], "copy",
+        "a null-sandbox Trigger must defer to the instance default (copy): {run}"
+    );
+}

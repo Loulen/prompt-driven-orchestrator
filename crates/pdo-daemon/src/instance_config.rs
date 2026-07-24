@@ -49,6 +49,14 @@ pub struct InstanceConfig {
     /// SQL `NULL` so it never wins precedence. The resolver
     /// ([`crate::sandbox_image::image_source_with`]) owns the precedence.
     pub image_source: Option<String>,
+    /// Stored instance-wide default sandbox mode (`"off"` | `"copy"` | `"pure"`), or
+    /// `None` when unset (#410). `None` falls through to the env seam
+    /// ([`crate::event_log::DEFAULT_SANDBOX_ENV`]) then the built-in default (`off`,
+    /// the byte-identical host path). `Some("")` is the clear sentinel — [`update`]
+    /// normalises it to SQL `NULL` so it never wins precedence. The resolver
+    /// ([`crate::event_log::default_sandbox_with`]) owns the precedence; the create-run
+    /// chokepoint then feeds it through [`crate::event_log::effective_sandbox`].
+    pub default_sandbox: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -72,6 +80,10 @@ pub struct UpdateInstanceConfig {
     /// Set the sandbox image source (#411). `Some("")` clears it back to unset (the
     /// same `""`-sentinel discipline as `default_model`); `None` leaves it untouched.
     pub image_source: Option<String>,
+    /// Set the instance-wide default sandbox mode (#410). `Some("")` clears it back to
+    /// unset (same `""`-sentinel as `default_model`/`image_source`); `None` leaves it
+    /// untouched.
+    pub default_sandbox: Option<String>,
 }
 
 impl UpdateInstanceConfig {
@@ -81,6 +93,7 @@ impl UpdateInstanceConfig {
             && self.guard_timeout_secs.is_none()
             && self.default_model.is_none()
             && self.image_source.is_none()
+            && self.default_sandbox.is_none()
     }
 }
 
@@ -100,6 +113,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             default_model      TEXT,
             triggers_paused    INTEGER,
             image_source       TEXT,
+            default_sandbox    TEXT,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -162,6 +176,23 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#410 databases: the `default_sandbox` column is absent
+    // on tables created before the run-level sandbox default landed. Same guarded
+    // `ADD COLUMN` idiom as the columns above — safe on every boot. NULLABLE, never
+    // `NOT NULL DEFAULT`: a non-null default would make the stored tier always win and
+    // break the `off`-by-default (byte-identical) precedence floor.
+    let has_default_sandbox = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_sandbox'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_default_sandbox {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN default_sandbox TEXT")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -172,6 +203,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         guard_timeout_secs: row.get("guard_timeout_secs"),
         default_model: row.get("default_model"),
         image_source: row.get("image_source"),
+        default_sandbox: row.get("default_sandbox"),
         updated_at: row.get("updated_at"),
     }
 }
@@ -214,6 +246,9 @@ pub async fn update(
     if edit.image_source.is_some() {
         sets.push("image_source = ?");
     }
+    if edit.default_sandbox.is_some() {
+        sets.push("default_sandbox = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -242,6 +277,11 @@ pub async fn update(
         // "" = clear sentinel → SQL NULL (#411, mirrors default_model). The resolver
         // then falls back env→default(registry); a stored "" would otherwise win
         // precedence and be treated as unset only by the empty-string filter.
+        query = query.bind(if v.is_empty() { None } else { Some(v) });
+    }
+    if let Some(v) = edit.default_sandbox {
+        // "" = clear sentinel → SQL NULL (#410, mirrors default_model/image_source).
+        // The resolver then falls back env→default(off, the byte-identical host path).
         query = query.bind(if v.is_empty() { None } else { Some(v) });
     }
     query = query.bind(crate::event_log::now_iso());
@@ -307,6 +347,7 @@ mod tests {
         assert_eq!(cfg.guard_timeout_secs, None);
         assert_eq!(cfg.default_model, None);
         assert_eq!(cfg.image_source, None);
+        assert_eq!(cfg.default_sandbox, None);
         assert!(!cfg.updated_at.is_empty(), "seed must stamp updated_at");
     }
 
@@ -448,6 +489,127 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.image_source.as_deref(), Some("registry"));
+    }
+
+    #[tokio::test]
+    async fn update_sets_default_sandbox() {
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_sandbox: Some("pure".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_sandbox.as_deref(), Some("pure"));
+        // A re-read confirms persistence (not just the returned row).
+        assert_eq!(
+            get(&db).await.unwrap().default_sandbox.as_deref(),
+            Some("pure")
+        );
+        // Sibling knobs stay untouched.
+        assert_eq!(updated.image_source, None);
+    }
+
+    #[tokio::test]
+    async fn update_clears_default_sandbox_on_empty_string() {
+        // "" is the clear sentinel: it resets the column to NULL (mirrors #347/#411),
+        // so the resolver falls back env→default(off).
+        let db = test_db().await;
+        update(
+            &db,
+            UpdateInstanceConfig {
+                default_sandbox: Some("pure".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let cleared = update(
+            &db,
+            UpdateInstanceConfig {
+                default_sandbox: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cleared.default_sandbox, None,
+            "empty string must clear the stored default sandbox back to NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_sandbox_only_edit_is_not_a_noop() {
+        // Guard-rail for the `is_empty()` addition: an edit touching ONLY
+        // default_sandbox (all other knobs None) must still write.
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_sandbox: Some("copy".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_sandbox.as_deref(), Some("copy"));
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_default_sandbox_schema() {
+        // Installs created before #410 lack the `default_sandbox` column. Simulate the
+        // pre-#410 schema (also missing default_model + triggers_paused + image_source),
+        // then prove `init` adds the column idempotently and it is writable afterwards,
+        // without clobbering the stored knob.
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap        INTEGER,
+                reaper_ttl_secs    INTEGER,
+                guard_timeout_secs INTEGER,
+                updated_at         TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 13, ?)")
+            .bind(crate::event_log::now_iso())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(
+            cfg.session_cap,
+            Some(13),
+            "existing knob must survive the ALTER"
+        );
+        assert_eq!(cfg.default_sandbox, None, "new column defaults to NULL");
+
+        // And the migrated column is writable.
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_sandbox: Some("pure".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_sandbox.as_deref(), Some("pure"));
     }
 
     #[tokio::test]

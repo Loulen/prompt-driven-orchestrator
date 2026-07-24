@@ -309,6 +309,7 @@ mod tests {
             guard_command: None,
             overlap_policy: "skip".to_string(),
             max_concurrent: None,
+            sandbox: None,
             enabled: true,
             next_fire_at: next_fire_at.map(str::to_string),
             last_fired_at: None,

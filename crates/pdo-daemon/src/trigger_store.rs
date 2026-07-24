@@ -43,6 +43,13 @@ pub struct Trigger {
     /// `None` = unbounded (also the effective value under the `skip` policy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i64>,
+    /// Per-Trigger sandbox mode (`"off"` | `"copy"` | `"pure"`), or `None` to inherit
+    /// the instance default (#410). Read at fire time and folded into the create
+    /// request's explicit tier; the create chokepoint then resolves precedence
+    /// (run → trigger → instance default). Clearable back to `None` via the
+    /// double-`Option` `UpdateTrigger.sandbox` (mirror of `max_concurrent`, #239).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
     pub enabled: bool,
     /// The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
     /// Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
@@ -72,6 +79,8 @@ pub struct NewTrigger {
     pub overlap_policy: String,
     /// Bounded-`allow` ceiling (#239); `None` = unbounded.
     pub max_concurrent: Option<i64>,
+    /// Per-Trigger sandbox mode (#410); `None` inherits the instance default.
+    pub sandbox: Option<String>,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
 }
@@ -133,6 +142,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             guard_command TEXT,
             overlap_policy TEXT NOT NULL DEFAULT 'skip',
             max_concurrent INTEGER,
+            sandbox TEXT,
             enabled INTEGER NOT NULL DEFAULT 1,
             next_fire_at TEXT,
             last_fired_at TEXT,
@@ -174,6 +184,21 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .is_some();
     if !has_col {
         sqlx::query("ALTER TABLE triggers ADD COLUMN max_concurrent INTEGER")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration (#410): per-Trigger `sandbox` mode. Same PRAGMA-guarded
+    // `ALTER` precedent as `max_concurrent` above — a pre-#410 `~/.pdo/pdo.db` got
+    // the table via `CREATE TABLE IF NOT EXISTS`, a no-op there, so the column must
+    // be added out-of-band. NULLABLE: a NULL row inherits the instance default.
+    let has_sandbox =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'sandbox'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_sandbox {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN sandbox TEXT")
             .execute(db)
             .await?;
     }
@@ -242,8 +267,8 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -257,6 +282,7 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .bind(&new.guard_command)
     .bind(&new.overlap_policy)
     .bind(new.max_concurrent)
+    .bind(&new.sandbox)
     .bind(&new.next_fire_at)
     .bind(&now)
     .execute(db)
@@ -281,6 +307,7 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         guard_command: row.get("guard_command"),
         overlap_policy: row.get("overlap_policy"),
         max_concurrent: row.get("max_concurrent"),
+        sandbox: row.get("sandbox"),
         enabled: row.get::<i64, _>("enabled") != 0,
         next_fire_at: row.get("next_fire_at"),
         last_fired_at: row.get("last_fired_at"),
@@ -451,6 +478,12 @@ pub struct UpdateTrigger {
     /// Bounded-`allow` ceiling (#239), double-wrapped like the other nullable
     /// fields: `None` leaves it, `Some(None)` clears to NULL, `Some(Some(n))` sets.
     pub max_concurrent: Option<Option<i64>>,
+    /// Per-Trigger sandbox mode (#410), double-wrapped like `max_concurrent`: `None`
+    /// leaves it, `Some(None)` clears to NULL (= "inherit the instance default"),
+    /// `Some(Some(mode))` sets. The double-`Option` is load-bearing — a plain
+    /// `serde(default)` would make present-`null` indistinguishable from omitted, so
+    /// the UI could never reset a Trigger back to inheriting.
+    pub sandbox: Option<Option<String>>,
     pub next_fire_at: Option<Option<String>>,
     /// Enable/disable toggle (#372): `None` leaves the bit, `Some(v)` sets it.
     /// Folded in here so the enable bit and a forward `next_fire_at` land in one
@@ -471,6 +504,7 @@ impl UpdateTrigger {
             && self.guard_command.is_none()
             && self.overlap_policy.is_none()
             && self.max_concurrent.is_none()
+            && self.sandbox.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
     }
@@ -522,6 +556,9 @@ pub async fn update(
     if edit.max_concurrent.is_some() {
         sets.push("max_concurrent = ?");
     }
+    if edit.sandbox.is_some() {
+        sets.push("sandbox = ?");
+    }
     if edit.next_fire_at.is_some() {
         sets.push("next_fire_at = ?");
     }
@@ -564,6 +601,11 @@ pub async fn update(
     if let Some(v) = &edit.max_concurrent {
         query = query.bind(*v);
     }
+    if let Some(v) = &edit.sandbox {
+        // `Some(None)` → binds SQL NULL (inherit the instance default);
+        // `Some(Some(mode))` → binds the mode string. Mirror of `target_repo`.
+        query = query.bind(v.clone());
+    }
     if let Some(v) = &edit.next_fire_at {
         query = query.bind(v.clone());
     }
@@ -602,6 +644,7 @@ mod tests {
             guard_command: None,
             overlap_policy: "skip".to_string(),
             max_concurrent: None,
+            sandbox: None,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }
     }
@@ -1214,6 +1257,79 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get(&db, &t.id).await.unwrap().unwrap().max_concurrent, None);
+    }
+
+    // --- #410: per-Trigger sandbox persistence (mirror of max_concurrent) ---
+
+    #[tokio::test]
+    async fn create_then_get_round_trips_sandbox() {
+        let db = test_db().await;
+
+        let mut sandboxed = sample("sandboxed", "0 9 * * *");
+        sandboxed.sandbox = Some("pure".to_string());
+        let created = create(&db, sandboxed).await.unwrap();
+        assert_eq!(created.sandbox.as_deref(), Some("pure"));
+        assert_eq!(
+            get(&db, &created.id).await.unwrap().unwrap().sandbox.as_deref(),
+            Some("pure")
+        );
+
+        // The default (inherit instance) round-trips as NULL.
+        let inherit = create(&db, sample("inherit", "0 9 * * *")).await.unwrap();
+        assert_eq!(inherit.sandbox, None);
+        assert_eq!(get(&db, &inherit.id).await.unwrap().unwrap().sandbox, None);
+    }
+
+    #[tokio::test]
+    async fn update_sets_and_clears_sandbox() {
+        let db = test_db().await;
+        let t = create(&db, sample("sbx", "0 9 * * *")).await.unwrap();
+        assert_eq!(t.sandbox, None);
+
+        // Some(Some(mode)) sets it.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                sandbox: Some(Some("copy".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().sandbox.as_deref(),
+            Some("copy")
+        );
+
+        // An unrelated edit (None) leaves it untouched.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                input_template: Some("changed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().sandbox.as_deref(),
+            Some("copy")
+        );
+
+        // Some(None) clears it back to NULL (inherit the instance default).
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                sandbox: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db, &t.id).await.unwrap().unwrap().sandbox, None);
     }
 
     /// #239 migration: a `~/.pdo/pdo.db` created before `max_concurrent` existed

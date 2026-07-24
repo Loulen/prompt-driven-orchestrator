@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   collectionFanoutFields,
   collectionFanoutNudges,
+  DEFAULT_MAX_ITER,
+  generatedRegionId,
+  materializeMissingRegions,
   reconcileLoopRegions,
   regionsDestroyedByEdgeRemoval,
 } from "./loopRegions";
@@ -292,5 +295,65 @@ describe("collectionFanoutFields (#269)", () => {
       loops: [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     };
     expect(collectionFanoutFields(p, ["fixer"])).toEqual(["issues"]);
+  });
+});
+
+describe("generatedRegionId — the daemon mirror (#396)", () => {
+  // Pinned against the value `loop_region::generated_region_id` produces for the
+  // same members (its Rust twin asserts the same literal). The canvas materializes
+  // the region the user just drew; the daemon materializes the region a loaded
+  // pipeline arrives with. If the two id spaces drift, one loop becomes two
+  // regions on the next save and the run's lap counter keys off the wrong one.
+  it("matches the Rust implementation byte for byte", () => {
+    expect(generatedRegionId(["impl", "rev"])).toBe("loop-2e1c629fbe6d531a");
+    expect(generatedRegionId(["aaaa1111"])).toBe("loop-4f5ab6d49af12362");
+  });
+
+  it("derives identity from the member set, not the member order", () => {
+    expect(generatedRegionId(["rev", "impl"])).toBe(generatedRegionId(["impl", "rev"]));
+  });
+});
+
+describe("materializeMissingRegions (#396)", () => {
+  // a -> b -> a: the two-node cycle the review loop is made of.
+  function twoNodeCycle(): { nodes: NodeDef[]; edges: EdgeDef[] } {
+    return {
+      nodes: [plainNode("a"), plainNode("b")],
+      edges: [edge("a", "out", "b", "in"), edge("b", "out", "a", "in")],
+    };
+  }
+
+  it("materializes one bounded region at DEFAULT_MAX_ITER for an uncovered cycle", () => {
+    const { nodes, edges } = twoNodeCycle();
+    const regions = materializeMissingRegions(nodes, edges);
+    expect(regions).toHaveLength(1);
+    expect(regions[0].kind).toBe("bounded");
+    expect(regions[0].max_iter).toBe(DEFAULT_MAX_ITER);
+    expect(regions[0].id).toBe(generatedRegionId(regions[0].members));
+    expect(new Set(regions[0].members)).toEqual(new Set(["a", "b"]));
+  });
+
+  it("adds nothing when an existing region already covers the cycle", () => {
+    const { nodes, edges } = twoNodeCycle();
+    const existing = materializeMissingRegions(nodes, edges);
+    expect(materializeMissingRegions(nodes, edges, existing)).toEqual([]);
+  });
+
+  it("leaves a cycle running through a legacy `loop` node to `pdo migrate`", () => {
+    // The legacy node carries its own `max_iter` and its own scheduler iteration
+    // path: a region over it would count the same laps twice and would show
+    // DEFAULT_MAX_ITER on a canvas whose engine runs the node's real bound. Drawing
+    // ANY edge used to be enough to mint that lying region (the daemon applies the
+    // same carve-out, so both mirrors agree).
+    // `loop` is not in the FE `NodeType` union (the canvas has no editor for it)
+    // but the daemon still parses and serves such YAML, so the value does arrive.
+    const legacyLoop = { ...plainNode("lp"), type: "loop" as unknown as NodeDef["type"] };
+    const nodes = [plainNode("a"), plainNode("b"), legacyLoop];
+    const edges = [
+      edge("a", "out", "b", "in"),
+      edge("b", "out", "lp", "in"),
+      edge("lp", "out", "a", "in"),
+    ];
+    expect(materializeMissingRegions(nodes, edges)).toEqual([]);
   });
 });

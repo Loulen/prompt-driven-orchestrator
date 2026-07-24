@@ -401,6 +401,37 @@ describe("addEdge auto-materializes a bounded loop region on a cycle (ADR-0011 /
     expect(yaml).toContain("bbbb2222");
   });
 
+  it("draws no region over a cycle running through a legacy `loop` node (#396)", () => {
+    // The lever that exposed #396: on a pre-ADR-0011 pipeline, drawing ANY edge
+    // (even one unrelated to the loop) reconciled the whole graph and minted a
+    // region over `loop`/`switch` control nodes — 4 members bounded at
+    // DEFAULT_MAX_ITER, while the engine ran the loop node's own bound of 3. A dial
+    // that lies is worse than no dial: those files go through `pdo migrate`, and
+    // the daemon applies the identical carve-out at parse time.
+    const a = makeNode({ id: "aaaa1111", name: "impl" });
+    const b = makeNode({ id: "bbbb2222", name: "rev" });
+    const lp = makeNode({
+      id: "lpNODE001",
+      name: "loop",
+      // Not in the FE NodeType union (no canvas editor for it), but the daemon
+      // still serves such YAML.
+      type: "loop" as unknown as NodeDef["type"],
+      max_iter: 3,
+    });
+    // impl -> rev -> loop, plus loop -> impl already closing the cycle.
+    seedTabWithPipeline(
+      makePipeline(
+        [a, b, lp],
+        [edge("aaaa1111", "bbbb2222"), edge("lpNODE001", "aaaa1111")],
+      ),
+    );
+
+    useEditStore.getState().addEdge(edge("bbbb2222", "lpNODE001"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.loops ?? []).toHaveLength(0);
+  });
+
   it("captures every member of a three-node cycle, ordered by node position", () => {
     const a = makeNode({ id: "aaaa1111", name: "a" });
     const b = makeNode({ id: "bbbb2222", name: "b" });

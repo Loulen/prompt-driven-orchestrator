@@ -8,6 +8,17 @@ import type { EdgeDef, LoopRegion, NodeDef, PipelineDef } from "../types";
 export const DEFAULT_MAX_ITER = 5;
 
 /**
+ * A pre-ADR-0011 `type: loop` node. The FE `NodeType` union deliberately omits
+ * the retired control types (the canvas has no editor for them), but the daemon
+ * still parses and runs such YAML, so the value does reach us on the wire — hence
+ * the widening cast rather than a union member. A node the editor cannot even
+ * represent must not be wrapped in a region (see `materializeMissingRegions`).
+ */
+function isLegacyLoopNode(node: NodeDef): boolean {
+  return (node.type as string) === "loop";
+}
+
+/**
  * Detects the cycles in a node/edge graph (ADR-0011 / #148). A *cycle* is a
  * strongly-connected component of >= 2 nodes, or a single node carrying a
  * self-edge. Members are ordered by their position in `nodes` for determinism;
@@ -112,6 +123,19 @@ export function generatedRegionId(members: string[]): string {
  * already covered by an existing `loops:` entry (ADR-0011 / #148, #166). A cycle
  * is "covered" when an existing region's member set is identical to it. Mirrors
  * the daemon's `loop_region::materialize_missing_regions`.
+ *
+ * Scope note (#396): this is the **live gesture** half of the invariant — the
+ * edge just drawn on a canvas the daemon has not seen yet (`addEdge`). Regions
+ * for cycles a pipeline *arrives with* are materialized at the model boundary, by
+ * the daemon's mirror inside `parse_pipeline`, so every load path (open, run
+ * open, hot-reload, conflict "take theirs", reload-from-library) and the library
+ * twin diff all agree without a per-call-site reconciliation.
+ *
+ * A cycle running through a legacy `type: loop` node is skipped, exactly as the
+ * daemon skips it: that node carries its own `max_iter` and its own scheduler
+ * iteration path, so a region over it would give one loop two counters and show
+ * DEFAULT_MAX_ITER on a canvas whose engine runs the node's real bound. Such
+ * pipelines belong to `pdo migrate` (the daemon emits the diagnostic saying so).
  */
 export function materializeMissingRegions(
   nodes: NodeDef[],
@@ -121,9 +145,13 @@ export function materializeMissingRegions(
   const covered = existing.map((r) => new Set(r.members));
   const sameSet = (a: Set<string>, b: string[]) =>
     a.size === b.length && b.every((m) => a.has(m));
+  const legacyLoopNodes = new Set(
+    nodes.filter(isLegacyLoopNode).map((n) => n.id),
+  );
 
   const out: LoopRegion[] = [];
   for (const cycle of detectCycles(nodes, edges)) {
+    if (cycle.some((m) => legacyLoopNodes.has(m))) continue;
     if (covered.some((c) => sameSet(c, cycle))) continue;
     out.push({
       id: generatedRegionId(cycle),

@@ -128,6 +128,89 @@ pub struct MigrateResult {
     pub prompt_moves: Vec<(String, String)>,
 }
 
+/// The `review-loop` seed pipeline **as it was shipped before #396**: a
+/// `type: loop` control node (bound 3) wrapping implementer → reviewer, exited
+/// through a `type: switch`. The seed on disk is now migrated (that is half of
+/// the #396 fix: the editor cannot draw a region for a legacy loop node, so the
+/// canvas offered no `max_iter` at all), which would have left the tests below
+/// asserting dissolution against an already-dissolved file — green and blind.
+/// Kept verbatim here so the Loop/Switch dissolution stays covered, and shared
+/// with the `GET /pipelines/<id>` route test that pins how a legacy file is served.
+#[cfg(test)]
+pub(crate) const LEGACY_REVIEW_LOOP_YAML: &str = r#"
+name: review-loop
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+  - id: qdtXejYS
+    name: loop
+    type: loop
+    max_iter: 3
+    inputs:
+      - { name: in, side: left }
+      - { name: break, side: left }
+    outputs:
+      - { name: body, side: right }
+      - { name: done, side: right }
+    view: { x: 100, y: 160 }
+  - id: XBG5Cxkn
+    name: implementer
+    type: code-mutating
+    inputs:
+      - { name: task, side: left }
+    outputs:
+      - { name: code, side: right }
+    view: { x: 335, y: 249 }
+  - id: Qws9KzRZ
+    name: reviewer
+    type: doc-only
+    inputs:
+      - { name: code, side: left }
+    outputs:
+      - name: review
+        side: right
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [PASS, APPROVED, FAIL, NEEDS_WORK]
+    view: { x: 500, y: 100 }
+  - id: tmkRzihO
+    name: switch
+    type: switch
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - name: pass
+        side: right
+        when:
+          verdict:
+                      in: [PASS, APPROVED]
+      - { name: default, side: right }
+    view: { x: 700, y: 100 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: qdtXejYS, port: in }
+  - source: { node: qdtXejYS, port: body }
+    target: { node: XBG5Cxkn, port: task }
+  - source: { node: XBG5Cxkn, port: code }
+    target: { node: Qws9KzRZ, port: code }
+  - source: { node: Qws9KzRZ, port: review }
+    target: { node: tmkRzihO, port: in }
+  - source: { node: tmkRzihO, port: pass }
+    target: { node: qdtXejYS, port: break }
+  - source: { node: qdtXejYS, port: done }
+    target: { node: end, port: result }
+"#;
+
 pub fn migrate_pipeline_yaml(
     yaml_text: &str,
     pipeline_path: &Path,
@@ -1053,7 +1136,14 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
     // Per-loop wiring: entry (body target), upstream-in edges, break edges,
     // done edges.
     let mut loop_entry: HashMap<String, (String, String)> = HashMap::new(); // loop -> (entry node, entry port)
-    let mut loop_in_sources: HashMap<String, Vec<(String, String)>> = HashMap::new(); // loop -> [(U node, U port)]
+                                                                            // loop -> [(U node, U port, the whole `U.p -> L.in` edge)]. The edge itself is
+                                                                            // kept, not just its endpoint, because its routing clauses have to survive the
+                                                                            // rewire: `U.p -> L.in [when W]` becomes `U.p -> E.q [when W]`. Dropping `W`
+                                                                            // here turned a guarded loop entry into an unconditional one — the shipped
+                                                                            // `simple-bugfix` lost its "Verdict == Bug" gate and every verdict entered the
+                                                                            // fix loop, with the `else` route to End permanently dead (#396).
+    let mut loop_in_sources: HashMap<String, Vec<(String, String, serde_yaml::Value)>> =
+        HashMap::new();
     let mut loop_break_edges: HashMap<String, Vec<serde_yaml::Value>> = HashMap::new();
     let mut loop_done_targets: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
@@ -1084,11 +1174,12 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
             if loop_ids.contains(tnode) {
                 match tport.as_str() {
                     "in" => {
-                        if let Some(s) = &src {
-                            loop_in_sources
-                                .entry(tnode.clone())
-                                .or_default()
-                                .push(s.clone());
+                        if let Some((snode, sport)) = &src {
+                            loop_in_sources.entry(tnode.clone()).or_default().push((
+                                snode.clone(),
+                                sport.clone(),
+                                edge.clone(),
+                            ));
                         }
                     }
                     "break" => {
@@ -1122,9 +1213,15 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
             None => continue, // loop with no body — nothing to enter
         };
 
-        // U.p -> L.in  +  L.body -> E.q   ==>   U.p -> E.q
+        // U.p -> L.in [when W / else / reason]  +  L.body -> E.q
+        //   ==>   U.p -> E.q [when W / else / reason]
+        //
+        // The routing clauses ride along: the guard that decided whether the loop
+        // was entered at all must now decide whether its entry node is spawned.
+        // Layout (`mode`/`waypoints`/`target_side`) is deliberately NOT copied —
+        // it described a route to a node that no longer exists.
         if let Some(sources) = loop_in_sources.get(loop_id) {
-            for (unode, uport) in sources {
+            for (unode, uport, in_edge) in sources {
                 let mut m = serde_yaml::Mapping::new();
                 m.insert(
                     serde_yaml::Value::String("source".into()),
@@ -1134,6 +1231,11 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
                     serde_yaml::Value::String("target".into()),
                     mk_endpoint(&entry.0, &entry.1),
                 );
+                for key in ["when", "else", "reason"] {
+                    if let Some(v) = in_edge.get(key) {
+                        m.insert(serde_yaml::Value::String(key.into()), v.clone());
+                    }
+                }
                 new_edges.push(serde_yaml::Value::Mapping(m));
             }
         }
@@ -2899,10 +3001,10 @@ edges:
     #[test]
     fn migrates_loop_node_to_bounded_region() {
         // ADR-0011 / #148: a Loop node dissolves into a `loops:` entry + rewired
-        // body edges. The review-loop fixture (start -> loop -> body -> ...) must
-        // produce a bounded region whose members are the body nodes, with the
+        // body edges. The legacy review-loop shape (start -> loop -> body -> ...)
+        // must produce a bounded region whose members are the body nodes, with the
         // Loop node and its ports gone.
-        let yaml = include_str!("../../../.pdo/pipelines/review-loop.yaml");
+        let yaml = LEGACY_REVIEW_LOOP_YAML;
         let parsed = migrate_str_and_parse(yaml);
 
         // No Loop node may remain, nor any edge referencing it.
@@ -2952,7 +3054,7 @@ edges:
 
     #[test]
     fn migrates_review_loop_fixture_switch_to_guarded_edges() {
-        let yaml = include_str!("../../../.pdo/pipelines/review-loop.yaml");
+        let yaml = LEGACY_REVIEW_LOOP_YAML;
         let parsed = migrate_str_and_parse(yaml);
         // The dissolved switch leaves at least one guarded (when:) or else edge.
         assert!(
@@ -2967,17 +3069,152 @@ edges:
     }
 
     #[test]
-    fn migrates_simple_bugfix_fixture_switches_to_guarded_edges() {
-        let yaml = include_str!("../../../.pdo/pipelines/simple-bugfix.yaml");
+    fn loop_entry_guard_survives_dissolution() {
+        // `U.p -> L.in [when W]`: the guard decides whether the loop is entered at
+        // all. Dissolving the Loop node rewires that edge onto the body entry, and
+        // the guard MUST ride along — the shipped simple-bugfix lost its
+        // "Verdict == Bug" gate this way, so every verdict entered the fix loop and
+        // the `else` route to End was dead code (#396).
+        let yaml = r#"
+name: guarded-entry
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+  - id: aaaa0001
+    name: triage
+    type: doc-only
+    outputs:
+      - name: out
+        side: right
+        frontmatter:
+          Verdict: { type: enum, allowed: [Bug, Feature] }
+  - id: lpNODE01
+    name: retry
+    type: loop
+    max_iter: 4
+    inputs:
+      - { name: in, side: left }
+      - { name: break, side: left }
+    outputs:
+      - { name: body, side: right }
+      - { name: done, side: right }
+  - id: aaaa0002
+    name: fixer
+    type: code-mutating
+    outputs:
+      - { name: out, side: right }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aaaa0001, port: in }
+  - source: { node: aaaa0001, port: out }
+    target: { node: lpNODE01, port: in }
+    when:
+      Verdict: { eq: Bug }
+  - source: { node: aaaa0001, port: out }
+    target: { node: end, port: result }
+    else: true
+  - source: { node: lpNODE01, port: body }
+    target: { node: aaaa0002, port: in }
+  - source: { node: aaaa0002, port: out }
+    target: { node: lpNODE01, port: break }
+    when:
+      Verdict: { eq: Pass }
+  - source: { node: lpNODE01, port: done }
+    target: { node: end, port: result }
+"#;
         let parsed = migrate_str_and_parse(yaml);
-        assert!(
-            parsed.edges.iter().any(|e| e.when.is_some() || e.is_else),
-            "simple-bugfix should have conditional edges after migration"
+        let entry_edge = parsed
+            .edges
+            .iter()
+            .find(|e| e.source.node == "aaaa0001" && e.target.node == "aaaa0002")
+            .expect("the loop-entry edge must be rewired onto the body entry");
+        let when = entry_edge
+            .when
+            .as_ref()
+            .expect("the entry guard must survive the rewire");
+        assert_eq!(
+            when.get("Verdict")
+                .and_then(|c| c.get("eq"))
+                .and_then(|v| v.as_str()),
+            Some("Bug"),
+            "the rewired entry edge must keep its original when-clause: {when:?}"
         );
-        let first = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
-        let second =
-            migrate_pipeline_yaml(&first.yaml_text, Path::new("/tmp/fixture.yaml")).unwrap();
-        assert!(!second.migrated, "migration must be idempotent");
+    }
+
+    #[test]
+    fn shipped_loop_fixtures_need_no_migration() {
+        // #396: `review-loop` and `simple-bugfix` shipped as pre-ADR-0011 YAML
+        // (`type: loop` + `type: switch`). The editor has no representation for
+        // those nodes, so opening either one drew no loop region and left
+        // `max_iter` unreachable — the reported symptom. They now ship migrated:
+        // a real cycle plus a `loops:` entry carrying the bound the engine runs.
+        for (name, yaml, expect_members, expect_max) in [
+            (
+                "review-loop",
+                include_str!("../../../.pdo/pipelines/review-loop.yaml"),
+                vec!["Qws9KzRZ", "XBG5Cxkn"],
+                3i64,
+            ),
+            (
+                "simple-bugfix",
+                include_str!("../../../.pdo/pipelines/simple-bugfix.yaml"),
+                vec!["9NOnrpKY", "KHFCO0US"],
+                5i64,
+            ),
+        ] {
+            let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
+            assert!(
+                !result.migrated,
+                "{name} must ship already migrated — run `pdo migrate --dir .pdo/pipelines`"
+            );
+
+            let parsed = pipeline::parse_pipeline(yaml).unwrap();
+            assert!(
+                !parsed
+                    .pipeline
+                    .nodes
+                    .iter()
+                    .any(|n| matches!(n.node_type, NodeType::Loop | NodeType::Switch)),
+                "{name} must carry no legacy control node"
+            );
+            assert!(
+                parsed.diagnostics.is_empty(),
+                "{name} must parse diagnostic-clean: {:?}",
+                parsed.diagnostics
+            );
+
+            let pipeline = parsed.pipeline;
+            assert_eq!(pipeline.loops.len(), 1, "{name}: one bounded region");
+            let region = &pipeline.loops[0];
+            assert_eq!(region.kind, pipeline::LoopKind::Bounded);
+            let mut members = region.members.clone();
+            members.sort();
+            assert_eq!(members, expect_members, "{name}: region members");
+            // The bound comes off the file, NOT from DEFAULT_MAX_ITER: a region
+            // materialized over the legacy shape would have advertised 5 while the
+            // engine ran the node's own bound (#396).
+            assert_eq!(
+                crate::loop_region::resolve_region_max_iter(region, &HashMap::new()),
+                expect_max,
+                "{name}: the persisted bound must be the real one"
+            );
+            // The region is a genuine cycle in the graph, so the scheduler's
+            // re-entry path (not the generic forward spawn) governs its laps.
+            let cycles = crate::graph_resolver::detect_cycles(&pipeline);
+            assert_eq!(cycles.len(), 1, "{name}: exactly one cycle");
+            let mut cycle = cycles[0].clone();
+            cycle.sort();
+            assert_eq!(cycle, members, "{name}: the cycle IS the region");
+        }
     }
 
     #[test]

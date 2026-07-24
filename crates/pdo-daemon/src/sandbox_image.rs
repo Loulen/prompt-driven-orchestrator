@@ -260,13 +260,39 @@ mod tests {
         bin.to_str().unwrap().to_string()
     }
 
+    /// Under `cargo test --workspace`, exec-ing a **freshly written** binary can
+    /// return `ETXTBSY` (os error 26): a sibling test that `fork`+`exec`s at the
+    /// same instant transiently inherits the write fd of this test's fake docker
+    /// (rust-lang/rust#45719). Prod never exec-s a freshly-written binary
+    /// (`docker` is stable), so the retry lives HERE, not in the core. Mirrors the
+    /// identical guard in [`crate::sandbox_container`]'s tests.
+    fn retry_etxtbsy<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
+        for _ in 0..100 {
+            match op() {
+                Err(e) if is_etxtbsy(&e) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                other => return other,
+            }
+        }
+        op()
+    }
+
+    fn is_etxtbsy(e: &anyhow::Error) -> bool {
+        e.chain().any(|c| {
+            c.downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                == Some(26)
+        })
+    }
+
     #[test]
     fn present_image_skips_build() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, argv_log) = write_fake_docker(tmp.path(), 0, 0, "");
         let sandbox_root = tmp.path().join("sandbox");
 
-        let tag = ensure_image(&docker_str(&docker), &sandbox_root).unwrap();
+        let tag = retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap();
 
         assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
         assert!(
@@ -281,7 +307,7 @@ mod tests {
         let (docker, argv_log) = write_fake_docker(tmp.path(), 1, 0, "");
         let sandbox_root = tmp.path().join("sandbox");
 
-        let tag = ensure_image(&docker_str(&docker), &sandbox_root).unwrap();
+        let tag = retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap();
 
         assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
         assert_eq!(
@@ -303,7 +329,7 @@ mod tests {
         let (docker, _) = write_fake_docker(tmp.path(), 1, 1, "boom: base image missing");
         let sandbox_root = tmp.path().join("sandbox");
 
-        let err = ensure_image(&docker_str(&docker), &sandbox_root).unwrap_err();
+        let err = retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap_err();
 
         let msg = format!("{err:#}");
         assert!(
@@ -348,7 +374,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
         assert!(!dockerfile_path(&sandbox_root).exists());
 
-        ensure_image(&docker_str(&docker), &sandbox_root).unwrap();
+        retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap();
 
         let seeded = std::fs::read(dockerfile_path(&sandbox_root)).unwrap();
         assert_eq!(
@@ -368,7 +394,7 @@ mod tests {
         let edited: &[u8] = b"FROM ubuntu:24.04\nRUN echo edited\n";
         std::fs::write(dockerfile_path(&sandbox_root), edited).unwrap();
 
-        let tag = ensure_image(&docker_str(&docker), &sandbox_root).unwrap();
+        let tag = retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap();
 
         // (a) Octets inchangés : pas d'écrasement.
         assert_eq!(
@@ -388,7 +414,7 @@ mod tests {
         let (docker, argv_log) = write_fake_docker(tmp.path(), 1, 0, "");
         let sandbox_root = tmp.path().join("sandbox");
 
-        ensure_image(&docker_str(&docker), &sandbox_root).unwrap();
+        retry_etxtbsy(|| ensure_image(&docker_str(&docker), &sandbox_root)).unwrap();
 
         let argv = build_argv(&argv_log);
         let ctx = argv.last().unwrap();

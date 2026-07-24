@@ -177,6 +177,36 @@ impl RunStatus {
     }
 }
 
+/// How a Run is isolated (#403 / #407). A **per-Run, immutable** property carried
+/// on `RunStarted`, projected once into [`RunState::sandbox`], never mutated for
+/// the Run's whole life — a resumed session matches its transcript by working-dir
+/// path, so flipping the mode mid-life would break `claude --continue`.
+///
+/// - `Off` — historical host execution (no Docker, byte-identical legacy launch);
+/// - `Copy` — sandboxed, staged Claude home seeded by copying an allowlist of the
+///   host `~/.claude`;
+/// - `Pure` — sandboxed, staged Claude home seeded with credentials + trust only.
+///
+/// The wire form is exactly `off`/`copy`/`pure`. `Default` is `Off` so an absent
+/// payload field (historical runs, bare-API creates) projects to the host path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxMode {
+    #[default]
+    Off,
+    Copy,
+    Pure,
+}
+
+impl SandboxMode {
+    /// Whether this Run runs on the host (the legacy, no-Docker path). The whole
+    /// sandbox wiring is gated on `!is_off()`, so the `off` parcours never touches
+    /// a single new line.
+    pub fn is_off(self) -> bool {
+        matches!(self, SandboxMode::Off)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
@@ -373,6 +403,11 @@ pub struct RunState {
     pub switch_states: HashMap<String, SwitchState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+    /// Isolation mode for this Run (#403 / #407). Immutable: set once from the
+    /// `RunStarted` payload, never mutated. Absent payload field → `Off` (the
+    /// legacy host path), so historical runs and bare-API creates stay off.
+    #[serde(default)]
+    pub sandbox: SandboxMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
     /// Provenance: the id of the Trigger that created this Run, if any.
@@ -427,6 +462,7 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             target_repo: None,
+            sandbox: SandboxMode::Off,
             source_branch: None,
             triggered_by: None,
             pipeline_id: None,
@@ -682,6 +718,15 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {
                     state.target_repo = Some(tr.to_string());
+                }
+                // #407: isolation mode, projected once and never mutated. Absent
+                // (or malformed) → the `Off` default (host path). Never panics —
+                // this applier runs before the transition guard.
+                if let Some(sandbox) = payload
+                    .get("sandbox")
+                    .and_then(|v| serde_json::from_value::<SandboxMode>(v.clone()).ok())
+                {
+                    state.sandbox = sandbox;
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
@@ -4509,7 +4554,8 @@ mod tests {
                 "sw": { "chosen_branch": "pass", "evaluated_at": "2026-02-01T00:05:00.000Z", "switch_node_id": "sw" }
             },
             "target_repo": "Loulen/prompt-driven-orchestrator",
-            "triggered_by": "trigger-7"
+            "triggered_by": "trigger-7",
+            "sandbox": "off"
         });
         assert_eq!(actual, expected);
     }

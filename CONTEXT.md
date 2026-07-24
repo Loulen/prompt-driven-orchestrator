@@ -819,8 +819,10 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 
 > Section seedée par #404, complétée par les slices suivantes du PRD #403. Couvert **ici** :
 > staging fs (#404) + **fourniture de l'image** (#405, *Image (fourniture)*) + **exécution /
-> conteneur** (#406, *Exécution (conteneur)*). Le **câblage** dans le run-advance et le modèle
-> d'exécution formel (réseau/auth) restent **différés à ADR-0030 / #407** — ne pas les fixer ici.
+> conteneur** (#406, *Exécution (conteneur)*) + **câblage run-advance** (#407 : prep eager fail-fast,
+> wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
+> d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260). Reste **différé** : `merge_back` +
+> observabilité (#408), précédence des sources du mode (#410), fourniture par registry (#411).
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
@@ -860,7 +862,9 @@ de sous-agents `<uuid>/subagents/*.jsonl`), sous le **même dirname encodé** (c
 conteneur, garanti par les identity mounts, ADR-0030). **Idempotent** : copie ssi le fichier hôte est
 absent ou plus court (transcripts append-only) ; ne réécrit jamais un fichier hôte. Aucune autre
 écriture vers l'hôte. **Jeté délibérément (v1)** : settings, statsig, todos, `history.jsonl`,
-shell-snapshots — tout sauf les transcripts (#403 US-29). _Éviter_ : « sync », « flush », « commit ».
+shell-snapshots — tout sauf les transcripts (#403 US-29). **Câblage dans le run-advance = #408**
+(pas #407) : d'ici là un Run sandboxé est aveugle pour le coût/stale, trou d'observabilité assumé
+(ADR-0030). _Éviter_ : « sync », « flush », « commit ».
 
 **`teardown(run_id)`** :
 Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
@@ -955,12 +959,16 @@ absent (idempotent). C'est **le** verbe « destroy / destruction » réservé pa
   `ensure_running` (#406) ; ses **identity mounts** rendent le chemin de travail identique
   hôte/conteneur (d'où le même dirname encodé pour `merge_back`), et toutes les tails y entrent par le
   **préfixe `docker exec`** portant un **marqueur de session**. Kill ciblé + `remove` au `cleanup_run`.
-- **Différé (hors #404-#406)** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
+- **Câblé (#407, ADR-0030)** : `prepare`/`ensure_image`/`ensure_running`/`exec_prefix` dans le
+  run-advance — prep eager fail-fast au create (Docker indispo → `RunFailed`, zéro spawn hôte),
+  wrapping des tails au chokepoint `build_tmux_script` (`off` byte-identique), kill ciblé dans
+  `reap_node_session`/`kill_node`/`restart_node`, `remove`+`teardown` au `cleanup_run`,
+  `ensure_running` à `boot_recovery` (Run live) et `open_run_shell` (ressuscite-ou-échoue).
+- **Différé** : `merge_back` **dans le run-advance** + observabilité coût/stale (seam
+  `transcripts_root`) (#408) ; injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; précédence des sources du mode (run → trigger →
-  `default_sandbox`, pattern ADR-0015) (#410) ; seam `transcripts_root` (#408) ; **fourniture par
-  registry** (pull GHCR + `image_source`) (#411) ; **câblage** de
-  `prepare`/`ensure_image`/`ensure_running`/`exec_prefix`/`merge_back` dans le run-advance +
-  **ADR-0030** (modèle d'exécution : réseau/auth) (#407).
+  `default_sandbox`, pattern ADR-0015) (#410) ; **fourniture par registry** (pull GHCR +
+  `image_source`) (#411).
 
 ### Ambiguïté signalée
 « sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;

@@ -54,6 +54,9 @@ pub(crate) struct SpawnDeps<'a> {
     pub(crate) panic_on_spawn: &'a std::sync::atomic::AtomicBool,
     pub(crate) port: u16,
     pub(crate) tmux_cmd_override: Option<&'a str>,
+    /// Per-daemon `docker` binary override for the sandbox wiring (#407), `Copy`
+    /// like the rest of the bundle. `None` in production (real `docker`).
+    pub(crate) docker_cmd_override: Option<&'a str>,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -66,6 +69,7 @@ impl<'a> SpawnDeps<'a> {
             panic_on_spawn: &state.panic_on_spawn,
             port: state.port,
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+            docker_cmd_override: state.docker_cmd_override.as_deref(),
         }
     }
 }
@@ -155,6 +159,14 @@ pub(crate) async fn spawn_node(
             return SpawnOutcome::Refused { reason };
         }
     }
+
+    // #407: the Run's isolation mode (immutable, projected from RunStarted). When
+    // not `off`, the tail below is wrapped to run inside `pdo-sbx-<run_id>`. Read
+    // from the guard projection — `sandbox` never changes over a Run's life.
+    let run_sandbox = projected
+        .as_ref()
+        .map(|s| s.sandbox)
+        .unwrap_or_default();
 
     // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
     // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.
@@ -460,6 +472,16 @@ pub(crate) async fn spawn_node(
     } else {
         &full_prompt
     };
+    // #407: wrap the tail in `docker exec … pdo-sbx-<run>` when sandboxed. The
+    // marker MUST equal the session name (the kill path scans `/proc` for it), and
+    // the workdir is the node's own working dir.
+    let sandbox_wrap = (!run_sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: deps.docker_cmd_override.unwrap_or("docker"),
+        uid: crate::sandbox_container::host_uid(),
+        gid: crate::sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: &working_dir,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         spawn_prompt,
@@ -470,6 +492,7 @@ pub(crate) async fn spawn_node(
         deps.port,
         deps.tmux_cmd_override,
         tail,
+        sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn tmux session: {e}");
     }

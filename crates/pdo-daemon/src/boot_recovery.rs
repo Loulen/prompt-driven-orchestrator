@@ -131,6 +131,33 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
             continue;
         }
 
+        // #407 D10: a live sandboxed Run needs its container back after a daemon
+        // restart — reconcile it here (before the orphan scan). Synchronous effect
+        // via spawn_blocking (ensure_ready may build/probe docker); failure is
+        // logged, not fatal — the orphan/stall handling below still runs, and a
+        // downstream spawn would fail loud on a still-missing container. No-op for
+        // `off`.
+        if !run_state.sandbox.is_off() {
+            match crate::sandbox_run::context_from_state(state, &run_state) {
+                Ok(ctx) => {
+                    match tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => warn!(
+                            "Boot recovery: failed to ensure sandbox container for run {run_id}: {e:#}"
+                        ),
+                        Err(je) => warn!(
+                            "Boot recovery: sandbox ensure_ready panicked for run {run_id}: {je}"
+                        ),
+                    }
+                }
+                Err(e) => warn!(
+                    "Boot recovery: failed to build sandbox context for run {run_id}: {e:#}"
+                ),
+            }
+        }
+
         // (1) Orphaned live nodes: Running/AwaitingUser with no tmux session.
         let orphaned: Vec<(String, i64)> = run_state
             .nodes

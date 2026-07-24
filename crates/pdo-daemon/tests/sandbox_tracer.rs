@@ -479,3 +479,333 @@ async fn kill_node_targets_the_container() {
         log_text(&log)
     );
 }
+
+// -- #409: mode `copy` de bout en bout ---------------------------------------
+//
+// The harness collocates `home_root == host_home == repo_root == tempdir`
+// (`sandbox_home_override`), so the fake host `~/.claude` lives at
+// `<repo>/.claude`. It is fabricated AFTER spawn (untracked, out of the seed
+// commit) and BEFORE `start_run` (eager prep reads it). The fake `docker exec`
+// cannot run the container body, so a real end-to-end `copy` run (skills actually
+// loaded, kernel isolation, real auth) is the Layer-5 job (FP-409). Layer-3 proves
+// what PDO **stages** and the **argv/mounts** it hands `docker create`.
+
+/// Fabricate a realistic host `~/.claude` (+ sibling `.claude.json`) under `home`.
+/// Mirrors the unit `sandbox_staging::fabricate_home`: allowlist dirs/files, an
+/// INTRA-tree symlink, an ESCAPING symlink to `~/.agents` (deref target, #409 D2),
+/// 0600 creds, bulky host state that must be EXCLUDED, a pre-existing host
+/// transcript under `projects/`, and a profile `.claude.json` with `oauthAccount`.
+fn fabricate_host_claude(home: &Path) {
+    let claude = home.join(".claude");
+    let write = |p: PathBuf, c: &str| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, c).unwrap();
+    };
+    let write_mode = |p: PathBuf, c: &str, mode: u32| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, c).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    // Allowlist dirs.
+    write(claude.join("skills/foo/skill.md"), "# skill\n");
+    write_mode(claude.join("skills/foo/run.sh"), "#!/bin/sh\necho hi\n", 0o755);
+    // INTRA-tree symlink (stays a link).
+    std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
+    // ESCAPING skill → ~/.agents/skills/esc (outside ~/.claude): must be
+    // dereferenced into the staged tree, else it dangles in the container.
+    write(home.join(".agents/skills/esc/SKILL.md"), "# escaped skill\n");
+    std::os::unix::fs::symlink("../../.agents/skills/esc", claude.join("skills/esc")).unwrap();
+    write(claude.join("plugins/bar/plugin.json"), "{}\n");
+    write(claude.join("agents/a.md"), "agent\n");
+    write(claude.join("commands/c.md"), "cmd\n");
+    write(claude.join("output-styles/s.md"), "style\n");
+    // Allowlist files (hooks live inside settings.json).
+    write(claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
+    write(claude.join("settings.local.json"), r#"{"local":true}"#);
+    write_mode(claude.join(".credentials.json"), r#"{"token":"secret"}"#, 0o600);
+    write(claude.join("CLAUDE.md"), "# global\n");
+    write(claude.join("RTK.md"), "# rtk\n");
+    // Bulky host state — must stay EXCLUDED from the staging.
+    write(claude.join("history.jsonl"), "{\"cmd\":\"ls\"}\n");
+    write(claude.join("file-history/big.bin"), "xxxxxxxxxx");
+    write(claude.join("session-env/env-1/data"), "junk");
+    // Pre-existing host transcript — `prepare` must NOT copy it.
+    write(claude.join("projects/-enc-host/old.jsonl"), "{\"host\":1}\n");
+    // Sibling profile `.claude.json` (PII-bearing; copy stages it verbatim + trust).
+    write(
+        home.join(".claude.json"),
+        r#"{"host":"profile","oauthAccount":{"x":1}}"#,
+    );
+}
+
+/// The staged Claude home of a run under the tempdir override
+/// (`<repo>/.pdo/sandbox/<run>/claude-home`).
+fn staged_home(daemon: &TestDaemon, run_id: &str) -> PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo/sandbox")
+        .join(run_id)
+        .join("claude-home")
+}
+
+/// The staged `.claude.json` sibling (`<repo>/.pdo/sandbox/<run>/.claude.json`).
+fn staged_json(daemon: &TestDaemon, run_id: &str) -> PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo/sandbox")
+        .join(run_id)
+        .join(".claude.json")
+}
+
+/// Every `-v` mount spec (the arg following each `-v`) in the fake-docker argv log.
+fn mount_specs(log: &Path) -> Vec<String> {
+    let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
+    let mut specs = Vec::new();
+    let mut iter = lines.iter();
+    while let Some(line) = iter.next() {
+        if line == "-v" {
+            if let Some(spec) = iter.next() {
+                specs.push(spec.clone());
+            }
+        }
+    }
+    specs
+}
+
+// -- Test 7: copy stages the allowlist (deref + trust) and completes ---------
+
+#[tokio::test]
+async fn copy_run_stages_allowlist_and_completes() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+    fabricate_host_claude(daemon.repo_root());
+
+    let run_id = start_run(&daemon, Some("copy")).await;
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(run["sandbox"], "copy", "run must project sandbox=copy: {run}");
+
+    // Node reaches Running ⇒ eager prep (incl. the copy walk + trust seed) is done.
+    let run = wait_node_status(&daemon, &run_id, "running").await;
+    assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
+
+    let home = staged_home(&daemon, &run_id);
+    assert!(
+        wait_until(|| home.join("settings.json").is_file()).await,
+        "staged settings.json should exist once the node is running"
+    );
+
+    // Allowlist dirs staged.
+    assert!(home.join("skills/foo/skill.md").is_file());
+    assert!(home.join("plugins/bar/plugin.json").is_file());
+    assert!(home.join("agents/a.md").is_file());
+    assert!(home.join("commands/c.md").is_file());
+    assert!(home.join("output-styles/s.md").is_file());
+    // #409 D2: the escaping skill is DEREFERENCED into a regular file (not a
+    // dangling symlink) — exercised through the real prep path, not just a unit.
+    let esc = home.join("skills/esc/SKILL.md");
+    assert!(
+        std::fs::symlink_metadata(&esc)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the escaping skill must be dereferenced, not a dangling symlink"
+    );
+    assert_eq!(std::fs::read_to_string(&esc).unwrap(), "# escaped skill\n");
+    // Allowlist files (hooks live inside settings.json).
+    assert!(std::fs::read_to_string(home.join("settings.json"))
+        .unwrap()
+        .contains("hooks"));
+    assert!(home.join("settings.local.json").is_file());
+    assert!(home.join(".credentials.json").is_file());
+    assert!(home.join("CLAUDE.md").is_file());
+    assert!(home.join("RTK.md").is_file());
+
+    // `.claude.json` sibling (OUTSIDE claude-home/): host profile preserved verbatim
+    // + trust seeded for the Run's repo_root (#409 D5).
+    let staged = staged_json(&daemon, &run_id);
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+    assert_eq!(
+        json["oauthAccount"]["x"],
+        serde_json::json!(1),
+        "host profile keys preserved verbatim: {json}"
+    );
+    let repo_key = daemon.repo_root().to_string_lossy().into_owned();
+    assert_eq!(
+        json["projects"][&repo_key]["hasTrustDialogAccepted"],
+        serde_json::json!(true),
+        "copy seeds trust for the Run's repo_root: {json}"
+    );
+    assert!(
+        !home.join(".claude.json").exists(),
+        ".claude.json must NOT live inside claude-home/"
+    );
+
+    // projects/ staged EMPTY (host transcripts never copied).
+    assert!(home.join("projects").is_dir());
+    assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
+
+    // Drive the run terminal (simulate the container's output + `pdo complete`).
+    write_node_output(&daemon, &run_id, "copy output\n");
+    simulate_node_done(&daemon, &run_id).await;
+    let run = wait_run_status(&daemon, &run_id, "completed").await;
+    assert_eq!(run["status"], "completed", "copy run must complete: {run}");
+}
+
+// -- Test 8: copy excludes projects/ and bulky host state --------------------
+
+#[tokio::test]
+async fn copy_excludes_projects_and_bulky_host_state() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+    fabricate_host_claude(daemon.repo_root());
+
+    let run_id = start_run(&daemon, Some("copy")).await;
+    wait_node_status(&daemon, &run_id, "running").await;
+
+    let home = staged_home(&daemon, &run_id);
+    assert!(
+        wait_until(|| home.join("settings.json").is_file()).await,
+        "staging should be seeded once the node is running"
+    );
+
+    // Bulky/transient host state is NEVER staged (allowlist, not denylist).
+    assert!(!home.join("history.jsonl").exists());
+    assert!(!home.join("file-history").exists());
+    assert!(!home.join("session-env").exists());
+    // Host transcripts are never copied by prepare; projects/ is created EMPTY.
+    assert!(!home.join("projects/-enc-host/old.jsonl").exists());
+    assert!(home.join("projects").is_dir());
+    assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
+}
+
+// -- Test 9: the real host ~/.claude is never a mount SOURCE -----------------
+
+#[tokio::test]
+async fn copy_never_mounts_the_real_host_claude() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+    fabricate_host_claude(daemon.repo_root());
+
+    let run_id = start_run(&daemon, Some("copy")).await;
+    // `container inspect` → ABSENT → ensure_running does `create` (mounts logged).
+    assert!(
+        wait_until(|| log_text(&log).contains("create")).await,
+        "prep must `docker create` the container; log:\n{}",
+        log_text(&log)
+    );
+
+    let specs = mount_specs(&log);
+    let host_claude = daemon.repo_root().join(".claude");
+    let host_json = daemon.repo_root().join(".claude.json");
+
+    // Positive: the STAGED home is mounted at <repo>/.claude — source = staging.
+    let expected_home_mount = format!(
+        "{}:{}:rw",
+        staged_home(&daemon, &run_id).display(),
+        host_claude.display()
+    );
+    assert!(
+        specs.contains(&expected_home_mount),
+        "staged home must mount to <repo>/.claude (source = staging); specs={specs:?}"
+    );
+
+    // Negative (load-bearing): NO mount has the real host `.claude`/`.claude.json`
+    // as its SOURCE. Inspect the source SEGMENT (split ':'), never `contains` — the
+    // mount TARGET `<repo>/.claude` coincides on disk with the fake host here
+    // (override home == repo_root), so a substring check would false-positive.
+    for spec in &specs {
+        let source = spec.split(':').next().unwrap_or(spec);
+        assert_ne!(
+            source,
+            host_claude.display().to_string(),
+            "the real host ~/.claude must never be a mount source; spec={spec}"
+        );
+        assert_ne!(
+            source,
+            host_json.display().to_string(),
+            "the real host ~/.claude.json must never be a mount source; spec={spec}"
+        );
+    }
+}
+
+// -- Test 10: no host config write-back; transcripts DO flow back ------------
+
+#[tokio::test]
+async fn copy_completes_without_host_config_writeback() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+    fabricate_host_claude(daemon.repo_root());
+
+    let host_claude = daemon.repo_root().join(".claude");
+    let host_json = daemon.repo_root().join(".claude.json");
+    // Snapshot the host config BEFORE the run (bytes, load-bearing).
+    let settings_before = std::fs::read(host_claude.join("settings.json")).unwrap();
+    let json_before = std::fs::read(&host_json).unwrap();
+
+    let run_id = start_run(&daemon, Some("copy")).await;
+    wait_node_status(&daemon, &run_id, "running").await;
+    write_node_output(&daemon, &run_id, "done\n");
+    simulate_node_done(&daemon, &run_id).await;
+    wait_run_status(&daemon, &run_id, "completed").await;
+
+    let staging = daemon.repo_root().join(".pdo/sandbox").join(&run_id);
+    assert!(
+        wait_until(|| staging.exists()).await,
+        "staging must exist before cleanup: {staging:?}"
+    );
+
+    // Plant a transcript in the staged projects/ sink: the cleanup merge_back must
+    // land it on the host (positive), while config stays untouched (negative).
+    let staged_proj = staged_home(&daemon, &run_id).join("projects/-enc-test");
+    std::fs::create_dir_all(&staged_proj).unwrap();
+    std::fs::write(staged_proj.join("t.jsonl"), "{\"line\":1}\n").unwrap();
+
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "cleanup_run" }),
+    )
+    .await;
+    assert!(resp.status().is_success(), "cleanup_run should archive");
+    wait_run_status(&daemon, &run_id, "archived").await;
+
+    // AC: NO config write ever comes back to the host. Copy + trust seeding all
+    // land in the STAGED tree; the host config stays byte-identical.
+    assert_eq!(
+        std::fs::read(host_claude.join("settings.json")).unwrap(),
+        settings_before,
+        "host settings.json must be byte-identical (no write-back)"
+    );
+    assert_eq!(
+        std::fs::read(&host_json).unwrap(),
+        json_before,
+        "host .claude.json must be byte-identical (trust seeding writes only the staged copy)"
+    );
+    // Positive counterpart: transcripts DO merge back to the host projects dir.
+    assert!(
+        host_claude.join("projects/-enc-test/t.jsonl").is_file(),
+        "merge_back must land staged transcripts on the host"
+    );
+    // And the staging is purged.
+    assert!(
+        !staging.exists(),
+        "cleanup must purge the staging dir: {staging:?}"
+    );
+}

@@ -1,4 +1,5 @@
-import { useEditStore, serializePipeline } from "../stores/editStore";
+import { useEditStore } from "../stores/editStore";
+import { serializePipeline } from "../lib/serializePipeline";
 import type { VariableDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";

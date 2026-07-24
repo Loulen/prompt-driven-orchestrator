@@ -3,7 +3,8 @@ import { Star } from "lucide-react";
 import type { PipelineDef } from "../types";
 import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
-import { serializePipeline, useEditStore } from "../stores/editStore";
+import { useEditStore } from "../stores/editStore";
+import { serializePipeline } from "../lib/serializePipeline";
 import type { PipelineLibrarySyncState } from "../hooks/useLibraryPipelines";
 import { Tooltip } from "./ui/tooltip";
 

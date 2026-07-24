@@ -18,8 +18,11 @@ import type {
  *
  *     Object.keys(emitted[scope])  ==  SEMANTIC_FIELDS[scope] ∪ LAYOUT_FIELDS[scope]
  *
- * Add a field to the serializer (`editStore.ts` pipelineToYamlObject) → classify
- * it here, or the exhaustiveness guard turns the build RED.
+ * Add a field to the serializer (`lib/serializePipeline.ts` pipelineToYamlObject)
+ * → classify it here, or the exhaustiveness guard in `layoutFields.test.ts`
+ * fails. Note it fails under `vitest`, which CI does NOT run
+ * (`.github/workflows/ci.yml` stops at typecheck + lint + build) — so run the
+ * unit suite by hand; a green CI does not clear this guard.
  *
  * `LAYOUT_FIELDS` has a runtime consumer (`stripLayout`, used by
  * `comparablePipelineObject`). `SEMANTIC_FIELDS` has NO runtime consumer — the

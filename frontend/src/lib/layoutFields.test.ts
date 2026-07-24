@@ -10,7 +10,7 @@ import type {
   VariableDef,
   EdgeWaypoint,
 } from "../types";
-import { pipelineToYamlObject } from "../stores/editStore";
+import { pipelineToYamlObject } from "./serializePipeline";
 import {
   SEMANTIC_FIELDS,
   LAYOUT_FIELDS,

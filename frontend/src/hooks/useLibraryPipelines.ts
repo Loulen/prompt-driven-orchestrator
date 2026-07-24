@@ -3,7 +3,7 @@ import { fetchLibraryPipelines } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import type { PipelineDef } from "../types";
 import type { OpenPipeline } from "../stores/editStore";
-import { pipelineToYamlObject } from "../stores/editStore";
+import { pipelineToYamlObject } from "../lib/serializePipeline";
 import { deepEqual } from "../lib/deepEqual";
 import { stripLayout } from "../lib/layoutFields";
 

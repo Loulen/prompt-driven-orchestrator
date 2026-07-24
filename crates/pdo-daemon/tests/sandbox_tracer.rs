@@ -508,12 +508,19 @@ fn fabricate_host_claude(home: &Path) {
     };
     // Allowlist dirs.
     write(claude.join("skills/foo/skill.md"), "# skill\n");
-    write_mode(claude.join("skills/foo/run.sh"), "#!/bin/sh\necho hi\n", 0o755);
+    write_mode(
+        claude.join("skills/foo/run.sh"),
+        "#!/bin/sh\necho hi\n",
+        0o755,
+    );
     // INTRA-tree symlink (stays a link).
     std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
     // ESCAPING skill → ~/.agents/skills/esc (outside ~/.claude): must be
     // dereferenced into the staged tree, else it dangles in the container.
-    write(home.join(".agents/skills/esc/SKILL.md"), "# escaped skill\n");
+    write(
+        home.join(".agents/skills/esc/SKILL.md"),
+        "# escaped skill\n",
+    );
     std::os::unix::fs::symlink("../../.agents/skills/esc", claude.join("skills/esc")).unwrap();
     write(claude.join("plugins/bar/plugin.json"), "{}\n");
     write(claude.join("agents/a.md"), "agent\n");
@@ -522,7 +529,11 @@ fn fabricate_host_claude(home: &Path) {
     // Allowlist files (hooks live inside settings.json).
     write(claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
     write(claude.join("settings.local.json"), r#"{"local":true}"#);
-    write_mode(claude.join(".credentials.json"), r#"{"token":"secret"}"#, 0o600);
+    write_mode(
+        claude.join(".credentials.json"),
+        r#"{"token":"secret"}"#,
+        0o600,
+    );
     write(claude.join("CLAUDE.md"), "# global\n");
     write(claude.join("RTK.md"), "# rtk\n");
     // Bulky host state — must stay EXCLUDED from the staging.
@@ -530,7 +541,10 @@ fn fabricate_host_claude(home: &Path) {
     write(claude.join("file-history/big.bin"), "xxxxxxxxxx");
     write(claude.join("session-env/env-1/data"), "junk");
     // Pre-existing host transcript — `prepare` must NOT copy it.
-    write(claude.join("projects/-enc-host/old.jsonl"), "{\"host\":1}\n");
+    write(
+        claude.join("projects/-enc-host/old.jsonl"),
+        "{\"host\":1}\n",
+    );
     // Sibling profile `.claude.json` (PII-bearing; copy stages it verbatim + trust).
     write(
         home.join(".claude.json"),
@@ -586,7 +600,10 @@ async fn copy_run_stages_allowlist_and_completes() {
 
     let run_id = start_run(&daemon, Some("copy")).await;
     let run = get_run(&daemon, &run_id).await;
-    assert_eq!(run["sandbox"], "copy", "run must project sandbox=copy: {run}");
+    assert_eq!(
+        run["sandbox"], "copy",
+        "run must project sandbox=copy: {run}"
+    );
 
     // Node reaches Running ⇒ eager prep (incl. the copy walk + trust seed) is done.
     let run = wait_node_status(&daemon, &run_id, "running").await;

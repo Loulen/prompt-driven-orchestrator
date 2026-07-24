@@ -333,14 +333,20 @@ fn copy_tree_preserving(src: &Path, dst: &Path, copy_root: &Path, depth: u32) {
         return;
     }
     let Ok(entries) = std::fs::read_dir(src) else {
-        warn!("sandbox copy: cannot read dir {}; skipping subtree", src.display());
+        warn!(
+            "sandbox copy: cannot read dir {}; skipping subtree",
+            src.display()
+        );
         return;
     };
     for entry in entries.flatten() {
         let from = entry.path();
         let to = dst.join(entry.file_name());
         let Ok(md) = std::fs::symlink_metadata(&from) else {
-            warn!("sandbox copy: cannot stat {}; skipping entry", from.display());
+            warn!(
+                "sandbox copy: cannot stat {}; skipping entry",
+                from.display()
+            );
             continue;
         };
         let ft = md.file_type();
@@ -450,7 +456,9 @@ fn seed_trust_in_claude_json(path: &Path, trusted_root: &Path) -> Result<()> {
     if !entry.is_object() {
         *entry = serde_json::json!({});
     }
-    let entry = entry.as_object_mut().expect("project entry forced to object");
+    let entry = entry
+        .as_object_mut()
+        .expect("project entry forced to object");
     entry.insert(
         "hasTrustDialogAccepted".to_string(),
         serde_json::json!(true),
@@ -576,7 +584,10 @@ mod tests {
         std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
         // Symlink ÉCHAPPANT : ~/.claude/skills/esc → ~/.agents/skills/esc (hors
         // ~/.claude). `../../.agents/…` depuis ~/.claude/skills/ résout à <home>/.agents.
-        write(&home.join(".agents/skills/esc/SKILL.md"), "# escaped skill\n");
+        write(
+            &home.join(".agents/skills/esc/SKILL.md"),
+            "# escaped skill\n",
+        );
         std::os::unix::fs::symlink("../../.agents/skills/esc", claude.join("skills/esc")).unwrap();
         write(&claude.join("plugins/bar/plugin.json"), "{}\n");
         write(&claude.join("agents/a.md"), "agent\n");
@@ -753,7 +764,14 @@ mod tests {
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
 
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Copy, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
         // Le skill lié à ~/.agents (hors ~/.claude) est DÉRÉFÉRENCÉ : son contenu
@@ -783,7 +801,10 @@ mod tests {
                 .is_symlink(),
             "le lien intra-arbre doit rester un symlink"
         );
-        assert_eq!(std::fs::read_link(&intra).unwrap(), PathBuf::from("skill.md"));
+        assert_eq!(
+            std::fs::read_link(&intra).unwrap(),
+            PathBuf::from("skill.md")
+        );
     }
 
     #[test]
@@ -797,7 +818,14 @@ mod tests {
             .unwrap();
 
         // Ne panique pas / n'échoue pas malgré l'entrée cassée (D3).
-        prepare(home_dir.path(), sandbox_dir.path(), Mode::Copy, "run1", None).unwrap();
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Copy,
+            "run1",
+            None,
+        )
+        .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
         // Le bon fichier est copié ; l'entrée cassée est sautée (rien de staged).

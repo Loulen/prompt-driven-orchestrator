@@ -132,7 +132,10 @@ fn sh_quote_arg(s: &str) -> String {
     let safe = !s.is_empty()
         && s.bytes().all(|b| {
             b.is_ascii_alphanumeric()
-                || matches!(b, b'_' | b'-' | b'.' | b'/' | b'=' | b':' | b',' | b'@' | b'+')
+                || matches!(
+                    b,
+                    b'_' | b'-' | b'.' | b'/' | b'=' | b':' | b',' | b'@' | b'+'
+                )
         });
     if safe {
         s.to_string()
@@ -540,7 +543,14 @@ pub fn resume(
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
 ) -> Result<()> {
-    let script = build_resume_script(run_id, node_id, iter, daemon_port, tmux_cmd_override, sandbox);
+    let script = build_resume_script(
+        run_id,
+        node_id,
+        iter,
+        daemon_port,
+        tmux_cmd_override,
+        sandbox,
+    );
     let socket = tmux_socket_name(daemon_port);
 
     let output = tmux(&socket)
@@ -1592,7 +1602,10 @@ mod tests {
             SessionTail::Agent { model: None },
             None,
         );
-        assert!(!with_none.contains("docker"), "off path must not mention docker: {with_none}");
+        assert!(
+            !with_none.contains("docker"),
+            "off path must not mention docker: {with_none}"
+        );
         assert!(!with_none.contains("pdo-sbx-"), "{with_none}");
         assert!(
             with_none.contains("exec claude --dangerously-skip-permissions \"$(cat "),

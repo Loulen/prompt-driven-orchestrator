@@ -221,15 +221,14 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
     // #407: wrap the tail into the Run's container when sandboxed (manual
     // force-spawn / restart door, #204). Marker = the session name (kill target).
-    let sandbox_wrap = (!params.run_state.sandbox.is_off()).then(|| {
-        tmux_session_manager::SandboxWrap {
+    let sandbox_wrap =
+        (!params.run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
             docker_bin: params.docker_cmd_override.unwrap_or("docker"),
             uid: crate::sandbox_container::host_uid(),
             gid: crate::sandbox_container::host_gid(),
             marker: &session_name,
             workdir: &working_dir,
-        }
-    });
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         spawn_prompt,

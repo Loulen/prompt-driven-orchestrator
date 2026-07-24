@@ -335,7 +335,10 @@ mod tests {
         let lines = log_lines(&log);
         assert!(lines.contains(&"image".to_string()), "image inspected");
         assert!(lines.contains(&"container".to_string()), "container probed");
-        assert!(!lines.contains(&"build".to_string()), "present image → no build");
+        assert!(
+            !lines.contains(&"build".to_string()),
+            "present image → no build"
+        );
         assert!(
             !lines.contains(&"create".to_string()),
             "running container → no create"
@@ -371,7 +374,10 @@ mod tests {
         std::fs::write(&sentinel, "keep").unwrap();
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
-        assert!(sentinel.exists(), "staging must not be re-prepared when present");
+        assert!(
+            sentinel.exists(),
+            "staging must not be re-prepared when present"
+        );
     }
 
     #[test]
@@ -421,7 +427,8 @@ mod tests {
                 let l = log_lines(&log);
                 !l.is_empty()
                     && l[0] == "exec"
-                    && l.iter().any(|x| x.contains("PDO_SBX_SESSION=pdo-r1-n1-iter-1"))
+                    && l.iter()
+                        .any(|x| x.contains("PDO_SBX_SESSION=pdo-r1-n1-iter-1"))
             },
         );
         assert!(

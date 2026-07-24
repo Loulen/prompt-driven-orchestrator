@@ -73,7 +73,10 @@ fn git_init_with_commit(repo: &Path) -> anyhow::Result<()> {
     let run = |args: &[&str]| -> anyhow::Result<()> {
         let out = Command::new("git").args(args).current_dir(repo).output()?;
         if !out.status.success() {
-            anyhow::bail!("git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+            anyhow::bail!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         Ok(())
     };
@@ -200,7 +203,11 @@ async fn wait_node_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> 
     last
 }
 
-async fn post_command(daemon: &TestDaemon, run_id: &str, body: serde_json::Value) -> reqwest::Response {
+async fn post_command(
+    daemon: &TestDaemon,
+    run_id: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}/runs/{run_id}/commands", daemon.url()))
         .json(&body)
@@ -226,7 +233,10 @@ fn write_node_output(daemon: &TestDaemon, run_id: &str, content: &str) {
 
 async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
     let resp = reqwest::Client::new()
-        .post(format!("{}/runs/{run_id}/nodes/{NODE_ID}/done", daemon.url()))
+        .post(format!(
+            "{}/runs/{run_id}/nodes/{NODE_ID}/done",
+            daemon.url()
+        ))
         .json(&serde_json::json!({}))
         .send()
         .await
@@ -244,18 +254,19 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
 async fn pure_run_prepares_wraps_and_completes() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    let daemon = TestDaemon::spawn_with_docker_override(
-        seed("#!/usr/bin/env bash\ntrue\n"),
-        docker,
-    )
-    .await
-    .unwrap();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
 
     let run_id = start_run(&daemon, Some("pure")).await;
 
     // (a) The mode is projected onto the Run from RunStarted.
     let run = get_run(&daemon, &run_id).await;
-    assert_eq!(run["sandbox"], "pure", "run must project sandbox=pure: {run}");
+    assert_eq!(
+        run["sandbox"], "pure",
+        "run must project sandbox=pure: {run}"
+    );
 
     // (b) Eager prep created + started the container (ensure_ready).
     assert!(
@@ -342,7 +353,10 @@ async fn off_run_never_invokes_docker() {
     // No `sandbox` param → Off → host execution.
     let run_id = start_run(&daemon, None).await;
     let run = wait_run_status(&daemon, &run_id, "completed").await;
-    assert_eq!(run["status"], "completed", "off run must complete on host: {run}");
+    assert_eq!(
+        run["status"], "completed",
+        "off run must complete on host: {run}"
+    );
     assert_eq!(run["sandbox"], "off", "default mode is off: {run}");
 
     // Docker was NEVER invoked on the off parcours.
@@ -359,12 +373,10 @@ async fn off_run_never_invokes_docker() {
 async fn cleanup_run_removes_container_and_staging() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    let daemon = TestDaemon::spawn_with_docker_override(
-        seed("#!/usr/bin/env bash\ntrue\n"),
-        docker,
-    )
-    .await
-    .unwrap();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
 
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_node_status(&daemon, &run_id, "running").await;
@@ -373,16 +385,18 @@ async fn cleanup_run_removes_container_and_staging() {
     wait_run_status(&daemon, &run_id, "completed").await;
 
     // Staging landed under the tempdir home override (hermetic).
-    let staging = daemon
-        .repo_root()
-        .join(".pdo/sandbox")
-        .join(&run_id);
+    let staging = daemon.repo_root().join(".pdo/sandbox").join(&run_id);
     assert!(
         wait_until(|| staging.exists()).await,
         "staging dir should exist before cleanup: {staging:?}"
     );
 
-    let resp = post_command(&daemon, &run_id, serde_json::json!({ "kind": "cleanup_run" })).await;
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "cleanup_run" }),
+    )
+    .await;
     assert!(resp.status().is_success(), "cleanup_run should archive");
     wait_run_status(&daemon, &run_id, "archived").await;
 
@@ -392,7 +406,10 @@ async fn cleanup_run_removes_container_and_staging() {
         "cleanup must `docker rm -f pdo-sbx-{run_id}`; log:\n{}",
         log_text(&log)
     );
-    assert!(!staging.exists(), "cleanup must purge the staging dir: {staging:?}");
+    assert!(
+        !staging.exists(),
+        "cleanup must purge the staging dir: {staging:?}"
+    );
 }
 
 // -- Test 5: boot_recovery re-ensures a live sandboxed container -------------
@@ -401,12 +418,10 @@ async fn cleanup_run_removes_container_and_staging() {
 async fn boot_recovery_reensures_sandbox_container() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    let daemon = TestDaemon::spawn_with_docker_override(
-        seed("#!/usr/bin/env bash\ntrue\n"),
-        docker,
-    )
-    .await
-    .unwrap();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
 
     let run_id = start_run(&daemon, Some("pure")).await;
     let count_creates = |log: &Path| log_text(log).lines().filter(|l| *l == "create").count();
@@ -440,12 +455,10 @@ async fn boot_recovery_reensures_sandbox_container() {
 async fn kill_node_targets_the_container() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    let daemon = TestDaemon::spawn_with_docker_override(
-        seed("#!/usr/bin/env bash\ntrue\n"),
-        docker,
-    )
-    .await
-    .unwrap();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
 
     let run_id = start_run(&daemon, Some("pure")).await;
     wait_node_status(&daemon, &run_id, "running").await;

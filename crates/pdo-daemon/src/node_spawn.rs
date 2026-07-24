@@ -163,10 +163,7 @@ pub(crate) async fn spawn_node(
     // #407: the Run's isolation mode (immutable, projected from RunStarted). When
     // not `off`, the tail below is wrapped to run inside `pdo-sbx-<run_id>`. Read
     // from the guard projection — `sandbox` never changes over a Run's life.
-    let run_sandbox = projected
-        .as_ref()
-        .map(|s| s.sandbox)
-        .unwrap_or_default();
+    let run_sandbox = projected.as_ref().map(|s| s.sandbox).unwrap_or_default();
 
     // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
     // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.

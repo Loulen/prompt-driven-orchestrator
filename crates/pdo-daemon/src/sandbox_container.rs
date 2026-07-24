@@ -781,7 +781,10 @@ mod tests {
             "/repo/.pdo/runs/r1/nodes/n1/iter-1",
             "pdo-sbx-r1",
         ]);
-        assert_eq!(args, expected, "catalogue `-e K=V` inséré avant le conteneur");
+        assert_eq!(
+            args, expected,
+            "catalogue `-e K=V` inséré avant le conteneur"
+        );
         // Invariant : PDO_DAEMON_URL jamais re-passé, même présent dans le catalogue.
         assert!(
             !args.iter().any(|a| a.contains("PDO_DAEMON_URL")),

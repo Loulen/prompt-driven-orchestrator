@@ -152,9 +152,9 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         ),
                     }
                 }
-                Err(e) => warn!(
-                    "Boot recovery: failed to build sandbox context for run {run_id}: {e:#}"
-                ),
+                Err(e) => {
+                    warn!("Boot recovery: failed to build sandbox context for run {run_id}: {e:#}")
+                }
             }
         }
 

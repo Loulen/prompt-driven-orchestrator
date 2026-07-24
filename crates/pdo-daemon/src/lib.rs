@@ -7320,15 +7320,14 @@ async fn node_pane(
         if working_dir.exists() {
             // #407: a resumed sandboxed session re-enters its container (6th tail
             // path). Marker = the session name; workdir = the node's working dir.
-            let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| {
-                tmux_session_manager::SandboxWrap {
+            let sandbox_wrap =
+                (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
                     docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
                     uid: sandbox_container::host_uid(),
                     gid: sandbox_container::host_gid(),
                     marker: &session_name,
                     workdir: &working_dir,
-                }
-            });
+                });
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -8043,7 +8042,14 @@ async fn node_done(
         // Reap on terminal state (#205): snapshot the pane then kill the session,
         // so a completed node never holds a live session toward the tmux-collapse
         // point (#77/#78). Post-mortem inspection survives via the snapshot.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter, tail_sandbox);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
         // run, re-drive throttled waiters, then the single completion gate. Everything
@@ -8105,7 +8111,14 @@ async fn node_fail(
                 .unwrap_or_else(|| (tail_state.repo_root.clone(), event_log::SandboxMode::Off)),
             Err(_) => (tail_state.repo_root.clone(), event_log::SandboxMode::Off),
         };
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter, tail_sandbox);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Mark the run as failed
         let run_failed = event_log::Event {
@@ -8201,7 +8214,14 @@ async fn node_skip(
     let tail_sandbox = pre_run_state.sandbox;
     detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter, tail_sandbox);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // End the run as a graceful no-op (#245) — distinct from RunFailed. This
         // short-circuits downstream: `spawn_ready_after_event` only spawns for a
@@ -8464,7 +8484,14 @@ async fn node_stop(
     // killed, so the stopped node's post-mortem pane survives. `stop_node`
     // kills the session too (idempotent — reap already killed it).
     let repo_root = effective_repo_root(&state, &run_state);
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter, run_state.sandbox);
+    reap_node_session(
+        &state,
+        &repo_root,
+        &run_id,
+        &node_id,
+        iter,
+        run_state.sandbox,
+    );
 
     let params = node_primitives::StopNodeParams {
         run_id: &run_id,
@@ -10149,9 +10176,7 @@ async fn open_run_shell(
         let prep = match sandbox_run::context_from_state(&state, &run_state) {
             Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
                 .await
-                .unwrap_or_else(|je| {
-                    Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
-                }),
+                .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
             Err(e) => Err(e),
         };
         if let Err(e) = prep {

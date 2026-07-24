@@ -147,8 +147,51 @@ l'hôte qu'un Run hôte.
   donnent déjà la parité fichiers) et perd les outils `sudo`-installés éphémères. On garde le
   wrapping pour l'uniformité + zéro divergence hôte silencieuse (`ensure_running`-or-fail).
 
+## Amendement — Vocabulaire, exceptions de mount `$HOME`, maîtrise du Dockerfile (grilling 2026-07-24, PRD #403)
+
+Quatre points de cette ADR sont amendés à l'issue de la validation manuelle du PRD, **avant** le
+merge vers `main`. Le détail du modèle de contenu vit dans **ADR-0031** ; ici, ce qui change du
+modèle d'*exécution*.
+
+1. **Vocabulaire.** Le tri-état devient `off` | `minimal` | `full` (ex-`pure`/`copy`). Aucun alias
+   de compatibilité : les seules valeurs persistées vivaient dans la base de l'instance de test,
+   nettoyée avant le renommage. `minimal` est plus juste que `pure` depuis que le plancher de
+   garanties (ADR-0031 §1) y seede des consentements — le mode n'est pas *pur*, il est *minimal*.
+
+2. **Les identity mounts ne sont plus une liste fermée.** Aux quatre mounts du point 1 (repo,
+   `.claude` stagé, `.claude.json` stagé, binaire `pdo`) s'ajoutent les **exceptions déclarées** par
+   le profil de staging : une entrée hors `.claude` est copiée dans `<staging>/home/<chemin>` puis
+   montée rw à `$HOME/<chemin>` (ADR-0031 §4, dédup des entrées internes à `.claude` incluse).
+   `create_args` gagne donc une **queue variable** — le golden test qui fige l'ordre canonique doit
+   l'accommoder plutôt que la figer.
+
+3. **La valeur sécurité v1 est reformulée, pas retirée.** La section « Pourquoi » revendique comme
+   seule valeur un « blast radius filesystem réduit par défaut (pas d'accès ambiant au reste de
+   `$HOME`, aux autres repos, à `~/.ssh`) ». Ce n'est plus exact : le refus par défaut de `$HOME`
+   devient une **liste d'exceptions déclarées et visibles**. Le défaut reste le refus — un profil
+   vierge ne monte rien de plus — mais l'utilisateur peut déclarer `.ssh` s'il l'assume, et l'UI
+   l'avertit sans l'interdire (ADR-0031 §3). La posture générale est inchangée : la sandbox n'est
+   pas une frontière de sécurité en v1.
+
+4. **Échec fort étendu au profil inconnu.** Le point 4 (« jamais de fallback hôte silencieux »)
+   couvrait l'indisponibilité de Docker ; il couvre désormais aussi un nom de profil non résolu —
+   400 à la création, tir de Trigger en échec visible, `RunFailed` en boot recovery (ADR-0031 §7).
+
+5. **Le Dockerfile résolu devient un réglage.** Le point 7 supposait un Dockerfile unique, seedé à
+   `~/.pdo/sandbox/Dockerfile`. Un réglage d'instance `dockerfile_path` (précédence
+   `stored → env → défaut seedé`, ADR-0015) permet d'en pointer un autre — typiquement versionné
+   dans le repo, donc partagé par l'équipe. Le tag reste le hash du contenu du fichier **pointé** :
+   l'édition déclenche toujours le rebuild. Conséquence opérationnelle : quand le Dockerfile résolu
+   diffère du seedé, `ensure_image` **saute le pull GHCR** (un hash custom ne peut pas exister en
+   amont) et build directement. Fournir un **ref d'image tout fait** reste hors périmètre : ça
+   supprimerait le tag adressé par contenu, exigerait d'écrire le contrat d'image (bash, `claude`
+   installé, auto-updater off, `$HOME` inscriptible au chemin hôte) et rouvrirait une question
+   d'auth que le pull anonyme évite.
+
 ## Relations
 
+- **ADR-0031** (profils de staging) : *ce que* le home stagé contient, là où cette ADR fixe *où* et
+  *comment* le Run s'exécute.
 - **ADR-0004** (stratégie de test) : golden des tails wrappées (unit) + layer-3 (Docker indispo →
   RunFailed, off inchangé, cleanup/boot/kill) via les seams `docker_cmd_override` +
   `sandbox_home_override` (per-daemon, #181) — jamais d'`std::env` global ni de vrai Docker en CI.

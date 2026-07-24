@@ -831,6 +831,11 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
 > `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`).
 
+> **Décidé au grilling 2026-07-24 (ADR-0031), pas encore en vigueur** — livré par les slices
+> post-validation du PRD : le tri-état devient `off` | `minimal` | `full` (ex-`pure`/`copy`, sans
+> alias), le plancher de staging devient une liste de **garanties**, et les valeurs non-`off`
+> deviennent des noms de **profil de staging**. Les trois termes concernés portent le même marqueur.
+
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
 dans l'état du Run). Tri-état `off` | `copy` | `pure` : `off` = comportement historique (sessions
@@ -845,8 +850,10 @@ _Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confond
 
 **Staging dir (répertoire de staging)** :
 Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
-`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling. Le vrai `~/.claude` n'est
-**jamais** monté. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
+`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling (+, une fois ADR-0031
+livré, un `home/` portant les **exceptions `$HOME`** déclarées par le profil). Le vrai `~/.claude`
+n'est **jamais** monté — et l'invariant s'étend au reste de `$HOME` : ce sont toujours des copies
+qui sont montées. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
 fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
 
 **Staged Claude home (`claude-home/`)** :
@@ -854,6 +861,35 @@ Sous-répertoire `~/.pdo/sandbox/<run-id>/claude-home/` qui tient lieu de `.clau
 Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le mode (voir `prepare`).
 Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté séparément vers
 `$HOME/.claude.json`. _Éviter_ : « fake home », « home miroir ».
+
+**Profil de staging** _(décidé, pas encore en vigueur — ADR-0031)_ :
+Liste **nommée** de ce qu'un Run sandboxé stage dans son home. Le champ sandbox d'un Run, d'un
+Trigger ou de l'instance vaut `off` **ou un nom de profil** — jamais une liste : la précédence
+existante (`effective_sandbox`) et les `<select>` de l'UI restent inchangés. `minimal` et `full`
+sont des **défauts virtuels** (aucune ligne en base) jusqu'à édition. Ce qui est stocké est un
+**diff** d'intention (`disabled` / `extras`), jamais un instantané — sinon une install ne verrait
+plus les évolutions futures du défaut. Le nom **et** la liste résolue sont gelés dans `RunStarted` :
+`prepare` lit l'état du Run, jamais le réglage vivant. Un nom inconnu **échoue fort** (400 à la
+création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
+_Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template ».
+
+**Plancher de staging** _(décidé, pas encore en vigueur — ADR-0031)_ :
+Les **garanties** que `prepare` tient quel que soit le profil : credentials valides, managed
+settings de l'org **consentis** (baseline `remote-settings.json`), bypass permissions accepté,
+confiance pré-accordée à la racine du Run, `projects/` vide. Chaque garantie est satisfaite soit par
+une entrée du profil, soit par une **synthèse de repli** — c'est ce qui rend le décochage sûr sans
+l'interdire. Formulé en fichiers verrouillés, le plancher se contredirait dès `settings.json`
+(copié en `full`, synthétisé en `minimal`). _Éviter_ : « fichiers obligatoires », « liste
+verrouillée ».
+
+**Entrée de profil / exception `$HOME`** _(décidé, pas encore en vigueur — ADR-0031)_ :
+Une entrée est un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`).
+Refusés : absolu, `..`, sortie de `$HOME`, et `projects/` sous `.claude`. Une entrée **hors
+`.claude`** est copiée dans `<staging>/home/<chemin>` puis montée rw à `$HOME/<chemin>` — jamais un
+bind direct du fichier hôte (un agent ferait `git config --global` et réécrirait le `~/.gitconfig`
+de l'utilisateur). Une entrée **sous `.claude/`** ne reçoit **pas** de mount propre : elle est déjà
+servie par le mount `.claude`. _Éviter_ : « fichier monté » (c'est une copie qui est montée),
+« exclusion » pour parler d'un décochage.
 
 **`prepare(mode, run_id)`** :
 Seede le *staged Claude home* selon le mode. **`copy`** : recopie une **liste explicite** de

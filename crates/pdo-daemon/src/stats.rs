@@ -379,6 +379,15 @@ pub async fn stats_cost(
         }
     };
 
+    // #408: resolve the sandbox home roots once for the whole fold. HOME absent →
+    // degrade to the host `~/.claude` root (never fail the aggregate).
+    let (home_root, sandbox_root) =
+        crate::sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+            let sandbox = home.join(".pdo").join("sandbox");
+            (home, sandbox)
+        });
+
     let mut cost_rows: Vec<CostRow> = Vec::with_capacity(rows.len());
     for (run_id, bucket, payload) in rows {
         let payload: serde_json::Value = payload
@@ -403,7 +412,18 @@ pub async fn stats_cost(
             .unwrap_or_else(|| state.repo_root.clone());
         let project = repo_root.to_string_lossy().into_owned();
 
-        let cost = crate::run_cost::compute_run_cost_cached(&repo_root, &run_id);
+        // #408: read the transcripts from the sandboxed Run's staged home while it
+        // is live (else `~/.claude/projects/`). Parse `sandbox` straight off the
+        // `run_started` payload (like `target_repo`/`pipeline_id`) — no full
+        // RunState projection, so the SQL stays cheap (no fan-out regression).
+        let sandbox = payload
+            .get("sandbox")
+            .and_then(|v| serde_json::from_value::<crate::event_log::SandboxMode>(v.clone()).ok())
+            .unwrap_or_default();
+        let projects_root =
+            crate::sandbox_run::transcripts_root(sandbox, &run_id, &home_root, &sandbox_root);
+
+        let cost = crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id);
         cost_rows.push(CostRow {
             bucket,
             pipeline,

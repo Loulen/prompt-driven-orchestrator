@@ -124,6 +124,53 @@ impl TestDaemon {
         })
     }
 
+    /// Spawn a daemon with a **fake `docker`** AND an explicit tmux tail override
+    /// (#408). Like [`TestDaemon::spawn_with_docker_override`] but the caller
+    /// chooses the tail: pass `Some("exec sleep 600")` so a sandboxed node's
+    /// session stays **alive** long enough to exercise the live-run observability
+    /// paths (cost + stale-detection reading the staged home). The default
+    /// docker-override harness pins the tail to `exec true`, which collapses the
+    /// session instantly — too short to prove "stale reads the staging".
+    ///
+    /// `sandbox_home_override` is the tempdir, so the staging
+    /// (`<tempdir>/.pdo/sandbox/<run>/…`) and the host `~/.claude`
+    /// (`<tempdir>/.claude/…`) both live under the test's own dir — hermetic, no
+    /// real `$HOME` touched.
+    pub async fn spawn_with_docker_and_tmux_override<F>(
+        setup: F,
+        docker_cmd: String,
+        tmux_cmd_override: Option<String>,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override,
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: Some(docker_cmd),
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
     /// Spawn a daemon that **panics** the scheduler tick when a due Trigger named
     /// `panic_name` is processed (#222 fault injection). Lets a test prove the
     /// panic is isolated and the scheduler keeps firing. Per-daemon config, so no

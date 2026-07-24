@@ -134,17 +134,17 @@ pub fn encode_working_dir(dir: &Path) -> String {
         .collect()
 }
 
-/// Find the most recently modified `.jsonl` file in the Claude Code projects
-/// directory for the given working directory.
-pub fn find_session_jsonl(working_dir: &Path) -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+/// Find the most recently modified `.jsonl` file for `working_dir` under the
+/// given Claude Code `projects/` root.
+///
+/// `projects_root` is the seam that lets a sandboxed Run's transcripts be read
+/// from its staged home while it is live (#408): the caller resolves it via
+/// [`crate::sandbox_run::transcripts_root`] (staging for a live sandboxed Run,
+/// `~/.claude/projects/` otherwise). The cwd encoding stays here, the single
+/// source of truth (#373) — the seam only swaps the base root.
+pub fn find_session_jsonl(projects_root: &Path, working_dir: &Path) -> Option<PathBuf> {
     let encoded = encode_working_dir(working_dir);
-    let projects_dir = PathBuf::from(home)
-        .join(".claude")
-        .join("projects")
-        .join(&encoded);
-
-    newest_jsonl_in(&projects_dir)
+    newest_jsonl_in(&projects_root.join(encoded))
 }
 
 fn newest_jsonl_in(dir: &Path) -> Option<PathBuf> {
@@ -997,53 +997,18 @@ SwapFree:         204800 kB
     }
 
     // --- find_session_jsonl (filesystem) ---
-
-    /// RAII guard that swaps HOME for a temp dir while holding the crate-wide
-    /// HOME lock. `find_session_jsonl` reads `$HOME`, and other test modules
-    /// (library_store, lib.rs FakeHome) also mutate HOME — without the lock,
-    /// parallel test threads clobber each other's HOME mid-test.
-    struct TempHome {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        tmp: tempfile::TempDir,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl TempHome {
-        fn new() -> Self {
-            let lock = crate::library_store::HOME_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let tmp = tempfile::tempdir().unwrap();
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", tmp.path());
-            Self {
-                _lock: lock,
-                tmp,
-                prev,
-            }
-        }
-
-        fn path(&self) -> &Path {
-            self.tmp.path()
-        }
-    }
-
-    impl Drop for TempHome {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
+    //
+    // Since #408 `find_session_jsonl` takes the `projects/` root as a param (the
+    // observability seam), so these tests inject a tempdir root directly — no HOME
+    // swap, no crate-wide HOME lock, fully hermetic.
 
     #[test]
     fn find_jsonl_returns_newest_file() {
-        let home_guard = TempHome::new();
-        let home = home_guard.path();
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
 
         let encoded = encode_working_dir(Path::new("/home/user/project"));
-        let projects_dir = home.join(".claude").join("projects").join(&encoded);
+        let projects_dir = projects.join(&encoded);
         std::fs::create_dir_all(&projects_dir).unwrap();
 
         let old_file = projects_dir.join("old-session.jsonl");
@@ -1057,7 +1022,7 @@ SwapFree:         204800 kB
         let new_file = projects_dir.join("new-session.jsonl");
         std::fs::write(&new_file, "new").unwrap();
 
-        let result = find_session_jsonl(Path::new("/home/user/project"));
+        let result = find_session_jsonl(&projects, Path::new("/home/user/project"));
 
         assert!(result.is_some());
         assert_eq!(result.unwrap().file_name().unwrap(), "new-session.jsonl");
@@ -1065,23 +1030,24 @@ SwapFree:         204800 kB
 
     #[test]
     fn find_jsonl_no_dir_returns_none() {
-        let _home_guard = TempHome::new();
-        assert!(find_session_jsonl(Path::new("/nonexistent/dir")).is_none());
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
+        assert!(find_session_jsonl(&projects, Path::new("/nonexistent/dir")).is_none());
     }
 
     #[test]
     fn find_jsonl_ignores_non_jsonl_files() {
-        let home_guard = TempHome::new();
-        let home = home_guard.path();
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
 
         let encoded = encode_working_dir(Path::new("/tmp/testdir"));
-        let projects_dir = home.join(".claude").join("projects").join(&encoded);
+        let projects_dir = projects.join(&encoded);
         std::fs::create_dir_all(&projects_dir).unwrap();
 
         std::fs::write(projects_dir.join("notes.txt"), "not jsonl").unwrap();
         std::fs::write(projects_dir.join("data.json"), "not jsonl either").unwrap();
 
-        assert!(find_session_jsonl(Path::new("/tmp/testdir")).is_none());
+        assert!(find_session_jsonl(&projects, Path::new("/tmp/testdir")).is_none());
     }
 
     #[test]
@@ -1090,29 +1056,22 @@ SwapFree:         204800 kB
         // carries `.pdo`) must resolve to the transcript CC actually writes —
         // i.e. under the leading-dash, `--pdo` name. Pre-fix this looked up
         // `home-...-.pdo-...` and found nothing, so the mtime probe was dead.
-        let home_guard = TempHome::new();
-        let home = home_guard.path();
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
 
         let node_dir =
             Path::new("/home/llenoir/Documents/perso/Maestro/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1");
 
         // The transcript dir CC writes: leading `-`, `.pdo` → `--pdo`.
-        let cc_name = home
-            .join(".claude")
-            .join("projects")
+        let cc_name = projects
             .join("-home-llenoir-Documents-perso-Maestro--pdo-runs-20260623-100032-9b8331b-nodes-gzpYZA2m-iter-1");
         std::fs::create_dir_all(&cc_name).unwrap();
         std::fs::write(cc_name.join("session.jsonl"), "{}").unwrap();
 
         // The encoder now produces exactly that name …
-        assert_eq!(
-            home.join(".claude")
-                .join("projects")
-                .join(encode_working_dir(node_dir)),
-            cc_name
-        );
+        assert_eq!(projects.join(encode_working_dir(node_dir)), cc_name);
         // … so the probe resolves the transcript.
-        let found = find_session_jsonl(node_dir);
+        let found = find_session_jsonl(&projects, node_dir);
         assert!(
             found.is_some(),
             "find_session_jsonl must resolve a real PDO node transcript after the #373 fix"

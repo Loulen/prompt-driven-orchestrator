@@ -3074,8 +3074,27 @@ pub(crate) async fn append_event_with(
 /// Thin `AppState` wrapper over [`append_event_with`] — the name every
 /// in-process caller already uses. The db-only core exists so `spawn_node`
 /// (#356) can append through a narrow `SpawnDeps` without the full `AppState`.
+///
+/// #408: this wrapper is also the single chokepoint for the terminal
+/// `merge_back` — the ~14 emitters of the 4 terminal Run events (§3.B of the
+/// plan) all funnel through here, and only here is `&AppState` available. After a
+/// SUCCESSFUL append of a terminal event, a sandboxed Run's staged transcripts
+/// are merged into `~/.claude/projects/` so cost + stale-detection see them once
+/// the staging is eventually purged. [`sandbox_run::merge_back_best_effort`] fires
+/// the walk on a detached task, so it never adds latency or a failure mode to the
+/// terminal transition (ADR-0023); it is idempotent, so a double-fire is safe.
 async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
-    append_event_with(&state.db, &state.event_tx, event).await
+    append_event_with(&state.db, &state.event_tx, event).await?;
+    if matches!(
+        event.kind,
+        event_log::EventKind::RunCompleted
+            | event_log::EventKind::RunFailed
+            | event_log::EventKind::RunSkipped
+            | event_log::EventKind::RunHalted
+    ) {
+        sandbox_run::merge_back_best_effort(state, &event.run_id).await;
+    }
+    Ok(())
 }
 
 /// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
@@ -6490,7 +6509,22 @@ async fn get_run(
     match event_log::project(&events) {
         Some(mut run_state) => {
             let repo_root = effective_repo_root(&state, &run_state);
-            augment_run_state_from_disk(&mut run_state, &repo_root);
+            // #408: read the cost transcripts from the sandboxed Run's staged home
+            // while it is live, `~/.claude/projects/` otherwise. HOME absent →
+            // degrade to the host root (never fail a read).
+            let (home_root, sandbox_root) =
+                sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+                    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+                    let sandbox = home.join(".pdo").join("sandbox");
+                    (home, sandbox)
+                });
+            let projects_root = sandbox_run::transcripts_root(
+                run_state.sandbox,
+                &run_state.run_id,
+                &home_root,
+                &sandbox_root,
+            );
+            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root);
             Json(run_state).into_response()
         }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
@@ -6916,6 +6950,12 @@ struct SweepNodeProbes<'a> {
     socket: &'a str,
     session_name: &'a str,
     working_dir: &'a Path,
+    /// The Claude Code `projects/` root to read this node's transcript from (#408
+    /// observability seam): the sandboxed Run's staged home while it is live,
+    /// `~/.claude/projects/` otherwise. Resolved once per Run in the sweep via
+    /// [`sandbox_run::transcripts_root`]; the encoded cwd segment is still derived
+    /// from `working_dir` (the single source of truth), never re-encoded here.
+    projects_root: &'a Path,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
     run_id: &'a str,
@@ -6930,7 +6970,7 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn jsonl_mtime(&self) -> Option<std::time::SystemTime> {
-        stale_detector::find_session_jsonl(self.working_dir)
+        stale_detector::find_session_jsonl(self.projects_root, self.working_dir)
             .and_then(|p| std::fs::metadata(&p).ok())
             .and_then(|m| m.modified().ok())
     }
@@ -6991,6 +7031,22 @@ async fn run_stale_detection(state: &AppState) {
     let socket = state.tmux_socket();
     let now = std::time::SystemTime::now();
 
+    // #408: resolve the sandbox home roots once for the whole sweep. HOME absent
+    // must NOT abort the sweep (unlike `context_from_state` at create, which
+    // fails loud) — degrade to the host `~/.claude` root and log. `off` runs
+    // ignore `sandbox_root` anyway (the seam returns the host root for them).
+    let (home_root, sandbox_root) = match sandbox_run::sandbox_home_roots(state) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(
+                "stale sweep: cannot resolve sandbox home roots, treating all runs as host ({e:#})"
+            );
+            let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+            let sandbox = home.join(".pdo").join("sandbox");
+            (home, sandbox)
+        }
+    };
+
     // #290 (Slice 1, observability only): count of live nodes found stuck on
     // Claude Code's usage-limit menu across this whole sweep. Recomputed each
     // sweep (leak-free — a node that leaves the live set drops out naturally);
@@ -7018,6 +7074,13 @@ async fn run_stale_detection(state: &AppState) {
         let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
         let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
 
+        // #408: the Claude Code `projects/` root this Run's transcripts live under
+        // — the staged home while a sandboxed Run is live, `~/.claude/projects/`
+        // otherwise. The per-node encoded dirname is still derived from the
+        // node's `working_dir` inside the probe; the seam only swaps the base.
+        let projects_root =
+            sandbox_run::transcripts_root(run_state.sandbox, run_id, &home_root, &sandbox_root);
+
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
             let node_type = find_node_type(&run_state, node_id);
@@ -7039,6 +7102,7 @@ async fn run_stale_detection(state: &AppState) {
                 socket: &socket,
                 session_name: &session_name,
                 working_dir: &working_dir,
+                projects_root: &projects_root,
                 pipeline_path: &pipeline_path,
                 artifacts_dir: &artifacts_dir,
                 run_id,
@@ -9205,6 +9269,34 @@ async fn run_command(
                 &tmux_session_manager::shell_session_name(&run_id),
             );
 
+            // #408 D5: resuming a sandboxed Run must re-arm its container before
+            // the scheduler `docker exec`s into it. Containers are created without
+            // `--restart` and `boot_recovery` skips terminal Runs, so after a host
+            // reboot the container is down — reviving a terminal sandboxed Run
+            // would otherwise spawn into a dead container ("failed to spawn tmux
+            // session"). Resurrect it (via `spawn_blocking`, `ensure_ready` may
+            // `docker build`) or fail EXPLICITLY — never a silent host fallback.
+            // Mirrors the run-shell guard (#407 D11).
+            if !run_state.sandbox.is_off() {
+                let prep = match sandbox_run::context_from_state(&state, &run_state) {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                        .await
+                        .unwrap_or_else(|je| {
+                            Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
+                        }),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = prep {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("sandbox container unavailable: {e:#}")
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+
             let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("resume_run: run {run_id}");
@@ -10375,20 +10467,24 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     let shell_session = tmux_session_manager::shell_session_name(run_id);
     tmux_session_manager::kill(&socket, &shell_session);
 
-    // #407 D9: destroy the sandbox container + purge its staging BEFORE any
-    // `git worktree remove` below — the container bind-mounts the repo, so a live
-    // worktree removal under it would hit a busy mount. Best-effort. `merge_back`
-    // is intentionally NOT wired here (→ observability slice #408). No-op for
-    // `off`.
+    // #407 D9 + #408 D-4: merge the transcripts back, then destroy the sandbox
+    // container + purge its staging, all BEFORE any `git worktree remove` below —
+    // the container bind-mounts the repo, so a live worktree removal under it
+    // would hit a busy mount. The tmux sessions were killed just above, so the
+    // staging is quiescent for the merge. `cleanup` merges first ("harvest before
+    // purge"), capturing any post-terminal growth (resume, late subagent flushes)
+    // the detached terminal merge missed; idempotent, so the double-merge is safe.
+    // Best-effort. No-op for `off`.
     if !run_state.sandbox.is_off() {
         match sandbox_run::sandbox_home_roots(state) {
-            Ok((_, sandbox_root)) => sandbox_run::cleanup(
+            Ok((home_root, sandbox_root)) => sandbox_run::cleanup(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                &home_root,
                 &sandbox_root,
                 run_id,
             ),
             Err(e) => {
-                warn!("cleanup_run: cannot purge sandbox staging for run {run_id}: {e:#}")
+                warn!("cleanup_run: cannot merge/purge sandbox staging for run {run_id}: {e:#}")
             }
         }
     }
@@ -11010,14 +11106,20 @@ fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_lo
     Some(parse_numstat(&stdout))
 }
 
-fn augment_run_state_from_disk(run_state: &mut event_log::RunState, repo_root: &std::path::Path) {
+fn augment_run_state_from_disk(
+    run_state: &mut event_log::RunState,
+    projects_root: &std::path::Path,
+    repo_root: &std::path::Path,
+) {
     // LOC is independent of the run YAML: the run branch lives in `repo_root`,
     // not the run dir, so a missing/unparseable YAML must not suppress an
     // otherwise-valid LOC. Compute it before the YAML early-return below.
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
     // Estimated cost (#272), likewise independent of the run YAML: it reads the
-    // Claude Code transcripts under `~/.claude/projects/`, not the run dir.
-    run_state.cost = run_cost::compute_run_cost(repo_root, &run_state.run_id);
+    // Claude Code transcripts under `projects_root` (the #408 seam — the staged
+    // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
+    // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
+    run_state.cost = run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -13557,6 +13659,85 @@ mod tests {
         );
     }
 
+    /// #408 (F4): `cleanup_run` merges a sandboxed Run's staged transcripts into
+    /// `~/.claude/projects/` (recursively — subagent jsonl included, non-jsonl
+    /// siblings excluded) BEFORE the staging is purged, via the real route. This
+    /// is the tmux-independent proof that `cleanup_run` → `sandbox_run::cleanup` →
+    /// `merge_back` is wired; the synchronous cleanup merge means no waiting.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cleanup_run_merges_sandbox_transcripts_to_host() {
+        let home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "cleanup-merge";
+        // `docker rm -f` → `true` (no-op), so no real docker is ever spawned.
+        let state = test_state_with_dir_and_docker(tmp.path(), Some("true".to_string())).await;
+
+        // Seed a sandboxed (`copy`) run: RunStarted projects `sandbox=copy`.
+        append_event_with(
+            &state.db,
+            &state.event_tx,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": "sbx-obs",
+                    "input": "x",
+                    "sandbox": "copy",
+                })),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Plant a staged transcript tree: a top-level jsonl, a nested subagent
+        // jsonl (locks the recursion), and a non-jsonl sibling that must NOT land.
+        let staged_projects = home
+            .path()
+            .join(".pdo/sandbox")
+            .join(run_id)
+            .join("claude-home/projects");
+        let enc = "-some-enc-worktree";
+        let proj = staged_projects.join(enc);
+        std::fs::create_dir_all(proj.join("uuid-1/subagents")).unwrap();
+        std::fs::write(proj.join("main.jsonl"), "{\"line\":1}\n").unwrap();
+        std::fs::write(proj.join("uuid-1/subagents/side.jsonl"), "{\"line\":2}\n").unwrap();
+        std::fs::write(proj.join("notes.txt"), "not a transcript").unwrap();
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+
+        // Merged to the host projects dir, recursively, jsonl-only.
+        let host = home.path().join(".claude/projects").join(enc);
+        assert_eq!(
+            std::fs::read_to_string(host.join("main.jsonl")).unwrap(),
+            "{\"line\":1}\n",
+            "top-level transcript must be merged verbatim"
+        );
+        assert_eq!(
+            std::fs::read_to_string(host.join("uuid-1/subagents/side.jsonl")).unwrap(),
+            "{\"line\":2}\n",
+            "nested subagent transcript must be merged (recursion)"
+        );
+        assert!(
+            !host.join("notes.txt").exists(),
+            "non-jsonl siblings must NOT be merged"
+        );
+        // Staging purged after the merge; run Archived.
+        assert!(
+            !home.path().join(".pdo/sandbox").join(run_id).exists(),
+            "cleanup must purge the staging after merging"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Archived
+        );
+    }
+
     /// R2: after archive (worktree gone), `GET /nodes/<n>/io` serves the correct
     /// payload from the durable store — the shape matches the live-run contract.
     #[tokio::test]
@@ -15249,6 +15430,16 @@ mod tests {
     }
 
     async fn test_state_with_dir(dir: &std::path::Path) -> Arc<AppState> {
+        test_state_with_dir_and_docker(dir, None).await
+    }
+
+    /// Like [`test_state_with_dir`] but with an explicit `docker_cmd_override` —
+    /// e.g. `Some("true")` so a sandboxed `cleanup_run`'s `docker rm -f` is a
+    /// no-op (never spawns the real `docker`, whether or not it is installed).
+    async fn test_state_with_dir_and_docker(
+        dir: &std::path::Path,
+        docker_cmd_override: Option<String>,
+    ) -> Arc<AppState> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -15272,7 +15463,7 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override: None,
+            docker_cmd_override,
             sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,

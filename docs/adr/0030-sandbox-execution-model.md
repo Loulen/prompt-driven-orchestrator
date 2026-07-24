@@ -56,6 +56,19 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrive que par le
    paramètre de l'API `POST /runs` ; les fires de Trigger passent `off` (précédence des sources #410).
 
+9. **Observabilité (câblée #408).** `merge_back` est câblé dans le run-advance — à la **transition
+   terminale** (chokepoint `append_event`, tâche détachée pour ne pas coupler la latence/l'échec de la
+   transition, cohérent ADR-0023) **et** à `cleanup_run` (avant `teardown`, synchrone, pour capter la
+   croissance post-terminale : resume, flushs tardifs de sous-agents). Double merge = état identique
+   (copy-if-absent-or-larger idempotent). Coût (`run_cost`) et stale/AutoComplete (`stale_detector`)
+   deviennent sandbox-conscients via le seam `transcripts_root(mode, run_id, home_root, sandbox_root)`,
+   consommé par les **deux** (source unique, pas d'encodeur dupliqué — leçon #373) : Run sandboxé
+   **vivant** → le staging ; après `cleanup_run` → `~/.claude/projects/`. Dispatch **keyé sur
+   l'existence du staging dir** (pas le statut terminal : reste correct si le merge terminal best-effort
+   a échoué). `resume_run` re-arme d'abord le conteneur (`ensure_ready`-ou-échec, miroir du run-shell)
+   car sans `--restart` il est down après un reboot hôte. **session-died** reste
+   transcript-indépendante.
+
 ## Pourquoi (le trou d'auth assumé v1)
 
 Le daemon expose une API HTTP **non authentifiée**, liée à `0.0.0.0` (lib.rs, #260 CLOSED — choix
@@ -92,11 +105,6 @@ l'hôte qu'un Run hôte.
 
 ## Limites acceptées
 
-- **Observabilité en attente de #408.** `merge_back` n'est PAS câblé en #407 : coût (`run_cost`) et
-  détection stale/AutoComplete (`stale_detector`) sont **aveugles** pour un Run sandboxé (ils lisent
-  `~/.claude/projects/`, vide) ; les transcripts sont purgés au `cleanup_run`. Trou
-  d'**observabilité**, pas de correction : **session-died** (la détection critique pour la liveness)
-  est transcript-indépendante et reste vivante. #408 referme (merge_back + seam `transcripts_root`).
 - **uid hôte ≠ 1000.** `sudo` (getpwuid avant NOPASSWD) et `claude` (`os.userInfo()`) peuvent casser
   faute d'entrée `/etc/passwd` ; ubuntu:24.04 livre `ubuntu`=1000 → le cas laptop courant résout.
   Injection `/etc/passwd`+`/etc/group` différée à une issue de suivi (ne PAS éditer le Dockerfile,

@@ -290,7 +290,7 @@ struct AppState {
     service_health: Arc<ServiceHealth>,
     /// TTL cache (~10 s) of the Docker availability probe (#410), surfaced as
     /// `sandbox_docker` on `GET /settings` so the NewRunModal can gray out
-    /// `copy`/`pure` when Docker is unreachable. Lazily refreshed by
+    /// `full`/`minimal` when Docker is unreachable. Lazily refreshed by
     /// `build_settings_view` when stale — never boot-once (a user may start Docker
     /// mid-session) and never per-fetch (a `PUT` of an unrelated knob would pay a
     /// docker round-trip). The refresh runs under `spawn_blocking` + a short
@@ -2077,7 +2077,7 @@ struct CreateTriggerRequest {
     /// unbounded. Inert unless `overlap_policy == "allow"`.
     #[serde(default)]
     max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or absent/`null`
+    /// Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or absent/`null`
     /// to inherit the instance default. Read at fire time and folded into the create
     /// request's explicit tier.
     #[serde(default)]
@@ -2094,7 +2094,7 @@ fn default_overlap_policy() -> String {
 fn validate_trigger_sandbox(v: Option<&str>) -> Result<(), &'static str> {
     match v {
         Some(s) if event_log::SandboxMode::parse(s).is_none() => {
-            Err("sandbox must be `off`, `copy`, or `pure`")
+            Err("sandbox must be `off`, `full`, or `minimal`")
         }
         _ => Ok(()),
     }
@@ -3744,11 +3744,21 @@ async fn fire_one_trigger(
                 // run-level choice), so this is the sole non-`None` tier here; the
                 // chokepoint's `effective_sandbox(req.sandbox, None, default)` then
                 // resolves it against the instance default. A `None`/unparseable
-                // stored mode defers to the instance default.
-                sandbox: trigger
-                    .sandbox
-                    .as_deref()
-                    .and_then(event_log::SandboxMode::parse),
+                // stored mode defers to the instance default. #426: an unparseable
+                // stored mode is logged — the rename dropped `copy`/`pure` with no
+                // alias, and the degradation goes toward LESS isolation.
+                sandbox: trigger.sandbox.as_deref().and_then(|raw| {
+                    let parsed = event_log::SandboxMode::parse(raw);
+                    if parsed.is_none() {
+                        warn!(
+                            "trigger {} carries an unreadable `sandbox` value ({raw}); deferring to \
+                             the instance default. `copy`/`pure` were renamed to `full`/`minimal` \
+                             in #426, without alias.",
+                            trigger.id
+                        );
+                    }
+                    parsed
+                }),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -6224,8 +6234,8 @@ fn settings_field_enum(
 
 /// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
 /// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
-/// round-trip, short enough that a user who starts Docker mid-session sees `copy`/
-/// `pure` un-gray within seconds.
+/// round-trip, short enough that a user who starts Docker mid-session sees `full`/
+/// `minimal` un-gray within seconds.
 const DOCKER_PROBE_TTL: Duration = Duration::from_secs(10);
 /// Hard cap on how long the probe may block the `/settings` response (#410). A cold
 /// or wedged Docker daemon must never hang the settings page — on timeout we report
@@ -6373,7 +6383,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
-    // fetch. Advisory: it grays out `copy`/`pure`, but the run-advance fail-fast
+    // fetch. Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
     // (ADR-0030 pt 4) stays the authoritative gate.
     let docker_probe = docker_probe_cached(state).await;
 
@@ -6462,7 +6472,7 @@ async fn put_settings(
         // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
         // non-variant → 400 (fail-fast, no silent default) (#410).
         if !s.is_empty() && event_log::SandboxMode::parse(s).is_none() {
-            return bad("default_sandbox must be `off`, `copy`, or `pure`");
+            return bad("default_sandbox must be `off`, `full`, or `minimal`");
         }
     }
 
@@ -13951,7 +13961,7 @@ mod tests {
         // `docker rm -f` → `true` (no-op), so no real docker is ever spawned.
         let state = test_state_with_dir_and_docker(tmp.path(), Some("true".to_string())).await;
 
-        // Seed a sandboxed (`copy`) run: RunStarted projects `sandbox=copy`.
+        // Seed a sandboxed (`full`) run: RunStarted projects `sandbox=full`.
         append_event_with(
             &state.db,
             &state.event_tx,
@@ -13965,7 +13975,7 @@ mod tests {
                 payload: Some(serde_json::json!({
                     "pipeline_name": "sbx-obs",
                     "input": "x",
-                    "sandbox": "copy",
+                    "sandbox": "full",
                 })),
             },
         )
@@ -22926,17 +22936,17 @@ edges:
         // Stored always wins over env/default, so the effective/source assertions are
         // race-free (mirror of image_source, #411).
         let state = test_state().await;
-        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "pure"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(view["default_sandbox"]["stored"], "pure");
+        assert_eq!(view["default_sandbox"]["stored"], "minimal");
         assert_eq!(view["default_sandbox"]["source"], "stored");
-        assert_eq!(view["default_sandbox"]["effective"], "pure");
+        assert_eq!(view["default_sandbox"]["effective"], "minimal");
         assert_eq!(view["default_sandbox"]["default"], "off");
 
         // Re-GET confirms persistence.
         let reget = get_settings_json(&state).await;
-        assert_eq!(reget["default_sandbox"]["stored"], "pure");
-        assert_eq!(reget["default_sandbox"]["effective"], "pure");
+        assert_eq!(reget["default_sandbox"]["stored"], "minimal");
+        assert_eq!(reget["default_sandbox"]["effective"], "minimal");
     }
 
     #[tokio::test]
@@ -22944,7 +22954,7 @@ edges:
         // "" is the clear sentinel: accepted (not 400), resets the stored tier to null
         // so the resolver falls back to the built-in default `off` (#410).
         let state = test_state().await;
-        put_settings_resp(&state, r#"{"default_sandbox": "pure"}"#).await;
+        put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
         let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": ""}"#).await;
         assert_eq!(
             status,

@@ -49,7 +49,7 @@ pub(crate) const DOCKER_NOT_FOUND_MSG: &str =
      install Docker or set this run's sandbox to `off`";
 
 /// Message when the `docker` binary IS present but its daemon is unreachable (#410).
-/// The precise reason the availability probe grays out `copy`/`pure` in the UI. This
+/// The precise reason the availability probe grays out `full`/`minimal` in the UI. This
 /// case and `DOCKER_NOT_FOUND_MSG` both collapse to `available: false` — no action is
 /// gated on the distinction (the probe is advisory; the run-advance fail-fast, ADR-0030
 /// pt 4, stays the authoritative gate) — so the cause survives only in `reason`.
@@ -59,7 +59,7 @@ pub(crate) const DOCKER_DAEMON_UNREACHABLE_MSG: &str =
 
 /// Advisory availability of a usable Docker for sandboxed Runs (#410). `available`
 /// gates nothing on its own (the run-advance fail-fast is authoritative); it drives
-/// the NewRunModal's greying of `copy`/`pure`. `reason` carries the human-readable
+/// the NewRunModal's greying of `full`/`minimal`. `reason` carries the human-readable
 /// cause when unavailable (one of the two messages above), `None` when available.
 #[derive(Debug, Clone)]
 pub(crate) struct DockerProbe {

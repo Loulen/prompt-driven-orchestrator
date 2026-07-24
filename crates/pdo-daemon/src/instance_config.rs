@@ -49,7 +49,7 @@ pub struct InstanceConfig {
     /// SQL `NULL` so it never wins precedence. The resolver
     /// ([`crate::sandbox_image::image_source_with`]) owns the precedence.
     pub image_source: Option<String>,
-    /// Stored instance-wide default sandbox mode (`"off"` | `"copy"` | `"pure"`), or
+    /// Stored instance-wide default sandbox mode (`"off"` | `"full"` | `"minimal"`), or
     /// `None` when unset (#410). `None` falls through to the env seam
     /// ([`crate::event_log::DEFAULT_SANDBOX_ENV`]) then the built-in default (`off`,
     /// the byte-identical host path). `Some("")` is the clear sentinel — [`update`]
@@ -497,17 +497,17 @@ mod tests {
         let updated = update(
             &db,
             UpdateInstanceConfig {
-                default_sandbox: Some("pure".to_string()),
+                default_sandbox: Some("minimal".to_string()),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.default_sandbox.as_deref(), Some("pure"));
+        assert_eq!(updated.default_sandbox.as_deref(), Some("minimal"));
         // A re-read confirms persistence (not just the returned row).
         assert_eq!(
             get(&db).await.unwrap().default_sandbox.as_deref(),
-            Some("pure")
+            Some("minimal")
         );
         // Sibling knobs stay untouched.
         assert_eq!(updated.image_source, None);
@@ -521,7 +521,7 @@ mod tests {
         update(
             &db,
             UpdateInstanceConfig {
-                default_sandbox: Some("pure".to_string()),
+                default_sandbox: Some("minimal".to_string()),
                 ..Default::default()
             },
         )
@@ -550,13 +550,13 @@ mod tests {
         let updated = update(
             &db,
             UpdateInstanceConfig {
-                default_sandbox: Some("copy".to_string()),
+                default_sandbox: Some("full".to_string()),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.default_sandbox.as_deref(), Some("copy"));
+        assert_eq!(updated.default_sandbox.as_deref(), Some("full"));
     }
 
     #[tokio::test]
@@ -603,13 +603,13 @@ mod tests {
         let updated = update(
             &db,
             UpdateInstanceConfig {
-                default_sandbox: Some("pure".to_string()),
+                default_sandbox: Some("minimal".to_string()),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.default_sandbox.as_deref(), Some("pure"));
+        assert_eq!(updated.default_sandbox.as_deref(), Some("minimal"));
     }
 
     #[tokio::test]

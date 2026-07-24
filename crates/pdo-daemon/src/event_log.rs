@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeInfo {
@@ -116,7 +117,7 @@ pub enum EventKind {
     RunRenamed,
     /// Informational (#410): a sandboxed Run's image is being prepared (pull/build)
     /// at the head of the detached prep task, before the first session spawns. Emitted
-    /// only on the create path and only when the resolved mode is `copy`/`pure` (the
+    /// only on the create path and only when the resolved mode is `full`/`minimal` (the
     /// `off` path stays byte-identical). Non-terminal: `status` stays `Running`, only
     /// `RunState::sandbox_prep` moves to `pending`. Wire form: `"sandbox_prep_started"`.
     SandboxPrepStarted,
@@ -194,19 +195,23 @@ impl RunStatus {
 /// path, so flipping the mode mid-life would break `claude --continue`.
 ///
 /// - `Off` — historical host execution (no Docker, byte-identical legacy launch);
-/// - `Copy` — sandboxed, staged Claude home seeded by copying an allowlist of the
-///   host `~/.claude`;
-/// - `Pure` — sandboxed, staged Claude home seeded with credentials + trust only.
+/// - `Full` — sandboxed, staged Claude home seeded by copying an allowlist of the
+///   host `~/.claude` (ex-`copy`, renamed in #426);
+/// - `Minimal` — sandboxed, staged Claude home seeded by the staging floor alone
+///   (ex-`pure`, renamed in #426).
 ///
-/// The wire form is exactly `off`/`copy`/`pure`. `Default` is `Off` so an absent
+/// The wire form is exactly `off`/`full`/`minimal`, with **no compatibility alias**
+/// for the old `copy`/`pure` tokens (ADR-0031 §1 + ADR-0030 amendment §1): an
+/// unknown token keeps yielding `None` from [`SandboxMode::parse`], which the
+/// resolvers treat as unset and now **log** (#426). `Default` is `Off` so an absent
 /// payload field (historical runs, bare-API creates) projects to the host path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxMode {
     #[default]
     Off,
-    Copy,
-    Pure,
+    Full,
+    Minimal,
 }
 
 impl SandboxMode {
@@ -222,13 +227,13 @@ impl SandboxMode {
         matches!(self, SandboxMode::Off)
     }
 
-    /// The exact wire form: `off`/`copy`/`pure`. Mirror of `ImageSource::as_str`;
+    /// The exact wire form: `off`/`full`/`minimal`. Mirror of `ImageSource::as_str`;
     /// consumed by `build_settings_view` and the enum validators (#410).
     pub fn as_str(self) -> &'static str {
         match self {
             SandboxMode::Off => "off",
-            SandboxMode::Copy => "copy",
-            SandboxMode::Pure => "pure",
+            SandboxMode::Full => "full",
+            SandboxMode::Minimal => "minimal",
         }
     }
 
@@ -238,8 +243,8 @@ impl SandboxMode {
     pub fn parse(s: &str) -> Option<SandboxMode> {
         match s.trim().to_ascii_lowercase().as_str() {
             "off" => Some(SandboxMode::Off),
-            "copy" => Some(SandboxMode::Copy),
-            "pure" => Some(SandboxMode::Pure),
+            "full" => Some(SandboxMode::Full),
+            "minimal" => Some(SandboxMode::Minimal),
             _ => None,
         }
     }
@@ -263,9 +268,19 @@ fn env_default_sandbox() -> Option<SandboxMode> {
 /// value is treated as unset (mirror of the `""` sentinel + PUT validator). SINGLE
 /// source shared by `create_run_inner` AND `build_settings_view` (0 drift, lesson #373).
 pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
+    let stored = stored.filter(|s| !s.is_empty());
+    // #426: a stored token that no longer parses (a pre-rename `copy`/`pure` left in
+    // `instance_config`) silently demotes the whole instance to `off`. Say it out loud.
+    if let Some(raw) = stored.as_deref() {
+        if SandboxMode::parse(raw).is_none() {
+            warn!(
+                "stored default_sandbox `{raw}` is not a valid mode; falling back to the env/`off` \
+                 tier. `copy`/`pure` were renamed to `full`/`minimal` in #426, without alias."
+            );
+        }
+    }
     stored
         .as_deref()
-        .filter(|s| !s.is_empty())
         .and_then(SandboxMode::parse)
         .or_else(env_default_sandbox)
         .unwrap_or(SandboxMode::DEFAULT)
@@ -822,11 +837,21 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 // #407: isolation mode, projected once and never mutated. Absent
                 // (or malformed) → the `Off` default (host path). Never panics —
                 // this applier runs before the transition guard.
-                if let Some(sandbox) = payload
-                    .get("sandbox")
-                    .and_then(|v| serde_json::from_value::<SandboxMode>(v.clone()).ok())
-                {
-                    state.sandbox = sandbox;
+                match payload.get("sandbox") {
+                    None => {}
+                    Some(raw) => match serde_json::from_value::<SandboxMode>(raw.clone()) {
+                        Ok(sandbox) => state.sandbox = sandbox,
+                        // #426: the rename dropped `copy`/`pure` with no alias, and the
+                        // degradation goes toward LESS isolation (`Off` → host bash in
+                        // `run-shell`, `cleanup_run` skipping `merge_back`/`teardown`,
+                        // cost reading the wrong transcripts root). Silent is not an
+                        // option: ADR-0030 pt 4 forbids an unlogged host fallback.
+                        Err(_) => warn!(
+                            "run_started carries an unreadable `sandbox` value ({raw}); \
+                             projecting `off` (host path). \
+                             `copy`/`pure` were renamed to `full`/`minimal` in #426, without alias."
+                        ),
+                    },
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
@@ -940,7 +965,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             state.end_node = None;
         }
         // #410: additive image-prep visibility. Non-terminal — `status` untouched,
-        // only `sandbox_prep` moves. Emitted only for a sandboxed create (`copy`/`pure`);
+        // only `sandbox_prep` moves. Emitted only for a sandboxed create (`full`/`minimal`);
         // `off`/historical runs never carry these, so the field stays `None`.
         EventKind::SandboxPrepStarted => {
             state.sandbox_prep = Some(SandboxPrepState::Pending);
@@ -1654,11 +1679,11 @@ mod tests {
     // -- Slice A (#410): precedence resolver + instance-default helper ---------
 
     #[test]
-    fn explicit_off_beats_copy_default() {
-        // The bug #410 exists to fix: an explicit `off` must survive a `copy`/`pure`
+    fn explicit_off_beats_full_default() {
+        // The bug #410 exists to fix: an explicit `off` must survive a `full`/`minimal`
         // instance default — otherwise the default could never be overridden downward.
         assert_eq!(
-            effective_sandbox(Some(SandboxMode::Off), None, SandboxMode::Copy),
+            effective_sandbox(Some(SandboxMode::Off), None, SandboxMode::Full),
             SandboxMode::Off
         );
     }
@@ -1667,23 +1692,23 @@ mod tests {
     fn explicit_wins_over_trigger_and_default() {
         assert_eq!(
             effective_sandbox(
-                Some(SandboxMode::Pure),
-                Some(SandboxMode::Copy),
+                Some(SandboxMode::Minimal),
+                Some(SandboxMode::Full),
                 SandboxMode::Off
             ),
-            SandboxMode::Pure
+            SandboxMode::Minimal
         );
     }
 
     #[test]
     fn trigger_used_when_no_explicit() {
         assert_eq!(
-            effective_sandbox(None, Some(SandboxMode::Pure), SandboxMode::Off),
-            SandboxMode::Pure
+            effective_sandbox(None, Some(SandboxMode::Minimal), SandboxMode::Off),
+            SandboxMode::Minimal
         );
-        // A trigger's explicit `off` also stands over a `copy` instance default.
+        // A trigger's explicit `off` also stands over a `full` instance default.
         assert_eq!(
-            effective_sandbox(None, Some(SandboxMode::Off), SandboxMode::Copy),
+            effective_sandbox(None, Some(SandboxMode::Off), SandboxMode::Full),
             SandboxMode::Off
         );
     }
@@ -1691,8 +1716,8 @@ mod tests {
     #[test]
     fn all_none_falls_to_instance_default() {
         assert_eq!(
-            effective_sandbox(None, None, SandboxMode::Copy),
-            SandboxMode::Copy
+            effective_sandbox(None, None, SandboxMode::Full),
+            SandboxMode::Full
         );
         assert_eq!(
             effective_sandbox(None, None, SandboxMode::DEFAULT),
@@ -1703,8 +1728,11 @@ mod tests {
     #[test]
     fn default_sandbox_with_precedence() {
         // stored valid wins.
-        assert_eq!(default_sandbox_with(Some("pure".into())), SandboxMode::Pure);
-        assert_eq!(default_sandbox_with(Some("copy".into())), SandboxMode::Copy);
+        assert_eq!(
+            default_sandbox_with(Some("minimal".into())),
+            SandboxMode::Minimal
+        );
+        assert_eq!(default_sandbox_with(Some("full".into())), SandboxMode::Full);
         // empty sentinel → unset → default (Off) (env not set in this harness).
         assert_eq!(default_sandbox_with(Some(String::new())), SandboxMode::Off);
         // garbage → unset → default.
@@ -1718,12 +1746,32 @@ mod tests {
 
     #[test]
     fn sandbox_mode_parse_and_as_str_round_trip() {
-        for mode in [SandboxMode::Off, SandboxMode::Copy, SandboxMode::Pure] {
+        for mode in [SandboxMode::Off, SandboxMode::Full, SandboxMode::Minimal] {
             assert_eq!(SandboxMode::parse(mode.as_str()), Some(mode));
         }
         // case / whitespace tolerant, rejects unknown.
-        assert_eq!(SandboxMode::parse("  PURE "), Some(SandboxMode::Pure));
+        assert_eq!(SandboxMode::parse("  MINIMAL "), Some(SandboxMode::Minimal));
         assert_eq!(SandboxMode::parse("nope"), None);
+        // #426: the rename ships with NO compatibility alias — the pre-rename
+        // tokens are plain unknown tokens now.
+        assert_eq!(SandboxMode::parse("copy"), None);
+        assert_eq!(SandboxMode::parse("pure"), None);
+    }
+
+    /// #426: a pre-rename `copy`/`pure` in a persisted `RunStarted` degrades to
+    /// `Off` — the host path. The degradation is DELIBERATE (no alias, ADR-0031 §1)
+    /// but it goes toward LESS isolation, so `apply_run_event` logs it. This test
+    /// pins the choice so nobody "fixes" it into an alias by accident.
+    #[test]
+    fn run_started_with_a_pre_rename_sandbox_token_projects_off() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "sandbox": "copy" }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox, SandboxMode::Off);
+        assert_eq!(state.sandbox_prep, None);
     }
 
     // -- Slice E (#410): sandbox-prep projection ------------------------------
@@ -1734,7 +1782,7 @@ mod tests {
             make_event_with_payload(
                 EventKind::RunStarted,
                 None,
-                serde_json::json!({ "pipeline_name": "p", "sandbox": "pure" }),
+                serde_json::json!({ "pipeline_name": "p", "sandbox": "minimal" }),
             ),
             make_event(EventKind::SandboxPrepStarted, None, None),
         ];

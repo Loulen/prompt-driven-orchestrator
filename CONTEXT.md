@@ -823,35 +823,43 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
 > d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260) + **observabilité** (#408 : `merge_back`
 > câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale) +
-> **mode `copy` de bout en bout** (#409 : vérifie `prepare`(allowlist copy) → conteneur →
-> `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `pure` que par le seed de
+> **mode `full` de bout en bout** (#409 : vérifie `prepare`(allowlist `full`) → conteneur →
+> `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `minimal` que par le seed de
 > `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
 > l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`,
 > job release GHCR) + **exposition run-level + sources de config** (#410 : sélecteur tri-état du
 > NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
-> `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`).
+> `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`) +
+> **vocabulaire + plancher de garanties** (#426 : tri-état renommé `off` | `minimal` | `full` sans
+> alias, plancher tenu par `prepare` dans les **deux** modes — `remote-settings.json` consenti +
+> `skipDangerousModePermissionPrompt` dans le `settings.json` stagé ; **ADR-0031 §1** + amendement
+> **ADR-0030 §1**).
 
 > **Décidé au grilling 2026-07-24 (ADR-0031), pas encore en vigueur** — livré par les slices
-> post-validation du PRD : le tri-état devient `off` | `minimal` | `full` (ex-`pure`/`copy`, sans
-> alias), le plancher de staging devient une liste de **garanties**, et les valeurs non-`off`
-> deviennent des noms de **profil de staging**. Les trois termes concernés portent le même marqueur.
+> **profils** du PRD : les valeurs non-`off` deviennent des noms de **profil de staging** (liste
+> nommée, éditable, sélectionnable par Run et par Trigger), et une **entrée de profil** peut désigner
+> une exception `$HOME` hors `.claude`. Les deux termes concernés portent le même marqueur. Le
+> renommage du tri-état et le plancher de **garanties**, décidés au même grilling, sont **en vigueur**
+> depuis #426.
 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
-dans l'état du Run). Tri-état `off` | `copy` | `pure` : `off` = comportement historique (sessions
-sur l'hôte, défaut) ; `copy` / `pure` = toutes les tails du Run s'exécutent dans un conteneur dédié.
+dans l'état du Run). Tri-état `off` | `minimal` | `full` (renommé en #426, ex-`pure`/`copy`, **sans
+alias**) : `off` = comportement historique (sessions sur l'hôte, défaut) ; `minimal` / `full` =
+toutes les tails du Run s'exécutent dans un conteneur dédié.
 C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
 reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
 hôte, trou réseau/auth) → **ADR-0030 / #407**. La **source** du mode suit la précédence **choix
 explicite du Run → défaut par-Trigger → `default_sandbox` d'instance** (résolveur pur
 `effective_sandbox`, #410) ; `off` reste le plancher.
 _Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confondre avec l'attribut
-`sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport.
+`sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport ; « `copy` » /
+« `pure` » (vocabulaire mort depuis #426, aucun alias).
 
 **Staging dir (répertoire de staging)** :
 Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
-`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling (+, une fois ADR-0031
-livré, un `home/` portant les **exceptions `$HOME`** déclarées par le profil). Le vrai `~/.claude`
+`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling (+, une fois les
+**profils** livrés, un `home/` portant les **exceptions `$HOME`** déclarées par le profil). Le vrai `~/.claude`
 n'est **jamais** monté — et l'invariant s'étend au reste de `$HOME` : ce sont toujours des copies
 qui sont montées. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
 fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
@@ -873,14 +881,17 @@ plus les évolutions futures du défaut. Le nom **et** la liste résolue sont ge
 création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
 _Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template ».
 
-**Plancher de staging** _(décidé, pas encore en vigueur — ADR-0031)_ :
-Les **garanties** que `prepare` tient quel que soit le profil : credentials valides, managed
-settings de l'org **consentis** (baseline `remote-settings.json`), bypass permissions accepté,
-confiance pré-accordée à la racine du Run, `projects/` vide. Chaque garantie est satisfaite soit par
-une entrée du profil, soit par une **synthèse de repli** — c'est ce qui rend le décochage sûr sans
-l'interdire. Formulé en fichiers verrouillés, le plancher se contredirait dès `settings.json`
-(copié en `full`, synthétisé en `minimal`). _Éviter_ : « fichiers obligatoires », « liste
-verrouillée ».
+**Plancher de staging** :
+Les **garanties** que `prepare` tient dans les **deux** modes (`minimal` et `full`) — et demain quel
+que soit le **profil** : credentials valides (`.credentials.json`), managed settings de l'org
+**consentis** (copie de `~/.claude/remote-settings.json` quand elle existe), bypass permissions
+accepté (`skipDangerousModePermissionPrompt: true` **mergé** dans le `settings.json` copié en `full`,
+**synthétisé** en `minimal`), confiance pré-accordée à la racine du Run (dans le `.claude.json`
+stagé, #409), `projects/` **vide**. Chaque garantie est satisfaite soit par une **copie** de l'hôte,
+soit par une **synthèse de repli** — c'est ce qui rendra le décochage d'une entrée de profil sûr sans
+l'interdire (ADR-0031 §1). Formulé en fichiers verrouillés, le plancher se contredirait dès
+`settings.json` (copié en `full`, synthétisé en `minimal`). Réalisé en **#426**.
+_Éviter_ : « fichiers obligatoires », « liste verrouillée ».
 
 **Entrée de profil / exception `$HOME`** _(décidé, pas encore en vigueur — ADR-0031)_ :
 Une entrée est un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`).
@@ -892,22 +903,27 @@ servie par le mount `.claude`. _Éviter_ : « fichier monté » (c'est une copie
 « exclusion » pour parler d'un décochage.
 
 **`prepare(mode, run_id)`** :
-Seede le *staged Claude home* selon le mode. **`copy`** : recopie une **liste explicite** de
-`~/.claude` (skills, plugins, agents, commands, output-styles, settings[.local].json, credentials,
-`*.md` global) + `~/.claude.json` verbatim, **avec la confiance de la racine du Run mergée** dedans
-(#409 D5 — sinon un Run autonome se bloquerait sur le dialogue « trust this folder ? ») ; **exclut
-`projects/`** et tout état hôte volumineux (`history.jsonl`, `session-env/`, …). Les symlinks qui
-**sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
+Seede le *staged Claude home* selon le mode, en tenant le **plancher de staging** dans les deux cas.
+**`full`** : recopie une **liste explicite** de `~/.claude` (skills, plugins, agents, commands,
+output-styles, settings[.local].json, credentials, `*.md` global) + `~/.claude.json` verbatim ;
+**exclut `projects/`** et tout état hôte volumineux (`history.jsonl`, `session-env/`, …). Les symlinks
+qui **sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
 dangleraient dans le conteneur) ; les liens intra-arbre (`node_modules/.bin`) restent des liens. Walk
-**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. **`pure`** :
-uniquement `.credentials.json` + un `.claude.json` minimal (onboarding validé + confiance
-pré-accordée à la racine du Run). Dans les deux modes, `projects/` est créé **vide** (puits de
-transcripts runtime). Bits exécutables préservés. **Volume/PII (#409)** : `copy` pèse **~1 Go/run**
-(dominé par `plugins/*/node_modules`, requis par les serveurs MCP *in-container* — délibérément non
-strippés) et expose en plus le profil PII (`oauthAccount`/`userID`/`emailAddress`) + settings + `.md`
-globaux que `pure` retient (choix conscient, aligné sur le trou d'auth d'ADR-0030). Dette disque : le
-staging n'est purgé qu'au `cleanup_run` (surveiller vs la récurrence disque connue). _Éviter_ :
-« init », « seed » seul.
+**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. **`minimal`** :
+n'apporte **rien** en propre — `minimal` *est* le plancher. Le **plancher**, mode-agnostique, tient
+ensuite les cinq garanties : `.credentials.json` copié ; `remote-settings.json` copié de `~/.claude/`
+quand il existe (absent → no-op loggé, jamais une erreur) ; `skipDangerousModePermissionPrompt: true`
+dans le `settings.json` stagé (**mergé** non destructivement dans la copie hôte en `full`,
+**synthétisé** en `minimal` — sans quoi la session bute sur le dialogue de bypass permissions) ;
+confiance de la racine du Run mergée dans le `.claude.json` stagé (#409 D5 — sinon un Run autonome se
+bloquerait sur le dialogue « trust this folder ? ») ; `projects/` créé **vide** (puits de transcripts
+runtime). Le plancher est le **writer unique** de `remote-settings.json` et de la clé de bypass : ni
+l'un ni l'autre n'est dans l'allowlist `full`. Bits exécutables préservés. **Volume/PII (#409)** :
+`full` pèse **~1 Go/run** (dominé par `plugins/*/node_modules`, requis par les serveurs MCP
+*in-container* — délibérément non strippés) et expose en plus le profil PII
+(`oauthAccount`/`userID`/`emailAddress`) + settings + `.md` globaux que `minimal` retient (choix
+conscient, aligné sur le trou d'auth d'ADR-0030). Dette disque : le staging n'est purgé qu'au
+`cleanup_run` (surveiller vs la récurrence disque connue). _Éviter_ : « init », « seed » seul.
 
 **`merge_back(run_id)`** :
 À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de
@@ -969,7 +985,7 @@ Le réglage qui pilote d'où `ensure_image` tire l'image : `registry` (défaut, 
 fallback build) | `dockerfile` (build local direct). **Par-daemon**, jamais par-Run (à la différence
 du **mode** sandbox porté par `RunStarted`) : colonne additive `instance_config`, précédence
 `stored → env (PDO_SANDBOX_IMAGE_SOURCE) → default(registry)` (ADR-0015), éditable dans la Settings
-UI. _Éviter_ : « mode registry » (le mode = off/copy/pure), « image_source par run ».
+UI. _Éviter_ : « mode registry » (le mode = off/minimal/full), « image_source par run ».
 
 **`registry_image_ref` / `ghcr.io/loulen/pdo-sandbox`** :
 Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` — **même hash** que le ref
@@ -1048,7 +1064,7 @@ convergent), juste avant le gel du mode dans `RunStarted` (immuable, ADR-0030 pt
 « merge », « override », « fusion des modes ».
 
 **`default_sandbox` (défaut d'instance)** :
-Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`copy`/`pure`,
+Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`minimal`/`full`,
 `""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
 → default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
 /settings` (0 drift #373, miroir exact d'`image_source`). Éditable dans la Settings UI (`<select>`).
@@ -1066,7 +1082,7 @@ Check de disponibilité host (`docker version`, exit 0 = disponible ; binaire ab
 `DOCKER_NOT_FOUND_MSG` ; daemon injoignable → message dédié). **TTL-cachée** (~10 s) par-daemon,
 surfacée sur `GET /settings` comme `sandbox_docker {available, reason, checked_at}` (pas un
 `settings_field` : aucun tier stored/env/default) à côté du knob `default_sandbox`, pour un **seul**
-fetch du modal. Affordance **advisory** : grise les options `copy`/`pure` du sélecteur tri-état et
+fetch du modal. Affordance **advisory** : grise les options `minimal`/`full` du sélecteur tri-état et
 clamp sur `off` ; le fail-fast du run-advance (ADR-0030 pt 4) reste le gate **autoritaire**. Passe par
 le seam `docker_cmd_override`. _Éviter_ : « Docker health », « sandbox available » (ambigu avec le
 mode), confondre avec `ensure_image`/`probe_state` (provisionnement/liveness par-Run).
@@ -1078,15 +1094,15 @@ mode), confondre avec `ensure_image`/`probe_state` (provisionnement/liveness par
 `NodeAutoCompleteObserved`), émis au chokepoint `append_event`, **jamais** pour un Run `off`. N'altère
 **pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié). L'UI du Run
 affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge** `sandbox :
-copy|pure` persistant. _Éviter_ : « statut preparing » (écarté, pas un état de la machine à statut) ;
+minimal|full` persistant. _Éviter_ : « statut preparing » (écarté, pas un état de la machine à statut) ;
 l'inférence client (écartée : faux positifs advance-détaché/#159).
 
 ### Relations
-- Une **Sandbox** `copy`/`pure` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
+- Une **Sandbox** `minimal`/`full` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
   **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
 - `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
   supprime le staging dir.
-- Une **Sandbox** `copy`/`pure` s'exécute dans un **conteneur sandbox** (`pdo-sbx-<run-id>`)
+- Une **Sandbox** `minimal`/`full` s'exécute dans un **conteneur sandbox** (`pdo-sbx-<run-id>`)
   instancié depuis l'**image sandbox** `pdo-sandbox:h-<hash>` (garantie par `ensure_image`, #405) via
   `ensure_running` (#406) ; ses **identity mounts** rendent le chemin de travail identique
   hôte/conteneur (d'où le même dirname encodé pour `merge_back`), et toutes les tails y entrent par le
@@ -1101,8 +1117,8 @@ l'inférence client (écartée : faux positifs advance-détaché/#159).
   (`run_cost`) + stale (`stale_detector`) via le seam `transcripts_root` (staging si Run sandboxé
   vivant, `~/.claude/projects/` sinon) ; garde `ensure_ready`-ou-échec ajouté à `resume_run` (re-arme
   le conteneur après reboot hôte).
-- **Vérifié e2e (#409)** : le mode `copy` tourne le **même câblage mode-agnostique** que #407 (aucun
-  net-new run-advance) ; il ne diffère de `pure` que par le seed de `prepare` — deref des symlinks
+- **Vérifié e2e (#409)** : le mode `full` tourne le **même câblage mode-agnostique** que #407 (aucun
+  net-new run-advance) ; il ne diffère de `minimal` que par le seed de `prepare` — deref des symlinks
   **échappants** (les skills liés à `~/.agents` ne danglent plus), walk **best-effort**, et confiance
   `repo_root` mergée dans le `.claude.json` copié (D5). Aucune écriture de config ne revient vers
   l'hôte (`merge_back` reste jsonl-only). Couvert par unit + 4 tests layer-3 (`sandbox_tracer`) + le
@@ -1124,9 +1140,21 @@ l'inférence client (écartée : faux positifs advance-détaché/#159).
   `Option<SandboxMode>` (absent ≠ `off` explicite) ; `default_sandbox` colonne `instance_config`
   (résolveur `default_sandbox_with`, `stored → env → default(off)`) ; défaut par-Trigger colonne
   nullable `sandbox` (clearable `deserialize_double_option`, précédent #239). **Sonde Docker** advisory
-  (`GET /settings.sandbox_docker`, TTL-cachée) → grise `copy`/`pure` du sélecteur. **Visibilité prep**
+  (`GET /settings.sandbox_docker`, TTL-cachée) → grise `minimal`/`full` du sélecteur. **Visibilité prep**
   via événements additifs `SandboxPrepStarted`/`Ready` → `RunState.sandbox_prep` (badge + bannière).
   Testé layer-1 (résolveur pur) + unit (settings/probe) + FE (vitest) + FP-410 (L5, Docker réel).
+- **Réalisé (#426, ADR-0031 §1 + amendement ADR-0030 §1)** : **vocabulaire + plancher de garanties**.
+  Le tri-état est renommé `off` | `minimal` | `full`, **sans alias** de compatibilité (aucune valeur
+  persistée dans l'instance prod ni dev — les colonnes `default_sandbox`/`triggers.sandbox` n'y
+  existent même pas ; un alias n'aurait servi que des instances de validation jetables) ; un token
+  inconnu garde `parse() → None` et est désormais **loggé** aux trois décodeurs (projection
+  `RunStarted`, `default_sandbox_with`, tir de Trigger) — la dégradation va vers **moins**
+  d'isolation, elle ne doit pas être silencieuse. `prepare` tient le **plancher** dans les deux modes,
+  en deux phases (profil puis `enforce_staging_floor` mode-agnostique) : `minimal` est un bras de
+  `match` **vide**. Restent à livrer par les slices **profils** : le profil de staging lui-même (liste
+  nommée/éditable/sélectionnable, diff `disabled`/`extras`, défauts virtuels, gel dans `RunStarted`,
+  échec fort sur nom inconnu — ADR-0031 §2/§5/§6/§7), les **exceptions `$HOME`** (§3/§4, amendement
+  ADR-0030 §2/§3) et le réglage `dockerfile_path` (amendement ADR-0030 §5).
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
   (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).

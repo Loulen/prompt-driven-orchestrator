@@ -331,7 +331,7 @@ fn plant_transcript(
 // -- Test 1: cost reads the staged home while a sandboxed run is live ----------
 
 #[tokio::test]
-async fn cost_reads_staging_during_pure_run() {
+async fn cost_reads_staging_during_minimal_run() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
@@ -346,7 +346,7 @@ async fn cost_reads_staging_during_pure_run() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     // The worker reaches Running with a live (sleeping) session; its staging is
     // seeded by the eager prep.
     wait_node_status(&daemon, &run_id, "running").await;
@@ -389,7 +389,7 @@ async fn cost_reads_staging_during_pure_run() {
 // -- Test 2: stale-detection reads the staged home while live ------------------
 
 #[tokio::test]
-async fn stale_detection_reads_staging_during_pure_run() {
+async fn stale_detection_reads_staging_during_minimal_run() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
@@ -404,7 +404,7 @@ async fn stale_detection_reads_staging_during_pure_run() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
         wait_until(|| staging_projects(&daemon, &run_id)
@@ -453,7 +453,7 @@ async fn terminal_merges_staging_into_host_claude_projects() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
         wait_until(|| staging_projects(&daemon, &run_id)
@@ -517,7 +517,7 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
         wait_until(|| staging_projects(&daemon, &run_id)
@@ -604,7 +604,7 @@ async fn resume_reengages_seam_and_ensures_container() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
@@ -649,7 +649,7 @@ async fn resume_fails_loud_when_docker_unavailable() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_run_status(&daemon, &run_id, "failed").await;
 
     let resp = post_command(

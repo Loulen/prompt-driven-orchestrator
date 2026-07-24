@@ -14,7 +14,7 @@
 //!   stale-detection/coût vers le staging (seam [`crate::sandbox_run::transcripts_root`]).
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
-//! - **`copy` = allowlist, jamais denylist.** Copier « tout `~/.claude` sauf
+//! - **`full` = allowlist, jamais denylist.** Copier « tout `~/.claude` sauf
 //!   `projects/` » embarquerait tout l'état hôte transitoire (`history.jsonl`,
 //!   `session-env/`, `file-history/`…) — fuite d'isolation + fragile aux futures
 //!   versions de Claude Code. On copie une liste explicite.
@@ -33,9 +33,14 @@
 //!   `projects/<enc>/<uuid>/subagents/*.jsonl` (profondeur 9). Le copy-set doit
 //!   *égaler* le read-set de [`crate::run_cost`] (`collect_jsonl_recursive`),
 //!   sinon le coût des runs sandboxés est sous-estimé (régression silencieuse).
-//! - **`pure` seede la confiance.** `{"hasCompletedOnboarding":true}` seul
-//!   désarme l'onboarding mais PAS le dialogue « trust this folder ? » — un agent
-//!   non surveillé se bloquerait. On pré-approuve la racine du Run.
+//! - **Le plancher de staging est mode-agnostique** (#426, ADR-0031 §1).
+//!   [`prepare`] est en **deux phases** : matérialisation du profil (ce que `full`
+//!   apporte en plus), puis [`enforce_staging_floor`] qui tient **cinq garanties**
+//!   dans les deux modes — chacune satisfaite soit par une copie de l'hôte, soit
+//!   par une synthèse de repli. `minimal` est donc un **bras de `match` vide** :
+//!   `minimal`, c'est exactement le plancher. Les trois garanties qui désarment un
+//!   dialogue bloquant (confiance, managed settings de l'org, bypass permissions)
+//!   ne sont pas cosmétiques : un agent non surveillé se figerait dessus.
 
 // #408: `merge_back` is now wired; the rest of the module (path-math + effects)
 // is consumed by #406/#407.
@@ -44,27 +49,50 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Comment le *staged Claude home* d'un Run est seedé. `off` (PRD) n'est PAS une
 /// variante : le caller skippe simplement [`prepare`] (pas de branche no-op dans
-/// la couche fs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// la couche fs). Interne au daemon : jamais sérialisé (le tri-état wire/persisté
+/// est [`crate::event_log::SandboxMode`]) — d'où l'absence de derive serde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
-    Copy,
-    Pure,
+    /// Réplique de l'hôte : allowlist de `~/.claude` + `~/.claude.json` verbatim.
+    Full,
+    /// Rien en propre — `minimal` **est** le plancher ([`enforce_staging_floor`]).
+    Minimal,
 }
 
-/// Fichiers de config top-level de `~/.claude` recopiés en mode `copy` (en plus
+/// Fichiers de config top-level de `~/.claude` recopiés en mode `full` (en plus
 /// des `*.md` captés par glob). `.credentials.json` préserve son mode 0600 via
 /// [`std::fs::copy`].
-const COPY_ALLOWLIST_FILES: &[&str] =
+///
+/// N.B. [`REMOTE_SETTINGS_FILE`] n'y est **pas** : le plancher en est le writer
+/// unique, dans les deux modes (#426). L'y ajouter donnerait, à la slice
+/// « profils », une entrée décochable que le plancher réinjecterait aussitôt.
+const FULL_ALLOWLIST_FILES: &[&str] =
     &["settings.json", "settings.local.json", ".credentials.json"];
 
-/// Dossiers de `~/.claude` recopiés en mode `copy` (walk préservant symlinks +
+/// Dossiers de `~/.claude` recopiés en mode `full` (walk préservant symlinks +
 /// bits exécutables). `projects/` est délibérément absent : jamais copié.
-const COPY_ALLOWLIST_DIRS: &[&str] = &["skills", "plugins", "agents", "commands", "output-styles"];
+const FULL_ALLOWLIST_DIRS: &[&str] = &["skills", "plugins", "agents", "commands", "output-styles"];
+
+/// Baseline de managed settings poussée par l'organisation, cachée par Claude Code
+/// dans `~/.claude/`. Garantie G2 : recopiée dans les **deux** modes, jamais via
+/// [`FULL_ALLOWLIST_FILES`]. Sans elle, la session bute sur le dialogue
+/// « managed settings require approval » (le consentement est comparé au contenu
+/// de ce fichier) et un Run autonome reste planté.
+const REMOTE_SETTINGS_FILE: &str = "remote-settings.json";
+
+/// Le `settings.json` du home stagé — porteur de la garantie G3.
+const SETTINGS_FILE: &str = "settings.json";
+
+/// Clé top-level qui désarme le prompt de confirmation du
+/// `--dangerously-skip-permissions`. Garantie G3 : un agent non surveillé s'y
+/// bloque. Résolue par un **OU monotone** sur les tiers de settings, donc un
+/// `true` dans le `settings.json` stagé suffit — et un `false` hôte doit être
+/// **écrasé** (d'où `insert` et non `entry().or_insert()`).
+const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
 
 // -- path math (pur, sans IO) ------------------------------------------------
 
@@ -92,12 +120,24 @@ pub(crate) fn staged_claude_json(sandbox_root: &Path, run_id: &str) -> PathBuf {
 
 /// Seede le *staged Claude home* et renvoie sa racine (`<sandbox_root>/<run_id>`).
 ///
-/// Idempotent (`create_dir_all` ; copy-or-overwrite). `trusted_root` : racine à
-/// pré-approuver dans le `.claude.json`. En mode `pure`, `None` = objet nu. En
-/// mode `copy` (#409), une racine fournie est **mergée** dans le `.claude.json`
-/// hôte copié (les autres clés/projets préservés, 0600 réappliqué) — le repo du
-/// Run est ainsi trusté même si l'hôte ne l'avait jamais ouvert (sinon un Run
-/// autonome se bloquerait sur le dialogue « trust this folder ? »).
+/// **Deux phases** (#426, ADR-0031 §1) :
+/// 1. *matérialisation du profil* — ce que `full` apporte **en plus** ; `minimal`
+///    n'apporte rien en propre ;
+/// 2. *[`enforce_staging_floor`]* — mode-agnostique, tient les **cinq garanties**
+///    (credentials, managed settings de l'org, bypass permissions, confiance sur
+///    `trusted_root` + onboarding, `projects/` vide).
+///
+/// La phase 2 tourne **après** le match, jamais dedans : le plancher est un
+/// *check-then-repair* sur ce qui est effectivement posé sur disque (« satisfaite
+/// soit par une copie de l'hôte, soit par une synthèse de repli » n'est décidable
+/// qu'à ce moment-là). Le double write sur `settings.json` en `full` (copié par le
+/// profil, puis mergé par le plancher) est **voulu** : le plancher est merge-aware,
+/// il ne doit pas être mode-aware.
+///
+/// Idempotent (`create_dir_all` ; copy-or-overwrite ; merges non destructifs) et
+/// **additif** — jamais de suppression (ADR-0031 §6). `trusted_root` : racine à
+/// pré-approuver dans le `.claude.json` stagé ; `None` = pas de bloc `projects`
+/// (le reste du plancher est tenu quand même).
 pub(crate) fn prepare(
     home_root: &Path,
     sandbox_root: &Path,
@@ -111,58 +151,132 @@ pub(crate) fn prepare(
         .with_context(|| format!("create staged claude home {}", home.display()))?;
 
     let src = home_root.join(".claude");
+    let staged_json = staged_claude_json(sandbox_root, run_id);
 
+    // -- PHASE 1 : matérialisation du profil ---------------------------------
     match mode {
-        Mode::Copy => {
-            // Allowlist top-level : `*.md` (capte CLAUDE.md + imports siblings type
-            // RTK.md) + les fichiers de config nommés (0600 des creds préservé).
-            copy_top_level_md(&src, &home)?;
-            for name in COPY_ALLOWLIST_FILES {
-                copy_file_if_present(&src.join(name), &home.join(name))?;
-            }
-            // Allowlist dirs : walk préservant les symlinks intra-arbre + mode,
-            // déréférençant les liens échappants (#409). `projects/` EXCLU.
-            // `copy_root` = la racine canonique `~/.claude` : tout symlink dont la
-            // cible sort de cet arbre est copié déréférencé (sa cible réelle n'est
-            // ni copiée ni montée → danglerait). Best-effort par entrée.
-            let copy_root = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
-            for name in COPY_ALLOWLIST_DIRS {
-                let dir_src = src.join(name);
-                if dir_src.is_dir() {
-                    copy_tree_preserving(&dir_src, &home.join(name), &copy_root, 0);
-                }
-            }
-            // `.claude.json` sibling, verbatim (mode préservé). Chemin explicite :
-            // c'est un dotfile, un glob `*` sans dotglob le raterait.
-            copy_file_if_present(
-                &home_root.join(".claude.json"),
-                &staged_claude_json(sandbox_root, run_id),
-            )?;
-            // D5 (#409) : garantir que le repo du Run est trusté. `copy` s'appuie
-            // sur le `.claude.json` hôte, qui peut n'avoir jamais ouvert ce repo →
-            // Run autonome bloqué sur le dialogue de confiance. Merge non-destructif.
-            if let Some(root) = trusted_root {
-                seed_trust_in_claude_json(&staged_claude_json(sandbox_root, run_id), root)?;
-            }
-        }
-        Mode::Pure => {
-            // Auth = `.credentials.json` seul (`oauthAccount`/`userID` de
-            // `.claude.json` sont du cache profil PII inutile).
-            copy_file_if_present(
-                &src.join(".credentials.json"),
-                &home.join(".credentials.json"),
-            )?;
-            write_pure_claude_json(&staged_claude_json(sandbox_root, run_id), trusted_root)?;
-        }
+        Mode::Full => materialise_full(&src, home_root, &home, &staged_json)?,
+        // `minimal` EST le plancher : rien en propre, par construction.
+        Mode::Minimal => {}
     }
 
-    // Les deux modes : `projects/` créé VIDE (puits de transcripts runtime). Ni
+    // -- PHASE 2 : plancher, mode-agnostique --------------------------------
+    enforce_staging_floor(&src, &home, &staged_json, trusted_root)?;
+
+    Ok(staging)
+}
+
+/// Phase 1 du mode `full` : réplique de l'hôte (allowlist `~/.claude` +
+/// `~/.claude.json` verbatim). N'inclut **aucune** garantie du plancher — celui-ci
+/// tourne juste après, dans les deux modes.
+fn materialise_full(src: &Path, home_root: &Path, home: &Path, staged_json: &Path) -> Result<()> {
+    // Allowlist top-level : `*.md` (capte CLAUDE.md + imports siblings type
+    // RTK.md) + les fichiers de config nommés (0600 des creds préservé).
+    copy_top_level_md(src, home)?;
+    for name in FULL_ALLOWLIST_FILES {
+        copy_file_if_present(&src.join(name), &home.join(name))?;
+    }
+    // Allowlist dirs : walk préservant les symlinks intra-arbre + mode,
+    // déréférençant les liens échappants (#409). `projects/` EXCLU.
+    // `copy_root` = la racine canonique `~/.claude` : tout symlink dont la
+    // cible sort de cet arbre est copié déréférencé (sa cible réelle n'est
+    // ni copiée ni montée → danglerait). Best-effort par entrée.
+    let copy_root = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    for name in FULL_ALLOWLIST_DIRS {
+        let dir_src = src.join(name);
+        if dir_src.is_dir() {
+            copy_tree_preserving(&dir_src, &home.join(name), &copy_root, 0);
+        }
+    }
+    // `.claude.json` sibling, verbatim (mode préservé). Chemin explicite :
+    // c'est un dotfile, un glob `*` sans dotglob le raterait. La confiance et
+    // l'onboarding y sont mergés ensuite par le plancher (G4).
+    copy_file_if_present(&home_root.join(".claude.json"), staged_json)?;
+    Ok(())
+}
+
+/// **Le plancher de staging** (#426, ADR-0031 §1) : les garanties que `prepare`
+/// tient dans les **deux** modes — et demain quel que soit le profil. Chacune est
+/// satisfaite soit par une **copie de l'hôte** (phase 1 ou ici), soit par une
+/// **synthèse de repli**. Écrit exclusivement dans le staging ; ne touche jamais
+/// l'hôte.
+///
+/// - **G1 credentials** — `.credentials.json` copié (0600 préservé par
+///   [`std::fs::copy`]). Absent hôte → no-op (l'auth échouera plus loin, ce n'est
+///   pas à `prepare` d'en juger).
+/// - **G2 managed settings de l'org** — [`REMOTE_SETTINGS_FILE`] copié verbatim.
+///   Absent hôte → `info!` + no-op (cas majoritaire : install sans org ; un `warn!`
+///   par Run entraînerait à ignorer les warnings). Présent mais copie en échec →
+///   erreur **dure** : c'est une surprise de conformité, pas un détail.
+/// - **G3 bypass permissions** — [`BYPASS_PERMISSIONS_KEY`] à `true` dans le
+///   `settings.json` stagé : **mergé** dans la copie hôte en `full`, **synthétisé**
+///   en `minimal`. Fichier corrompu/non-objet → `warn!` + remplacé (symétrie avec
+///   G4 : durcir ferait qu'un seul caractère malformé dans `~/.claude/settings.json`
+///   empêcherait **tout** Run sandboxé).
+/// - **G4 baseline `.claude.json`** — `hasCompletedOnboarding` (défaut défensif,
+///   `or_insert`) + confiance sur `trusted_root` si fournie, 0600 réappliqué.
+///   Inconditionnelle : `sandbox_container` monte ce chemin **toujours**, donc ne
+///   rien écrire laisserait Docker créer un *répertoire* par-dessus
+///   `$HOME/.claude.json`.
+/// - **G5 puits de transcripts** — `projects/` créé **vide**.
+///
+/// Politique d'écriture : **fail-fast**. `prepare` tourne avant l'existence du
+/// conteneur ; une garantie intenable doit échouer là, pas produire un Run qui pend
+/// sur un dialogue sans personne devant. Ni le best-effort de
+/// [`copy_tree_preserving`] (arbre de 1 Go volatil) ni l'avalage de
+/// [`copy_jsonl_tree`] (transition terminale, ADR-0023) ne s'appliquent ici.
+fn enforce_staging_floor(
+    src: &Path,
+    home: &Path,
+    staged_json: &Path,
+    trusted_root: Option<&Path>,
+) -> Result<()> {
+    // G1 — auth. En `minimal`, c'est la seule chose copiée de `~/.claude`
+    // (`oauthAccount`/`userID` de `.claude.json` sont du cache profil PII inutile).
+    copy_file_if_present(
+        &src.join(".credentials.json"),
+        &home.join(".credentials.json"),
+    )?;
+
+    // G2 — baseline de managed settings de l'org, writer UNIQUE (jamais l'allowlist).
+    let remote_src = src.join(REMOTE_SETTINGS_FILE);
+    if remote_src.exists() {
+        let remote_dst = home.join(REMOTE_SETTINGS_FILE);
+        std::fs::copy(&remote_src, &remote_dst).with_context(|| {
+            format!(
+                "stage org managed settings {} -> {}",
+                remote_src.display(),
+                remote_dst.display()
+            )
+        })?;
+    } else {
+        // Cas majoritaire (install sans organisation). `info!` et non `debug!` : le
+        // filtre par défaut du daemon est `pdo_daemon=info,info` (`main.rs`).
+        info!(
+            "sandbox staging: no {REMOTE_SETTINGS_FILE} at {} — nothing to consent to (no-op)",
+            remote_src.display()
+        );
+    }
+
+    // G3 — bypass permissions. `insert` (pas `entry().or_insert()`) : un `false`
+    // hôte doit être écrasé, sinon l'agent se bloque sur le prompt. Pas de `chmod`
+    // (ce n'est pas un secret ; `fs::write` tronque en place et préserve donc le
+    // mode hôte en `full`) et pas de tmp+rename : aucun lecteur concurrent n'existe
+    // avant le conteneur — contrairement à `merge_back`/`atomic_copy_into`.
+    edit_json_object(&home.join(SETTINGS_FILE), "staged settings.json", |obj| {
+        obj.insert(BYPASS_PERMISSIONS_KEY.to_string(), serde_json::json!(true));
+    })?;
+
+    // G4 — baseline du `.claude.json` stagé (onboarding + confiance).
+    ensure_claude_json_baseline(staged_json, trusted_root)?;
+
+    // G5 — `projects/` créé VIDE (puits de transcripts runtime). Ni
     // `~/.claude/projects/` ni le sous-dir encodé n'existent pour un run frais.
     let projects = home.join("projects");
     std::fs::create_dir_all(&projects)
         .with_context(|| format!("create staged projects sink {}", projects.display()))?;
 
-    Ok(staging)
+    Ok(())
 }
 
 /// Récupère les transcripts (`projects/**/*.jsonl`) du staging vers
@@ -175,12 +289,12 @@ pub(crate) fn prepare(
 ///
 /// **Best-effort** : tolère tout échec `read_dir`/`copy` sans jamais faire échouer
 /// l'appelant (la transition terminale du Run ne doit pas dépendre de ce merge).
-/// `projects/` staging absent (mode `pure`, run sans session) = no-op propre.
+/// `projects/` staging absent (run sans session) = no-op propre.
 pub(crate) fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result<()> {
     let src = staged_claude_home(sandbox_root, run_id).join("projects");
     let dest = home_root.join(".claude").join("projects");
     if !src.is_dir() {
-        return Ok(()); // pure / rien écrit
+        return Ok(()); // rien écrit
     }
     let Ok(entries) = std::fs::read_dir(&src) else {
         return Ok(());
@@ -254,34 +368,90 @@ fn copy_file_if_present(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Écrit le `.claude.json` du mode `pure` (chmod 0600). `Some(root)` seede la
-/// confiance de la racine (héritée par les descendants → couvre les worktrees de
-/// nodes) ; `None` → objet nu `{"hasCompletedOnboarding":true}`.
-fn write_pure_claude_json(dst: &Path, trusted_root: Option<&Path>) -> Result<()> {
-    let value = match trusted_root {
-        Some(root) => {
-            let key = root.to_string_lossy().into_owned();
-            serde_json::json!({
-                "hasCompletedOnboarding": true,
-                "projects": {
-                    key: {
-                        "hasTrustDialogAccepted": true,
-                        "hasCompletedProjectOnboarding": true,
-                    }
-                }
-            })
-        }
-        None => serde_json::json!({ "hasCompletedOnboarding": true }),
+/// *Lire-comme-objet-ou-dégrader → muter → écrire pretty.* La **politique de
+/// dégradation unique** du module (#426) : fichier absent ou illisible → objet vide
+/// (synthèse) ; objet → merge ; JSON valide mais **pas** un objet, ou corrompu →
+/// `warn!` + objet vide. `what` nomme le fichier dans les logs et les erreurs.
+///
+/// Volontairement sans paramètre de mode de fichier : la confidentialité reste au
+/// callsite (0600 pour le `.claude.json`, rien pour le `settings.json`), là où
+/// l'asymétrie est décidée.
+fn edit_json_object(
+    path: &Path,
+    what: &str,
+    mutate: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Result<()> {
+    let mut value = match std::fs::read_to_string(path) {
+        Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
+            warn!(
+                "sandbox staging: {what} at {} is not valid JSON ({e}); replacing with a synthesised object",
+                path.display()
+            );
+            serde_json::json!({})
+        }),
+        Err(_) => serde_json::json!({}),
     };
-    let body = serde_json::to_string_pretty(&value).context("serialize pure .claude.json")?;
-    if let Some(parent) = dst.parent() {
+    if !value.is_object() {
+        warn!(
+            "sandbox staging: {what} at {} is not a JSON object; replacing with a synthesised object",
+            path.display()
+        );
+        value = serde_json::json!({});
+    }
+    let obj = value.as_object_mut().expect("value forced to object above");
+    mutate(obj);
+
+    let body = serde_json::to_string_pretty(&value).with_context(|| format!("serialize {what}"))?;
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create parent {}", parent.display()))?;
     }
-    std::fs::write(dst, body)
-        .with_context(|| format!("write pure .claude.json {}", dst.display()))?;
-    set_mode_0600(dst)?;
+    std::fs::write(path, body).with_context(|| format!("write {what} {}", path.display()))?;
     Ok(())
+}
+
+/// Garantie **G4** du plancher : le `.claude.json` stagé porte
+/// `hasCompletedOnboarding` et, si `trusted_root` est fournie, la confiance de cette
+/// racine (héritée par les descendants → couvre les worktrees de nodes). Merge non
+/// destructif dans le fichier hôte copié en `full` (profil `oauthAccount`, autres
+/// repos trustés… préservés) ; synthèse en `minimal`. 0600 réappliqué (le fichier
+/// peut porter un token).
+///
+/// `hasCompletedOnboarding` en `or_insert` (**défaut défensif** : une valeur hôte
+/// existante est respectée) mais les deux drapeaux de confiance en `insert` (ce sont
+/// des **garanties** : un `false` bloquerait un Run autonome).
+fn ensure_claude_json_baseline(path: &Path, trusted_root: Option<&Path>) -> Result<()> {
+    edit_json_object(path, "staged .claude.json", |obj| {
+        obj.entry("hasCompletedOnboarding")
+            .or_insert_with(|| serde_json::json!(true));
+        let Some(root) = trusted_root else {
+            return; // pas de bloc `projects` — objet nu (hors `full`, où l'hôte le porte)
+        };
+        let projects = obj
+            .entry("projects")
+            .or_insert_with(|| serde_json::json!({}));
+        if !projects.is_object() {
+            *projects = serde_json::json!({});
+        }
+        let projects = projects.as_object_mut().expect("projects forced to object");
+        let key = root.to_string_lossy().into_owned();
+        let entry = projects.entry(key).or_insert_with(|| serde_json::json!({}));
+        if !entry.is_object() {
+            *entry = serde_json::json!({});
+        }
+        let entry = entry
+            .as_object_mut()
+            .expect("project entry forced to object");
+        entry.insert(
+            "hasTrustDialogAccepted".to_string(),
+            serde_json::json!(true),
+        );
+        entry.insert(
+            "hasCompletedProjectOnboarding".to_string(),
+            serde_json::json!(true),
+        );
+    })?;
+    set_mode_0600(path)
 }
 
 /// `chmod 0600` (le `.claude.json` généré contient un token potentiel côté
@@ -426,59 +596,6 @@ fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
     // else : échappant non-régulier (socket/fifo) → skip.
 }
 
-/// Merge non-destructif d'une confiance pour `trusted_root` dans le `.claude.json`
-/// (existant ou frais) du staging `copy` (#409, D5). Préserve toutes les autres
-/// clés/projets (profil `oauthAccount`, autres repos trustés…) et réapplique 0600
-/// (le fichier peut porter un token). Un `.claude.json` illisible/corrompu est
-/// remplacé par un objet nu + la confiance (dégradation gracieuse, pas d'échec dur).
-fn seed_trust_in_claude_json(path: &Path, trusted_root: &Path) -> Result<()> {
-    let mut value = match std::fs::read_to_string(path) {
-        Ok(body) => serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({})),
-        Err(_) => serde_json::json!({}),
-    };
-    if !value.is_object() {
-        value = serde_json::json!({});
-    }
-    let obj = value.as_object_mut().expect("value forced to object above");
-    // Onboarding : défensif, aligne `copy` sur la garantie `pure` sans écraser une
-    // valeur hôte existante.
-    obj.entry("hasCompletedOnboarding")
-        .or_insert_with(|| serde_json::json!(true));
-    let projects = obj
-        .entry("projects")
-        .or_insert_with(|| serde_json::json!({}));
-    if !projects.is_object() {
-        *projects = serde_json::json!({});
-    }
-    let projects = projects.as_object_mut().expect("projects forced to object");
-    let key = trusted_root.to_string_lossy().into_owned();
-    let entry = projects.entry(key).or_insert_with(|| serde_json::json!({}));
-    if !entry.is_object() {
-        *entry = serde_json::json!({});
-    }
-    let entry = entry
-        .as_object_mut()
-        .expect("project entry forced to object");
-    entry.insert(
-        "hasTrustDialogAccepted".to_string(),
-        serde_json::json!(true),
-    );
-    entry.insert(
-        "hasCompletedProjectOnboarding".to_string(),
-        serde_json::json!(true),
-    );
-
-    let body = serde_json::to_string_pretty(&value).context("serialize copy .claude.json")?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create parent {}", parent.display()))?;
-    }
-    std::fs::write(path, body)
-        .with_context(|| format!("write copy .claude.json {}", path.display()))?;
-    set_mode_0600(path)?;
-    Ok(())
-}
-
 /// Recopie récursivement les `*.jsonl` de `src_dir` vers `dest_dir`, copy-if-
 /// absent-or-larger, atomiquement. Miroir de
 /// [`crate::run_cost`]'s `collect_jsonl_recursive` (même prédicat `is_dir` +
@@ -568,6 +685,15 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
     }
 
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// Contenu de la baseline org fabriquée par [`fabricate_home`]. Un *stand-in*
+    /// : le vrai `~/.claude/remote-settings.json` porte un bearer OTEL de l'org et
+    /// ne doit jamais apparaître dans un test, un log ou un artefact (#426).
+    const ORG_BASELINE: &str = r#"{"org":"baseline"}"#;
+
     /// Construit un faux `~/.claude` réaliste sous `<home>/.claude` + le sibling
     /// `<home>/.claude.json`, couvrant l'allowlist, un symlink, un exécutable,
     /// des creds 0600, ET de l'état hôte volumineux qui doit rester EXCLU.
@@ -596,6 +722,11 @@ mod tests {
         // Allowlist files.
         write(&claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
         write(&claude.join("settings.local.json"), r#"{"local":true}"#);
+        // Baseline de managed settings de l'org — hors allowlist, stagée par le
+        // plancher (G2) dans les DEUX modes. Miroir de la fixture couche 3
+        // (`sandbox_tracer::fabricate_host_claude`) : les deux doivent dériver
+        // ensemble.
+        write(&claude.join(REMOTE_SETTINGS_FILE), ORG_BASELINE);
         write_mode(
             &claude.join(".credentials.json"),
             r#"{"token":"secret"}"#,
@@ -638,10 +769,10 @@ mod tests {
         );
     }
 
-    // -- prepare (copy) ------------------------------------------------------
+    // -- prepare (full) ------------------------------------------------------
 
     #[test]
-    fn prepare_copy_reproduces_allowlist_and_excludes_projects() {
+    fn prepare_full_reproduces_allowlist_and_excludes_projects() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
@@ -649,7 +780,7 @@ mod tests {
         let staging = prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             None,
         )
@@ -677,12 +808,19 @@ mod tests {
             "*.md siblings captés par glob"
         );
 
-        // `.claude.json` sibling copié verbatim (hors claude-home/).
+        // `.claude.json` sibling copié depuis l'hôte (hors claude-home/), puis
+        // repris par G4 : les clés hôte survivent, l'onboarding est ajouté. Le
+        // fichier n'est PLUS byte-identique à l'hôte depuis #426 (G4 est
+        // inconditionnelle) — mais rien de l'hôte n'est perdu.
         let staged_json = staged_claude_json(sandbox_dir.path(), "run1");
         assert!(staged_json.is_file());
-        assert_eq!(
-            std::fs::read_to_string(&staged_json).unwrap(),
-            r#"{"host":"profile","oauthAccount":{"x":1}}"#
+        let json = read_json(&staged_json);
+        assert_eq!(json["host"], serde_json::json!("profile"));
+        assert_eq!(json["oauthAccount"]["x"], serde_json::json!(1));
+        assert_eq!(json["hasCompletedOnboarding"], serde_json::json!(true));
+        assert!(
+            json.get("projects").is_none(),
+            "trusted_root None → aucun bloc projects ajouté"
         );
         assert!(
             !home.join(".claude.json").exists(),
@@ -701,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_copy_preserves_symlinks_and_exec_bit() {
+    fn prepare_full_preserves_symlinks_and_exec_bit() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
@@ -709,7 +847,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             None,
         )
@@ -735,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_copy_ignores_missing_entries() {
+    fn prepare_full_ignores_missing_entries() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         // Home minimal : uniquement settings.json, aucun autre membre de l'allowlist.
@@ -745,7 +883,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             None,
         )
@@ -754,12 +892,26 @@ mod tests {
         assert!(home.join("settings.json").is_file());
         assert!(!home.join("skills").exists());
         assert!(!home.join(".credentials.json").exists());
-        assert!(!staged_claude_json(sandbox_dir.path(), "run1").exists());
         assert!(home.join("projects").is_dir());
+        // G3 : le `settings.json` hôte était `{}` → la clé de bypass y est ajoutée.
+        assert_eq!(
+            read_json(&home.join(SETTINGS_FILE)),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
+        // G4 est INCONDITIONNELLE depuis #426 : sans elle, l'hôte n'ayant pas de
+        // `~/.claude.json`, rien n'était stagé — et `sandbox_container` monte ce
+        // chemin toujours, donc Docker créait un *répertoire* par-dessus
+        // `$HOME/.claude.json`. Le plancher ferme ce footgun.
+        let staged_json = staged_claude_json(sandbox_dir.path(), "run1");
+        assert_eq!(
+            read_json(&staged_json),
+            serde_json::json!({ "hasCompletedOnboarding": true })
+        );
+        assert_eq!(mode_of(&staged_json), 0o600);
     }
 
     #[test]
-    fn prepare_copy_dereferences_escaping_symlink() {
+    fn prepare_full_dereferences_escaping_symlink() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path());
@@ -767,7 +919,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             None,
         )
@@ -808,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_copy_is_best_effort_on_unreadable_entry() {
+    fn prepare_full_is_best_effort_on_unreadable_entry() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         let claude = home_dir.path().join(".claude");
@@ -821,7 +973,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             None,
         )
@@ -837,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_copy_seeds_trust_for_repo_root() {
+    fn prepare_full_seeds_trust_for_repo_root() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path()); // `.claude.json` hôte porte `oauthAccount`
@@ -846,7 +998,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Copy,
+            Mode::Full,
             "run1",
             Some(trusted),
         )
@@ -869,10 +1021,13 @@ mod tests {
         assert_eq!(mode_of(&staged), 0o600);
     }
 
-    // -- prepare (pure) ------------------------------------------------------
+    // -- prepare (minimal) ---------------------------------------------------
 
+    /// *L'*assertion que `minimal` == le plancher, ni plus ni moins (#426) : le
+    /// contenu exact de `claude-home/` est le plancher, alors que l'hôte porte tout
+    /// l'appareil `full` (skills, plugins, settings riches…).
     #[test]
-    fn prepare_pure_only_credentials_and_onboarding() {
+    fn prepare_minimal_stages_only_the_floor() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         fabricate_home(home_dir.path()); // skills/settings existent → prouvent l'exclusion
@@ -880,14 +1035,14 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Pure,
+            Mode::Minimal,
             "run1",
             None,
         )
         .unwrap();
         let home = staged_claude_home(sandbox_dir.path(), "run1");
 
-        // claude-home ne contient QUE `.credentials.json` + `projects/` (vide).
+        // Ensemble EXACT (trié ASCII) = les fichiers du plancher, rien d'autre.
         let mut names: Vec<String> = std::fs::read_dir(&home)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -895,28 +1050,33 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec![".credentials.json".to_string(), "projects".to_string()]
+            vec![
+                ".credentials.json".to_string(),
+                "projects".to_string(),
+                REMOTE_SETTINGS_FILE.to_string(),
+                SETTINGS_FILE.to_string(),
+            ]
         );
         assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
         assert!(!home.join("skills").exists());
-        assert!(!home.join("settings.json").exists());
         assert_eq!(mode_of(&home.join(".credentials.json")), 0o600);
+        // G3 : `settings.json` est la SYNTHÈSE à une clé, pas celui de l'hôte (qui
+        // porte des `hooks`) — c'est la fourche synthèse-vs-copie du plancher.
+        assert_eq!(
+            read_json(&home.join(SETTINGS_FILE)),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
 
         // `.claude.json` minimal : onboarding seul, pas de bloc projects.
-        let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(staged_claude_json(sandbox_dir.path(), "run1")).unwrap(),
-        )
-        .unwrap();
+        let staged_json = staged_claude_json(sandbox_dir.path(), "run1");
+        let json = read_json(&staged_json);
         assert_eq!(json["hasCompletedOnboarding"], serde_json::json!(true));
         assert!(json.get("projects").is_none(), "None → objet nu");
-        assert_eq!(
-            mode_of(&staged_claude_json(sandbox_dir.path(), "run1")),
-            0o600
-        );
+        assert_eq!(mode_of(&staged_json), 0o600);
     }
 
     #[test]
-    fn prepare_pure_seeds_trust_when_root_given() {
+    fn prepare_minimal_seeds_trust_when_root_given() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         write_mode(
@@ -929,7 +1089,7 @@ mod tests {
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Pure,
+            Mode::Minimal,
             "run1",
             Some(trusted),
         )
@@ -949,14 +1109,14 @@ mod tests {
     }
 
     #[test]
-    fn prepare_pure_bare_object_when_no_root() {
+    fn prepare_minimal_bare_object_when_no_root() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
 
         prepare(
             home_dir.path(),
             sandbox_dir.path(),
-            Mode::Pure,
+            Mode::Minimal,
             "run1",
             None,
         )
@@ -968,6 +1128,392 @@ mod tests {
         .unwrap();
         // Exactement une clé : hasCompletedOnboarding.
         assert_eq!(json, serde_json::json!({ "hasCompletedOnboarding": true }));
+    }
+
+    // -- plancher de staging, G2 : managed settings de l'org (#426) -----------
+
+    /// Home fabriqué à la main SANS baseline org — le cas majoritaire (install sans
+    /// organisation). Porte des credentials pour que G1 ait quelque chose à faire.
+    fn fabricate_home_without_org(home: &Path) {
+        write_mode(&home.join(".claude/.credentials.json"), "{}", 0o600);
+    }
+
+    #[test]
+    fn prepare_full_stages_remote_settings() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path());
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let staged = staged_claude_home(sandbox_dir.path(), "run1").join(REMOTE_SETTINGS_FILE);
+        // Copie VERBATIM : la baseline est comparée au contenu côté Claude Code, une
+        // ré-sérialisation ne serait pas forcément reconnue.
+        assert_eq!(std::fs::read_to_string(&staged).unwrap(), ORG_BASELINE);
+    }
+
+    #[test]
+    fn prepare_minimal_stages_remote_settings() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path());
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Minimal,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let home = staged_claude_home(sandbox_dir.path(), "run1");
+        assert_eq!(
+            std::fs::read_to_string(home.join(REMOTE_SETTINGS_FILE)).unwrap(),
+            ORG_BASELINE
+        );
+        // Preuve que c'est le PLANCHER et non l'allowlist `full` : rien du profil.
+        assert!(!home.join("skills").exists());
+    }
+
+    #[test]
+    fn prepare_full_without_remote_settings_is_a_logged_noop() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home_without_org(home_dir.path());
+
+        // Aucune erreur : l'absence est le cas majoritaire (`info!` + no-op).
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let home = staged_claude_home(sandbox_dir.path(), "run1");
+        assert!(!home.join(REMOTE_SETTINGS_FILE).exists());
+        // …et le plancher n'a PAS avorté en cours de route.
+        assert!(home.join(SETTINGS_FILE).is_file());
+        assert!(home.join("projects").is_dir());
+    }
+
+    #[test]
+    fn prepare_minimal_without_remote_settings_is_a_logged_noop() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home_without_org(home_dir.path());
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Minimal,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let home = staged_claude_home(sandbox_dir.path(), "run1");
+        assert!(!home.join(REMOTE_SETTINGS_FILE).exists());
+        assert!(home.join(SETTINGS_FILE).is_file());
+        assert!(home.join("projects").is_dir());
+        // G1 tenue malgré le no-op de G2.
+        assert_eq!(mode_of(&home.join(".credentials.json")), 0o600);
+    }
+
+    // -- plancher de staging, G3 : bypass permissions (#426) ------------------
+
+    fn staged_settings(sandbox: &Path, run_id: &str) -> PathBuf {
+        staged_claude_home(sandbox, run_id).join(SETTINGS_FILE)
+    }
+
+    #[test]
+    fn prepare_full_merges_bypass_into_host_settings() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let host_settings = home_dir.path().join(".claude").join(SETTINGS_FILE);
+        write(&host_settings, r#"{"hooks":{"Stop":[]},"model":"opus"}"#);
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let staged = staged_settings(sandbox_dir.path(), "run1");
+        let json = read_json(&staged);
+        assert_eq!(json[BYPASS_PERMISSIONS_KEY], serde_json::json!(true));
+        // Merge NON destructif : les clés hôte survivent.
+        assert_eq!(json["model"], serde_json::json!("opus"));
+        assert!(json["hooks"]["Stop"].is_array());
+        // Pas de chmod, pas d'élargissement : le mode hôte est conservé (`fs::write`
+        // tronque en place). Comparé au mode hôte, donc indépendant de l'umask.
+        assert_eq!(mode_of(&staged), mode_of(&host_settings));
+    }
+
+    #[test]
+    fn prepare_full_keeps_bypass_already_set_by_host() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        write(
+            &home_dir.path().join(".claude").join(SETTINGS_FILE),
+            &format!(r#"{{"{BYPASS_PERMISSIONS_KEY}":true,"model":"opus"}}"#),
+        );
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        let json = read_json(&staged_settings(sandbox_dir.path(), "run1"));
+        assert_eq!(json[BYPASS_PERMISSIONS_KEY], serde_json::json!(true));
+        // Aucun artefact de duplication : toujours 2 clés.
+        assert_eq!(json.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prepare_full_overrides_host_bypass_false() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        write(
+            &home_dir.path().join(".claude").join(SETTINGS_FILE),
+            &format!(r#"{{"{BYPASS_PERMISSIONS_KEY}":false}}"#),
+        );
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        // C'est une GARANTIE, pas un défaut : `insert`, jamais `entry().or_insert()`
+        // (contrairement à `hasCompletedOnboarding` juste à côté). Un `false` hôte
+        // bloquerait l'agent sur le prompt de bypass.
+        let json = read_json(&staged_settings(sandbox_dir.path(), "run1"));
+        assert_eq!(json[BYPASS_PERMISSIONS_KEY], serde_json::json!(true));
+    }
+
+    #[test]
+    fn prepare_full_synthesises_settings_when_host_has_none() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home_without_org(home_dir.path()); // aucun settings.json hôte
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_json(&staged_settings(sandbox_dir.path(), "run1")),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
+    }
+
+    #[test]
+    fn prepare_minimal_synthesises_settings_ignoring_host() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path()); // settings hôte riches (hooks)
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Minimal,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        // La phrase d'ADR-0031 §1 sous forme de test : la même garantie, satisfaite
+        // par une synthèse ici et par un merge en `full`.
+        assert_eq!(
+            read_json(&staged_settings(sandbox_dir.path(), "run1")),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
+    }
+
+    #[test]
+    fn prepare_full_replaces_corrupt_host_settings() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        write(
+            &home_dir.path().join(".claude").join(SETTINGS_FILE),
+            "{ not json,",
+        );
+
+        // Dégradation GRACIEUSE (miroir du seed de trust) : en dur, un seul
+        // caractère malformé dans `~/.claude/settings.json` empêcherait TOUT Run
+        // sandboxé de démarrer.
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_json(&staged_settings(sandbox_dir.path(), "run1")),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
+    }
+
+    #[test]
+    fn prepare_full_replaces_non_object_host_settings() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        // JSON valide, mais pas un objet → chemin de code distinct (garde `is_object`).
+        write(
+            &home_dir.path().join(".claude").join(SETTINGS_FILE),
+            "[1,2]",
+        );
+
+        prepare(
+            home_dir.path(),
+            sandbox_dir.path(),
+            Mode::Full,
+            "run1",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_json(&staged_settings(sandbox_dir.path(), "run1")),
+            serde_json::json!({ BYPASS_PERMISSIONS_KEY: true })
+        );
+    }
+
+    // -- plancher de staging, les CINQ garanties en un point (#426) -----------
+
+    /// La forme exécutable d'ADR-0031 §1, et le test qu'un relecteur lit pour
+    /// répondre « le plancher est-il tenu ? ». La slice « profils » l'étendra
+    /// (même corps, plus « … même avec l'entrée décochée »).
+    #[test]
+    fn prepare_floor_holds_in_both_modes() {
+        for mode in [Mode::Full, Mode::Minimal] {
+            let home_dir = tempfile::tempdir().unwrap();
+            let sandbox_dir = tempfile::tempdir().unwrap();
+            fabricate_home(home_dir.path());
+            let trusted = Path::new("/repo/root");
+
+            prepare(
+                home_dir.path(),
+                sandbox_dir.path(),
+                mode,
+                "run1",
+                Some(trusted),
+            )
+            .unwrap();
+            let home = staged_claude_home(sandbox_dir.path(), "run1");
+
+            // G1 — credentials valides, 0600 préservé.
+            assert_eq!(
+                mode_of(&home.join(".credentials.json")),
+                0o600,
+                "G1 en {mode:?}"
+            );
+            // G2 — baseline de managed settings de l'org.
+            assert_eq!(
+                std::fs::read_to_string(home.join(REMOTE_SETTINGS_FILE)).unwrap(),
+                ORG_BASELINE,
+                "G2 en {mode:?}"
+            );
+            // G3 — bypass permissions accepté.
+            assert_eq!(
+                read_json(&home.join(SETTINGS_FILE))[BYPASS_PERMISSIONS_KEY],
+                serde_json::json!(true),
+                "G3 en {mode:?}"
+            );
+            // G4 — confiance pré-accordée à la racine du Run + onboarding.
+            let json = read_json(&staged_claude_json(sandbox_dir.path(), "run1"));
+            assert_eq!(
+                json["projects"]["/repo/root"]["hasTrustDialogAccepted"],
+                serde_json::json!(true),
+                "G4 (trust) en {mode:?}"
+            );
+            assert_eq!(
+                json["hasCompletedOnboarding"],
+                serde_json::json!(true),
+                "G4 (onboarding) en {mode:?}"
+            );
+            // G5 — puits de transcripts créé VIDE.
+            let projects = home.join("projects");
+            assert!(projects.is_dir(), "G5 en {mode:?}");
+            assert_eq!(
+                std::fs::read_dir(&projects).unwrap().count(),
+                0,
+                "G5 vide en {mode:?}"
+            );
+        }
+    }
+
+    /// Fige ADR-0031 §6 (« `prepare` est additif : il copie ou écrase, il ne
+    /// supprime jamais ») et répond à la question du double write sur
+    /// `settings.json` en `full` : le second merge n'écrase ni ne duplique rien.
+    #[test]
+    fn prepare_twice_keeps_the_floor_and_is_additive() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        fabricate_home(home_dir.path());
+        let trusted = Path::new("/repo/root");
+        let (home_p, sandbox_p) = (home_dir.path(), sandbox_dir.path());
+
+        prepare(home_p, sandbox_p, Mode::Full, "run1", Some(trusted)).unwrap();
+        // Le conteneur (simulé) a écrit un transcript dans le puits.
+        stage_transcript(sandbox_p, "run1", &format!("{ENC}/s.jsonl"), "line\n");
+
+        prepare(home_p, sandbox_p, Mode::Full, "run1", Some(trusted)).unwrap();
+
+        let home = staged_claude_home(sandbox_p, "run1");
+        let settings = read_json(&home.join(SETTINGS_FILE));
+        assert_eq!(settings[BYPASS_PERMISSIONS_KEY], serde_json::json!(true));
+        assert!(
+            settings["hooks"]["Stop"].is_array(),
+            "le 2e merge n'a pas écrasé les clés hôte"
+        );
+        assert_eq!(
+            settings.as_object().unwrap().len(),
+            2,
+            "ni dupliqué la clé de bypass"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(REMOTE_SETTINGS_FILE)).unwrap(),
+            ORG_BASELINE
+        );
+        assert_eq!(
+            read_json(&staged_claude_json(sandbox_p, "run1"))["projects"]["/repo/root"]
+                ["hasTrustDialogAccepted"],
+            serde_json::json!(true)
+        );
+        // ADDITIF : le transcript écrit entre les deux `prepare` survit.
+        assert_eq!(
+            std::fs::read_to_string(home.join(format!("projects/{ENC}/s.jsonl"))).unwrap(),
+            "line\n"
+        );
     }
 
     // -- merge_back ----------------------------------------------------------
@@ -1120,7 +1666,7 @@ mod tests {
         let sandbox_dir = tempfile::tempdir().unwrap();
         let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
 
-        // Staging pure : claude-home existe mais sans projects/.
+        // Staging minimal : claude-home existe mais sans projects/.
         std::fs::create_dir_all(staged_claude_home(sandbox, "run1")).unwrap();
 
         merge_back(home, sandbox, "run1").unwrap(); // Ok, aucune écriture hôte.
@@ -1187,12 +1733,12 @@ mod tests {
     // -- round-trip prepare → (write) → merge_back → teardown ----------------
 
     #[test]
-    fn prepare_pure_then_merge_and_teardown_roundtrip() {
+    fn prepare_minimal_then_merge_and_teardown_roundtrip() {
         let home_dir = tempfile::tempdir().unwrap();
         let sandbox_dir = tempfile::tempdir().unwrap();
         let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
 
-        prepare(home, sandbox, Mode::Pure, "run1", None).unwrap();
+        prepare(home, sandbox, Mode::Minimal, "run1", None).unwrap();
         // Le conteneur (simulé) écrit un transcript dans le puits projects/.
         stage_transcript(sandbox, "run1", &format!("{ENC}/sess.jsonl"), "hello\n");
 

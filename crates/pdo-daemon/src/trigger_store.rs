@@ -43,7 +43,7 @@ pub struct Trigger {
     /// `None` = unbounded (also the effective value under the `skip` policy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode (`"off"` | `"copy"` | `"pure"`), or `None` to inherit
+    /// Per-Trigger sandbox mode (`"off"` | `"full"` | `"minimal"`), or `None` to inherit
     /// the instance default (#410). Read at fire time and folded into the create
     /// request's explicit tier; the create chokepoint then resolves precedence
     /// (run → trigger → instance default). Clearable back to `None` via the
@@ -1266,9 +1266,9 @@ mod tests {
         let db = test_db().await;
 
         let mut sandboxed = sample("sandboxed", "0 9 * * *");
-        sandboxed.sandbox = Some("pure".to_string());
+        sandboxed.sandbox = Some("minimal".to_string());
         let created = create(&db, sandboxed).await.unwrap();
-        assert_eq!(created.sandbox.as_deref(), Some("pure"));
+        assert_eq!(created.sandbox.as_deref(), Some("minimal"));
         assert_eq!(
             get(&db, &created.id)
                 .await
@@ -1276,7 +1276,7 @@ mod tests {
                 .unwrap()
                 .sandbox
                 .as_deref(),
-            Some("pure")
+            Some("minimal")
         );
 
         // The default (inherit instance) round-trips as NULL.
@@ -1296,7 +1296,7 @@ mod tests {
             &db,
             &t.id,
             UpdateTrigger {
-                sandbox: Some(Some("copy".to_string())),
+                sandbox: Some(Some("full".to_string())),
                 ..Default::default()
             },
         )
@@ -1304,7 +1304,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             get(&db, &t.id).await.unwrap().unwrap().sandbox.as_deref(),
-            Some("copy")
+            Some("full")
         );
 
         // An unrelated edit (None) leaves it untouched.
@@ -1320,7 +1320,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             get(&db, &t.id).await.unwrap().unwrap().sandbox.as_deref(),
-            Some("copy")
+            Some("full")
         );
 
         // Some(None) clears it back to NULL (inherit the instance default).

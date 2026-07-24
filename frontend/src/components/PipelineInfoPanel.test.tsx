@@ -42,15 +42,15 @@ function renderPanel(run: RunState | null) {
 }
 
 describe("PipelineInfoPanel — sandbox surface (#410)", () => {
-  it("shows the sandbox badge for a sandboxed run (pure)", () => {
-    renderPanel(makeRun({ sandbox: "pure" }));
+  it("shows the sandbox badge for a sandboxed run (minimal)", () => {
+    renderPanel(makeRun({ sandbox: "minimal" }));
     const badge = screen.getByTestId("sandbox-badge");
-    expect(badge).toHaveTextContent(/sandbox:\s*pure/i);
+    expect(badge).toHaveTextContent(/sandbox:\s*minimal/i);
   });
 
-  it("shows the sandbox badge for a copy run", () => {
-    renderPanel(makeRun({ sandbox: "copy" }));
-    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent(/sandbox:\s*copy/i);
+  it("shows the sandbox badge for a full run", () => {
+    renderPanel(makeRun({ sandbox: "full" }));
+    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent(/sandbox:\s*full/i);
   });
 
   it("omits the badge for an off/host run", () => {
@@ -64,12 +64,12 @@ describe("PipelineInfoPanel — sandbox surface (#410)", () => {
   });
 
   it("shows the preparation banner while sandbox_prep is pending", () => {
-    renderPanel(makeRun({ sandbox: "pure", sandbox_prep: "pending" }));
+    renderPanel(makeRun({ sandbox: "minimal", sandbox_prep: "pending" }));
     expect(screen.getByTestId("sandbox-prep-banner")).toHaveTextContent(/preparing the sandbox/i);
   });
 
   it("hides the preparation banner once sandbox_prep is ready", () => {
-    renderPanel(makeRun({ sandbox: "pure", sandbox_prep: "ready" }));
+    renderPanel(makeRun({ sandbox: "minimal", sandbox_prep: "ready" }));
     expect(screen.queryByTestId("sandbox-prep-banner")).not.toBeInTheDocument();
     // The badge stays visible after prep completes.
     expect(screen.getByTestId("sandbox-badge")).toBeInTheDocument();

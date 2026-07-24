@@ -44,8 +44,9 @@ pub(crate) struct SandboxContext {
     /// Effective repo root — bind-mounted rw at its host path. One mount covers
     /// the repo + every node sub-worktree under `.pdo/runs/` + `.pdo/prompts`.
     pub(crate) repo_root: PathBuf,
-    /// The Run's pipeline worktree (`-w` cosmetic at create; the `pure` trust
-    /// dialog is seeded on `repo_root`, the common ancestor of every worktree).
+    /// The Run's pipeline worktree (`-w` cosmetic at create; the trust dialog is
+    /// seeded by the staging floor on `repo_root`, the common ancestor of every
+    /// worktree, in BOTH sandboxed modes — #426).
     pub(crate) run_worktree: PathBuf,
     pub(crate) daemon_port: u16,
     /// Host `$HOME` — source of `.claude` for `prepare`.
@@ -71,8 +72,8 @@ impl SandboxContext {
     fn staging_mode(&self) -> Option<sandbox_staging::Mode> {
         match self.mode {
             SandboxMode::Off => None,
-            SandboxMode::Copy => Some(sandbox_staging::Mode::Copy),
-            SandboxMode::Pure => Some(sandbox_staging::Mode::Pure),
+            SandboxMode::Full => Some(sandbox_staging::Mode::Full),
+            SandboxMode::Minimal => Some(sandbox_staging::Mode::Minimal),
         }
     }
 }
@@ -221,17 +222,20 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         return Ok(()); // off: gated by callers; no docker touched.
     };
 
-    // 1. Stage the Claude home ONCE. The ~1 GB `copy` walk (and the `pure` seed)
-    //    must not repeat on every ensure_ready — gate on the staging dir already
-    //    existing. BOTH sandboxed modes pre-approve the trust dialog on `repo_root`,
-    //    the common ancestor of the pipeline worktree AND every node sub-worktree:
-    //    `pure` writes a minimal `.claude.json`; `copy` (#409, D5) merges the trust
-    //    into the copied host `.claude.json` (else a repo the host never opened
-    //    would block an autonomous Run on the "trust this folder?" dialog).
+    // 1. Stage the Claude home ONCE. The ~1 GB `full` walk must not repeat on
+    //    every ensure_ready — gate on the staging dir already existing.
+    //    `prepare` then holds the **staging floor** (#426, ADR-0031 §1) in BOTH
+    //    sandboxed modes, mode-agnostically: valid credentials, the org managed-
+    //    settings baseline, the accepted permissions bypass, trust pre-granted on
+    //    `repo_root` (the common ancestor of the pipeline worktree AND every node
+    //    sub-worktree), and an empty `projects/` sink. Each guarantee is met either
+    //    by a copy of the host file or by a fallback synthesis — which is why an
+    //    autonomous Run never blocks on the "trust this folder?", "managed settings
+    //    require approval" or bypass-permissions dialogs.
     let staging_dir = sandbox_staging::staging_dir_for_run(&ctx.sandbox_root, &ctx.run_id);
     if !staging_dir.exists() {
         let trusted_root = match ctx.mode {
-            SandboxMode::Pure | SandboxMode::Copy => Some(ctx.repo_root.as_path()),
+            SandboxMode::Minimal | SandboxMode::Full => Some(ctx.repo_root.as_path()),
             SandboxMode::Off => None,
         };
         sandbox_staging::prepare(
@@ -423,16 +427,17 @@ mod tests {
     fn ensure_ready_stages_probes_image_and_container() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Pure);
+        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Minimal);
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
 
-        // Staging seeded (pure → credentials + .claude.json + empty projects/).
+        // Staging seeded (minimal → floor only: credentials, remote-settings,
+        // settings.json, .claude.json, empty projects/).
         let staging = sandbox_staging::staging_dir_for_run(&ctx.sandbox_root, "r1");
         assert!(staging.exists(), "staging dir must be created");
         assert!(
             sandbox_staging::staged_claude_json(&ctx.sandbox_root, "r1").is_file(),
-            "pure staging writes a .claude.json"
+            "minimal staging writes a .claude.json"
         );
         // Docker was probed for image + container (present → no build/create).
         let lines = log_lines(&log);
@@ -467,7 +472,7 @@ mod tests {
     fn ensure_ready_does_not_restage_when_present() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Pure);
+        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Minimal);
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
         // Drop a sentinel into the staging dir; a second ensure_ready must NOT
@@ -484,25 +489,38 @@ mod tests {
     }
 
     #[test]
-    fn ensure_ready_copy_seeds_trust_for_repo_root() {
+    fn ensure_ready_full_seeds_trust_for_repo_root() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _log) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Copy);
+        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Full);
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
 
-        // #409 D5: copy stages a `.claude.json`, and ensure_ready pre-approves the
+        // #409 D5: full stages a `.claude.json`, and ensure_ready pre-approves the
         // Run's repo_root trust dialog in it — even when the host had no
         // `.claude.json` (an autonomous Run must not block on "trust this folder?").
         let staged = sandbox_staging::staged_claude_json(&ctx.sandbox_root, "r1");
-        assert!(staged.is_file(), "copy staging writes a .claude.json");
+        assert!(staged.is_file(), "full staging writes a .claude.json");
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
         let key = ctx.repo_root.to_string_lossy().into_owned();
         assert_eq!(
             json["projects"][&key]["hasTrustDialogAccepted"],
             serde_json::json!(true),
-            "copy must pre-approve the repo_root trust dialog: {json}"
+            "full must pre-approve the repo_root trust dialog: {json}"
+        );
+
+        // #426: the staging floor runs through the REAL caller, not just a direct
+        // `prepare` call. `test_ctx`'s home carries credentials only, so G3 lands on
+        // its synthesis branch.
+        let staged_settings =
+            sandbox_staging::staged_claude_home(&ctx.sandbox_root, "r1").join("settings.json");
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&staged_settings).unwrap()).unwrap();
+        assert_eq!(
+            settings["skipDangerousModePermissionPrompt"],
+            serde_json::json!(true),
+            "ensure_ready must hold the staging floor: {settings}"
         );
     }
 
@@ -545,11 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn kill_session_pure_execs_marker() {
+    fn kill_session_minimal_execs_marker() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
         let logged = retry_side_effect(
-            || kill_session_best_effort(&docker, SandboxMode::Pure, "r1", "pdo-r1-n1-iter-1"),
+            || kill_session_best_effort(&docker, SandboxMode::Minimal, "r1", "pdo-r1-n1-iter-1"),
             || {
                 let l = log_lines(&log);
                 !l.is_empty()
@@ -626,12 +644,12 @@ mod tests {
         // Staging present → live/reapable Run → read the staged home.
         std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
         assert_eq!(
-            transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root),
+            transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root),
             sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
         );
-        // `copy` behaves identically.
+        // `full` behaves identically.
         assert_eq!(
-            transcripts_root(SandboxMode::Copy, "r1", &home, &sandbox_root),
+            transcripts_root(SandboxMode::Full, "r1", &home, &sandbox_root),
             sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
         );
     }
@@ -645,7 +663,7 @@ mod tests {
         // flushed. Keyed on staging EXISTENCE, not the Run's terminal status.
         assert!(!sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists());
         assert_eq!(
-            transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root),
+            transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root),
             home.join(".claude").join("projects")
         );
     }
@@ -664,12 +682,12 @@ mod tests {
         let enc = crate::stale_detector::encode_working_dir(cwd);
 
         // Host arm (no staging).
-        let host = transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root);
+        let host = transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root);
         assert_eq!(host.join(&enc), home.join(".claude/projects").join(&enc));
 
         // Staging arm (staging materialised) — same encoded segment appended.
         std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
-        let staged = transcripts_root(SandboxMode::Pure, "r1", &home, &sandbox_root);
+        let staged = transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root);
         assert_eq!(
             staged.join(&enc),
             sandbox_staging::staged_claude_home(&sandbox_root, "r1")

@@ -93,7 +93,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   // Sandbox (#410). `settings` carries the instance `default_sandbox` (prefill) and
   // the advisory `sandbox_docker` probe (greying). `sandbox` is the selector value:
-  // a concrete `off`/`copy`/`pure` in run mode; also `""` in trigger mode, meaning
+  // a concrete `off`/`full`/`minimal` in run mode; also `""` in trigger mode, meaning
   // "inherit the instance default".
   const [settings, setSettings] = useState<InstanceSettings | null>(null);
   const [sandbox, setSandbox] = useState<string>("off");
@@ -307,7 +307,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // #410: seed the sandbox selector once per open, matched to the intent. Edit/new
   // trigger seed synchronously (from the trigger / the "inherit" sentinel); a plain
   // run waits for the settings fetch to prefill the instance default, CLAMPED to
-  // `off` when Docker is unavailable (availability wins over a `copy`/`pure` prefill
+  // `off` when Docker is unavailable (availability wins over a `full`/`minimal` prefill
   // so we never mint a Run doomed to a RunFailed the UI could have prevented).
   useEffect(() => {
     if (!open) {
@@ -472,7 +472,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         source_branch: sourceBranch || undefined,
         name: autoName ? undefined : runName.trim() || undefined,
         // #410: the explicit run-level mode. Always concrete in run mode
-        // (off/copy/pure); sent explicitly so it wins the create-chokepoint
+        // (off/full/minimal); sent explicitly so it wins the create-chokepoint
         // precedence over any instance/trigger default.
         sandbox: sandbox || undefined,
         images: images.length > 0 ? images : undefined,
@@ -494,7 +494,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt;
 
-  // #410: advisory Docker greying. Only gate `copy`/`pure` once we KNOW Docker is
+  // #410: advisory Docker greying. Only gate `full`/`minimal` once we KNOW Docker is
   // unavailable (settings loaded && probe false); while settings load, stay
   // optimistic. `sandboxReason` explains the greying (title + help text).
   const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
@@ -909,8 +909,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             </div>
 
             {/* Sandbox (#410): the isolation mode. Run mode offers a concrete
-                off/copy/pure (prefilled from the instance default); Trigger mode adds
-                a leading "Use instance default" option. `copy`/`pure` are disabled
+                off/full/minimal (prefilled from the instance default); Trigger mode adds
+                a leading "Use instance default" option. `full`/`minimal` are disabled
                 when the daemon reports Docker unavailable (advisory greying — the
                 run-advance fail-fast remains authoritative). */}
             <div className="flex flex-col gap-1.5">
@@ -934,11 +934,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   <option value="">Use instance default</option>
                 )}
                 <option value="off">off (run on the host)</option>
-                <option value="copy" disabled={dockerUnavailable}>
-                  {dockerUnavailable ? "copy (Docker unavailable)" : "copy (Docker sandbox)"}
+                <option value="full" disabled={dockerUnavailable}>
+                  {dockerUnavailable ? "full (Docker unavailable)" : "full (Docker sandbox)"}
                 </option>
-                <option value="pure" disabled={dockerUnavailable}>
-                  {dockerUnavailable ? "pure (Docker unavailable)" : "pure (Docker sandbox)"}
+                <option value="minimal" disabled={dockerUnavailable}>
+                  {dockerUnavailable
+                    ? "minimal (Docker unavailable)"
+                    : "minimal (Docker sandbox)"}
                 </option>
               </select>
               {dockerUnavailable && (

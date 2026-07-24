@@ -196,7 +196,7 @@ function InfoTab({
               {run ? `run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}` : `template · ${pipeline?.version ?? "v1"}`}
             </div>
           </div>
-          {/* Sandbox badge (#410): shown for any sandboxed Run (copy/pure). An
+          {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An
               `off`/host Run renders nothing — the field is absent on those. */}
           {run?.sandbox && run.sandbox !== "off" && (
             <span

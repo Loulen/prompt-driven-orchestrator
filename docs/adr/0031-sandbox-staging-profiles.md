@@ -2,14 +2,15 @@
 
 > Statut : accepted (grilling du 2026-07-24, PRD #403). Vocabulaire : CONTEXT.md § « Sandbox ».
 > Complète ADR-0030 (modèle d'exécution) : ADR-0030 dit *où* tourne un Run sandboxé, celle-ci dit
-> *avec quel contenu de home*. Implémentée par les slices « plancher » puis « profils ».
+> *avec quel contenu de home*. Implémentée par les slices « plancher » puis « profils » : §1 est
+> **réalisé en #426** (avec l'amendement §1 d'ADR-0030) ; §2-§7 restent à livrer.
 
 Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. Il devient un
 **profil de staging** : une liste nommée, éditable, sélectionnable par Run et par Trigger.
 
 ## Ce qu'on décide
 
-1. **Le plancher est une liste de garanties, pas de fichiers verrouillés.** Quel que soit le
+1. **Le plancher est une liste de garanties, pas de fichiers verrouillés** *(réalisé en #426)*. Quel que soit le
    profil, `prepare` garantit qu'au démarrage la session dispose de : credentials valides, managed
    settings de l'org **consentis**, bypass permissions accepté, confiance pré-accordée à la racine
    du Run, `projects/` vide. Chaque garantie est satisfaite **soit** par une entrée du profil,
@@ -69,7 +70,7 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
 
 Le mode est un interrupteur à deux positions qui décide de *tout* d'un coup — skills, plugins,
 agents, commands, settings, `.md` globaux. Or le poste de coût est **un seul** de ces éléments :
-`copy`/`full` pèse ~1 Go par Run, « dominé par `plugins/*/node_modules` », et le staging n'est purgé
+`full` pèse ~1 Go par Run, « dominé par `plugins/*/node_modules` », et le staging n'est purgé
 qu'au `cleanup_run`. Un pipeline qui a besoin des skills mais pas des serveurs MCP n'avait aucune
 option : il payait 1 Go ou il perdait tout. Sur une instance à Triggers horaires, ce choix
 binaire alimente directement la récurrence disque connue.
@@ -106,4 +107,5 @@ un Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'ident
 - **ADR-0015** — précédence `stored → env → default` des réglages d'instance ; les défauts virtuels
   `minimal`/`full` en sont l'application à une valeur non scalaire.
 - **ADR-0001** — outil tranchant, pas outil sûr : fonde le choix « autoriser + avertir » (§3).
-- **#403** — PRD Sandbox ; ces décisions sont livrées par les slices post-validation du PRD.
+- **#403** — PRD Sandbox ; ces décisions sont livrées par les slices post-validation du PRD. §1 est
+  livré par **#426**, §2-§7 par les slices « profils ».

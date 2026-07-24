@@ -91,8 +91,8 @@ export interface InstanceSettings {
    */
   image_source: StringSettingField;
   /**
-   * Instance-wide default sandbox mode (#410): `"off"` (host, default), `"copy"`,
-   * or `"pure"`. A closed enum with a built-in `off` default, so every tier is a
+   * Instance-wide default sandbox mode (#410): `"off"` (host, default), `"full"`,
+   * or `"minimal"`. A closed enum with a built-in `off` default, so every tier is a
    * present string — reuses {@link StringSettingField} (a superset) though it is
    * never null. The create-run chokepoint resolves precedence run → trigger → this.
    */
@@ -100,7 +100,7 @@ export interface InstanceSettings {
   /**
    * Advisory Docker availability probe (#410), folded into `GET /settings` so the
    * NewRunModal learns the default AND whether Docker can run a sandbox in one fetch.
-   * `available: false` grays out `copy`/`pure` (`reason` explains why); the
+   * `available: false` grays out `full`/`minimal` (`reason` explains why); the
    * run-advance fail-fast stays the authoritative gate.
    */
   sandbox_docker: {
@@ -126,7 +126,7 @@ export interface UpdateSettingsRequest {
   /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
    *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
   image_source?: string;
-  /** Default sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or `""` to clear
+  /** Default sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`/`image_source`. */
   default_sandbox?: string;
@@ -184,7 +184,7 @@ export interface Trigger {
   overlap_policy: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; null = unbounded. */
   max_concurrent?: number | null;
-  /** Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or null/absent
+  /** Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or null/absent
    *  to inherit the instance default. Read at fire time. */
   sandbox?: string | null;
   enabled: boolean;
@@ -342,7 +342,7 @@ export interface RunState {
    * runs (projected as `off` server-side and skipped from the payload when off).
    * Immutable once the Run started.
    */
-  sandbox?: "off" | "copy" | "pure";
+  sandbox?: "off" | "full" | "minimal";
   /**
    * One-time image-prep visibility for a sandboxed Run (#410). `"pending"` while
    * the image is pulled/built at first use; `"ready"` once the container is about

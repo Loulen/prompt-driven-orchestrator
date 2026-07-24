@@ -4,7 +4,7 @@
 //! `docker_cmd_override`) and a tempdir-scoped sandbox home (via
 //! `sandbox_home_override`), so no test needs Docker, touches the real `$HOME`,
 //! or launches real claude. Asserts the run-advance wiring:
-//!   1. a `pure` run projects `sandbox=pure`, prep runs (`create`+`start`), the
+//!   1. a `minimal` run projects `sandbox=minimal`, prep runs (`create`+`start`), the
 //!      node tail is wrapped (`docker exec … pdo-sbx-<run>`), and the run completes;
 //!   2. Docker unavailable → `RunFailed`, ZERO host spawn (no `NodeStarted`);
 //!   3. an `off` run invokes docker NOT AT ALL (argv log empty) and completes on
@@ -248,10 +248,10 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
     );
 }
 
-// -- Test 1: pure run wires end-to-end ---------------------------------------
+// -- Test 1: minimal run wires end-to-end ------------------------------------
 
 #[tokio::test]
-async fn pure_run_prepares_wraps_and_completes() {
+async fn minimal_run_prepares_wraps_and_completes() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
     let daemon =
@@ -259,13 +259,13 @@ async fn pure_run_prepares_wraps_and_completes() {
             .await
             .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
 
     // (a) The mode is projected onto the Run from RunStarted.
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
-        run["sandbox"], "pure",
-        "run must project sandbox=pure: {run}"
+        run["sandbox"], "minimal",
+        "run must project sandbox=minimal: {run}"
     );
 
     // (b) Eager prep created + started the container (ensure_ready).
@@ -296,10 +296,27 @@ async fn pure_run_prepares_wraps_and_completes() {
     // POST node-done) and assert the whole run reaches `completed`.
     let run = wait_node_status(&daemon, &run_id, "running").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
+
+    // (d-bis) #426 G3: with no host `~/.claude` at all, the floor SYNTHESISES the
+    // staged `settings.json` down to the single bypass key — otherwise the session
+    // would stall on the bypass-permissions prompt with nobody watching.
+    let home = staged_home(&daemon, &run_id);
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings,
+        serde_json::json!({ BYPASS_PERMISSIONS_KEY: true }),
+        "minimal must synthesise settings.json to the floor's single key"
+    );
+
     write_node_output(&daemon, &run_id, "hello from the sandbox\n");
     simulate_node_done(&daemon, &run_id).await;
     let run = wait_run_status(&daemon, &run_id, "completed").await;
-    assert_eq!(run["status"], "completed", "pure run must complete: {run}");
+    assert_eq!(
+        run["status"], "completed",
+        "minimal run must complete: {run}"
+    );
 }
 
 // -- Test 2: Docker unavailable → RunFailed, no host spawn -------------------
@@ -315,7 +332,7 @@ async fn docker_unavailable_fails_run_with_no_host_spawn() {
     .await
     .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
 
     let run = wait_run_status(&daemon, &run_id, "failed").await;
     assert_eq!(
@@ -378,7 +395,7 @@ async fn cleanup_run_removes_container_and_staging() {
             .await
             .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
@@ -423,7 +440,7 @@ async fn boot_recovery_reensures_sandbox_container() {
             .await
             .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     let count_creates = |log: &Path| log_text(log).lines().filter(|l| *l == "create").count();
 
     // Wait for the first prep to create+start (so the run is live), targeting
@@ -460,7 +477,7 @@ async fn kill_node_targets_the_container() {
             .await
             .unwrap();
 
-    let run_id = start_run(&daemon, Some("pure")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
 
     let resp = post_command(
@@ -480,15 +497,25 @@ async fn kill_node_targets_the_container() {
     );
 }
 
-// -- #409: mode `copy` de bout en bout ---------------------------------------
+// -- #409: mode `full` de bout en bout ---------------------------------------
 //
 // The harness collocates `home_root == host_home == repo_root == tempdir`
 // (`sandbox_home_override`), so the fake host `~/.claude` lives at
 // `<repo>/.claude`. It is fabricated AFTER spawn (untracked, out of the seed
 // commit) and BEFORE `start_run` (eager prep reads it). The fake `docker exec`
-// cannot run the container body, so a real end-to-end `copy` run (skills actually
+// cannot run the container body, so a real end-to-end `full` run (skills actually
 // loaded, kernel isolation, real auth) is the Layer-5 job (FP-409). Layer-3 proves
 // what PDO **stages** and the **argv/mounts** it hands `docker create`.
+
+/// Org managed-settings baseline cached by Claude Code in `~/.claude/` — the
+/// guarantee G2 of the staging floor (#426).
+const ORG_BASELINE_FILE: &str = "remote-settings.json";
+/// Stand-in content for [`ORG_BASELINE_FILE`]. The real host file carries an org
+/// OTEL bearer: assertions here compare against this fixture, never the real one.
+const ORG_BASELINE: &str = r#"{"org":"baseline"}"#;
+/// The top-level key that disarms the `--dangerously-skip-permissions` prompt —
+/// guarantee G3 of the staging floor (#426).
+const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
 
 /// Fabricate a realistic host `~/.claude` (+ sibling `.claude.json`) under `home`.
 /// Mirrors the unit `sandbox_staging::fabricate_home`: allowlist dirs/files, an
@@ -529,6 +556,11 @@ fn fabricate_host_claude(home: &Path) {
     // Allowlist files (hooks live inside settings.json).
     write(claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
     write(claude.join("settings.local.json"), r#"{"local":true}"#);
+    // Org managed-settings baseline (#426): OUTSIDE the `full` allowlist — the
+    // staging floor is its single writer, in BOTH modes. Deliberate mirror of the
+    // unit fixture `sandbox_staging::tests::fabricate_home`; keep them in step.
+    // Stand-in content: the real file carries an org OTEL bearer.
+    write(claude.join(ORG_BASELINE_FILE), ORG_BASELINE);
     write_mode(
         claude.join(".credentials.json"),
         r#"{"token":"secret"}"#,
@@ -545,7 +577,8 @@ fn fabricate_host_claude(home: &Path) {
         claude.join("projects/-enc-host/old.jsonl"),
         "{\"host\":1}\n",
     );
-    // Sibling profile `.claude.json` (PII-bearing; copy stages it verbatim + trust).
+    // Sibling profile `.claude.json` (PII-bearing; `full` stages it, the floor
+    // then merges onboarding + trust into it).
     write(
         home.join(".claude.json"),
         r#"{"host":"profile","oauthAccount":{"x":1}}"#,
@@ -586,10 +619,10 @@ fn mount_specs(log: &Path) -> Vec<String> {
     specs
 }
 
-// -- Test 7: copy stages the allowlist (deref + trust) and completes ---------
+// -- Test 7: full stages the allowlist (deref + trust) and completes ---------
 
 #[tokio::test]
-async fn copy_run_stages_allowlist_and_completes() {
+async fn full_run_stages_allowlist_and_completes() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
@@ -598,14 +631,14 @@ async fn copy_run_stages_allowlist_and_completes() {
             .unwrap();
     fabricate_host_claude(daemon.repo_root());
 
-    let run_id = start_run(&daemon, Some("copy")).await;
+    let run_id = start_run(&daemon, Some("full")).await;
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
-        run["sandbox"], "copy",
-        "run must project sandbox=copy: {run}"
+        run["sandbox"], "full",
+        "run must project sandbox=full: {run}"
     );
 
-    // Node reaches Running ⇒ eager prep (incl. the copy walk + trust seed) is done.
+    // Node reaches Running ⇒ eager prep (incl. the full walk + the floor) is done.
     let run = wait_node_status(&daemon, &run_id, "running").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
 
@@ -636,6 +669,28 @@ async fn copy_run_stages_allowlist_and_completes() {
     assert!(std::fs::read_to_string(home.join("settings.json"))
         .unwrap()
         .contains("hooks"));
+    // #426 G2: the org managed-settings baseline is staged VERBATIM — through the
+    // daemon's real prep path, not just the unit. It lives OUTSIDE the `full`
+    // allowlist: the floor is its single writer.
+    assert_eq!(
+        std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
+        ORG_BASELINE,
+        "the org managed-settings baseline must be staged byte-for-byte"
+    );
+    // #426 G3: the bypass key is MERGED into the copied host settings — the hooks
+    // survive (a naive overwrite would drop them).
+    let staged_settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        staged_settings[BYPASS_PERMISSIONS_KEY],
+        serde_json::json!(true),
+        "staged settings.json must carry the bypass key: {staged_settings}"
+    );
+    assert!(
+        staged_settings["hooks"]["Stop"].is_array(),
+        "the merge must be non-destructive: {staged_settings}"
+    );
     assert!(home.join("settings.local.json").is_file());
     assert!(home.join(".credentials.json").is_file());
     assert!(home.join("CLAUDE.md").is_file());
@@ -655,7 +710,7 @@ async fn copy_run_stages_allowlist_and_completes() {
     assert_eq!(
         json["projects"][&repo_key]["hasTrustDialogAccepted"],
         serde_json::json!(true),
-        "copy seeds trust for the Run's repo_root: {json}"
+        "the floor seeds trust for the Run's repo_root: {json}"
     );
     assert!(
         !home.join(".claude.json").exists(),
@@ -667,16 +722,22 @@ async fn copy_run_stages_allowlist_and_completes() {
     assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
 
     // Drive the run terminal (simulate the container's output + `pdo complete`).
-    write_node_output(&daemon, &run_id, "copy output\n");
+    write_node_output(&daemon, &run_id, "full output\n");
     simulate_node_done(&daemon, &run_id).await;
     let run = wait_run_status(&daemon, &run_id, "completed").await;
-    assert_eq!(run["status"], "completed", "copy run must complete: {run}");
+    assert_eq!(run["status"], "completed", "full run must complete: {run}");
 }
 
-// -- Test 8: copy excludes projects/ and bulky host state --------------------
+// -- Test 7-bis (#426): minimal against a FABRICATED host — the floor's fork ---
+//
+// The only layer-3 test that drives `minimal` with a real host `~/.claude` present.
+// That is exactly where the floor's copy-vs-synthesis fork lives: `remote-settings`
+// is COPIED in both modes (G2), while `settings.json` is SYNTHESISED in `minimal`
+// even though a rich host file sits right there (G3). Without a fabricated host, G2
+// would take its no-op branch in every layer-3 test.
 
 #[tokio::test]
-async fn copy_excludes_projects_and_bulky_host_state() {
+async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
@@ -685,7 +746,68 @@ async fn copy_excludes_projects_and_bulky_host_state() {
             .unwrap();
     fabricate_host_claude(daemon.repo_root());
 
-    let run_id = start_run(&daemon, Some("copy")).await;
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    wait_node_status(&daemon, &run_id, "running").await;
+
+    let home = staged_home(&daemon, &run_id);
+    assert!(
+        wait_until(|| home.join("settings.json").is_file()).await,
+        "staging should be seeded once the node is running"
+    );
+
+    // (a) G2 — COPY branch: the org baseline is staged even in `minimal`.
+    assert_eq!(
+        std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
+        ORG_BASELINE,
+        "the floor stages the org baseline in `minimal` too"
+    );
+
+    // (b) G3 — SYNTHESIS branch: the host `settings.json` carries `hooks`, the staged
+    // one carries the bypass key and NOTHING of the host.
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings,
+        serde_json::json!({ BYPASS_PERMISSIONS_KEY: true }),
+        "`minimal` synthesises settings.json — it never copies the host's: {settings}"
+    );
+
+    // (c) `minimal` really is minimal: nothing from the `full` profile leaked in.
+    assert!(!home.join("skills").exists());
+    assert!(!home.join("plugins").exists());
+    assert!(!home.join("CLAUDE.md").exists());
+
+    // (d) The host `.claude` is untouched (no write-back through the floor).
+    let host_settings = daemon.repo_root().join(".claude/settings.json");
+    assert_eq!(
+        std::fs::read_to_string(&host_settings).unwrap(),
+        r#"{"hooks":{"Stop":[]}}"#,
+        "the floor must never write to the host `~/.claude`"
+    );
+
+    write_node_output(&daemon, &run_id, "minimal output\n");
+    simulate_node_done(&daemon, &run_id).await;
+    let run = wait_run_status(&daemon, &run_id, "completed").await;
+    assert_eq!(
+        run["status"], "completed",
+        "minimal run must complete: {run}"
+    );
+}
+
+// -- Test 8: full excludes projects/ and bulky host state --------------------
+
+#[tokio::test]
+async fn full_excludes_projects_and_bulky_host_state() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+    fabricate_host_claude(daemon.repo_root());
+
+    let run_id = start_run(&daemon, Some("full")).await;
     wait_node_status(&daemon, &run_id, "running").await;
 
     let home = staged_home(&daemon, &run_id);
@@ -707,7 +829,7 @@ async fn copy_excludes_projects_and_bulky_host_state() {
 // -- Test 9: the real host ~/.claude is never a mount SOURCE -----------------
 
 #[tokio::test]
-async fn copy_never_mounts_the_real_host_claude() {
+async fn full_never_mounts_the_real_host_claude() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
     let daemon =
@@ -716,7 +838,7 @@ async fn copy_never_mounts_the_real_host_claude() {
             .unwrap();
     fabricate_host_claude(daemon.repo_root());
 
-    let run_id = start_run(&daemon, Some("copy")).await;
+    let run_id = start_run(&daemon, Some("full")).await;
     // `container inspect` → ABSENT → ensure_running does `create` (mounts logged).
     assert!(
         wait_until(|| log_text(&log).contains("create")).await,
@@ -761,7 +883,7 @@ async fn copy_never_mounts_the_real_host_claude() {
 // -- Test 10: no host config write-back; transcripts DO flow back ------------
 
 #[tokio::test]
-async fn copy_completes_without_host_config_writeback() {
+async fn full_completes_without_host_config_writeback() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
@@ -776,7 +898,7 @@ async fn copy_completes_without_host_config_writeback() {
     let settings_before = std::fs::read(host_claude.join("settings.json")).unwrap();
     let json_before = std::fs::read(&host_json).unwrap();
 
-    let run_id = start_run(&daemon, Some("copy")).await;
+    let run_id = start_run(&daemon, Some("full")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
@@ -888,7 +1010,7 @@ async fn registry_mode_pulls_the_sandbox_image() {
 
     // Store registry mode BEFORE starting the run — eager prep reads it fresh.
     put_image_source(&daemon, "registry").await;
-    let _run_id = start_run(&daemon, Some("pure")).await;
+    let _run_id = start_run(&daemon, Some("minimal")).await;
 
     // ensure_image (image absent) attempts a pull before any build.
     assert!(
@@ -916,7 +1038,7 @@ async fn dockerfile_mode_builds_never_pulls() {
             .unwrap();
 
     put_image_source(&daemon, "dockerfile").await;
-    let _run_id = start_run(&daemon, Some("pure")).await;
+    let _run_id = start_run(&daemon, Some("minimal")).await;
 
     assert!(
         wait_until(|| log_has_subcommand(&log, "build")).await,
@@ -1054,7 +1176,7 @@ async fn get_settings_reports_docker_unavailable_when_binary_absent() {
 // -- Test 14: a per-Trigger sandbox mode fires sandboxed Runs -----------------
 
 #[tokio::test]
-async fn trigger_with_sandbox_pure_fires_pure_run() {
+async fn trigger_with_sandbox_minimal_fires_minimal_run() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
@@ -1062,13 +1184,13 @@ async fn trigger_with_sandbox_pure_fires_pure_run() {
             .await
             .unwrap();
 
-    let trigger_id = create_trigger(&daemon, Some("pure")).await;
+    let trigger_id = create_trigger(&daemon, Some("minimal")).await;
     let run_id = fire_trigger_and_get_run(&daemon, &trigger_id).await;
 
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
-        run["sandbox"], "pure",
-        "a trigger with sandbox=pure must fire a pure Run: {run}"
+        run["sandbox"], "minimal",
+        "a trigger with sandbox=minimal must fire a minimal Run: {run}"
     );
 }
 
@@ -1083,14 +1205,14 @@ async fn trigger_without_sandbox_defers_to_instance_default() {
             .await
             .unwrap();
 
-    // Instance default = copy; the Trigger carries no sandbox → it inherits.
-    put_default_sandbox(&daemon, "copy").await;
+    // Instance default = full; the Trigger carries no sandbox → it inherits.
+    put_default_sandbox(&daemon, "full").await;
     let trigger_id = create_trigger(&daemon, None).await;
     let run_id = fire_trigger_and_get_run(&daemon, &trigger_id).await;
 
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
-        run["sandbox"], "copy",
-        "a null-sandbox Trigger must defer to the instance default (copy): {run}"
+        run["sandbox"], "full",
+        "a null-sandbox Trigger must defer to the instance default (full): {run}"
     );
 }

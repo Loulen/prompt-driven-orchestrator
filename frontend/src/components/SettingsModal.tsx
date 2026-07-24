@@ -389,13 +389,13 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
             style={{ fontSize: "12px" }}
           >
             <option value="off">off (run on the host)</option>
-            <option value="copy">copy (Docker, copy your Claude home)</option>
-            <option value="pure">pure (Docker, credentials + trust only)</option>
+            <option value="full">full (Docker, replica of your Claude home)</option>
+            <option value="minimal">minimal (Docker, staging floor only)</option>
           </select>
           <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
             The isolation mode a Run uses when neither the launch dialog nor a firing
             Trigger picks one. <span className="font-mono">off</span> runs on the host;{" "}
-            <span className="font-mono">copy</span> and <span className="font-mono">pure</span>{" "}
+            <span className="font-mono">full</span> and <span className="font-mono">minimal</span>{" "}
             run inside a Docker sandbox (require Docker).
           </div>
           <div

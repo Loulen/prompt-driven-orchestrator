@@ -1331,21 +1331,21 @@ describe("NewRunModal — sandbox selector (#410)", () => {
   it("prefills the run selector from the instance default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        default_sandbox: { effective: "copy", source: "stored", stored: "copy", env: null, default: "off" },
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off" },
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
     renderModal();
     await waitFor(() => {
-      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("copy");
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("full");
     });
   });
 
-  it("disables copy/pure and clamps to off when Docker is unavailable (availability wins over prefill)", async () => {
+  it("disables full/minimal and clamps to off when Docker is unavailable (availability wins over prefill)", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        // The instance default is `pure`, but Docker is down: greying wins.
-        default_sandbox: { effective: "pure", source: "stored", stored: "pure", env: null, default: "off" },
+        // The instance default is `minimal`, but Docker is down: greying wins.
+        default_sandbox: { effective: "minimal", source: "stored", stored: "minimal", env: null, default: "off" },
         sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
       }),
     );
@@ -1355,17 +1355,17 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     // Clamped to off (never mints a Run doomed to RunFailed).
     await waitFor(() => expect(select.value).toBe("off"));
-    // copy/pure options are disabled; the reason is surfaced.
+    // full/minimal options are disabled; the reason is surfaced.
     const options = Array.from(select.options);
-    expect(options.find((o) => o.value === "copy")?.disabled).toBe(true);
-    expect(options.find((o) => o.value === "pure")?.disabled).toBe(true);
+    expect(options.find((o) => o.value === "full")?.disabled).toBe(true);
+    expect(options.find((o) => o.value === "minimal")?.disabled).toBe(true);
     expect(screen.getByTestId("sandbox-docker-warning")).toHaveTextContent(/unreachable/i);
   });
 
   it("passes the chosen sandbox mode to createRun", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        default_sandbox: { effective: "copy", source: "stored", stored: "copy", env: null, default: "off" },
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off" },
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([
@@ -1373,9 +1373,9 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     ]);
     renderModal();
     await enterValidRepo();
-    // The prefill lands "copy".
+    // The prefill lands "full".
     await waitFor(() => {
-      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("copy");
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("full");
     });
 
     vi.useRealTimers();
@@ -1383,7 +1383,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
 
     await waitFor(() => {
-      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ sandbox: "copy" }));
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ sandbox: "full" }));
     });
   });
 
@@ -1391,7 +1391,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
     ]);
-    // A trigger whose sandbox is set to `pure` — prefills the select to `pure`.
+    // A trigger whose sandbox is set to `minimal` — prefills the select to `minimal`.
     const trigger = {
       id: "trg-sbx",
       name: "Nightly",
@@ -1404,7 +1404,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       cron: "0 9 * * *",
       guard_command: null,
       overlap_policy: "skip",
-      sandbox: "pure",
+      sandbox: "minimal",
       enabled: true,
       next_fire_at: null,
       last_fired_at: null,
@@ -1416,7 +1416,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     );
 
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("pure"));
+    await waitFor(() => expect(select.value).toBe("minimal"));
     // Trigger mode exposes the inherit option.
     expect(Array.from(select.options).some((o) => o.value === "")).toBe(true);
 

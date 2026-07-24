@@ -254,9 +254,9 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_sandbox: {
-          effective: "pure",
+          effective: "minimal",
           source: "stored",
-          stored: "pure",
+          stored: "minimal",
           env: null,
           default: "off",
         },
@@ -264,7 +264,7 @@ describe("SettingsModal", () => {
     );
     render(<SettingsModal open onClose={() => {}} />);
     const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
-    expect(select.value).toBe("pure");
+    expect(select.value).toBe("minimal");
   });
 
   it("saves the picked default sandbox (#410)", async () => {
@@ -272,9 +272,9 @@ describe("SettingsModal", () => {
     updateSettingsMock.mockResolvedValue(
       sample({
         default_sandbox: {
-          effective: "copy",
+          effective: "full",
           source: "stored",
-          stored: "copy",
+          stored: "full",
           env: null,
           default: "off",
         },
@@ -284,11 +284,11 @@ describe("SettingsModal", () => {
     render(<SettingsModal open onClose={onClose} />);
 
     const select = await screen.findByTestId("setting-default-sandbox");
-    fireEvent.change(select, { target: { value: "copy" } });
+    fireEvent.change(select, { target: { value: "full" } });
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ default_sandbox: "copy" });
+    expect(updateSettingsMock).toHaveBeenCalledWith({ default_sandbox: "full" });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
@@ -306,17 +306,17 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_sandbox: {
-          effective: "pure",
+          effective: "minimal",
           source: "stored",
-          stored: "pure",
-          env: "copy",
+          stored: "minimal",
+          env: "full",
           default: "off",
         },
       }),
     );
     render(<SettingsModal open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-default-sandbox");
-    expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=copy");
+    expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=full");
     expect(note).toHaveTextContent(/overridden/i);
   });
 });

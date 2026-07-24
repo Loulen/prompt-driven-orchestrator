@@ -344,7 +344,7 @@ export interface CreateRunRequest {
   target_repo?: string;
   source_branch?: string;
   name?: string;
-  /** Explicit sandbox mode (#410): `"off"` | `"copy"` | `"pure"`. Omitted → the
+  /** Explicit sandbox mode (#410): `"off"` | `"full"` | `"minimal"`. Omitted → the
    *  server defers to the trigger/instance default at the create chokepoint. */
   sandbox?: string;
   images?: File[];
@@ -395,7 +395,7 @@ export interface CreateTriggerRequest {
   overlap_policy?: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; omit/undefined = unbounded. */
   max_concurrent?: number | null;
-  /** Per-Trigger sandbox mode (#410): `"off"` | `"copy"` | `"pure"`, or null/omit to
+  /** Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or null/omit to
    *  inherit the instance default. */
   sandbox?: string | null;
 }

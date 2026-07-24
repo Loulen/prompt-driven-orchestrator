@@ -153,10 +153,15 @@ Quatre points de cette ADR sont amendés à l'issue de la validation manuelle du
 merge vers `main`. Le détail du modèle de contenu vit dans **ADR-0031** ; ici, ce qui change du
 modèle d'*exécution*.
 
-1. **Vocabulaire.** Le tri-état devient `off` | `minimal` | `full` (ex-`pure`/`copy`). Aucun alias
-   de compatibilité : les seules valeurs persistées vivaient dans la base de l'instance de test,
-   nettoyée avant le renommage. `minimal` est plus juste que `pure` depuis que le plancher de
-   garanties (ADR-0031 §1) y seede des consentements — le mode n'est pas *pur*, il est *minimal*.
+1. **Vocabulaire (réalisé en #426).** Le tri-état devient `off` | `minimal` | `full`
+   (ex-`pure`/`copy`). Aucun alias de compatibilité : aucune valeur persistée n'existe dans
+   l'instance prod ni dans l'instance dev (0/399 et 0/103 `run_started` ; ni l'une ni l'autre n'a même
+   les colonnes `default_sandbox` / `triggers.sandbox`), un alias n'aurait donc servi que des
+   instances de validation jetables. Corollaire assumé : un token pré-renommage retrouvé dans un log
+   d'événements se dégrade en `off`, donc vers **moins** d'isolation — les trois décodeurs le
+   **loggent** (#426), le point 4 interdisant tout fallback hôte silencieux. `minimal` est plus juste
+   que `pure` depuis que le plancher de garanties (ADR-0031 §1) y seede des consentements — le mode
+   n'est pas *pur*, il est *minimal*.
 
 2. **Les identity mounts ne sont plus une liste fermée.** Aux quatre mounts du point 1 (repo,
    `.claude` stagé, `.claude.json` stagé, binaire `pdo`) s'ajoutent les **exceptions déclarées** par
@@ -188,10 +193,14 @@ modèle d'*exécution*.
    installé, auto-updater off, `$HOME` inscriptible au chemin hôte) et rouvrirait une question
    d'auth que le pull anonyme évite.
 
+Le corps de cette ADR (points 1-10) est laissé **tel quel**, dans le vocabulaire d'avant #426 : y
+lire `full` partout où il dit `copy`, et `minimal` partout où il dit `pure`.
+
 ## Relations
 
 - **ADR-0031** (profils de staging) : *ce que* le home stagé contient, là où cette ADR fixe *où* et
-  *comment* le Run s'exécute.
+  *comment* le Run s'exécute. §1 (le plancher de garanties) est **réalisé en #426**, avec le point 1
+  de l'amendement ci-dessus.
 - **ADR-0004** (stratégie de test) : golden des tails wrappées (unit) + layer-3 (Docker indispo →
   RunFailed, off inchangé, cleanup/boot/kill) via les seams `docker_cmd_override` +
   `sandbox_home_override` (per-daemon, #181) — jamais d'`std::env` global ni de vrai Docker en CI.

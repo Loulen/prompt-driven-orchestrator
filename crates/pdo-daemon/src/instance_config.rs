@@ -57,6 +57,15 @@ pub struct InstanceConfig {
     /// ([`crate::event_log::default_sandbox_with`]) owns the precedence; the create-run
     /// chokepoint then feeds it through [`crate::event_log::effective_sandbox`].
     pub default_sandbox: Option<String>,
+    /// Stored path to the sandbox Dockerfile, or `None` when unset (#431). `None`
+    /// falls through to the env seam
+    /// ([`crate::sandbox_image::DOCKERFILE_PATH_ENV`]) then the seeded default
+    /// (`<sandbox_root>/Dockerfile`). `Some("")` is the clear sentinel — [`update`]
+    /// normalises it to SQL `NULL` so it never wins precedence. The resolver
+    /// ([`crate::sandbox_image::resolve_dockerfile`]) owns the precedence. Free-text
+    /// pass-through of an absolute path (ADR-0001): `PUT /settings` gates it as an
+    /// existing regular file, and the prep fails loud if it vanishes.
+    pub dockerfile_path: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -84,6 +93,9 @@ pub struct UpdateInstanceConfig {
     /// unset (same `""`-sentinel as `default_model`/`image_source`); `None` leaves it
     /// untouched.
     pub default_sandbox: Option<String>,
+    /// Set the sandbox Dockerfile path (#431). `Some("")` clears it back to unset
+    /// (same `""`-sentinel as the columns above); `None` leaves it untouched.
+    pub dockerfile_path: Option<String>,
 }
 
 impl UpdateInstanceConfig {
@@ -94,6 +106,7 @@ impl UpdateInstanceConfig {
             && self.default_model.is_none()
             && self.image_source.is_none()
             && self.default_sandbox.is_none()
+            && self.dockerfile_path.is_none()
     }
 }
 
@@ -114,6 +127,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             triggers_paused    INTEGER,
             image_source       TEXT,
             default_sandbox    TEXT,
+            dockerfile_path    TEXT,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -193,6 +207,22 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#431 databases: the `dockerfile_path` column is absent
+    // on tables created before the sandbox Dockerfile became a settable path. Same
+    // guarded `ADD COLUMN` idiom as the columns above — safe on every boot, NULLABLE so
+    // the `stored → env → seeded default` fall-through survives.
+    let has_dockerfile_path = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'dockerfile_path'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_dockerfile_path {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN dockerfile_path TEXT")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -204,6 +234,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         default_model: row.get("default_model"),
         image_source: row.get("image_source"),
         default_sandbox: row.get("default_sandbox"),
+        dockerfile_path: row.get("dockerfile_path"),
         updated_at: row.get("updated_at"),
     }
 }
@@ -249,6 +280,9 @@ pub async fn update(
     if edit.default_sandbox.is_some() {
         sets.push("default_sandbox = ?");
     }
+    if edit.dockerfile_path.is_some() {
+        sets.push("dockerfile_path = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -282,6 +316,12 @@ pub async fn update(
     if let Some(v) = edit.default_sandbox {
         // "" = clear sentinel → SQL NULL (#410, mirrors default_model/image_source).
         // The resolver then falls back env→default(off, the byte-identical host path).
+        query = query.bind(if v.is_empty() { None } else { Some(v) });
+    }
+    if let Some(v) = edit.dockerfile_path {
+        // "" = clear sentinel → SQL NULL (#431, mirrors default_model/image_source).
+        // The resolver then falls back env→seeded default; a stored "" would win
+        // precedence and be treated as unset only by the empty-string filter.
         query = query.bind(if v.is_empty() { None } else { Some(v) });
     }
     query = query.bind(crate::event_log::now_iso());
@@ -348,6 +388,7 @@ mod tests {
         assert_eq!(cfg.default_model, None);
         assert_eq!(cfg.image_source, None);
         assert_eq!(cfg.default_sandbox, None);
+        assert_eq!(cfg.dockerfile_path, None);
         assert!(!cfg.updated_at.is_empty(), "seed must stamp updated_at");
     }
 
@@ -557,6 +598,142 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.default_sandbox.as_deref(), Some("full"));
+    }
+
+    #[tokio::test]
+    async fn update_sets_dockerfile_path() {
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                dockerfile_path: Some("/repo/docker/sandbox.Dockerfile".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated.dockerfile_path.as_deref(),
+            Some("/repo/docker/sandbox.Dockerfile")
+        );
+        // A re-read confirms persistence (not just the returned row).
+        assert_eq!(
+            get(&db).await.unwrap().dockerfile_path.as_deref(),
+            Some("/repo/docker/sandbox.Dockerfile")
+        );
+        // Sibling knobs stay untouched.
+        assert_eq!(updated.image_source, None);
+    }
+
+    #[tokio::test]
+    async fn update_clears_dockerfile_path_on_empty_string() {
+        // "" is the clear sentinel: it resets the column to NULL (mirrors #347/#411/#410),
+        // so the resolver falls back env→seeded default.
+        let db = test_db().await;
+        update(
+            &db,
+            UpdateInstanceConfig {
+                dockerfile_path: Some("/repo/docker/sandbox.Dockerfile".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let cleared = update(
+            &db,
+            UpdateInstanceConfig {
+                dockerfile_path: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cleared.dockerfile_path, None,
+            "empty string must clear the stored Dockerfile path back to NULL"
+        );
+        // And the raw column really is SQL NULL, not `''` (a stored `''` would win
+        // precedence and be treated as unset only by the empty-string filter).
+        let raw: Option<String> =
+            sqlx::query_scalar("SELECT dockerfile_path FROM instance_config WHERE id = 1")
+                .fetch_optional(&db)
+                .await
+                .unwrap()
+                .flatten();
+        assert_eq!(raw, None, "clear must persist NULL, never ''");
+    }
+
+    #[tokio::test]
+    async fn dockerfile_path_only_edit_is_not_a_noop() {
+        // Guard-rail for the `is_empty()` addition: an edit touching ONLY
+        // dockerfile_path (all other knobs None) must still write. Without the
+        // `dockerfile_path.is_none()` clause it would fall into the no-op branch and
+        // silently never persist.
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                dockerfile_path: Some("/x/Dockerfile".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.dockerfile_path.as_deref(), Some("/x/Dockerfile"));
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_dockerfile_path_schema() {
+        // Installs created before #431 lack the `dockerfile_path` column. Simulate the
+        // pre-#431 schema (also missing default_model + triggers_paused + image_source +
+        // default_sandbox, so this covers the whole guarded-ALTER chain), then prove
+        // `init` adds the column idempotently and it is writable afterwards, without
+        // clobbering the stored knob.
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap        INTEGER,
+                reaper_ttl_secs    INTEGER,
+                guard_timeout_secs INTEGER,
+                updated_at         TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 17, ?)")
+            .bind(crate::event_log::now_iso())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(
+            cfg.session_cap,
+            Some(17),
+            "existing knob must survive the ALTER"
+        );
+        assert_eq!(cfg.dockerfile_path, None, "new column defaults to NULL");
+
+        // And the migrated column is writable.
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                dockerfile_path: Some("/x/Dockerfile".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.dockerfile_path.as_deref(), Some("/x/Dockerfile"));
     }
 
     #[tokio::test]

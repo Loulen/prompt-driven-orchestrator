@@ -65,6 +65,11 @@ pub(crate) struct SandboxContext {
     /// `instance_config` (stored → env → default Registry). Passed to
     /// `sandbox_image::ensure_image` in the sync path — no DB access in the core.
     pub(crate) image_source: sandbox_image::ImageSource,
+    /// WHICH Dockerfile to hash and build (#431): resolved once at the edge from the
+    /// SAME `instance_config` read (stored → env `PDO_SANDBOX_DOCKERFILE` → the seeded
+    /// default). Carries the winning tier, so a missing path fails with a reason that
+    /// names both the path and who chose it.
+    pub(crate) dockerfile: sandbox_image::ResolvedDockerfile,
 }
 
 impl SandboxContext {
@@ -102,12 +107,15 @@ pub(crate) async fn context_from_state(
     let pdo_bin = sandbox_container::pdo_bin_path()?;
     // Read fresh at each prep → a PUT /settings takes effect at the next ensure
     // (ADR-0015), like the cap/TTL/model seams. A DB error falls back env→default,
-    // never failing the prep.
-    let stored_image_source = crate::instance_config::get(&state.db)
-        .await
-        .ok()
-        .and_then(|c| c.image_source);
-    let image_source = sandbox_image::image_source_with(stored_image_source);
+    // never failing the prep. ONE read serves BOTH sandbox knobs (#431): two reads
+    // could straddle a concurrent PUT and mix tiers.
+    let cfg = crate::instance_config::get(&state.db).await.ok();
+    let image_source =
+        sandbox_image::image_source_with(cfg.as_ref().and_then(|c| c.image_source.clone()));
+    let dockerfile = sandbox_image::dockerfile_with(
+        cfg.as_ref().and_then(|c| c.dockerfile_path.clone()),
+        &sandbox_root,
+    );
     Ok(SandboxContext {
         docker_bin: docker_bin(state),
         run_id: run_state.run_id.clone(),
@@ -122,6 +130,7 @@ pub(crate) async fn context_from_state(
         gid: sandbox_container::host_gid(),
         pdo_bin,
         image_source,
+        dockerfile,
     })
 }
 
@@ -249,11 +258,18 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     }
 
     // 2. Ensure the content-addressed image (`pdo-sandbox:h-<hash>`) exists —
-    //    pull-then-retag from GHCR (registry, default), or build it from the seeded
-    //    Dockerfile (dockerfile mode / pull fallback), per `ctx.image_source` (#411).
-    let image_ref =
-        sandbox_image::ensure_image(&ctx.docker_bin, &ctx.sandbox_root, ctx.image_source)
-            .context("failed to ensure the sandbox image")?;
+    //    pull-then-retag from GHCR (registry, default), or build it from the RESOLVED
+    //    Dockerfile (dockerfile mode / custom path / pull fallback), per
+    //    `ctx.image_source` (#411) and `ctx.dockerfile` (#431). A resolved path that is
+    //    not a readable regular file is a hard error here, never a silent fallback to
+    //    the seeded default (ADR-0030 pt 4).
+    let image_ref = sandbox_image::ensure_image(
+        &ctx.docker_bin,
+        &ctx.sandbox_root,
+        &ctx.dockerfile,
+        ctx.image_source,
+    )
+    .context("failed to ensure the sandbox image")?;
 
     // 3. Assemble the container spec + ensure the long-lived container is up.
     let staged_home = sandbox_staging::staged_claude_home(&ctx.sandbox_root, &ctx.run_id);
@@ -404,6 +420,7 @@ mod tests {
         let home = tmp.join("home");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
+        let sandbox_root = tmp.join("sandbox");
         SandboxContext {
             docker_bin,
             run_id: "r1".to_string(),
@@ -412,7 +429,7 @@ mod tests {
             run_worktree: tmp.join("repo/.pdo/runs/r1/worktree"),
             daemon_port: 6172,
             home_root: home.clone(),
-            sandbox_root: tmp.join("sandbox"),
+            sandbox_root: sandbox_root.clone(),
             host_home: home,
             uid: 1000,
             gid: 1000,
@@ -420,6 +437,8 @@ mod tests {
             // Dockerfile → build-probe path (network-free); keeps the existing
             // ensure_ready assertions (image inspect + build/create) intact (#411).
             image_source: sandbox_image::ImageSource::Dockerfile,
+            // The seeded default location / `default` tier — the pre-#431 input (#431).
+            dockerfile: sandbox_image::resolve_dockerfile(None, None, &sandbox_root),
         }
     }
 

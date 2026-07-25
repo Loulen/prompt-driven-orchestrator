@@ -545,6 +545,18 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **`effective_repo` (résolu) ≠ `target_repo` (brut).** Le champ brut `target_repo` (nullable) reste la valeur saisie par l'utilisateur — il pilote le badge repo de la ligne Trigger, le panneau détail, le pré-remplissage Run-now. Le champ résolu `effective_repo` (toujours concret, exposé par les *endpoints de liste* uniquement) ne sert qu'à la clé de regroupement. **On ne réécrit jamais `target_repo` côté serveur** : sinon badge/détail/pré-remplissage afficheraient un repo jamais saisi en mono-repo (régression). Le regroupement vit **côté client** (UI réversible) ; le serveur se contente de résoudre la clé. Même posture pour le **filtrage** de la liste Runs (#336) : trois filtres client-side (repo cible résolu, nom de pipeline snapshotté, trigger — dont « Manual » pour `triggered_by` absent), combinés en ET, options dérivées des runs eux-mêmes (un pipeline renommé/supprimé ou un trigger supprimé reste filtrable), sans paramètre de requête ajouté à `GET /runs`.
 - **Repos récents (`GET /repos/recent`).** Projection *à la lecture* des `target_repo` portés par les événements `RunStarted` : jusqu'à 5 chemins distincts, plus récent d'abord. Comparaison **verbatim** (cohérent avec la règle jamais-canonicaliser ci-dessus : `/a/repo` et `/a/repo/` comptent comme deux entrées). Les Runs lancés sans `target_repo` explicite ne contribuent pas aux récents.
 
+### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
+
+L'**explorateur de fichiers** est la brique unique de sélection de chemin à la souris : une route de listing à **un niveau** (`GET /fs/browse?path=&files=&hidden=`) et **un** composant (`FsExplorerModal`). Deux consommateurs aujourd'hui — le **sélecteur de repo** du New-Run modal (`mode="dir"`) et le **sélecteur de Dockerfile** des Settings (`mode="file" showHidden`) — zéro duplication. Né repo-spécifique (#131, `/repos/browse` cloué dans `RepoCombobox`), généralisé et **renommé franchement, sans alias**, en #431.
+
+- **Défauts = comportement historique au bit près.** Sans paramètre : répertoires seuls, dot-entrées filtrées. `files=true` ajoute les **fichiers réguliers**, `hidden=true` les dot-entrées. Vocabulaire filaire **strict** : seuls les littéraux minuscules `true`/`false` (un `?files=1` est un `400 text/plain`, jamais un `false` silencieux).
+- **Ce qui n'est jamais offert** (dans aucun mode) : liens symboliques **cassés** et fichiers **spéciaux** (fifo, socket, device) — tout consommateur d'un chemin choisi le résout, donc l'entrée serait impickable par construction, et un fifo offert à `ensure_image` donnerait une lecture qui bloque indéfiniment. Un symlink vers un répertoire est **suivi** (`is_dir: true` **et** `is_symlink: true`).
+- **Cap de 1000 par genre, répertoires prioritaires** sur le budget. Un budget unique laisserait les fichiers **affamer** les répertoires (50 000 fichiers + 2 sous-dossiers ⇒ plus rien à traverser) : c'est une panne du picker, pas un détail cosmétique.
+- **Mode fichier = select-then-confirm**, jamais pick-and-close : un seul chemin vers `onPick`, et un misclick ne peut pas écrire silencieusement dans un réglage persisté.
+- **Exposition, dite exactement** : le daemon bind `0.0.0.0` et cette surface n'a **aucune authentification** (#260 est **closed**, pas différée — la portée LAN est assumée par le propriétaire). Les drapeaux élargissent l'énumération des noms de répertoires aux **noms de fichiers** ; les **contenus** ne sont jamais renvoyés (l'endpoint n'émet que des noms, un chemin et trois booléens). La bonne frontière est l'authentification de toute la surface HTTP — autre chantier.
+
+_Éviter_ : « explorateur de repo » / « repo browser » (il ne l'est plus), « `/repos/browse` » (retiré, sans alias — la route répond désormais la SPA), « lister récursivement » (un niveau à la fois, jamais de récursion).
+
 ---
 
 ## Trigger
@@ -723,7 +735,7 @@ POST   /runs/<id>/commands                 — émet une commande (body: { kind,
 GET    /repos/validate?path=               — valide un repo cible (chemin absolu + is_dir + `git rev-parse`)
 GET    /repos/branches?path=               — liste les branches locales du repo donné
 GET    /repos/recent                       — jusqu'à 5 `target_repo` distincts, projetés des événements `run_started`, plus récent d'abord
-GET    /repos/browse?path=                 — listing filesystem à un niveau (explorateur du New-Run modal, #131 ; durcissement d'exposition fs différé à #260)
+GET    /fs/browse?path=&files=&hidden=     — listing filesystem à un niveau (explorateur générique : sélecteur de repo du New-Run modal + sélecteur de Dockerfile des Settings, #131/#431 ; surface non authentifiée — #260 est closed, pas différée —, les drapeaux élargissent l'énumération des noms de répertoires aux noms de fichiers, jamais aux contenus)
 ```
 
 ### Conséquence pour la prompt augmentation
@@ -963,22 +975,28 @@ d'un registry et une image buildée localement **interchangeables sous le même 
 _Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le
 conteneur, #406).
 
-**Dockerfile embarqué / seedé** :
-Le Dockerfile est **embarqué dans le binaire** (contenu minimal : Ubuntu, git, ripgrep, Claude Code
-auto-update off, sudo NOPASSWD ; ni tmux ni `pdo`, fournis par l'hôte). Au premier usage il est
-**seedé** sur disque à `~/.pdo/sandbox/Dockerfile`, puis **jamais écrasé** : l'utilisateur peut
-l'éditer, et l'édition change le hash donc le tag donc déclenche un rebuild. _Éviter_ : confondre le
-Dockerfile **embarqué** (source de vérité dans le binaire) et le **seedé** (copie éditable sur
-disque) ; « image de base ».
+**Dockerfile embarqué / seedé / résolu** :
+Trois choses distinctes depuis #431. Le Dockerfile est **embarqué dans le binaire** (contenu minimal :
+Ubuntu, git, ripgrep, Claude Code auto-update off, sudo NOPASSWD ; ni tmux ni `pdo`, fournis par
+l'hôte). Au premier usage il est **seedé** sur disque à `~/.pdo/sandbox/Dockerfile` — inconditionnellement,
+et **jamais ailleurs** — puis **jamais écrasé** : c'est la copie de référence éditable et la
+matérialisation du tier `default`. Le **résolu** est celui que `ensure_image` hashe et builde
+réellement : le seedé par défaut, ou celui que `dockerfile_path` désigne. _Éviter_ : confondre les
+trois ; « image de base ».
 
 **`ensure_image()`** :
 Garantit que `pdo-sandbox:h-<hash>` existe **localement** et retourne **toujours** le ref local
-(invariant `sandbox_container`) : présente → réutilise (**fast-path**, zéro réseau) ; absente et
-`image_source=registry` (défaut) → `docker pull` le ref GHCR puis **retag** sous le ref local, avec
-**fallback build** si le pull échoue (offline / 404 / registry down) ; `image_source=dockerfile` →
-`docker build` direct depuis le Dockerfile sur disque, **jamais** de pull ; échec de build → erreur
-explicite (consommée par le fail-fast du Run). _Éviter_ : « ensure = build-**seul** » (c'est
-build-**si-absent**, et pull-**d'abord** en registry), « warm-up ».
+(invariant `sandbox_container`) : seed du Dockerfile par défaut → contrôle que le Dockerfile
+**résolu** est un fichier régulier (sinon **erreur dure** nommant chemin + tier, jamais de repli) →
+présente → réutilise (**fast-path**, zéro réseau) ; absente, `image_source=registry` (défaut) **et**
+Dockerfile résolu **à l'emplacement seedé par défaut** → `docker pull` le ref GHCR puis **retag** sous
+le ref local, avec **fallback build** si le pull échoue (offline / 404 / registry down) ;
+`image_source=dockerfile` **ou** Dockerfile résolu ailleurs → `docker build` direct, **jamais** de pull
+(un hash custom ne peut pas exister en amont) ; échec de build → erreur explicite (consommée par le
+fail-fast du Run). Le prédicat de skip-pull porte sur le **chemin**, pas sur les octets (ADR-0030 §5 —
+un prédicat-octets classerait « custom » toute machine ayant mis PDO à jour). _Éviter_ : « ensure =
+build-**seul** » (c'est build-**si-absent**, et pull-**d'abord** en registry au chemin par défaut),
+« warm-up ».
 
 **`image_source` (par-daemon)** :
 Le réglage qui pilote d'où `ensure_image` tire l'image : `registry` (défaut, pull GHCR-puis-retag +
@@ -986,6 +1004,21 @@ fallback build) | `dockerfile` (build local direct). **Par-daemon**, jamais par-
 du **mode** sandbox porté par `RunStarted`) : colonne additive `instance_config`, précédence
 `stored → env (PDO_SANDBOX_IMAGE_SOURCE) → default(registry)` (ADR-0015), éditable dans la Settings
 UI. _Éviter_ : « mode registry » (le mode = off/minimal/full), « image_source par run ».
+
+**`dockerfile_path` (par-daemon)** :
+Le réglage qui pilote **quel** Dockerfile `ensure_image` hashe et builde — typiquement un Dockerfile
+versionné dans le repo, donc partagé par l'équipe. **Par-daemon**, jamais par-Run : colonne additive
+nullable `instance_config`, sentinelle `Some("")` = clear, précédence
+`stored → env (PDO_SANDBOX_DOCKERFILE) → défaut seedé` (ADR-0015), résolveur **pur**
+(`resolve_dockerfile`) partagé par la prep **et** `GET /settings` (0 drift, leçon #373). Trois
+propriétés qui se retiennent ensemble : (a) le tag reste le hash du contenu du fichier **pointé**, donc
+l'édition rebuilde ; (b) le contexte de build reste `<sandbox_root>/.build-ctx`, **vide** — un
+Dockerfile pointé doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemin qui n'est pas un fichier
+régulier **échoue fort au prep** (`RunFailed` nommant chemin + tier), plus un `400` à `PUT /settings`
+comme gate précoce — le tier **env** contourne ce `400` par construction (échappatoire assumée pour un
+volume amovible), les deux tiers restent gatés au prep. La Settings UI affiche le **chemin résolu** et
+le **tag** qui en découle. _Éviter_ : « Dockerfile du run » (c'est par-daemon), « override d'image »
+(un ref d'image tout fait est hors périmètre), croire qu'un `COPY` fonctionne.
 
 **`registry_image_ref` / `ghcr.io/loulen/pdo-sandbox`** :
 Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` — **même hash** que le ref
@@ -1154,7 +1187,25 @@ l'inférence client (écartée : faux positifs advance-détaché/#159).
   `match` **vide**. Restent à livrer par les slices **profils** : le profil de staging lui-même (liste
   nommée/éditable/sélectionnable, diff `disabled`/`extras`, défauts virtuels, gel dans `RunStarted`,
   échec fort sur nom inconnu — ADR-0031 §2/§5/§6/§7), les **exceptions `$HOME`** (§3/§4, amendement
-  ADR-0030 §2/§3) et le réglage `dockerfile_path` (amendement ADR-0030 §5).
+  ADR-0030 §2/§3).
+- **Réalisé (#431, amendement ADR-0030 §5)** : **explorateur de fichiers générique + Dockerfile
+  réglable**. `GET /repos/browse` devient `GET /fs/browse` (renommage franc, sans alias : rien de cette
+  route n'était repo-spécifique) et gagne deux drapeaux optionnels `files` / `hidden` dont les défauts
+  reproduisent le listing d'avant **au bit près** (répertoires seuls, dot-entrées filtrées), plus un
+  `is_dir` par entrée ; le cap de 1000 devient **par genre, répertoires prioritaires** (un budget unique
+  laissait 50 000 fichiers affamer les 2 répertoires à traverser — panne fonctionnelle du picker, pas un
+  détail). Côté FE, l'explorateur sort de `RepoCombobox` dans un `FsExplorerModal` réutilisable
+  (`mode: "dir" | "file"`, `showHidden`, testids préfixés) — `RepoCombobox` en est le premier
+  consommateur, **inchangé au pixel** (ses 12 tests et l'e2e `repo-explorer-pick` passent sans édition
+  d'assertion), le `SettingsModal` le second. Réglage **par-daemon** `dockerfile_path` (voir le lexique
+  ci-dessus) ; la Settings UI expose le **chemin résolu** et le **tag** `pdo-sandbox:h-<hash>` qui en
+  découle, pour que « éditer le Dockerfile déclenche un rebuild » cesse d'être un savoir tribal.
+  `/fs` étant un **nouveau préfixe top-level**, il entre dans la whitelist du proxy vite (même piège que
+  `/nodes` #345 et `/stats` #377). Couvert par unit (query/classification/merge, résolveur pur,
+  `ensure_image`, `instance_config`, settings HTTP) + layer-3 (`fs_browse` : anti-SPA sur le
+  content-type, forme additive, les 2 drapeaux, liens cassés et spéciaux invisibles ; `sandbox_tracer` :
+  build depuis le chemin custom **sans pull**, et chemin disparu → `RunFailed` nommant chemin + tier)
+  + FE (vitest) + FP-431 (L5, Docker réel).
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
   (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).

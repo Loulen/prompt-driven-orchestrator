@@ -565,13 +565,20 @@ export function fetchRecentRepos(): Promise<string[]> {
   return request<string[]>("GET", "/repos/recent");
 }
 
-// --- Filesystem explorer (#131) ---
+// --- Filesystem explorer (#131, generalised in #431) ---
 
 export interface BrowseEntry {
   name: string;
   path: string;
+  /** `.git`-presence hint (never a `git rev-parse`); meaningless for a file. */
   is_git_repo: boolean;
   is_symlink: boolean;
+  /**
+   * #431: `true` for a directory (symlinks FOLLOWED), `false` for a regular file.
+   * Always emitted, including under the dirs-only default where it is invariably
+   * `true`, so an entry's shape never depends on the request.
+   */
+  is_dir: boolean;
 }
 
 export interface BrowseResponse {
@@ -580,22 +587,42 @@ export interface BrowseResponse {
   /** Parent directory, or null only at the filesystem root. */
   parent: string | null;
   entries: BrowseEntry[];
-  /** True iff the post-filter directory count exceeded the listing cap. */
+  /** True iff the post-filter entry count exceeded the listing cap. */
   truncated: boolean;
   /** Non-null when the dir was navigable but unlistable (e.g. permission denied). */
   error: string | null;
 }
 
 /**
- * List the directories inside `path` (or the daemon's default root when omitted).
+ * Optional widening of the listing (#431). Both flags are **off** by default, which
+ * is the pre-rename behaviour bit for bit: directories only, dot-entries filtered.
+ * A flag only travels on the wire when `true`, so the default call's URL is exactly
+ * `/fs/browse`, with no query string at all.
+ */
+export interface BrowseOptions {
+  files?: boolean;
+  hidden?: boolean;
+}
+
+/**
+ * List `path` (or the daemon's default chain `$HOME → repo_root → /` when omitted).
  * 200 always carries the {@link BrowseResponse} shape — including the in-body
  * `error` for navigable-but-unlistable dirs — so callers branch on `data.error`.
  * Only genuine caller/system bugs (relative path → 400, collapsed default → 500)
  * throw here.
+ *
+ * `path` stays the FIRST positional parameter, and in default mode callers must pass
+ * it as the SOLE argument: `RepoCombobox.test.tsx` pins `browseFs(undefined)` /
+ * `browseFs("/abs/repo/path")` and vitest compares arity strictly (a trailing
+ * `undefined` is a recorded second argument and breaks `toHaveBeenCalledWith`).
  */
-export function browseRepos(path?: string): Promise<BrowseResponse> {
-  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  return request<BrowseResponse>("GET", `/repos/browse${qs}`, { label: "GET /repos/browse" });
+export function browseFs(path?: string, opts: BrowseOptions = {}): Promise<BrowseResponse> {
+  return request<BrowseResponse>("GET", "/fs/browse", {
+    // `request` drops undefined-valued keys, so `|| undefined` keeps `files=false`
+    // off the wire instead of sending a redundant explicit default.
+    query: { path, files: opts.files || undefined, hidden: opts.hidden || undefined },
+    label: "GET /fs/browse",
+  });
 }
 
 export function killNode(

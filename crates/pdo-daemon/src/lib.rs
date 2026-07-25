@@ -1912,12 +1912,16 @@ struct BrowseEntry {
     is_git_repo: bool,
     is_symlink: bool,
     /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file (#431).
-    /// Declared **last** on purpose: `serde_json` is built without `preserve_order`, so
-    /// the `json!` envelope serialises its keys alphabetically while this derived struct
-    /// serialises in declaration order — putting `is_dir` last makes the default
-    /// response byte-for-byte the pre-#431 one plus a `,"is_dir":true` before each
-    /// entry's closing brace. Always emitted, including under the dirs-only default
-    /// where it is invariably `true`, so an entry's shape never depends on the query.
+    /// Always emitted, including under the dirs-only default where it is invariably
+    /// `true`, so an entry's shape never depends on the query.
+    ///
+    /// Declaration order is NOT load-bearing here, contrary to what this comment used to
+    /// claim: `fs_browse` builds its envelope with `json!`, which runs every entry through
+    /// `serde_json::to_value`, and `serde_json` is built without `preserve_order` — so each
+    /// entry lands in a `BTreeMap` and reaches the wire with its keys sorted
+    /// alphabetically (`is_dir` FIRST), whatever the order below. Pre-#431 responses went
+    /// through the same path and were already sorted, so the only wire delta remains the
+    /// added key — the AC holds, but by key-order irrelevance (RFC 8259), not by a trick.
     is_dir: bool,
 }
 

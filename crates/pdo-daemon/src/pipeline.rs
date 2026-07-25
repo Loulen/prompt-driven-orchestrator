@@ -665,6 +665,66 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 
     validate_switch_when_clauses(&pipeline)?;
 
+    // ── Bounded-region auto-materialization (ADR-0011 clause (b) / #396) ──────
+    //
+    // A `bounded` loop is born by auto-detection of a cycle, "pour qu'aucun cycle
+    // ne soit accidentellement non-borné". That invariant belongs to the model
+    // boundary, not to a canvas gesture: before #396 it was applied only by the
+    // editor's `addEdge`, so a cycle that arrived any other way (a file written by
+    // hand, an imported workflow, a pipeline merely *reopened*) rendered without a
+    // region — no `↻` header, no editable `max_iter` — and, worse, ran through the
+    // scheduler's generic forward-spawn path with no lap counter and no
+    // `Exhausted` halt: an unbounded cycle.
+    //
+    // Materializing here fixes both faces at once, because every reader funnels
+    // through this function: the editor's `GET /pipelines/<id>`, the run snapshot
+    // re-read on each advance, the library twin used by the synced/diverged star.
+    // Derived, never written: the file on disk is untouched (opening a pipeline
+    // does not dirty it), and the id is a pure function of the member set, so
+    // repeated parses agree and the region's lap counter keeps its identity.
+    pipeline
+        .loops
+        .extend(crate::loop_region::materialize_missing_regions(&pipeline));
+
+    // Legacy control nodes are the carve-out above (a `type: loop` node governs
+    // its own laps, so no region is materialized over it). Say so out loud rather
+    // than leaving the canvas silently unable to render the loop: `pdo migrate`
+    // dissolves them into the edge-conditional + `loops:` model, reading the real
+    // bound off the node instead of inventing DEFAULT_MAX_ITER (#396).
+    let legacy: Vec<String> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.node_type, NodeType::Loop | NodeType::Switch))
+        .map(|n| {
+            let kind = if n.node_type == NodeType::Loop {
+                "loop"
+            } else {
+                "switch"
+            };
+            format!("{kind} '{}'", n.id)
+        })
+        .collect();
+    if !legacy.is_empty() {
+        // The `max_iter` tail is added only when a loop node is actually present:
+        // a `switch`-only pipeline has no bound to edit, and a diagnostic that
+        // names a control the user cannot find is its own small lie.
+        let has_loop = pipeline.nodes.iter().any(|n| n.node_type == NodeType::Loop);
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message: format!(
+                "legacy control node(s) {} were removed from the model (ADR-0011) and \
+                 the canvas cannot represent them — run `pdo migrate` to convert them \
+                 into conditional edges and a `loops:` region{}",
+                legacy.join(", "),
+                if has_loop {
+                    "; until then this loop has no region on the canvas and its `max_iter` is not editable"
+                } else {
+                    ""
+                }
+            ),
+        });
+    }
+
     Ok(ParseResult {
         pipeline,
         diagnostics,
@@ -2847,21 +2907,149 @@ edges:
 
     // --- Existing variants unchanged (issue #46) ---
 
+    // --- Bounded-region auto-materialization at the parse boundary (#396) ---
+
+    #[test]
+    fn parse_materializes_a_region_for_an_undeclared_cycle() {
+        // ADR-0011 (b): a cycle is never accidentally unbounded. Before #396 this
+        // was applied only by the editor's `addEdge`, so a cycle that arrived any
+        // other way — hand-written file, imported workflow, or simply a pipeline
+        // reopened — parsed region-less: no `↻` header and no editable `max_iter`
+        // on the canvas, and no lap counter in the scheduler.
+        let yaml = with_start_end(
+            r#"
+name: cyclic
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+  - id: ab000002
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+edges:
+  - source: { node: ab000001, port: code }
+    target: { node: ab000002, port: code }
+  - source: { node: ab000002, port: review }
+    target: { node: ab000001, port: task }
+    else: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.loops.len(), 1);
+        let region = &result.pipeline.loops[0];
+        assert_eq!(region.kind, LoopKind::Bounded);
+        let mut members = region.members.clone();
+        members.sort();
+        assert_eq!(members, vec!["ab000001", "ab000002"]);
+        assert_eq!(
+            region.id,
+            crate::loop_region::generated_region_id(&region.members)
+        );
+        // Derived, never invented: re-parsing the same bytes yields the same id, so
+        // the region a live run counts laps against keeps its identity.
+        assert_eq!(
+            parse_pipeline(&yaml).unwrap().pipeline.loops[0].id,
+            region.id
+        );
+        // Materialization is not a complaint — it is the documented default.
+        assert!(
+            result.diagnostics.is_empty(),
+            "a plain cycle must parse clean: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn parse_keeps_a_declared_region_verbatim() {
+        // No-regression half of #396: a pipeline that already carries its `loops:`
+        // block keeps that entry — its own id, its own bound — and gains no
+        // duplicate region beside it.
+        let yaml = with_start_end(
+            r#"
+name: cyclic-declared
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+  - id: ab000002
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+edges:
+  - source: { node: ab000001, port: code }
+    target: { node: ab000002, port: code }
+  - source: { node: ab000002, port: review }
+    target: { node: ab000001, port: task }
+    else: true
+loops:
+  - id: my-loop
+    kind: bounded
+    members: [ab000001, ab000002]
+    max_iter: 2
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert_eq!(result.pipeline.loops.len(), 1);
+        assert_eq!(result.pipeline.loops[0].id, "my-loop");
+        assert_eq!(
+            crate::loop_region::resolve_region_max_iter(&result.pipeline.loops[0], &HashMap::new()),
+            2
+        );
+    }
+
+    #[test]
+    fn parse_diagnoses_legacy_control_nodes_instead_of_wrapping_them() {
+        // A `type: loop` node keeps its own bound and its own scheduler path, so no
+        // region is derived over its cycle (that would run one loop on two counters
+        // and show DEFAULT_MAX_ITER where the engine uses 3). The parse says what to
+        // do about it rather than leaving the canvas mutely region-less (#396).
+        let result = parse_pipeline(crate::pipeline_migrator::LEGACY_REVIEW_LOOP_YAML).unwrap();
+        assert!(
+            result.pipeline.loops.is_empty(),
+            "no region over a legacy loop node: {:?}",
+            result.pipeline.loops
+        );
+        let messages: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("pdo migrate")
+                && m.contains("loop 'qdtXejYS'")
+                && m.contains("switch 'tmkRzihO'")),
+            "the diagnostic must name every legacy node and the remedy: {messages:?}"
+        );
+    }
+
     #[test]
     fn parse_fixture_review_loop_yaml() {
+        // The seed fixture is post-ADR-0011 since #396 (it shipped with a
+        // `type: loop` + `type: switch` pair the canvas could not draw, which is
+        // why its `max_iter` was unreachable): conditional edges plus a named
+        // bounded region, no legacy control node.
         let yaml = include_str!("../../../.pdo/pipelines/review-loop.yaml");
         let result = parse_pipeline(yaml).unwrap();
         assert_eq!(result.pipeline.name, "review-loop");
-        assert!(result
+        assert!(!result
             .pipeline
             .nodes
             .iter()
-            .any(|n| n.node_type == NodeType::Loop));
+            .any(|n| matches!(n.node_type, NodeType::Loop | NodeType::Switch)));
         assert!(result
             .pipeline
-            .nodes
+            .edges
             .iter()
-            .any(|n| n.node_type == NodeType::Switch));
+            .any(|e| e.when.is_some() || e.is_else));
+        assert_eq!(result.pipeline.loops.len(), 1);
+        assert_eq!(result.pipeline.loops[0].kind, LoopKind::Bounded);
     }
 
     #[test]
@@ -3859,16 +4047,6 @@ nodes:
           verdict:
             type: enum
             allowed: [PASS, FAIL]
-  - id: ab000003
-    name: verdict-switch
-    type: switch
-    inputs:
-      - name: in
-    outputs:
-      - name: pass
-        when:
-          verdict: { in: [PASS] }
-      - name: default
   - id: end
     name: End
     type: end
@@ -3879,10 +4057,13 @@ edges:
     target: { node: ab000001, port: task }
   - source: { node: ab000001, port: code }
     target: { node: ab000002, port: code }
+  # Conditional routing on the EDGE (ADR-0011) — a legacy `switch` node here
+  # would trip the "run `pdo migrate`" diagnostic (#396) and make this fixture
+  # lint-dirty for a reason unrelated to what it guards.
   - source: { node: ab000002, port: review }
-    target: { node: ab000003, port: in }
-  - source: { node: ab000003, port: pass }
     target: { node: end, port: result }
+    when:
+      verdict: { in: [PASS] }
 loops:
   - id: review_loop
     kind: bounded

@@ -8,7 +8,7 @@ import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
-import { serializePipeline } from "../stores/editStore";
+import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 
 export type TabId = "info" | "manager" | "yaml";

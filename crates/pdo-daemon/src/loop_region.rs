@@ -12,12 +12,101 @@
 //! produces a silent stall.
 
 use crate::graph_resolver;
-use crate::pipeline::{LoopKind, LoopRegion, PipelineDef};
+use crate::pipeline::{LoopKind, LoopRegion, NodeType, PipelineDef};
 
 /// The default iteration cap given to an auto-materialized bounded region, so a
 /// drawn cycle is never accidentally unbounded (ADR-0011 / #148). Matches the
 /// daemon's existing `max_iter` fallback.
 pub const DEFAULT_MAX_ITER: i64 = 5;
+
+/// A short, deterministic region id derived from the sorted member ids, prefixed
+/// `loop-`: FNV-1a over the members (each followed by a `0x2f` separator),
+/// rendered hex. Deriving it from the member set — rather than minting a random
+/// id — is what makes auto-materialization *idempotent*: re-reading the same
+/// graph yields the same region id, so the run's per-region lap counter
+/// (`loop_states`, keyed by id) survives every reparse and every daemon restart.
+///
+/// The editor's `lib/loopRegions.ts` `generatedRegionId` is the byte-for-byte
+/// mirror of this function (pinned on both sides by
+/// `generated_region_id_matches_the_editor_mirror` / its vitest twin), so a
+/// region materialized on the canvas and the same region materialized here carry
+/// the same identity.
+pub fn generated_region_id(members: &[String]) -> String {
+    let mut sorted: Vec<&str> = members.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    for m in sorted {
+        for b in m.bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        // Separator only — XOR, no multiply. The editor mirror does the same;
+        // adding a round here would silently fork the two id spaces.
+        hash ^= 0x2f;
+    }
+    format!("loop-{hash:08x}")
+}
+
+/// The bounded regions that must be materialized for the cycles a pipeline's
+/// graph closes but its `loops:` block does not cover (ADR-0011 clause (b):
+/// a `bounded` loop *is born by auto-detection of a cycle* "pour qu'aucun cycle
+/// ne soit accidentellement non-borné"). A cycle is "covered" when an existing
+/// region's member set is identical to it.
+///
+/// This is the model-boundary half of the invariant, called from
+/// [`crate::pipeline::parse_pipeline`] so that **every** reader — the editor
+/// (`GET /pipelines/<id>`), the scheduler at run launch, the library twin diff —
+/// sees the same bounded region without anyone having to redraw an edge (#396).
+/// It never touches the file: the region is derived at parse, and only persists
+/// if the user saves. The editor mirror
+/// (`lib/loopRegions.ts::materializeMissingRegions`) covers the *live* gesture,
+/// i.e. the edge just drawn on an unsaved canvas.
+///
+/// **Legacy carve-out.** A cycle that runs through a legacy `type: loop` node is
+/// skipped. That node already carries its own `max_iter` and its own iteration
+/// path in the scheduler; wrapping it in a region would give the same laps two
+/// competing counters, and would advertise `DEFAULT_MAX_ITER` on the canvas while
+/// the engine ran the node's real bound (#396: the dial would lie). Those
+/// pipelines are the migrator's job — `parse_pipeline` emits the
+/// `run pdo migrate` diagnostic for them instead.
+pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
+    let legacy_loop_nodes: std::collections::HashSet<&str> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::Loop)
+        .map(|n| n.id.as_str())
+        .collect();
+
+    let covered: Vec<std::collections::HashSet<&str>> = pipeline
+        .loops
+        .iter()
+        .map(|r| r.members.iter().map(String::as_str).collect())
+        .collect();
+
+    let mut out = Vec::new();
+    for cycle in graph_resolver::detect_cycles(pipeline) {
+        if cycle.iter().any(|m| legacy_loop_nodes.contains(m.as_str())) {
+            continue;
+        }
+        let same_set = |c: &std::collections::HashSet<&str>| {
+            c.len() == cycle.len() && cycle.iter().all(|m| c.contains(m.as_str()))
+        };
+        if covered.iter().any(same_set) {
+            continue;
+        }
+        out.push(LoopRegion {
+            id: generated_region_id(&cycle),
+            kind: LoopKind::Bounded,
+            members: cycle,
+            max_iter: Some(serde_yaml::Value::Number(serde_yaml::Number::from(
+                DEFAULT_MAX_ITER,
+            ))),
+            over: None,
+        });
+    }
+    out
+}
 
 /// The live per-region iteration counter (keyed by the region `id` elsewhere).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1040,5 +1129,99 @@ mod tests {
         let (pipeline, region) = collection_fanout_merge();
         let targets = collection_barrier_targets(&pipeline, &region);
         assert_eq!(targets, vec!["merge".to_string()]);
+    }
+    // --- Auto-materialization at the model boundary (ADR-0011 (b) / #396) ---
+
+    #[test]
+    fn generated_region_id_matches_the_editor_mirror() {
+        // Pinned against the value `lib/loopRegions.ts::generatedRegionId` produces
+        // for the same members (its vitest twin asserts the same literal). The two
+        // implementations must not drift: a region auto-materialized on the canvas
+        // and the same region materialized here have to be ONE region, or a save
+        // would duplicate it and the run's lap counter would key off the wrong id.
+        assert_eq!(
+            generated_region_id(&["impl".to_string(), "rev".to_string()]),
+            "loop-2e1c629fbe6d531a"
+        );
+        // Member order is not identity: the id is derived from the sorted set.
+        assert_eq!(
+            generated_region_id(&["rev".to_string(), "impl".to_string()]),
+            generated_region_id(&["impl".to_string(), "rev".to_string()])
+        );
+        assert_eq!(
+            generated_region_id(&["aaaa1111".to_string()]),
+            "loop-4f5ab6d49af12362"
+        );
+    }
+
+    #[test]
+    fn materializes_a_bounded_region_for_an_undeclared_cycle() {
+        // The #396 core: a graph closing a cycle with an empty `loops:` block gets
+        // its bounded region derived, at DEFAULT_MAX_ITER, so the cycle is never
+        // accidentally unbounded and the canvas has a region to draw.
+        let (pipeline, _) = review_loop();
+        let regions = materialize_missing_regions(&pipeline);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].kind, LoopKind::Bounded);
+        assert_eq!(
+            regions[0].members,
+            vec!["impl".to_string(), "rev".to_string()]
+        );
+        assert_eq!(
+            resolve_region_max_iter(&regions[0], &Default::default()),
+            DEFAULT_MAX_ITER
+        );
+        assert_eq!(regions[0].id, generated_region_id(&regions[0].members));
+    }
+
+    #[test]
+    fn materialization_is_idempotent() {
+        // Feeding the derived region back in must add nothing — the id is a pure
+        // function of the member set, so re-parsing the same file (every run
+        // advance re-reads the snapshot) cannot grow a second region nor rename
+        // the one whose lap counter is live.
+        let (mut pipeline, _) = review_loop();
+        pipeline.loops = materialize_missing_regions(&pipeline);
+        assert!(materialize_missing_regions(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn a_declared_region_is_left_alone() {
+        // The persisted `loops:` entry keeps its own id AND its own bound: covering
+        // is by member set, so no duplicate region is derived next to it.
+        let (mut pipeline, region) = review_loop();
+        pipeline.loops = vec![region];
+        assert!(materialize_missing_regions(&pipeline).is_empty());
+    }
+
+    #[test]
+    fn a_cycle_through_a_legacy_loop_node_is_left_to_the_migrator() {
+        // A `type: loop` node carries its own `max_iter` and its own iteration path
+        // in the scheduler. Wrapping its cycle in a region would give one loop two
+        // counters, and would advertise DEFAULT_MAX_ITER on a canvas whose engine
+        // runs the node's real bound — a dial that lies (#396). Those files are
+        // `pdo migrate`'s job; `parse_pipeline` diagnoses them instead.
+        let (mut pipeline, _) = review_loop();
+        pipeline.nodes.push({
+            let mut n = node("lp", &["in", "break"], &["body", "done"]);
+            n.node_type = NodeType::Loop;
+            n.max_iter = Some(serde_yaml::Value::Number(3.into()));
+            n
+        });
+        // rev -> lp -> impl closes a second, larger cycle through the loop node.
+        pipeline.edges.push(edge("rev", "review", "lp", "break"));
+        pipeline.edges.push(edge("lp", "body", "impl", "task"));
+
+        let cycles = crate::graph_resolver::detect_cycles(&pipeline);
+        assert!(
+            cycles.iter().any(|c| c.iter().any(|m| m == "lp")),
+            "fixture must actually close a cycle through the loop node: {cycles:?}"
+        );
+        for region in materialize_missing_regions(&pipeline) {
+            assert!(
+                !region.members.iter().any(|m| m == "lp"),
+                "no region may cover a legacy loop node: {region:?}"
+            );
+        }
     }
 }

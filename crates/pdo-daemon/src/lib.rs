@@ -17141,10 +17141,13 @@ mod tests {
 
     #[tokio::test]
     async fn get_pipeline_returns_loop_switch_fixture() {
+        // A pre-ADR-0011 file still on someone's disk is served as it is written:
+        // the route never migrates behind the user's back. (The shipped seed is
+        // migrated since #396, hence the inline legacy fixture.)
         let tmp = tempfile::tempdir().unwrap();
         let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
-        let fixture = include_str!("../../../.pdo/pipelines/review-loop.yaml");
+        let fixture = crate::pipeline_migrator::LEGACY_REVIEW_LOOP_YAML;
         std::fs::write(pipelines_dir.join("review-loop.yaml"), fixture).unwrap();
 
         let state = test_state_with_dir(tmp.path()).await;
@@ -17180,6 +17183,122 @@ mod tests {
             .iter()
             .any(|o| o["name"] == "pass" && o["when"].is_object()));
         assert!(switch_outputs.iter().any(|o| o["name"] == "default"));
+
+        // No region is invented over the legacy loop node (it governs its own
+        // laps), and the response says so out loud instead of leaving the canvas
+        // silently region-less (#396).
+        assert!(
+            detail["pipeline"]["loops"]
+                .as_array()
+                .is_none_or(|l| l.is_empty()),
+            "a cycle through a legacy loop node must not be wrapped in a region: {:?}",
+            detail["pipeline"]["loops"]
+        );
+        let diagnostics = detail["diagnostics"].as_array().unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.as_str().is_some_and(|m| m.contains("pdo migrate"))),
+            "a legacy control node must be diagnosed: {diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_pipeline_materializes_the_region_of_an_undeclared_cycle() {
+        // #396: a pipeline whose graph closes a cycle but whose file carries no
+        // `loops:` block was served region-less, so the canvas drew no bounded
+        // region and `max_iter` — editable ONLY in the region inspector — was
+        // unreachable until the user redrew an edge. The invariant now lives at the
+        // parse boundary, so the route hands the editor a materialized region.
+        let tmp = tempfile::tempdir().unwrap();
+        let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = r#"
+name: cyclic
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+  - id: aaaa0001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - { name: code, side: right }
+  - id: aaaa0002
+    name: reviewer
+    type: doc-only
+    outputs:
+      - name: review
+        side: right
+        frontmatter:
+          verdict: { type: enum, allowed: [PASS, FAIL] }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aaaa0001, port: task }
+  - source: { node: aaaa0001, port: code }
+    target: { node: aaaa0002, port: code }
+  - source: { node: aaaa0002, port: review }
+    target: { node: end, port: result }
+    when:
+      verdict: { eq: PASS }
+  - source: { node: aaaa0002, port: review }
+    target: { node: aaaa0001, port: task }
+    else: true
+"#;
+        std::fs::write(pipelines_dir.join("cyclic.yaml"), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/cyclic")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let loops = detail["pipeline"]["loops"].as_array().unwrap();
+        assert_eq!(loops.len(), 1, "one materialized region: {loops:?}");
+        assert_eq!(loops[0]["kind"], "bounded");
+        assert_eq!(loops[0]["max_iter"], 5); // DEFAULT_MAX_ITER
+        assert_eq!(
+            loops[0]["id"],
+            crate::loop_region::generated_region_id(&[
+                "aaaa0001".to_string(),
+                "aaaa0002".to_string()
+            ]),
+            "the id must be the member-derived one the canvas mirror computes"
+        );
+        let members = loops[0]["members"].as_array().unwrap();
+        assert_eq!(members.len(), 2);
+
+        // Derived, not written: the file on disk is byte-identical, so opening the
+        // pipeline can never dirty it nor rewrite its YAML.
+        assert_eq!(
+            std::fs::read_to_string(pipelines_dir.join("cyclic.yaml")).unwrap(),
+            yaml,
+            "materialization must not touch the file"
+        );
+        assert!(
+            !detail["yaml"].as_str().unwrap().contains("loops:"),
+            "the served raw YAML is the file's, region-free"
+        );
     }
 
     #[tokio::test]

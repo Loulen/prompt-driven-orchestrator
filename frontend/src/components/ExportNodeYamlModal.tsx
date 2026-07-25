@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Download, Check } from "lucide-react";
 import type { NodeDef } from "../types";
-import { exportNodeAsYaml } from "../stores/editStore";
+import { exportNodeAsYaml } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 
 /**

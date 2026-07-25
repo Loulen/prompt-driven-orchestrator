@@ -187,8 +187,39 @@ modèle d'*exécution*.
    `stored → env → défaut seedé`, ADR-0015) permet d'en pointer un autre — typiquement versionné
    dans le repo, donc partagé par l'équipe. Le tag reste le hash du contenu du fichier **pointé** :
    l'édition déclenche toujours le rebuild. Conséquence opérationnelle : quand le Dockerfile résolu
-   diffère du seedé, `ensure_image` **saute le pull GHCR** (un hash custom ne peut pas exister en
-   amont) et build directement. Fournir un **ref d'image tout fait** reste hors périmètre : ça
+   **n'est pas à l'emplacement seedé par défaut** (`<sandbox_root>/Dockerfile`), `ensure_image`
+   **saute le pull GHCR** (un hash custom ne peut pas exister en amont) et build directement.
+
+   Trois précisions issues du grilling de la slice (#431), parce que la formulation initiale de ce
+   point était ambiguë au point d'induire la mauvaise implémentation :
+
+   - **Le prédicat de skip-pull porte sur le CHEMIN, pas sur les octets.** `seed_dockerfile`
+     n'écrasant jamais, une machine ayant mis PDO à jour garde sur disque le Dockerfile d'une
+     release **antérieure** — dont le tag `h-<hash>` *existe* sur GHCR, puisque `release.yml` publie
+     le hash du Dockerfile de chaque arbre de release. Un prédicat comparant les octets au Dockerfile
+     embarqué du binaire courant classerait ce cas (le cas dominant, pas un cas limite) en « custom »
+     et lui refuserait un pull valide, imposant un build local de plusieurs minutes. Le skip-pull est
+     une **optimisation, pas un gate de correction** : le fast-path local et le fallback build rendent
+     un pull inutile inoffensif dans les deux sens, donc le prédicat le moins cher gagne. Corollaire
+     assumé : un Dockerfile **édité sur place** au chemin par défaut continue de tenter un pull qui
+     404 puis retombe sur le build — comportement inchangé depuis #411, une fois par content-hash.
+   - **Le contexte de build reste `<sandbox_root>/.build-ctx`, gardé vide**, y compris sous un chemin
+     custom. Donc **un Dockerfile pointé doit être auto-porteur : pas de `COPY`/`ADD`**. Suivre le
+     répertoire parent du fichier pointé réouvrirait le piège D8 de #405 (les siblings de
+     `sandbox_root` sont les staging dirs par-run, écrits concurremment) et, surtout, ferait du tag
+     adressé par contenu un mensonge : le hash ne porte que sur les octets du Dockerfile, donc le
+     fast-path figerait pour toujours une image dont le contexte a changé. Supporter `COPY`
+     demanderait de hasher le contexte : autre contrat de tag, hors périmètre (même catégorie que le
+     ref d'image tout fait ci-dessous).
+   - **Un chemin résolu qui n'est pas un fichier régulier échoue fort au prep** (`RunFailed` dont la
+     `reason` nomme le chemin **et** le tier gagnant), plus un `400` à `PUT /settings` comme gate
+     précoce. Jamais de repli vers le seedé : ce serait builder silencieusement **une autre image que
+     celle que l'équipe a versionnée**, symptôme reporté au fond d'un node (`gh: command not found`)
+     avec un tag d'apparence saine. C'est le point 4 (« jamais de fallback hôte silencieux ») appliqué
+     au Dockerfile. Le tier **env** contourne la validation `PUT` par construction — c'est
+     l'échappatoire assumée pour un chemin sur volume amovible ; les deux tiers restent gatés au prep.
+
+   Fournir un **ref d'image tout fait** reste hors périmètre : ça
    supprimerait le tag adressé par contenu, exigerait d'écrire le contrat d'image (bash, `claude`
    installé, auto-updater off, `$HOME` inscriptible au chemin hôte) et rouvrirait une question
    d'auth que le pull anonyme évite.

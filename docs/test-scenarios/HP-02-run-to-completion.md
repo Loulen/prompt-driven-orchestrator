@@ -65,8 +65,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
    changed / LOC, and an **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
 9. Find the run in the **Runs list** (grouped by repo when ≥ 2 repos exist).
 10. **Sandboxed twin.** Seed (or reuse) a **one-node pipeline** whose node asks for a single line of
-    output and then completes. Open **New Run** on it → the sandbox field offers `off`, `minimal`,
-    `full` and any named **staging profile**; pick **`full`** → **Launch**.
+    output and then completes. Open **New Run** on it → the sandbox field sits on **Use instance
+    default**, and offers `off`, `minimal`, `full` and any named **staging profile**; pick **`full`**
+    → **Launch**.
 11. **Stay on the Run** and watch the **preparation** phase: the Run announces that its sandbox is
     being prepared and **no node starts while it lasts** (tens of seconds on a real `~/.claude`).
     When preparation clears, the node starts, its terminal preview shows a live `claude` session
@@ -96,6 +97,12 @@ Features validated while crossing the run screens (grafted from retired per-issu
 
 - The sandbox field lists `off`, `minimal`, `full` **and** any named staging profile; `full` and
   `minimal` are selectable with no prior configuration (they are virtual defaults).
+- The field **leads with "Use instance default"** and that is where a freshly opened dialog sits.
+  Set `default_sandbox` to a profile in **Settings**, **reopen** New Run *without reloading the page*
+  (the reopen is the part that used to fail), launch **without touching the field**, and read the
+  **`POST /runs` body**: it must carry **no** `sandbox` key. A `"sandbox":"off"` there is the #452
+  regression — `off` is final for the daemon, so it makes `default_sandbox` unreachable, and nothing
+  in the UI shows it. Only the request body does.
 - While the `full` Run prepares, **no node is running**. A node running while preparation is still
   announced is a **blocking finding** — that inversion is the #445 regression.
 - The sandboxed node's terminal preview shows a live `claude` session **with no interactive dialog**:

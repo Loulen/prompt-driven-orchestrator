@@ -1136,7 +1136,14 @@ Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` 
 `""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
 → default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
 /settings` (0 drift #373, miroir exact d'`image_source`). Éditable dans la Settings UI (`<select>`).
-_Éviter_ : confondre avec `image_source` (provisionnement d'image, orthogonal) ; « mode d'instance ».
+**Atteignable depuis le dialogue de lancement** (#452) : le sélecteur du NewRunModal mène, dans les
+**deux** modes, sur « Use instance default » — la sentinelle `""` qui **omet** la clé `sandbox` de la
+requête. C'est la seule façon de déférer, `Some(Off)` étant final ; en mode run l'option **nomme** le
+défaut résolu au lieu de le **recopier** dans le champ (un prefill async best-effort ratait sa fenêtre
+sur un fetch lent, en échec, ou en cache d'une ouverture précédente, et atterrissait sur un `off`
+explicite que l'utilisateur n'avait pas choisi).
+_Éviter_ : confondre avec `image_source` (provisionnement d'image, orthogonal) ; « mode d'instance » ;
+dire que le dialogue de lancement « choisit toujours » un mode (c'était le défaut #452).
 
 **Défaut par-Trigger (`Trigger.sandbox`)** :
 Mode par défaut d'un **Trigger** : colonne **nullable** `sandbox` sur `triggers`. `None` = **déférer**
@@ -1150,10 +1157,12 @@ Check de disponibilité host (`docker version`, exit 0 = disponible ; binaire ab
 `DOCKER_NOT_FOUND_MSG` ; daemon injoignable → message dédié). **TTL-cachée** (~10 s) par-daemon,
 surfacée sur `GET /settings` comme `sandbox_docker {available, reason, checked_at}` (pas un
 `settings_field` : aucun tier stored/env/default) à côté du knob `default_sandbox`, pour un **seul**
-fetch du modal. Affordance **advisory** : grise les options `minimal`/`full` du sélecteur tri-état et
-clamp sur `off` ; le fail-fast du run-advance (ADR-0030 pt 4) reste le gate **autoritaire**. Passe par
-le seam `docker_cmd_override`. _Éviter_ : « Docker health », « sandbox available » (ambigu avec le
-mode), confondre avec `ensure_image`/`probe_state` (provisionnement/liveness par-Run).
+fetch du modal. Affordance **advisory** : grise les options de profil du sélecteur et **refuse le
+Launch** quand le mode effectif en est un (#452 — elle ne **clampe plus** sur `off` : écrire un verdict
+métier dans le champ le rendait indistinguable d'un choix utilisateur) ; le fail-fast du run-advance
+(ADR-0030 pt 4) reste le gate **autoritaire**. Passe par le seam `docker_cmd_override`.
+_Éviter_ : « Docker health », « sandbox available » (ambigu avec le mode), confondre avec
+`ensure_image`/`probe_state` (provisionnement/liveness par-Run).
 
 **Préparation du sandbox (`sandbox_prep`)** :
 État **additif** projeté sur le Run (`pending`|`ready`) qui rend visible la fenêtre de prep eager

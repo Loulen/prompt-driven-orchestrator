@@ -1369,7 +1369,12 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     };
   }
 
-  it("prefills the run selector from the instance default", async () => {
+  /**
+   * #452 replaces #410's prefill. The run selector NAMES the instance default instead of
+   * copying it into the field: the value stays the `""` sentinel, so the key is omitted and
+   * the daemon resolves. See the `#452` describe below for why copying it was unsound.
+   */
+  it("names the instance default on the inherit option without seeding the field", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
         default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
@@ -1377,36 +1382,57 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     );
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
     renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() => {
-      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("full");
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Use instance default (full)",
+      );
     });
+    // The field asserts nothing of its own.
+    expect(select.value).toBe("");
   });
 
-  it("disables full/minimal and clamps to off when Docker is unavailable (availability wins over prefill)", async () => {
+  it("disables full/minimal and BLOCKS the launch when Docker is unavailable (no silent clamp to off)", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        // The instance default is `minimal`, but Docker is down: greying wins.
+        // The instance default is `minimal`, but Docker is down.
         default_sandbox: { effective: "minimal", source: "stored", stored: "minimal", env: null, default: "off", reason: null },
         sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
       }),
     );
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P", scope: "repo", prompt_required: false }),
+    ]);
     renderModal();
+    await enterValidRepo();
 
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
-    // Clamped to off (never mints a Run doomed to RunFailed).
-    await waitFor(() => expect(select.value).toBe("off"));
+    // #452: NOT clamped to `off` — the field still says "I did not choose".
+    await waitFor(() => expect(screen.getByTestId("sandbox-doomed-warning")).toBeInTheDocument());
+    expect(select.value).toBe("");
     // full/minimal options are disabled; the reason is surfaced.
     const options = Array.from(select.options);
     expect(options.find((o) => o.value === "full")?.disabled).toBe(true);
     expect(options.find((o) => o.value === "minimal")?.disabled).toBe(true);
     expect(screen.getByTestId("sandbox-docker-warning")).toHaveTextContent(/unreachable/i);
+
+    // The Run doomed to a RunFailed is still prevented — by refusing it, not by
+    // answering `off` on the user's behalf.
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    expect(createRun).not.toHaveBeenCalled();
+
+    // Demoting to `off` is the user's call, and it unblocks.
+    fireEvent.change(select, { target: { value: "off" } });
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
   });
 
   it("passes the chosen sandbox mode to createRun", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
+        default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([
@@ -1414,10 +1440,12 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     ]);
     renderModal();
     await enterValidRepo();
-    // The prefill lands "full".
-    await waitFor(() => {
-      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("full");
-    });
+
+    // An explicit pick — the case this test is named for. It must survive as-is, even
+    // though it disagrees with the instance default (`off`).
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).some((o) => o.value === "full")).toBe(true));
+    fireEvent.change(select, { target: { value: "full" } });
 
     vi.useRealTimers();
     await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
@@ -1495,7 +1523,9 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() =>
+      // #452: the inherit sentinel leads the list in run mode too.
       expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "",
         "off",
         "full",
         "full-no-mcp",
@@ -1562,7 +1592,243 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("off"));
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: "off" } });
+    expect(select.value).toBe("off");
     expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
+  });
+
+  it("does not tombstone the inherit sentinel either", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    expect(select.value).toBe("");
+    expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #452 — `default_sandbox` must be REACHABLE from the launch dialog.
+ *
+ * The daemon's contract is `Option<SandboxMode>`: `None` = "defer to the instance default",
+ * `Some(Off)` = "run on the host, and nothing may override that upward". #410 seeded the run
+ * selector by copying the resolved default into the field, asynchronously and best-effort, and
+ * `sandbox: sandbox || undefined` omits the key only for `""` — which run mode never held. So
+ * the key was structurally always present, and every way the prefill could miss its window
+ * landed on an explicit `off`: a choice the user never made, in the least protective direction,
+ * that nothing downstream could undo.
+ *
+ * The tests below pin the three ways it missed. Each one FAILS on the pre-fix component (it
+ * posts `sandbox: "off"`), which is the point: the happy path at
+ * "names the instance default…" passed throughout and hid all three.
+ */
+describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)", () => {
+  function settingsFixture(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      dockerfile_path: {
+        effective: "/home/user/.pdo/sandbox/Dockerfile",
+        source: "default",
+        stored: null,
+        env: null,
+        default: "/home/user/.pdo/sandbox/Dockerfile",
+      },
+      sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  const defaultIs = (name: string): Partial<InstanceSettings> => ({
+    default_sandbox: { effective: name, source: "stored", stored: name, env: null, default: "off", reason: null },
+  });
+
+  /**
+   * "Omitted" is read at the `createRun` boundary rather than on the wire: `api.ts` skips a
+   * falsy `sandbox` on BOTH transports (`JSON.stringify` drops `undefined`; the multipart path
+   * guards with `if (req.sandbox)`), so `undefined` here IS an absent key there. Asserted as a
+   * property lookup, not with `toHaveBeenCalledWith`, because `objectContaining` cannot express
+   * absence — and because vitest compares arity strictly, so a spurious trailing argument would
+   * fail the assertion for the wrong reason.
+   */
+  function sandboxSentTo(mock: typeof createRun) {
+    const calls = vi.mocked(mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    return calls[0][0].sandbox;
+  }
+
+  async function launchWithoutTouchingSandbox() {
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+  });
+
+  it("omits the sandbox key when the user never touches the selector", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+    renderModal();
+    // Wait for the settings to land, so this is not accidentally the in-flight case below.
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
+
+    await launchWithoutTouchingSandbox();
+
+    // The whole issue in one line: never `off`, and never anything at all.
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * Mode B of the repro, and the only one that needs no fault injection. The modal is
+   * always-mounted, so `settings` survives a close; the old seeding effect therefore ran
+   * synchronously against the STALE value on reopen and latched its one-shot ref before the
+   * fresh fetch could land. A user who changes `default_sandbox` in Settings and reopens New
+   * Run — without reloading the page — got the previous default posted explicitly.
+   */
+  it("does not seed a reopened dialog from settings cached before the default changed", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("off")));
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalledTimes(1));
+
+    // Close. The component stays mounted, so `settings` stays in state.
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />);
+
+    // The operator switches the instance default to `full` in Settings.
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />);
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    // And the label catches up with the new default once the refetch lands.
+    await waitFor(() =>
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Use instance default (full)",
+      ),
+    );
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * Mode C. `GET /settings` failing used to be swallowed whole: the option list silently
+   * degraded to `off` alone — indistinguishable from an instance without Docker — and the
+   * submission went ahead with an explicit `off`. Deferring is the right answer when we know
+   * nothing: the daemon has the default, we do not.
+   */
+  it("still defers, and says so, when GET /settings fails", async () => {
+    vi.mocked(fetchSettings).mockRejectedValue(new Error("daemon unreachable"));
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(screen.getByTestId("sandbox-settings-error")).toBeInTheDocument());
+    expect(select.value).toBe("");
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * The prefill also lost its race whenever the fetch was merely SLOW — a Run launched
+   * before it resolved was posted with the `off` initial state. Nothing waits on the fetch
+   * any more, so there is no race left to lose.
+   */
+  it("defers when the launch beats the settings fetch", async () => {
+    let resolveSettings!: (s: InstanceSettings) => void;
+    vi.mocked(fetchSettings).mockReturnValue(
+      new Promise<InstanceSettings>((resolve) => {
+        resolveSettings = resolve;
+      }),
+    );
+    renderModal();
+    await screen.findByTestId("sandbox-select");
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+
+    resolveSettings(settingsFixture(defaultIs("full")));
+  });
+
+  it("sends an explicit off when the user actually picks it", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: "off" } });
+
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+
+    // The sentinel must not swallow a real choice: `off` on purpose stays `off`, explicitly,
+    // so it keeps winning over the instance default.
+    expect(sandboxSentTo(createRun)).toBe("off");
+  });
+
+  it("surfaces a dangling instance default instead of letting the launch 400 unexplained", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: {
+          effective: "deleted-profile",
+          source: "stored",
+          stored: "deleted-profile",
+          env: null,
+          default: "off",
+          reason: "No staging profile named `deleted-profile`",
+        },
+      }),
+    );
+    renderModal();
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() =>
+      expect(screen.getByTestId("sandbox-default-reason")).toHaveTextContent(/deleted-profile/),
+    );
+  });
+
+  /**
+   * Trigger mode is untouched by all of this: a Trigger resolves its sandbox when it FIRES,
+   * so today's Docker probe cannot condemn it and the inherit option stays unqualified.
+   */
+  it("leaves trigger mode's inherit option unqualified and unblocked", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        ...defaultIs("full"),
+        sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
+      }),
+    );
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "new-trigger" }} />,
+    );
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(screen.getByTestId("sandbox-docker-warning")).toBeInTheDocument());
+    expect(select.value).toBe("");
+    expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+      "Use instance default",
+    );
+    expect(Array.from(select.options).find((o) => o.value === "")).not.toHaveTextContent("(full)");
+    expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
   });
 });

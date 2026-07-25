@@ -857,8 +857,11 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 **Sandbox** :
 Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
 dans l'état du Run). Tri-état `off` | `minimal` | `full` (renommé en #426, ex-`pure`/`copy`, **sans
-alias**) : `off` = comportement historique (sessions sur l'hôte, défaut) ; `minimal` / `full` =
-toutes les tails du Run s'exécutent dans un conteneur dédié.
+alias**) : `off` = comportement historique (sessions sur l'hôte, défaut) ; **tout autre nom** est un
+**profil de staging** (#432) — `minimal` / `full` en sont les deux défauts virtuels — et toutes les
+tails du Run s'exécutent alors dans un conteneur dédié. Le champ n'est donc plus un tri-état fermé
+mais `off | <nom de profil>` : `SandboxMode::parse` est **purement syntaxique** (l'existence d'un
+profil est une question de **base**, tranchée au bord), et un nom inconnu échoue fort partout.
 C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
 reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
 hôte, trou réseau/auth) → **ADR-0030 / #407**. La **source** du mode suit la précédence **choix
@@ -870,19 +873,20 @@ _Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confond
 
 **Staging dir (répertoire de staging)** :
 Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
-`cleanup_run`. Héberge le *staged Claude home* + un `.claude.json` sibling (+, une fois les
-**profils** livrés, un `home/` portant les **exceptions `$HOME`** déclarées par le profil). Le vrai `~/.claude`
+`cleanup_run`. Héberge le *staged Claude home*, un `.claude.json` sibling et un `home/` portant les
+**exceptions `$HOME`** déclarées par le profil (#432). Le vrai `~/.claude`
 n'est **jamais** monté — et l'invariant s'étend au reste de `$HOME` : ce sont toujours des copies
 qui sont montées. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
 fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
 
 **Staged Claude home (`claude-home/`)** :
 Sous-répertoire `~/.pdo/sandbox/<run-id>/claude-home/` qui tient lieu de `.claude` aux sessions du
-Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le mode (voir `prepare`).
+Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le **profil de staging**
+(voir `prepare`).
 Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté séparément vers
 `$HOME/.claude.json`. _Éviter_ : « fake home », « home miroir ».
 
-**Profil de staging** _(décidé, pas encore en vigueur — ADR-0031)_ :
+**Profil de staging** :
 Liste **nommée** de ce qu'un Run sandboxé stage dans son home. Le champ sandbox d'un Run, d'un
 Trigger ou de l'instance vaut `off` **ou un nom de profil** — jamais une liste : la précédence
 existante (`effective_sandbox`) et les `<select>` de l'UI restent inchangés. `minimal` et `full`
@@ -891,6 +895,9 @@ sont des **défauts virtuels** (aucune ligne en base) jusqu'à édition. Ce qui 
 plus les évolutions futures du défaut. Le nom **et** la liste résolue sont gelés dans `RunStarted` :
 `prepare` lit l'état du Run, jamais le réglage vivant. Un nom inconnu **échoue fort** (400 à la
 création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
+Table `sandbox_profiles` (`name` en clé, `disabled`/`extras` en JSON, `updated_at`) ; **pas de rename
+en v1** — rename = delete + create, car le nom est aussi la valeur stockée par les trois consommateurs
+(Trigger, défaut d'instance, payload `RunStarted`). Réalisé en **#432**.
 _Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template ».
 
 **Plancher de staging** :
@@ -900,42 +907,58 @@ que soit le **profil** : credentials valides (`.credentials.json`), managed sett
 accepté (`skipDangerousModePermissionPrompt: true` **mergé** dans le `settings.json` copié en `full`,
 **synthétisé** en `minimal`), confiance pré-accordée à la racine du Run (dans le `.claude.json`
 stagé, #409), `projects/` **vide**. Chaque garantie est satisfaite soit par une **copie** de l'hôte,
-soit par une **synthèse de repli** — c'est ce qui rendra le décochage d'une entrée de profil sûr sans
+soit par une **synthèse de repli** — c'est ce qui rend le décochage d'une entrée de profil sûr sans
 l'interdire (ADR-0031 §1). Formulé en fichiers verrouillés, le plancher se contredirait dès
-`settings.json` (copié en `full`, synthétisé en `minimal`). Réalisé en **#426**.
+`settings.json` (copié quand l'entrée est cochée, synthétisé sinon). Réalisé en **#426** ; le
+décochage effectif est arrivé avec les profils (**#432**), et trois garanties — credentials,
+managed settings de l'org, `projects/` vide — ne sont **pas** des entrées du tout : elles sont
+affichées en lecture seule et **refusées même en extra**.
 _Éviter_ : « fichiers obligatoires », « liste verrouillée ».
 
-**Entrée de profil / exception `$HOME`** _(décidé, pas encore en vigueur — ADR-0031)_ :
+**Entrée de profil / exception `$HOME`** :
 Une entrée est un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`).
-Refusés : absolu, `..`, sortie de `$HOME`, et `projects/` sous `.claude`. Une entrée **hors
+Refusés à l'écriture (400) : absolu, `..`, `\`, NUL, glob, sortie de `$HOME`, `.claude` nu, `.pdo`,
+et les trois chemins que le plancher possède **en entier** (`.credentials.json`,
+`remote-settings.json`, `projects/` sous `.claude`). Une entrée **hors
 `.claude`** est copiée dans `<staging>/home/<chemin>` puis montée rw à `$HOME/<chemin>` — jamais un
 bind direct du fichier hôte (un agent ferait `git config --global` et réécrirait le `~/.gitconfig`
 de l'utilisateur). Une entrée **sous `.claude/`** ne reçoit **pas** de mount propre : elle est déjà
-servie par le mount `.claude`. _Éviter_ : « fichier monté » (c'est une copie qui est montée),
-« exclusion » pour parler d'un décochage.
+servie par le mount `.claude` — ce n'est pas un cas spécial mais la **conséquence** du
+classificateur unique `landing()`, partagé par la vue *copie* (`prepare`) et la vue *mount*
+(`extra_mounts`), qui ne peuvent donc pas diverger. **Règle M1** : on ne monte que ce qui a été
+réellement stagé — un `-v` dont la source manque fait créer par Docker un répertoire `root:root`,
+ce qui à terme rend le staging indélébile par le daemon. _Éviter_ : « fichier monté » (c'est une
+copie qui est montée), « exclusion » pour parler d'un décochage.
 
-**`prepare(mode, run_id)`** :
-Seede le *staged Claude home* selon le mode, en tenant le **plancher de staging** dans les deux cas.
-**`full`** : recopie une **liste explicite** de `~/.claude` (skills, plugins, agents, commands,
-output-styles, settings[.local].json, credentials, `*.md` global) + `~/.claude.json` verbatim ;
-**exclut `projects/`** et tout état hôte volumineux (`history.jsonl`, `session-env/`, …). Les symlinks
+**`prepare(entries, run_id)`** :
+Seede le *staged Claude home* depuis la **liste d'entrées résolue et gelée** du profil (#432 — le
+paramètre `mode` a disparu avec le tri-état), en tenant le **plancher de staging** dans tous les cas.
+Le défaut `full` porte **9 entrées** : `.claude.json`, `.claude/*.md`, `.claude/settings.json`,
+`.claude/settings.local.json`, `.claude/agents`, `.claude/commands`, `.claude/output-styles`,
+`.claude/plugins`, `.claude/skills` — et **exclut `projects/`** et tout état hôte volumineux
+(`history.jsonl`, `session-env/`, …). Les symlinks
 qui **sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
 dangleraient dans le conteneur) ; les liens intra-arbre (`node_modules/.bin`) restent des liens. Walk
-**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. **`minimal`** :
-n'apporte **rien** en propre — `minimal` *est* le plancher. Le **plancher**, mode-agnostique, tient
+**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. Une entrée absente
+de l'hôte est **loggée et sautée** (défaut comme extra) : l'échec dur ferait dépendre la politique de
+qui a tapé le chemin, et sur une instance à Triggers horaires désinstaller `gh` tuerait chaque tir.
+**Liste vide** (`minimal`) : n'apporte **rien** en propre — `minimal` *est* le plancher. Le
+**plancher**, profil-agnostique, tient
 ensuite les cinq garanties : `.credentials.json` copié ; `remote-settings.json` copié de `~/.claude/`
 quand il existe (absent → no-op loggé, jamais une erreur) ; `skipDangerousModePermissionPrompt: true`
-dans le `settings.json` stagé (**mergé** non destructivement dans la copie hôte en `full`,
-**synthétisé** en `minimal` — sans quoi la session bute sur le dialogue de bypass permissions) ;
+dans le `settings.json` stagé (**mergé** non destructivement dans la copie hôte quand l'entrée est
+cochée, **synthétisé** sinon — sans quoi la session bute sur le dialogue de bypass permissions) ;
 confiance de la racine du Run mergée dans le `.claude.json` stagé (#409 D5 — sinon un Run autonome se
 bloquerait sur le dialogue « trust this folder ? ») ; `projects/` créé **vide** (puits de transcripts
 runtime). Le plancher est le **writer unique** de `remote-settings.json` et de la clé de bypass : ni
-l'un ni l'autre n'est dans l'allowlist `full`. Bits exécutables préservés. **Volume/PII (#409)** :
+l'un ni l'autre n'est une entrée du défaut. Bits exécutables préservés. **Volume/PII (#409)** :
 `full` pèse **~1 Go/run** (dominé par `plugins/*/node_modules`, requis par les serveurs MCP
 *in-container* — délibérément non strippés) et expose en plus le profil PII
 (`oauthAccount`/`userID`/`emailAddress`) + settings + `.md` globaux que `minimal` retient (choix
-conscient, aligné sur le trou d'auth d'ADR-0030). Dette disque : le staging n'est purgé qu'au
-`cleanup_run` (surveiller vs la récurrence disque connue). _Éviter_ : « init », « seed » seul.
+conscient, aligné sur le trou d'auth d'ADR-0030). Depuis #432 c'est **décochable entrée par entrée** :
+retirer `.claude/plugins` fait tomber le staging d'un ordre de grandeur. Dette disque : le staging
+n'est purgé qu'au `cleanup_run` (surveiller vs la récurrence disque connue).
+_Éviter_ : « init », « seed » seul.
 
 **`merge_back(run_id)`** :
 À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de

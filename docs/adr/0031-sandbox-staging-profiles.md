@@ -3,7 +3,9 @@
 > Statut : accepted (grilling du 2026-07-24, PRD #403). Vocabulaire : CONTEXT.md § « Sandbox ».
 > Complète ADR-0030 (modèle d'exécution) : ADR-0030 dit *où* tourne un Run sandboxé, celle-ci dit
 > *avec quel contenu de home*. Implémentée par les slices « plancher » puis « profils » : §1 est
-> **réalisé en #426** (avec l'amendement §1 d'ADR-0030) ; §2-§7 restent à livrer.
+> **réalisé en #426** (avec l'amendement §1 d'ADR-0030), **§2-§7 en #432**. Deux amendements en fin
+> de document : un point de §6 relit de fait le réglage vivant dans un cas borné, et l'un des
+> critères d'acceptation de #432 était factuellement faux.
 
 Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. Il devient un
 **profil de staging** : une liste nommée, éditable, sélectionnable par Run et par Trigger.
@@ -108,4 +110,51 @@ un Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'ident
   `minimal`/`full` en sont l'application à une valeur non scalaire.
 - **ADR-0001** — outil tranchant, pas outil sûr : fonde le choix « autoriser + avertir » (§3).
 - **#403** — PRD Sandbox ; ces décisions sont livrées par les slices post-validation du PRD. §1 est
-  livré par **#426**, §2-§7 par les slices « profils ».
+  livré par **#426**, §2-§7 par **#432**.
+
+## Amendements (#432, à la livraison)
+
+### A1 — §6 : un Run d'avant les profils relit le défaut vivant
+
+Le gel dit « `prepare` lit l'état du Run, jamais le réglage vivant ». Une ligne de la table de
+décision au replay y contrevient, **sciemment** : un payload `RunStarted` qui porte
+`sandbox: "full"` (ou `"minimal"`) **sans** `sandbox_entries` fait **re-résoudre le défaut virtuel
+maintenant**. Ce cas n'est atteignable que pour un Run créé par un daemon pré-#432, dont le staging a
+été purgé, puis repris. Les deux alternatives sont pires : `RunFailed` sur un Run parfaitement
+résoluble, ou figer dans le Rust pour toujours le défaut tel qu'il était en #426 — ce qui
+contredirait §2. Toutes les autres lignes de la table respectent le gel à la lettre, et un nom
+d'**utilisateur** sans liste gelée échoue dur (il est injoignable par construction : le chokepoint
+unique écrit les deux clés ou aucune).
+
+### A2 — le critère « `git config --global` modifie la copie stagée » était faux
+
+Le corps de #432 affirmait : « `git config --global` **depuis le conteneur modifie la copie stagée**,
+`~/.gitconfig` reste intact ». La seconde moitié est vraie et **doublement garantie** (copie-puis-mount
+de §4, *et* l'échec net ci-dessous). La première est **fausse**, vérifié en Docker réel
+(`pdo-sandbox:h-9a67637571a4`, `--user 1000:1000`) :
+
+```
+git commit                            -> OK, sous l'identité de l'hôte
+git config --global user.email x@y    -> error: could not lock config file
+                                         /home/probeuser/.gitconfig: Permission denied
+ls -ld $HOME                          -> drwxr-xr-x 2 root root
+```
+
+Cause : `$HOME` **n'existe pas dans l'image** (`ubuntu:24.04` livre `/home/ubuntu`, pas
+`/home/<user hôte>`), donc Docker le crée comme parent des mounts, en `root:root 0755`.
+`git config --global` n'écrit pas en place — il crée `$HOME/.gitconfig.lock` puis renomme, et le
+rename exige un `$HOME` inscriptible. **Condition pré-existante depuis #406**, déjà vraie pour la
+liste `full` : ce n'est pas une régression des profils.
+
+Le critère est donc reformulé en deux affirmations vraies et testées :
+
+1. « `~/.gitconfig` de l'hôte n'est **jamais** muté » — assertion couche 3a (aucun chemin hôte réel
+   en source de mount) + contrôle d'octets avant/après le Run ;
+2. « une écriture du conteneur sous `$HOME` atterrit dans la copie stagée » — prouvée sur une entrée
+   **répertoire** (`.config/gh`), qui est inscriptible (le mount porte l'ownership de la source
+   stagée). Seul le motif *lock-file-puis-rename* est bloqué, et `git config` est exactement ça.
+
+Rendre `$HOME` inscriptible dans le conteneur est un **arbitrage produit** : ça touche les identity
+mounts d'ADR-0030 §1 et casse la propriété « queue de mounts vide ⇒ argv byte-identique à #406 ».
+Hors périmètre de #432, à ficher en suivi. Sans lui, `git config --global`, `gh auth login` et tout
+outil qui crée un dotfile *nouveau* échouent dans le conteneur.

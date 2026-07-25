@@ -91,10 +91,12 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   const [images, setImages] = useState<File[]>([]);
 
-  // Sandbox (#410). `settings` carries the instance `default_sandbox` (prefill) and
-  // the advisory `sandbox_docker` probe (greying). `sandbox` is the selector value:
-  // a concrete `off`/`full`/`minimal` in run mode; also `""` in trigger mode, meaning
-  // "inherit the instance default".
+  // Sandbox (#410/#432). `settings` carries the instance `default_sandbox` (prefill), the
+  // advisory `sandbox_docker` probe (greying) and — since #432 — `sandbox_profiles`, the
+  // NAME list that drives the options. `sandbox` is the selector value: `off` or a staging
+  // profile name in run mode; also `""` in trigger mode, meaning "inherit the instance
+  // default". No second fetch: the modal already fetches settings on open (the
+  // `sandbox_docker` precedent from #410).
   const [settings, setSettings] = useState<InstanceSettings | null>(null);
   const [sandbox, setSandbox] = useState<string>("off");
   const sandboxSeeded = useRef(false);
@@ -448,6 +450,33 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const promptOptional = selectedPipeline?.prompt_required === false;
   const hasRequiredPrompt = promptOptional || Boolean(input.trim());
 
+  // #410: advisory Docker greying. Only gate the sandboxed options once we KNOW Docker is
+  // unavailable (settings loaded && probe false); while settings load, stay
+  // optimistic. `sandboxReason` explains the greying (title + help text).
+  const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
+  const sandboxReason = settings?.sandbox_docker.reason ?? undefined;
+
+  // #432: the options come from the daemon's profile list. Sorted server-side.
+  const sandboxProfiles = settings?.sandbox_profiles ?? [];
+
+  /**
+   * THE PHANTOM-PROFILE RULE. A seeded value is **never** silently rewritten: a
+   * non-empty, non-`off` value that is absent from the list gets a tombstone option and
+   * blocks Save/Launch.
+   *
+   * Without the tombstone React sets `selectedIndex = -1`, the field renders blank, and
+   * saving would PATCH `sandbox: null` — a **silent fallback to the instance default**,
+   * exactly what ADR-0031 §7 forbids. Deliberately separate from the Docker clamp above:
+   * clamping to `off` is legitimate for an unavailable Docker, and would be a silent
+   * fallback for a missing profile.
+   */
+  const missingProfile = Boolean(
+    settings &&
+      sandbox &&
+      sandbox !== "off" &&
+      !sandboxProfiles.some((p) => p.name === sandbox),
+  );
+
   const handleLaunch = useCallback(async () => {
     if (!repoValid || !selectedPipeline || !hasRequiredPrompt) return;
     setSubmitting(true);
@@ -471,8 +500,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         target_repo: targetRepo.trim() || undefined,
         source_branch: sourceBranch || undefined,
         name: autoName ? undefined : runName.trim() || undefined,
-        // #410: the explicit run-level mode. Always concrete in run mode
-        // (off/full/minimal); sent explicitly so it wins the create-chokepoint
+        // #410: the explicit run-level choice. Always concrete in run mode (`off` or a
+        // staging profile name); sent explicitly so it wins the create-chokepoint
         // precedence over any instance/trigger default.
         sandbox: sandbox || undefined,
         images: images.length > 0 ? images : undefined,
@@ -492,13 +521,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     }
   }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, sandbox, refreshRecentRepos]);
 
-  const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt;
-
-  // #410: advisory Docker greying. Only gate `full`/`minimal` once we KNOW Docker is
-  // unavailable (settings loaded && probe false); while settings load, stay
-  // optimistic. `sandboxReason` explains the greying (title + help text).
-  const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
-  const sandboxReason = settings?.sandbox_docker.reason ?? undefined;
+  const canLaunch = repoValid && selectedPipeline && hasRequiredPrompt && !missingProfile;
 
   // The cron expression the Trigger will be created with: a compiled preset or
   // the raw escape-hatch expression.
@@ -527,7 +550,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       selectedPipeline &&
       triggerName.trim().length > 0 &&
       resolvedCron.length > 0 &&
-      !triggerInputRejectReason,
+      !triggerInputRejectReason &&
+      // #432: a Trigger pointing at a vanished profile must not be re-saved as-is; the
+      // user picks a real one (or `off`) first.
+      !missingProfile,
   );
 
   const handleCreateTrigger = useCallback(async () => {
@@ -564,7 +590,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           overlap_policy: allowOverlap ? "allow" : "skip",
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : null,
           // #410: `""` (Use instance default) clears back to inheriting (`null`);
-          // a concrete mode sets it.
+          // `off` or a staging profile name sets it.
           sandbox: sandbox || null,
           variables,
         });
@@ -579,7 +605,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           source_branch: sourceBranch || undefined,
           overlap_policy: allowOverlap ? "allow" : "skip",
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
-          // #410: `""` (Use instance default) → `null` (inherit); a concrete mode sets it.
+          // #410: `""` (Use instance default) → `null` (inherit); `off` or a profile sets it.
           sandbox: sandbox || null,
           variables,
         });
@@ -908,11 +934,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               )}
             </div>
 
-            {/* Sandbox (#410): the isolation mode. Run mode offers a concrete
-                off/full/minimal (prefilled from the instance default); Trigger mode adds
-                a leading "Use instance default" option. `full`/`minimal` are disabled
-                when the daemon reports Docker unavailable (advisory greying — the
-                run-advance fail-fast remains authoritative). */}
+            {/* Sandbox (#410/#432): `off`, or one of the instance's STAGING PROFILES —
+                the options are data, served by `GET /settings` (names only). Run mode
+                prefills from the instance default; Trigger mode adds a leading "Use
+                instance default" option. Profiles are disabled when the daemon reports
+                Docker unavailable (advisory greying — the run-advance fail-fast remains
+                authoritative), and a seeded name that no longer exists gets a tombstone
+                that blocks the action instead of being silently rewritten. */}
             <div className="flex flex-col gap-1.5">
               <label
                 htmlFor="sandbox-select"
@@ -934,15 +962,33 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   <option value="">Use instance default</option>
                 )}
                 <option value="off">off (run on the host)</option>
-                <option value="full" disabled={dockerUnavailable}>
-                  {dockerUnavailable ? "full (Docker unavailable)" : "full (Docker sandbox)"}
-                </option>
-                <option value="minimal" disabled={dockerUnavailable}>
-                  {dockerUnavailable
-                    ? "minimal (Docker unavailable)"
-                    : "minimal (Docker sandbox)"}
-                </option>
+                {sandboxProfiles.map((p) => (
+                  <option key={p.name} value={p.name} disabled={dockerUnavailable}>
+                    {dockerUnavailable
+                      ? `${p.name} (Docker unavailable)`
+                      : `${p.name} (Docker sandbox)`}
+                  </option>
+                ))}
+                {/* Tombstone: keeps the seeded value SELECTED (React would otherwise
+                    render the field blank and a save would PATCH `sandbox: null` — a
+                    silent fallback to the instance default). */}
+                {missingProfile && (
+                  <option value={sandbox} data-testid="sandbox-missing-profile">
+                    {sandbox} — missing
+                  </option>
+                )}
               </select>
+              {missingProfile && (
+                <span
+                  className="text-st-failed"
+                  style={{ fontSize: "10.5px" }}
+                  data-testid="sandbox-missing-profile-warning"
+                >
+                  No staging profile named <span className="font-mono">{sandbox}</span> any
+                  more. Pick another one (or <span className="font-mono">off</span>) — a Run
+                  on a missing profile fails at launch, it does not fall back to a default.
+                </span>
+              )}
               {dockerUnavailable && (
                 <span
                   className="text-fg-4"

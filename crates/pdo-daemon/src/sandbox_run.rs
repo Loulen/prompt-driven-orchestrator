@@ -28,7 +28,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::event_log::{RunState, SandboxMode};
 use crate::{sandbox_container, sandbox_image, sandbox_staging, AppState};
@@ -40,7 +40,14 @@ pub(crate) struct SandboxContext {
     /// The `docker` binary to invoke (`state.docker_cmd_override` → `"docker"`).
     pub(crate) docker_bin: String,
     pub(crate) run_id: String,
+    /// `off`, or the staging profile this Run was launched with. The ONE place in the
+    /// tree that still needs the profile *name* rather than its off-ness — hence the
+    /// single `.clone()` of [`context_from_state`] (#432 D2).
     pub(crate) mode: SandboxMode,
+    /// The profile's entry list as **frozen at creation** (ADR-0031 §6), resolved at
+    /// the boundary. `None` for `off`. `Some(vec![])` is a legitimate resolution — it
+    /// is `minimal`.
+    pub(crate) entries: Option<Vec<String>>,
     /// Effective repo root — bind-mounted rw at its host path. One mount covers
     /// the repo + every node sub-worktree under `.pdo/runs/` + `.pdo/prompts`.
     pub(crate) repo_root: PathBuf,
@@ -72,15 +79,56 @@ pub(crate) struct SandboxContext {
     pub(crate) dockerfile: sandbox_image::ResolvedDockerfile,
 }
 
-impl SandboxContext {
-    /// [`sandbox_staging::Mode`] for this Run, or `None` for `off` (no staging).
-    fn staging_mode(&self) -> Option<sandbox_staging::Mode> {
-        match self.mode {
-            SandboxMode::Off => None,
-            SandboxMode::Full => Some(sandbox_staging::Mode::Full),
-            SandboxMode::Minimal => Some(sandbox_staging::Mode::Minimal),
-        }
+/// Resolve the entry list a sandboxed Run must stage, from its **frozen** projection
+/// (#432, ADR-0031 §6). The decision table, and why each arm is what it is:
+///
+/// | payload | behaviour | why |
+/// |---|---|---|
+/// | name + valid entries | **entries verbatim**, the name is ignored | the pure form of the freeze. A profile deleted since is *not* an error — surviving that is the point |
+/// | `full`/`minimal`, **no** entries | resolve the virtual default now | a virtual default always resolves; `RunFailed` on a perfectly resolvable Run is indefensible |
+/// | a user profile, **no** entries | **hard error** → `RunFailed` | unreachable by construction (the one chokepoint writes both keys) |
+/// | entries present but unreadable | **hard error**, raw value in the reason | undecidable; any fallback silently changes what the already-spawned nodes saw |
+///
+/// The `full`/`minimal`-without-entries arm does, in effect, read the **live** setting.
+/// Assumed and documented (ADR-0031 §6 note): it only fires for a Run created by a
+/// pre-profiles daemon, cleaned up, then resumed. Both alternatives are worse
+/// (`RunFailed` on something resolvable; or freezing the #426 default into Rust for
+/// ever, which contradicts ADR-0031 §2).
+async fn frozen_entries(
+    db: &sqlx::SqlitePool,
+    run_state: &RunState,
+    name: &str,
+) -> Result<Vec<String>> {
+    if let Some(raw) = &run_state.sandbox_entries_raw_error {
+        anyhow::bail!(
+            "run {} froze an unreadable sandbox entry list ({raw}); refusing to re-resolve \
+             a different list for a Run whose nodes already staged one",
+            run_state.run_id
+        );
     }
+    if let Some(entries) = &run_state.sandbox_entries {
+        // Frozen list wins outright — even if the profile has been edited or deleted.
+        return Ok(entries.clone());
+    }
+    // No frozen list: a pre-#432 payload. Only a virtual default may be re-resolved.
+    if !crate::sandbox_profile::VIRTUAL_PROFILES.contains(&name) {
+        anyhow::bail!(
+            "run {} names the staging profile `{name}` but froze no entry list \
+             (payload predates #432 and `{name}` is not a built-in default); refusing to \
+             guess what it should stage",
+            run_state.run_id
+        );
+    }
+    info!(
+        "run {} predates the frozen sandbox entry list; re-resolving the built-in \
+         default `{name}`",
+        run_state.run_id
+    );
+    let resolved = crate::sandbox_profile::resolve(db, name)
+        .await
+        .with_context(|| format!("resolve the built-in staging profile `{name}`"))?
+        .ok_or_else(|| anyhow::anyhow!("built-in staging profile `{name}` did not resolve"))?;
+    Ok(resolved.resolved.entries)
 }
 
 /// Resolve a [`SandboxContext`] from the daemon state + a projected Run. The one
@@ -91,8 +139,11 @@ impl SandboxContext {
 /// at the next ensure — consistent with the cap/TTL/model seams. A DB read error is
 /// swallowed (falls back env→default), never failing the prep.
 ///
-/// Fails (loud) when `$HOME` is unset or the current exe path can't be resolved —
-/// a sandboxed Run must never fall back to a half-configured container silently.
+/// Fails (loud) when `$HOME` is unset, the current exe path can't be resolved, or the
+/// Run's **frozen** staging-profile selection cannot be resolved (#432) — a sandboxed
+/// Run must never fall back to a half-configured container, or to a *different* home
+/// content, silently. The one caller that used to swallow this error (boot recovery)
+/// now turns it into an explicit `RunFailed`.
 pub(crate) async fn context_from_state(
     state: &AppState,
     run_state: &RunState,
@@ -116,10 +167,19 @@ pub(crate) async fn context_from_state(
         cfg.as_ref().and_then(|c| c.dockerfile_path.clone()),
         &sandbox_root,
     );
+    // #432: the frozen entry list, resolved here (the boundary) so the sync core stays
+    // DB-free. `off` resolves to `None` without touching the DB.
+    let entries = match run_state.sandbox.profile() {
+        None => None,
+        Some(name) => Some(frozen_entries(&state.db, run_state, name).await?),
+    };
     Ok(SandboxContext {
         docker_bin: docker_bin(state),
         run_id: run_state.run_id.clone(),
-        mode: run_state.sandbox,
+        // The ONE clone of the tree (#432 D2): every other consumer only tests
+        // off-ness and takes a `bool`.
+        mode: run_state.sandbox.clone(),
+        entries,
         repo_root,
         run_worktree,
         daemon_port: state.port,
@@ -170,13 +230,17 @@ pub(crate) fn docker_bin(state: &AppState) -> String {
 /// encoding is unchanged — the caller still resolves the encoded dirname from
 /// this base via [`crate::stale_detector::encode_working_dir`], the single source
 /// of truth (#373); the seam only swaps the base `projects/` root.
+/// `sandboxed` is a plain `bool`, not a [`SandboxMode`] (#432 D2): this seam only ever
+/// asked about off-ness, and since the mode owns a `String` a by-value parameter would
+/// force a clone at each of the call sites — several of which capture it into a detached
+/// `async move`, where a reference cannot live.
 pub(crate) fn transcripts_root(
-    mode: SandboxMode,
+    sandboxed: bool,
     run_id: &str,
     home_root: &Path,
     sandbox_root: &Path,
 ) -> PathBuf {
-    if !mode.is_off() && sandbox_staging::staging_dir_for_run(sandbox_root, run_id).exists() {
+    if sandboxed && sandbox_staging::staging_dir_for_run(sandbox_root, run_id).exists() {
         sandbox_staging::staged_claude_home(sandbox_root, run_id).join("projects")
     } else {
         home_root.join(".claude").join("projects")
@@ -227,7 +291,7 @@ pub(crate) async fn merge_back_best_effort(state: &AppState, run_id: &str) {
 /// isn't blocked. `off` is a defensive no-op (callers already gate on
 /// `!sandbox.is_off()`).
 pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
-    let Some(mode) = ctx.staging_mode() else {
+    let Some(entries) = ctx.entries.as_deref() else {
         return Ok(()); // off: gated by callers; no docker touched.
     };
 
@@ -243,16 +307,24 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     //    require approval" or bypass-permissions dialogs.
     let staging_dir = sandbox_staging::staging_dir_for_run(&ctx.sandbox_root, &ctx.run_id);
     if !staging_dir.exists() {
-        let trusted_root = match ctx.mode {
-            SandboxMode::Minimal | SandboxMode::Full => Some(ctx.repo_root.as_path()),
-            SandboxMode::Off => None,
-        };
+        // Name the profile AND the list once per staging, so "why does this Run carry
+        // plugins/" is answerable from the log rather than by reading the DB (which may
+        // have been edited since — the list is frozen, the profile is not).
+        info!(
+            "sandbox: staging run {} with profile `{}` ({} entries: {})",
+            ctx.run_id,
+            ctx.mode.as_str(),
+            entries.len(),
+            entries.join(", ")
+        );
+        // `Some(repo_root)` unconditionally: the `off` arm of the old match was DEAD —
+        // the `let Some(entries) = … else { return }` above has already excluded it.
         sandbox_staging::prepare(
             &ctx.home_root,
             &ctx.sandbox_root,
-            mode,
+            entries,
             &ctx.run_id,
-            trusted_root,
+            Some(ctx.repo_root.as_path()),
         )
         .with_context(|| format!("failed to stage the sandbox home for run {}", ctx.run_id))?;
     }
@@ -274,6 +346,11 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     // 3. Assemble the container spec + ensure the long-lived container is up.
     let staged_home = sandbox_staging::staged_claude_home(&ctx.sandbox_root, &ctx.run_id);
     let staged_json = sandbox_staging::staged_claude_json(&ctx.sandbox_root, &ctx.run_id);
+    // #432: derived from `frozen list × disk`, NOT returned by `prepare` — `prepare` is
+    // skipped whenever the staging already exists (3 of the 4 `ensure_ready` callers),
+    // and this derivation gives the same answer either way.
+    let extra =
+        sandbox_staging::extra_mounts(&ctx.sandbox_root, &ctx.run_id, &ctx.host_home, entries);
     let spec = sandbox_container::ContainerSpec {
         image_ref: &image_ref,
         repo_root: &ctx.repo_root,
@@ -285,6 +362,7 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         uid: ctx.uid,
         gid: ctx.gid,
         daemon_port: ctx.daemon_port,
+        extra_mounts: &extra,
     };
     sandbox_container::ensure_running(&ctx.docker_bin, &ctx.run_id, &spec)
         .context("failed to ensure the sandbox container is running")?;
@@ -319,11 +397,11 @@ pub(crate) fn cleanup(docker_bin: &str, home_root: &Path, sandbox_root: &Path, r
 /// the matching tree — sibling sessions survive.
 pub(crate) fn kill_session_best_effort(
     docker_bin: &str,
-    sandbox: SandboxMode,
+    sandboxed: bool,
     run_id: &str,
     marker: &str,
 ) {
-    if sandbox.is_off() {
+    if !sandboxed {
         return;
     }
     if let Err(e) = sandbox_container::kill_session_in_container(
@@ -415,8 +493,36 @@ mod tests {
         ready()
     }
 
+    fn full() -> SandboxMode {
+        SandboxMode::Profile(crate::sandbox_profile::FULL_PROFILE.into())
+    }
+    fn minimal() -> SandboxMode {
+        SandboxMode::Profile(crate::sandbox_profile::MINIMAL_PROFILE.into())
+    }
+
     /// Build a context rooted under temp dirs (bypasses the env/exe resolvers).
+    ///
+    /// #432: `mode` names the profile and `entries` is the FROZEN list — the two are
+    /// separate parameters here because the point of the freeze is that they *can*
+    /// disagree with whatever the store now says. `Off` carries `None`.
     fn test_ctx(tmp: &Path, docker_bin: String, mode: SandboxMode) -> SandboxContext {
+        let entries = match mode.profile() {
+            None => None,
+            Some(name) => {
+                let base = crate::sandbox_profile::base_entries(name);
+                Some(crate::sandbox_profile::resolve_entry_list(&base, &[], &[]).entries)
+            }
+        };
+        test_ctx_with_entries(tmp, docker_bin, mode, entries)
+    }
+
+    /// Like [`test_ctx`] but with an explicit frozen entry list.
+    fn test_ctx_with_entries(
+        tmp: &Path,
+        docker_bin: String,
+        mode: SandboxMode,
+        entries: Option<Vec<String>>,
+    ) -> SandboxContext {
         let home = tmp.join("home");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
@@ -425,6 +531,7 @@ mod tests {
             docker_bin,
             run_id: "r1".to_string(),
             mode,
+            entries,
             repo_root: tmp.join("repo"),
             run_worktree: tmp.join("repo/.pdo/runs/r1/worktree"),
             daemon_port: 6172,
@@ -446,7 +553,7 @@ mod tests {
     fn ensure_ready_stages_probes_image_and_container() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Minimal);
+        let ctx = test_ctx(tmp.path(), docker, minimal());
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
 
@@ -491,7 +598,7 @@ mod tests {
     fn ensure_ready_does_not_restage_when_present() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Minimal);
+        let ctx = test_ctx(tmp.path(), docker, minimal());
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
         // Drop a sentinel into the staging dir; a second ensure_ready must NOT
@@ -511,7 +618,7 @@ mod tests {
     fn ensure_ready_full_seeds_trust_for_repo_root() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _log) = write_fake_docker(tmp.path());
-        let ctx = test_ctx(tmp.path(), docker, SandboxMode::Full);
+        let ctx = test_ctx(tmp.path(), docker, full());
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
 
@@ -577,16 +684,16 @@ mod tests {
     fn kill_session_off_is_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
-        kill_session_best_effort(&docker, SandboxMode::Off, "r1", "pdo-r1-n1-iter-1");
+        kill_session_best_effort(&docker, false, "r1", "pdo-r1-n1-iter-1");
         assert!(!log.exists(), "off must not invoke docker to kill");
     }
 
     #[test]
-    fn kill_session_minimal_execs_marker() {
+    fn kill_session_sandboxed_execs_marker() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path());
         let logged = retry_side_effect(
-            || kill_session_best_effort(&docker, SandboxMode::Minimal, "r1", "pdo-r1-n1-iter-1"),
+            || kill_session_best_effort(&docker, true, "r1", "pdo-r1-n1-iter-1"),
             || {
                 let l = log_lines(&log);
                 !l.is_empty()
@@ -650,7 +757,7 @@ mod tests {
         // Even if a staging dir happens to exist, `off` reads the host.
         std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
         assert_eq!(
-            transcripts_root(SandboxMode::Off, "r1", &home, &sandbox_root),
+            transcripts_root(false, "r1", &home, &sandbox_root),
             home.join(".claude").join("projects")
         );
     }
@@ -663,12 +770,7 @@ mod tests {
         // Staging present → live/reapable Run → read the staged home.
         std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
         assert_eq!(
-            transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root),
-            sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
-        );
-        // `full` behaves identically.
-        assert_eq!(
-            transcripts_root(SandboxMode::Full, "r1", &home, &sandbox_root),
+            transcripts_root(true, "r1", &home, &sandbox_root),
             sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects")
         );
     }
@@ -682,7 +784,7 @@ mod tests {
         // flushed. Keyed on staging EXISTENCE, not the Run's terminal status.
         assert!(!sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists());
         assert_eq!(
-            transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root),
+            transcripts_root(true, "r1", &home, &sandbox_root),
             home.join(".claude").join("projects")
         );
     }
@@ -701,12 +803,12 @@ mod tests {
         let enc = crate::stale_detector::encode_working_dir(cwd);
 
         // Host arm (no staging).
-        let host = transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root);
+        let host = transcripts_root(true, "r1", &home, &sandbox_root);
         assert_eq!(host.join(&enc), home.join(".claude/projects").join(&enc));
 
         // Staging arm (staging materialised) — same encoded segment appended.
         std::fs::create_dir_all(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1")).unwrap();
-        let staged = transcripts_root(SandboxMode::Minimal, "r1", &home, &sandbox_root);
+        let staged = transcripts_root(true, "r1", &home, &sandbox_root);
         assert_eq!(
             staged.join(&enc),
             sandbox_staging::staged_claude_home(&sandbox_root, "r1")

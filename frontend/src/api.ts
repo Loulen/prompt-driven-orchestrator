@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileReferents } from "./types";
 
 const BASE = "";
 
@@ -148,6 +148,72 @@ export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
   return request<InstanceSettings>("PUT", "/settings", { body: patch });
+}
+
+// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
+//
+// A separate REST resource, NOT part of the grouped `PUT /settings`: a profile is a ROW,
+// not a `{effective, source, stored, env, default}` knob. That is exactly why the editor's
+// footer says "Done" rather than "Save" — nothing is batched behind it.
+//
+// The routes sit under `/settings/…` purely for ROUTING: the vite proxy key is a prefix,
+// so `'/settings'` already covers every sub-path (no proxy edit, none of the "dev GET
+// answers 200 with the SPA" traps that `/nodes`, `/stats` and `/fs` each paid).
+
+/** Every staging profile, each fully resolved (`+ home`, the host `$HOME`). */
+export function fetchSandboxProfiles(): Promise<{
+  profiles: SandboxProfile[];
+  home: string | null;
+}> {
+  return request("GET", "/settings/sandbox-profiles");
+}
+
+/** One resolved profile; throws `ApiError` with status 404 when the name is unknown. */
+export function fetchSandboxProfile(name: string): Promise<SandboxProfile> {
+  return request<SandboxProfile>(
+    "GET",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+  );
+}
+
+/**
+ * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2).
+ * Upsert, because the caller cannot know whether `full` already has a row, and editing it
+ * IS what materialises one. Returns the recomputed view so the editor needs no refetch.
+ */
+export function saveSandboxProfile(
+  name: string,
+  diff: { disabled: string[]; extras: string[] },
+): Promise<SandboxProfile> {
+  return request<SandboxProfile>(
+    "PUT",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+    { body: diff },
+  );
+}
+
+/**
+ * Delete the materialised row. Unconditional (ADR-0031 §7 — a *soft* guard-rail, no
+ * referential integrity in the DB): deleting an edited `full`/`minimal` reverts it to its
+ * virtual default, deleting a user profile makes its referents' next Run fail loud.
+ * Neither repoints anything, which is what {@link fetchSandboxProfileReferents} is for.
+ */
+export function deleteSandboxProfile(name: string): Promise<void> {
+  return request<void>(
+    "DELETE",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+    { responseMode: "void" },
+  );
+}
+
+/** Who still points at a profile — server-side, because `RunListEntry` carries no `sandbox`. */
+export function fetchSandboxProfileReferents(
+  name: string,
+): Promise<SandboxProfileReferents> {
+  return request<SandboxProfileReferents>(
+    "GET",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}/referents`,
+  );
 }
 
 /**
@@ -344,7 +410,7 @@ export interface CreateRunRequest {
   target_repo?: string;
   source_branch?: string;
   name?: string;
-  /** Explicit sandbox mode (#410): `"off"` | `"full"` | `"minimal"`. Omitted → the
+  /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
    *  server defers to the trigger/instance default at the create chokepoint. */
   sandbox?: string;
   images?: File[];
@@ -395,7 +461,7 @@ export interface CreateTriggerRequest {
   overlap_policy?: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; omit/undefined = unbounded. */
   max_concurrent?: number | null;
-  /** Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or null/omit to
+  /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/omit to
    *  inherit the instance default. */
   sandbox?: string | null;
 }
@@ -431,7 +497,7 @@ export interface UpdateTriggerRequest {
   variables?: Record<string, unknown>;
   /** Bounded-`allow` ceiling (#239): number sets, null clears to unbounded, undefined leaves unchanged. */
   max_concurrent?: number | null;
-  /** Per-Trigger sandbox mode (#410): a mode string sets it, `null` clears back to
+  /** Per-Trigger sandbox (#410/#432): a value sets it, `null` clears back to
    *  inheriting the instance default, `undefined` leaves it unchanged. */
   sandbox?: string | null;
 }

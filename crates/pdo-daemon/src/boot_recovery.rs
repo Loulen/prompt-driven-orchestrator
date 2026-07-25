@@ -133,10 +133,11 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
 
         // #407 D10: a live sandboxed Run needs its container back after a daemon
         // restart — reconcile it here (before the orphan scan). Synchronous effect
-        // via spawn_blocking (ensure_ready may build/probe docker); failure is
-        // logged, not fatal — the orphan/stall handling below still runs, and a
-        // downstream spawn would fail loud on a still-missing container. No-op for
-        // `off`.
+        // via spawn_blocking (ensure_ready may build/probe docker). No-op for `off`.
+        //
+        // #432 (ADR-0031 §7): the two `Err` arms are SPLIT, because they fail for
+        // categorically different reasons. This is the only one of `ensure_ready`'s four
+        // callers that used to swallow both — the other three `RunFailed` or 500.
         if !run_state.sandbox.is_off() {
             match crate::sandbox_run::context_from_state(state, &run_state).await {
                 Ok(ctx) => {
@@ -144,6 +145,14 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         .await
                     {
                         Ok(Ok(())) => {}
+                        // KEPT as a `warn!`, deliberately. `ensure_ready` touches the
+                        // Docker socket, and `service_unit.rs` emits
+                        // `After=network-online.target` WITHOUT `After=docker.service` —
+                        // so a daemon restarted by systemd at boot can reach this before
+                        // `dockerd` accepts connections. Making this arm fatal would
+                        // mass-`RunFailed` every live sandboxed Run on a boot-ordering
+                        // race. (Real fix — add `After=docker.service`, then make this
+                        // fatal — is a follow-up, not this slice.)
                         Ok(Err(e)) => warn!(
                             "Boot recovery: failed to ensure sandbox container for run {run_id}: {e:#}"
                         ),
@@ -152,8 +161,19 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         ),
                     }
                 }
+                // FATAL since #432: this is where an unresolvable FROZEN staging
+                // selection surfaces, and it never touches the Docker socket — so it
+                // cannot fail transiently. Deterministic: the retry at the next boot
+                // would fail identically, for ever. A Run left `Running` with a home
+                // nobody can stage is strictly worse than a Run that says so.
                 Err(e) => {
-                    warn!("Boot recovery: failed to build sandbox context for run {run_id}: {e:#}")
+                    crate::fail_run_sandbox_prep(
+                        state,
+                        run_id,
+                        &format!("sandbox prep failed at boot recovery: {e:#}"),
+                    )
+                    .await;
+                    continue;
                 }
             }
         }

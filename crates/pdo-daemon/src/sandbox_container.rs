@@ -86,6 +86,16 @@ pub(crate) struct ContainerSpec<'a> {
     pub gid: u32,
     /// Port du daemon hôte : `-e PDO_DAEMON_URL=http://host.docker.internal:<port>`.
     pub daemon_port: u16,
+    /// Mounts d'**exception `$HOME`** du profil de staging (#432, ADR-0031 §4) —
+    /// calculés par [`crate::sandbox_staging::extra_mounts`] depuis la liste d'entrées
+    /// GELÉE croisée avec le disque. Queue **variable** : vide pour `minimal`/`full`
+    /// non édités, d'où un argv byte-identique à #406 (propriété que le golden test
+    /// pin explicitement).
+    ///
+    /// Note pour [`ensure_running`] : `docker start` sur un conteneur pré-existant ne
+    /// **réévalue jamais** les mounts. Cohérent avec le gel d'ADR-0031 §6 — un profil
+    /// édité en cours de Run ne remonte rien — mais jusqu'ici non dit.
+    pub extra_mounts: &'a [crate::sandbox_staging::StagedMount],
 }
 
 // -- builders purs (golden-testés) -------------------------------------------
@@ -97,10 +107,17 @@ pub(crate) fn container_name(run_id: &str) -> String {
 }
 
 /// Argv `docker create` (après le binaire `docker`). Ordre canonique FIGÉ par le golden test :
-/// `--init`, `--name`, `--user` numérique, `--add-host`, `-w`, les 4 `-e`, les 4 `-v`, l'image,
-/// puis le trailing `sleep infinity` (le conteneur dort ; les tails entrent par `docker exec`).
+/// `--init`, `--name`, `--user` numérique, `--add-host`, `-w`, les 4 `-e`, les 4 `-v` **fixes**,
+/// puis la **queue variable** des mounts d'exception `$HOME` (#432), l'image, et le trailing
+/// `sleep infinity` (le conteneur dort ; les tails entrent par `docker exec`).
+///
+/// La queue est **entre** les `-v` fixes et l'image — position forcée par Docker : après
+/// l'image, tout argument devient la commande. Elle est triée par chemin relatif
+/// ([`crate::sandbox_staging::extra_mounts`]) : un ordre déterministe rend le golden
+/// lisible, et le tri est ce qui garde le collapse des imbriqués linéaire. Docker lui-même
+/// s'en moque (il applique les mounts par profondeur de destination, pas par ordre d'argv).
 pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "create".to_string(),
         // --init : tini comme PID 1, reape les enfants reparentés après un kill ciblé (sinon
         // zombies permanents, `sleep infinity` ne reape pas). Docker embarque tini >= 1.13.
@@ -147,11 +164,22 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         ),
         "-v".to_string(),
         format!("{}:/usr/local/bin/pdo:ro", spec.pdo_bin.display()),
-        // Image, puis la commande dormante.
-        spec.image_ref.to_string(),
-        "sleep".to_string(),
-        "infinity".to_string(),
-    ]
+    ];
+    // Queue variable (#432) : un `-v <source>:<target>:rw` par entrée d'exception
+    // `$HOME` réellement stagée. Vide ⇒ l'argv reste byte-identique à #406.
+    for mount in spec.extra_mounts {
+        args.push("-v".to_string());
+        args.push(format!(
+            "{}:{}:rw",
+            mount.source.display(),
+            mount.target.display()
+        ));
+    }
+    // Image, puis la commande dormante.
+    args.push(spec.image_ref.to_string());
+    args.push("sleep".to_string());
+    args.push("infinity".to_string());
+    args
 }
 
 /// Préfixe `docker exec` d'une session de nœud (après le binaire `docker` ; #407 y ajoute la
@@ -288,6 +316,12 @@ fn probe_state(docker_bin: &str, name: &str) -> Result<ContainerState> {
 /// Provisionneur IDEMPOTENT du conteneur (miroir de [`crate::sandbox_image::ensure_image`]) :
 /// sonde → up → no-op ; arrêté → `start` ; absent → `create` + `start`. Toute erreur de sonde
 /// (transitoire, docker absent) remonte via `?` sans jamais être traitée comme une absence.
+///
+/// **`spec` n'est consulté que sur le bras `Absent`.** `docker start` ne **réévalue jamais** les
+/// mounts d'un conteneur pré-existant : ils sont figés à `docker create`. Cohérent avec le gel
+/// d'ADR-0031 §6 — éditer un profil en cours de Run ne remonte rien, et ne doit rien remonter — mais
+/// jusqu'ici non dit, alors que la queue variable de [`ContainerSpec::extra_mounts`] (#432) rend la
+/// question naturelle.
 pub(crate) fn ensure_running(docker_bin: &str, run_id: &str, spec: &ContainerSpec) -> Result<()> {
     let name = container_name(run_id);
     match probe_state(docker_bin, &name)? {
@@ -604,6 +638,9 @@ mod tests {
         pdo: PathBuf,
         host_home: PathBuf,
         image: String,
+        /// Queue variable (#432). Vide par défaut — c'est ce qui garde l'argv
+        /// byte-identique à #406 pour un profil sans entrée d'exception `$HOME`.
+        extras: Vec<crate::sandbox_staging::StagedMount>,
     }
 
     impl Fixtures {
@@ -616,7 +653,19 @@ mod tests {
                 pdo: PathBuf::from("/host/bin/pdo"),
                 host_home: PathBuf::from("/home/u"),
                 image: "pdo-sandbox:h-abc123".to_string(),
+                extras: Vec::new(),
             }
+        }
+
+        fn with_extras(mut self, rels: &[&str]) -> Self {
+            self.extras = rels
+                .iter()
+                .map(|rel| crate::sandbox_staging::StagedMount {
+                    source: PathBuf::from(format!("/sb/r1/home/{rel}")),
+                    target: PathBuf::from(format!("/home/u/{rel}")),
+                })
+                .collect();
+            self
         }
 
         fn spec(&self) -> ContainerSpec<'_> {
@@ -631,6 +680,7 @@ mod tests {
                 uid: 1000,
                 gid: 1000,
                 daemon_port: 6172,
+                extra_mounts: &self.extras,
             }
         }
     }
@@ -665,13 +715,16 @@ mod tests {
         })
     }
 
-    // -- 1. create_args golden (AC#1) ----------------------------------------
+    // -- 1. create_args golden (AC#1, éclaté en trois en #432) ----------------
+    //
+    // « Accommoder la queue variable, pas la figer » : le préfixe FIXE est gravé UNE
+    // fois, la queue est prouvée séparément, et un troisième test pin la propriété
+    // structurelle (les extras ne peuvent QUE grossir la queue). Le filtre de dédup se
+    // teste là où il vit — `sandbox_staging::extra_mounts` — pas à travers `create_args`.
 
-    #[test]
-    fn create_args_golden() {
-        let fx = Fixtures::sample();
-        let args = create_args("r1", &fx.spec());
-        let expected = strings(&[
+    /// L'argv jusqu'aux 4 `-v` fixes inclus. FIGÉ ICI, et nulle part ailleurs.
+    fn create_argv_fixed() -> Vec<String> {
+        strings(&[
             "create",
             "--init",
             "--name",
@@ -698,11 +751,64 @@ mod tests {
             "/sb/r1/.claude.json:/home/u/.claude.json:rw",
             "-v",
             "/host/bin/pdo:/usr/local/bin/pdo:ro",
-            "pdo-sandbox:h-abc123",
-            "sleep",
-            "infinity",
-        ]);
-        assert_eq!(args, expected);
+        ])
+    }
+
+    /// L'image + la commande dormante.
+    fn create_argv_suffix() -> Vec<String> {
+        strings(&["pdo-sandbox:h-abc123", "sleep", "infinity"])
+    }
+
+    /// Queue vide ⇒ argv **byte-identique** à #406. La propriété qui garantit que #432
+    /// n'a touché aucun Run dont le profil n'a pas d'entrée d'exception `$HOME`.
+    #[test]
+    fn create_args_golden_no_extras() {
+        let fx = Fixtures::sample();
+        let mut expected = create_argv_fixed();
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// Une liste précise → une queue précise, insérée entre les `-v` fixes et l'image.
+    #[test]
+    fn create_args_golden_with_extras() {
+        let fx = Fixtures::sample().with_extras(&[".gitconfig", ".config/gh"]);
+        let mut expected = create_argv_fixed();
+        expected.extend(strings(&[
+            "-v",
+            "/sb/r1/home/.gitconfig:/home/u/.gitconfig:rw",
+            "-v",
+            "/sb/r1/home/.config/gh:/home/u/.config/gh:rw",
+        ]));
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// La propriété STRUCTURELLE, indépendante des chemins : le préfixe est intact, la
+    /// queue est insérée avant l'image, et une entrée coûte exactement deux args.
+    /// Position forcée par Docker — après l'image, tout devient la commande.
+    #[test]
+    fn extras_only_grow_the_tail_between_the_fixed_v_and_the_image() {
+        let fixed = create_argv_fixed();
+        let bare = create_args("r1", &Fixtures::sample().spec());
+        let one = create_args(
+            "r1",
+            &Fixtures::sample().with_extras(&[".gitconfig"]).spec(),
+        );
+
+        assert_eq!(
+            &one[..fixed.len()],
+            &fixed[..],
+            "le préfixe fixe est intact"
+        );
+        assert_eq!(one.len(), bare.len() + 2, "une entrée = exactement 2 args");
+        // La queue précède l'image, qui précède la commande.
+        let image_at = one
+            .iter()
+            .position(|a| a == "pdo-sandbox:h-abc123")
+            .unwrap();
+        assert_eq!(&one[image_at..], &create_argv_suffix()[..]);
+        assert_eq!(one[image_at - 2], "-v");
     }
 
     // -- 2. exec_prefix golden (AC#1) ----------------------------------------

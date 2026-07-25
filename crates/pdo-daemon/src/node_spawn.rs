@@ -384,7 +384,11 @@ pub(crate) async fn spawn_node(
             iter,
             artifacts_dir: spawn_ctx.artifacts_dir,
             variables: spawn_ctx.resolved_vars,
-            daemon_url: &format!("http://localhost:{}", deps.port),
+            // #447: same single resolver as the manager preamble and
+            // `PDO_DAEMON_URL` — `run_sandboxed` is already projected above for the
+            // spawn precondition. Defensive here: no node preamble consumes
+            // `daemon_url` yet (see the note in `node_primitives::start_node`).
+            daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
             input_images,

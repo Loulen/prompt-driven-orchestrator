@@ -740,7 +740,7 @@ GET    /fs/browse?path=&files=&hidden=     — listing filesystem à un niveau (
 
 ### Conséquence pour la prompt augmentation
 
-Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmentation*) inclut, en plus des chemins d'inputs/outputs, **l'URL de base du daemon** (`http://localhost:<port>`) pour les nœuds qui en ont besoin (typiquement le manager, mais aussi un nœud "Shipper" qui voudrait poster un commentaire sur l'issue source via les endpoints, etc.).
+Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmentation*) inclut, en plus des chemins d'inputs/outputs, **l'URL de base du daemon** pour les nœuds qui en ont besoin (typiquement le manager, mais aussi un nœud "Shipper" qui voudrait poster un commentaire sur l'issue source via les endpoints, etc.). Cette URL **n'est pas une constante** : elle dépend du côté où l'agent s'exécute (`http://localhost:<port>` sur l'hôte, la gateway du conteneur en sandbox) et passe donc par le **résolveur d'URL du daemon** — cf. section *Sandbox*.
 
 ---
 
@@ -1082,6 +1082,18 @@ La séquence d'arguments préposée à la tail d'un nœud pour la faire tourner 
 l'hôte. En mode `off` le préfixe est **vide** (exécution hôte). Pur : construction d'argv, sans
 effet de bord. Ne re-passe jamais `PDO_DAEMON_URL` (posé au create vers `host.docker.internal`).
 _Éviter_ : « wrapper », « shim ».
+
+**Résolveur d'URL du daemon (`daemon_url(port, sandboxed)`)** :
+La fonction **pure et unique** qui rend l'URL du daemon **telle qu'elle est joignable depuis le côté
+où l'agent s'exécute** : `http://localhost:<port>` côté hôte, `http://host.docker.internal:<port>`
+depuis l'intérieur du conteneur. Vit dans `sandbox_container` parce que c'est le module qui possède
+le `--add-host` créant cette gateway : le hostname n'a donc **qu'une** occurrence. Ses deux
+consommateurs sont le `-e PDO_DAEMON_URL` du `docker create` **et** le **texte** du préambule
+manager — c'est ce qui interdit la dérive #447 (l'env résolu, la prose codée en dur sur `localhost`,
+un manager sandboxé qui déclare le daemon mort). Son booléen nomme le **côté d'exécution**, pas le
+mode du Run : les exports d'env côté hôte du wrapper passent `false` même pour un Run sandboxé,
+puisqu'ils ne traversent pas le `docker exec`. _Éviter_ : « URL du daemon » tout court (ambigu entre
+l'env et le texte), « unifier les occurrences de localhost » (deux d'entre elles sont légitimes).
 
 **Marqueur de session (`PDO_SBX_SESSION`)** :
 La **variable d'environnement** (`PDO_SBX_SESSION=<nom-de-session>`) posée sur **chaque** `docker

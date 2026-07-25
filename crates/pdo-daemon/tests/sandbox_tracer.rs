@@ -583,6 +583,21 @@ fn fabricate_host_claude(home: &Path) {
         home.join(".claude.json"),
         r#"{"host":"profile","oauthAccount":{"x":1}}"#,
     );
+    // #432: host files OUTSIDE `~/.claude` that a staging profile may declare as
+    // extras. Present here even though the default `full` profile does NOT carry them —
+    // that is the point: `full_never_mounts_the_real_host_claude` and
+    // `full_completes_without_host_config_writeback` assert they are neither mounted nor
+    // written, so a future slice that starts staging them by default trips those tests.
+    // Deliberate mirror of the unit fixture `sandbox_staging::tests::fabricate_home` and
+    // of `sandbox_profiles::fabricate_host_home`; keep the three in step.
+    write(
+        home.join(".gitconfig"),
+        "[user]\n\tname = Host User\n\temail = host@example.com\n",
+    );
+    write(
+        home.join(".config/gh/hosts.yml"),
+        "github.com:\n  user: me\n",
+    );
 }
 
 /// The staged Claude home of a run under the tempdir override
@@ -861,23 +876,33 @@ async fn full_never_mounts_the_real_host_claude() {
         "staged home must mount to <repo>/.claude (source = staging); specs={specs:?}"
     );
 
-    // Negative (load-bearing): NO mount has the real host `.claude`/`.claude.json`
-    // as its SOURCE. Inspect the source SEGMENT (split ':'), never `contains` — the
-    // mount TARGET `<repo>/.claude` coincides on disk with the fake host here
-    // (override home == repo_root), so a substring check would false-positive.
+    // Negative (load-bearing): NO mount has ANY real host config path as its SOURCE.
+    // Widened in #432 from "not the real `.claude`" to "no real host path at all", now
+    // that a profile can name entries outside `~/.claude`: ADR-0031 §4 says such an entry
+    // is COPIED then mounted, never bind-mounted from the host.
+    //
+    // Inspect the source SEGMENT (split ':'), never `contains` — the mount TARGETS
+    // legitimately ARE host paths here (override home == repo_root), so a substring check
+    // would false-positive on every spec.
+    let host_gitconfig = daemon.repo_root().join(".gitconfig");
+    let host_gh = daemon.repo_root().join(".config/gh");
     for spec in &specs {
         let source = spec.split(':').next().unwrap_or(spec);
-        assert_ne!(
-            source,
-            host_claude.display().to_string(),
-            "the real host ~/.claude must never be a mount source; spec={spec}"
-        );
-        assert_ne!(
-            source,
-            host_json.display().to_string(),
-            "the real host ~/.claude.json must never be a mount source; spec={spec}"
-        );
+        for forbidden in [&host_claude, &host_json, &host_gitconfig, &host_gh] {
+            assert_ne!(
+                source,
+                forbidden.display().to_string(),
+                "a real host path must never be a mount source; spec={spec}"
+            );
+        }
     }
+    // And the `full` default declares nothing outside `~/.claude`, so the queue is empty:
+    // exactly the 4 fixed mounts, argv byte-identical to #406.
+    assert_eq!(
+        specs.len(),
+        4,
+        "`full` must add no `$HOME`-exception mount; specs={specs:?}"
+    );
 }
 
 // -- Test 10: no host config write-back; transcripts DO flow back ------------
@@ -894,9 +919,14 @@ async fn full_completes_without_host_config_writeback() {
 
     let host_claude = daemon.repo_root().join(".claude");
     let host_json = daemon.repo_root().join(".claude.json");
+    // #432: `~/.gitconfig` rides along. It is the file ADR-0031 §4 names explicitly — an
+    // agent that hits `unable to auto-detect email address` very naturally reaches for
+    // `git config --global`, and a direct bind would have it rewrite the user's identity.
+    let host_gitconfig = daemon.repo_root().join(".gitconfig");
     // Snapshot the host config BEFORE the run (bytes, load-bearing).
     let settings_before = std::fs::read(host_claude.join("settings.json")).unwrap();
     let json_before = std::fs::read(&host_json).unwrap();
+    let gitconfig_before = std::fs::read(&host_gitconfig).unwrap();
 
     let run_id = start_run(&daemon, Some("full")).await;
     wait_node_status(&daemon, &run_id, "running").await;
@@ -936,6 +966,11 @@ async fn full_completes_without_host_config_writeback() {
         std::fs::read(&host_json).unwrap(),
         json_before,
         "host .claude.json must be byte-identical (trust seeding writes only the staged copy)"
+    );
+    assert_eq!(
+        std::fs::read(&host_gitconfig).unwrap(),
+        gitconfig_before,
+        "host ~/.gitconfig must be byte-identical (ADR-0031 §4: copy, never bind)"
     );
     // Positive counterpart: transcripts DO merge back to the host projects dir.
     assert!(

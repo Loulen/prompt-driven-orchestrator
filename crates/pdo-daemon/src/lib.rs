@@ -33,6 +33,7 @@ mod run_advance;
 mod run_cost;
 mod sandbox_container;
 mod sandbox_image;
+mod sandbox_profile;
 mod sandbox_run;
 mod sandbox_staging;
 #[allow(dead_code)]
@@ -2195,15 +2196,34 @@ fn default_overlap_policy() -> String {
     "skip".to_string()
 }
 
-/// Validate a per-Trigger `sandbox` mode (#410): `None` (inherit) is always valid;
-/// a present value must be a known variant. Shared by create and patch so the rule
-/// cannot drift. Mirror of the `put_settings` `default_sandbox` validator.
-fn validate_trigger_sandbox(v: Option<&str>) -> Result<(), &'static str> {
-    match v {
-        Some(s) if event_log::SandboxMode::parse(s).is_none() => {
-            Err("sandbox must be `off`, `full`, or `minimal`")
-        }
-        _ => Ok(()),
+/// The SHARED existence gate for any `sandbox` reference a client can store (#432,
+/// ADR-0031 §7): the per-Trigger mode (create + patch) and the instance
+/// `default_sandbox`. `""` is the *clear* sentinel and `off` means "no sandbox", so both
+/// are always valid; anything else must name a profile that resolves — one of the two
+/// virtual defaults, or a materialised row.
+///
+/// A **write-time** gate, deliberately not the authoritative one (the create-run
+/// chokepoint is, and it re-resolves at every fire). It exists so the error lands where
+/// the user can fix it, at the moment they typed it — same posture as #431's
+/// `dockerfile_path` `is_file()` check. The `env` tier (`PDO_DEFAULT_SANDBOX`) never
+/// passes through here at all, which is why `build_settings_view` also discloses a
+/// `reason` on `default_sandbox`.
+async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), String> {
+    let Some(mode) = event_log::SandboxMode::parse(raw) else {
+        return Ok(()); // "" / whitespace = the clear sentinel
+    };
+    let Some(name) = mode.profile() else {
+        return Ok(()); // `off`
+    };
+    match sandbox_profile::exists(db, name).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "unknown sandbox profile `{name}`: use `off`, `{}`, `{}`, or a profile you \
+             created under Settings → Staging profiles",
+            sandbox_profile::MINIMAL_PROFILE,
+            sandbox_profile::FULL_PROFILE,
+        )),
+        Err(e) => Err(format!("sandbox profile store error: {e}")),
     }
 }
 
@@ -2385,13 +2405,15 @@ async fn create_trigger(
             .into_response();
     }
 
-    // A per-Trigger sandbox mode, when present, must be a known variant (#410).
-    if let Err(msg) = validate_trigger_sandbox(req.sandbox.as_deref()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response();
+    // A per-Trigger sandbox reference, when present, must resolve (#410/#432).
+    if let Some(raw) = req.sandbox.as_deref() {
+        if let Err(msg) = validate_sandbox_ref(&state.db, raw).await {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
     }
 
     // Resolve the target pipeline and its prompt_required flag.
@@ -2787,9 +2809,10 @@ async fn patch_trigger(
         }
     }
 
-    // Validate a sandbox edit (Some(Some(mode)) sets; Some(None) clears to inherit) (#410).
+    // Validate a sandbox edit (Some(Some(mode)) sets; Some(None) clears to inherit)
+    // (#410/#432 — same shared existence gate as create and `PUT /settings`).
     if let Some(Some(ref mode)) = req.sandbox {
-        if let Err(msg) = validate_trigger_sandbox(Some(mode)) {
+        if let Err(msg) = validate_sandbox_ref(&state.db, mode).await {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": msg })),
@@ -3104,6 +3127,28 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the
         // stored tier (fail-fast validation).
         .route("/settings", get(get_settings).put(put_settings))
+        // Staging profiles (#432, ADR-0031 §2-§7). Deliberately UNDER `/settings`
+        // rather than a new top-level prefix: the vite proxy key is a PREFIX, so
+        // `'/settings': daemonTarget` already covers every sub-path — no proxy edit,
+        // and none of the traps `/nodes` (#345), `/stats` (#377) and `/fs` (#431) each
+        // paid, where a missing proxy line makes a dev GET answer 200 with the SPA.
+        // Static-segment-beside-a-param is fine in axum 0.8 (precedents:
+        // `/triggers/health`, `/library/pipelines/{id}/duplicate`).
+        //
+        // The shared prefix is a **routing** decision, NOT a claim about the schema:
+        // profiles are ROWS, not a `{effective, source, stored, env, default}` knob, and
+        // they must NOT be folded into `build_settings_view` beyond the name list.
+        .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
+        .route(
+            "/settings/sandbox-profiles/{name}",
+            get(get_sandbox_profile)
+                .put(put_sandbox_profile)
+                .delete(delete_sandbox_profile),
+        )
+        .route(
+            "/settings/sandbox-profiles/{name}/referents",
+            get(get_sandbox_profile_referents),
+        )
         // Instance stats cockpit (#377, ADR-0029). New top-level `/stats` prefix
         // → added to the vite dev proxy whitelist so a dev-mode GET hits the
         // daemon instead of the SPA fallback. `overview` is cheap indexed SQL;
@@ -3168,6 +3213,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     instance_config::init(db)
         .await
         .context("failed to create instance_config table")?;
+
+    // #432: staging profiles. A brand-new table with NO seed row — `minimal` and
+    // `full` are virtual defaults (ADR-0031 §2), so an untouched install has zero
+    // rows here and still resolves both names.
+    sandbox_profile::init(db)
+        .await
+        .context("failed to create sandbox_profiles table")?;
 
     Ok(())
 }
@@ -3854,22 +3906,18 @@ async fn fire_one_trigger(
                 // tier. A Run has a single origin (a trigger fire is never also a
                 // run-level choice), so this is the sole non-`None` tier here; the
                 // chokepoint's `effective_sandbox(req.sandbox, None, default)` then
-                // resolves it against the instance default. A `None`/unparseable
-                // stored mode defers to the instance default. #426: an unparseable
-                // stored mode is logged — the rename dropped `copy`/`pure` with no
-                // alias, and the degradation goes toward LESS isolation.
-                sandbox: trigger.sandbox.as_deref().and_then(|raw| {
-                    let parsed = event_log::SandboxMode::parse(raw);
-                    if parsed.is_none() {
-                        warn!(
-                            "trigger {} carries an unreadable `sandbox` value ({raw}); deferring to \
-                             the instance default. `copy`/`pure` were renamed to `full`/`minimal` \
-                             in #426, without alias.",
-                            trigger.id
-                        );
-                    }
-                    parsed
-                }),
+                // resolves it against the instance default. A blank/absent stored value
+                // defers to the instance default.
+                //
+                // #432: no unparseable-token `warn!` any more — `parse` is syntactic, so
+                // a stored `copy` now reads as the profile NAME `copy`, and the chokepoint
+                // 400s it by name. That 400's message becomes this fire's `FireRecord`
+                // reason (the `Err` arm below), which is visibly red in the Trigger
+                // history — the fail-hard ADR-0031 §7 asks for, with zero new code.
+                sandbox: trigger
+                    .sandbox
+                    .as_deref()
+                    .and_then(event_log::SandboxMode::parse),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -5627,8 +5675,11 @@ async fn parse_multipart_create_run(
                 }
             }
             "sandbox" => {
-                // #410: parse the explicit mode off the multipart form. Empty or
-                // unknown → leave `None` (defer to trigger/instance default).
+                // #410: parse the explicit mode off the multipart form. Empty → leave
+                // `None` (defer to trigger/instance default). #432: `parse` is syntactic
+                // now, so a non-`off` token becomes `Profile(name)` and an unknown NAME
+                // is a hard 400 at the chokepoint — no longer silently demoted to the
+                // instance default (ADR-0031 §7).
                 let v = field
                     .text()
                     .await
@@ -5927,11 +5978,65 @@ async fn create_run_inner(
         .await
         .ok()
         .and_then(|c| c.default_sandbox);
+    let explicit_tier = req.sandbox.is_some();
     let sandbox = event_log::effective_sandbox(
-        req.sandbox,
+        req.sandbox.clone(),
         None,
         event_log::default_sandbox_with(stored_default),
     );
+
+    // #432 (ADR-0031 §6 + §7): resolve the winning tier's staging profile to its entry
+    // list HERE, at the same chokepoint, so the name AND the list are frozen together
+    // into `RunStarted` — editing (or deleting) the profile afterwards can never rewrite
+    // what this Run stages. Only the WINNER is resolved: an unknown name sitting in the
+    // instance default is not an error for a Run that explicitly picks another profile,
+    // because nothing ever consults it.
+    //
+    // An unknown name **fails hard**, never falls back to the instance default or to
+    // `off`. This is before `append_event(run_started)` and before `create_worktree`, so
+    // "no Run is created" holds in the strict sense. A Trigger fire needs ZERO new code:
+    // `fire_one_trigger`'s `Err((_, body))` arm already turns this 400's message into a
+    // `FireRecord { outcome: "error", reason }` that the history renders red — which is
+    // why the wording below is the deliverable, not an afterthought.
+    let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
+        None => None,
+        Some(name) => match sandbox_profile::resolve(&state.db, name).await {
+            Ok(Some(resolved)) => Some(resolved.resolved.entries),
+            Ok(None) => {
+                let error = if explicit_tier {
+                    if req.triggered_by.is_some() {
+                        format!(
+                            "unknown sandbox profile `{name}`: the Trigger's sandbox setting \
+                             names a staging profile that does not exist. Recreate it under \
+                             Settings → Staging profiles, or point the Trigger at `off`."
+                        )
+                    } else {
+                        format!(
+                            "unknown sandbox profile `{name}`: no such staging profile. \
+                             Create it under Settings → Staging profiles, or use `off`."
+                        )
+                    }
+                } else {
+                    format!(
+                        "unknown sandbox profile `{name}`: the instance default sandbox names \
+                         a staging profile that does not exist. Fix it under \
+                         Settings → Default sandbox."
+                    )
+                };
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": error }),
+                ));
+            }
+            Err(e) => {
+                error!("failed to resolve sandbox profile `{name}`: {e}");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": "sandbox profile store error" }),
+                ));
+            }
+        },
+    };
 
     let edge_infos: Vec<event_log::EdgeInfo> =
         pipeline.edges.iter().map(edge_info_from_pipeline).collect();
@@ -5959,8 +6064,17 @@ async fn create_run_inner(
     }
     // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
     // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
+    // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
+    // written together or not at all, which is the invariant that makes the replay table
+    // decidable (a `sandbox` with no entries can only mean "pre-profiles daemon").
+    // Nesting them (`sandbox: {name, entries}`) is disqualified by permanent
+    // back-compat: every historical payload carries `"sandbox": "full"` as a bare
+    // string, so both readers would have to accept `String | Object` for ever.
     if !sandbox.is_off() {
         run_payload["sandbox"] = serde_json::json!(sandbox);
+        run_payload["sandbox_entries"] = serde_json::json!(sandbox_entries
+            .as_ref()
+            .expect("a non-off sandbox always resolves an entry list at this chokepoint"));
     }
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
@@ -6065,7 +6179,7 @@ async fn create_run_inner(
     if sandbox.is_off() {
         // Historical host path — inline, byte-identical to pre-#407. NO docker.
         spawn_ready_after_event(state, &run_id).await;
-        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, sandbox);
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false);
     } else {
         // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
         // (mirror ADR-0023 — the 201 must not block on a first-run `docker
@@ -6135,7 +6249,7 @@ async fn create_run_inner(
                         &task_run_id,
                         &task_worktree,
                         name_hint,
-                        sandbox,
+                        true,
                     );
                 }
                 Ok(Err(e)) => {
@@ -6167,7 +6281,7 @@ async fn create_run_inner(
 /// `RunFailed` is terminal + unguarded (mirror `fail_spawn_before_start`): a Run
 /// whose container never came up must move terminal, never wedge `Running` with
 /// no live node — and NEVER fall back to a host spawn.
-async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason: &str) {
+pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason: &str) {
     error!("Run {run_id}: sandbox prep failed — {reason}");
     let run_failed = event_log::Event {
         id: None,
@@ -6188,7 +6302,7 @@ fn spawn_manager_session(
     run_id: &str,
     worktree_dir: &std::path::Path,
     name_hint: prompt_augmenter::RunNameHint,
-    sandbox: event_log::SandboxMode,
+    sandboxed: bool,
 ) {
     let daemon_url = format!("http://localhost:{}", state.port);
 
@@ -6207,7 +6321,7 @@ fn spawn_manager_session(
     let session_name = tmux_session_manager::manager_session_name(run_id);
     // #407: the manager runs inside the Run's container too when sandboxed. Marker
     // = the manager session name; workdir = the pipeline worktree.
-    let sandbox_wrap = (!sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
         gid: sandbox_container::host_gid(),
@@ -6510,6 +6624,22 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     } else {
         "default"
     };
+    // #432: the winning tier may name a staging profile that does not exist, and every
+    // Run it would produce dies with a 400. `put_settings` gates the *stored* tier, but
+    // the **env** tier (`PDO_DEFAULT_SANDBOX`) passes through no validator at all by
+    // construction — so the only honest place to surface it is here, as an advisory
+    // `reason` beside the value (mirror of `sandbox_docker.reason`).
+    let sbx_reason = match sbx_effective.profile() {
+        None => None,
+        Some(name) => match sandbox_profile::exists(db, name).await {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "no staging profile named `{name}` — every Run that falls back to this \
+                 default will fail at launch (tier: {sbx_source})"
+            )),
+            Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
+        },
+    };
 
     // --- resolved sandbox Dockerfile (path ; default = <sandbox_root>/Dockerfile) (#431) ---
     // `sandbox_home_roots` honours `sandbox_home_override` (the layer-3 seam, #181), so
@@ -6567,6 +6697,27 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // (ADR-0030 pt 4) stays the authoritative gate.
     let docker_probe = docker_probe_cached(state).await;
 
+    // --- staging profiles: NAMES ONLY, plus the host $HOME (#432) ---
+    // NAMES ONLY is part of the contract, not an oversight: this payload is on the hot
+    // path of the launch dialog (which fetches settings on every open). Serving resolved
+    // entry lists here would make a future slice quietly pay a per-profile fold for a
+    // `<select>` that needs three strings. The editor reads
+    // `GET /settings/sandbox-profiles` for the rest.
+    //
+    // `home` is an observed FACT (shape of `sandbox_image`/`sandbox_docker`, no tier):
+    // `onPick` from the filesystem explorer yields an ABSOLUTE path while an entry is
+    // RELATIVE to `$HOME`, and no endpoint exposed `$HOME` before this. It MUST honour
+    // `sandbox_home_override` — otherwise the layer-3 harness and the daemon would
+    // disagree about what "under $HOME" means.
+    let profile_names = sandbox_profile::list_names(db).await?;
+    let sandbox_profiles: Vec<serde_json::Value> = profile_names
+        .iter()
+        .map(|(name, is_virtual)| serde_json::json!({ "name": name, "virtual": is_virtual }))
+        .collect();
+    let host_home = sandbox_run::sandbox_home_roots(state)
+        .ok()
+        .map(|(home, _)| home.to_string_lossy().into_owned());
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
@@ -6579,13 +6730,20 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             img_env.as_deref(),
             sandbox_image::ImageSource::DEFAULT.as_str(),
         ),
-        "default_sandbox": settings_field_enum(
-            sbx_effective.as_str(),
-            sbx_source,
-            sbx_stored,
-            sbx_env_val.as_deref(),
-            event_log::SandboxMode::DEFAULT.as_str(),
-        ),
+        "default_sandbox": {
+            "effective": sbx_effective.as_str(),
+            "source": sbx_source,
+            "stored": sbx_stored,
+            "env": sbx_env_val,
+            "default": event_log::SandboxMode::OFF_WIRE,
+            // #432: additive sixth key, `null` when the winning tier resolves. Only
+            // `default_sandbox` carries it — it is the one enum knob whose value space
+            // is open (a profile name), hence the one that can point at nothing.
+            "reason": sbx_reason,
+        },
+        // #432: names only (see the note above), and the host `$HOME` as an observed fact.
+        "sandbox_profiles": sandbox_profiles,
+        "home": host_home,
         "dockerfile_path": settings_field_path(
             dfp_effective.as_deref(),
             dfp_source,
@@ -6660,10 +6818,11 @@ async fn put_settings(
         }
     }
     if let Some(s) = req.default_sandbox.as_deref() {
-        // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
-        // non-variant → 400 (fail-fast, no silent default) (#410).
-        if !s.is_empty() && event_log::SandboxMode::parse(s).is_none() {
-            return bad("default_sandbox must be `off`, `full`, or `minimal`");
+        // "" = clear sentinel (accepted, normalised to NULL by `update`); anything else
+        // must be `off` or a staging profile that RESOLVES → 400 otherwise (fail-fast,
+        // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
+        if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
+            return bad(&msg);
         }
     }
     if let Some(p) = req.dockerfile_path.as_deref() {
@@ -6706,6 +6865,396 @@ async fn put_settings(
         )
             .into_response(),
     }
+}
+
+// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
+
+/// Serialise one resolved entry for the editor: the path, what it points at, whether it
+/// comes from the built-in default or the user's extras, whether it is currently on, and
+/// the server-owned advisories.
+///
+/// Advisories are computed **here, server-side** — deliberately. Deriving the ≈1 GB
+/// warning or the sensitivity flag in the client would re-open exactly the drift #373
+/// cost us, and the size figure is a measurement recorded in `sandbox_staging`, not
+/// something a browser can know. `exists` is one `symlink_metadata` per entry (≤ a dozen
+/// per profile) — nothing like the recursive `plugins/**/node_modules` walk the settings
+/// handler explicitly budgets against.
+fn sandbox_entry_view(
+    home_root: Option<&std::path::Path>,
+    path: &str,
+    default_entry: Option<&sandbox_profile::DefaultEntry>,
+    enabled: bool,
+) -> serde_json::Value {
+    let sensitive = sandbox_profile::SENSITIVE_PREFIXES
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")));
+    // A glob is never stat-ed: the pattern itself is not a path.
+    let is_glob = default_entry.is_some_and(|d| d.kind == sandbox_profile::EntryKind::Glob);
+    let on_disk = match (home_root, is_glob) {
+        (Some(home), false) => Some(home.join(path)),
+        _ => None,
+    };
+    let exists = on_disk
+        .as_ref()
+        .map(|p| std::fs::symlink_metadata(p).is_ok());
+    let kind = match default_entry.map(|d| d.kind) {
+        Some(k) => k,
+        // An extra's kind is an OBSERVED fact — the picker knows it, but the stored diff
+        // does not, and re-deriving it here keeps the row honest after a `rm -rf`.
+        None => match on_disk.as_ref().map(|p| p.is_dir()) {
+            Some(true) => sandbox_profile::EntryKind::Dir,
+            _ => sandbox_profile::EntryKind::File,
+        },
+    };
+    serde_json::json!({
+        "path": path,
+        "kind": kind,
+        "from_default": default_entry.is_some(),
+        "enabled": enabled,
+        "resynthesised": default_entry.is_some_and(|d| d.resynthesised),
+        "note": default_entry.and_then(|d| d.note),
+        "sensitive": sensitive,
+        "exists": exists,
+    })
+}
+
+/// The full editor view of one resolved profile.
+fn sandbox_profile_view(
+    home_root: Option<&std::path::Path>,
+    profile: &sandbox_profile::ResolvedProfile,
+) -> serde_json::Value {
+    let base = sandbox_profile::base_entries(&profile.name);
+    // Default entries first, in the constant's own reading order (NOT sorted): the editor
+    // shows a stable checklist, and reordering it on every edit would be hostile.
+    let mut entries: Vec<serde_json::Value> = sandbox_profile::DEFAULT_FULL_ENTRIES
+        .iter()
+        .filter(|d| base.contains(&d.path))
+        .map(|d| {
+            let enabled = profile.resolved.entries.iter().any(|e| e == d.path);
+            sandbox_entry_view(home_root, d.path, Some(d), enabled)
+        })
+        .collect();
+    // Then the extras, in stored order.
+    for extra in &profile.extras {
+        let enabled = profile.resolved.entries.iter().any(|e| e == extra);
+        entries.push(sandbox_entry_view(home_root, extra, None, enabled));
+    }
+    let floor: Vec<serde_json::Value> = sandbox_profile::FLOOR_GUARANTEES
+        .iter()
+        .map(|g| serde_json::json!({ "id": g.id, "label": g.label, "path": g.path }))
+        .collect();
+    serde_json::json!({
+        "name": profile.name,
+        "virtual": profile.is_virtual,
+        "materialised": profile.materialised,
+        "disabled": profile.disabled,
+        "extras": profile.extras,
+        // The FROZEN-shaped list: exactly what a Run created now would stage.
+        "resolved": profile.resolved.entries,
+        "entries": entries,
+        // Signalled no-ops, never errors (ADR-0031 §2): the default may lose an entry
+        // tomorrow, and a `disabled` for an entry this version does not have yet must be
+        // remembered.
+        "redundant_extras": profile.resolved.redundant_extras,
+        "inactive_disabled": profile.resolved.inactive_disabled,
+        "floor": floor,
+        "sensitive_prefixes": sandbox_profile::SENSITIVE_PREFIXES,
+        "updated_at": profile.updated_at,
+    })
+}
+
+/// `GET /settings/sandbox-profiles` — every profile the instance can serve: the two
+/// virtual defaults ∪ the materialised rows, each fully resolved.
+async fn list_sandbox_profiles(State(state): State<Arc<AppState>>) -> Response {
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+    let names = match sandbox_profile::list_names(&state.db).await {
+        Ok(n) => n,
+        Err(e) => {
+            error!("failed to list sandbox profiles: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let mut out = Vec::with_capacity(names.len());
+    for (name, _) in &names {
+        match sandbox_profile::resolve(&state.db, name).await {
+            Ok(Some(p)) => out.push(sandbox_profile_view(home_root.as_deref(), &p)),
+            // Unreachable: the name came from the same store one statement ago.
+            Ok(None) => warn!("sandbox profile `{name}` vanished mid-list"),
+            Err(e) => {
+                error!("failed to resolve sandbox profile `{name}`: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "profiles": out,
+        "home": home_root.map(|h| h.to_string_lossy().into_owned()),
+    }))
+    .into_response()
+}
+
+/// `GET /settings/sandbox-profiles/{name}` — one resolved profile, or 404.
+async fn get_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+    match sandbox_profile::resolve(&state.db, &name).await {
+        Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("no staging profile named `{name}`") })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// The body of `PUT /settings/sandbox-profiles/{name}` — the **diff**, never a snapshot
+/// (ADR-0031 §2). Both fields default to empty so a bare `{}` means "materialise this
+/// profile exactly as the current default".
+#[derive(Deserialize)]
+struct UpsertSandboxProfileRequest {
+    #[serde(default)]
+    disabled: Vec<String>,
+    #[serde(default)]
+    extras: Vec<String>,
+}
+
+/// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
+///
+/// `upsert` and not create-then-update: the caller cannot know whether `full` already has
+/// a row, and ADR-0031 §2 says editing it *is* what materialises one.
+///
+/// Validation, all fail-fast before anything is written:
+/// - the name against the grammar (`off` and `""` reserved, no case folding);
+/// - each `extras` path through [`sandbox_profile::validate_entry`] — absolute, `..`,
+///   backslash, NUL, glob, `.claude` bare, `.pdo`, and the three floor-owned paths are
+///   rejected — and it must **exist under `$HOME` right now**, an early UX gate in the
+///   same spirit as #431's `dockerfile_path` (necessary, never sufficient: `prepare`
+///   warns-and-skips, and mount rule M1 handles a path that vanishes later);
+/// - each `disabled` name by **membership in the built-in default**, which is also what
+///   makes the default's `.claude/*.md` glob unauthorable by hand;
+/// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would freeze
+///   into `RunStarted` a winner the user never picked.
+async fn put_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+    Json(req): Json<UpsertSandboxProfileRequest>,
+) -> Response {
+    let bad = |msg: String| -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response()
+    };
+
+    let name = match sandbox_profile::validate_profile_name(&name) {
+        Ok(n) => n,
+        Err(msg) => return bad(msg),
+    };
+
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+
+    // Extras: validate → normalise → (exists under $HOME) → sort → dedup.
+    let mut extras: Vec<String> = Vec::with_capacity(req.extras.len());
+    for raw in &req.extras {
+        let norm = match sandbox_profile::validate_entry(raw) {
+            Ok(n) => n,
+            Err(msg) => return bad(msg),
+        };
+        if let Some(home) = home_root.as_deref() {
+            let abs = home.join(&norm);
+            if std::fs::symlink_metadata(&abs).is_err() {
+                return bad(format!(
+                    "`{norm}`: nothing at {} — pick a file or folder that exists under \
+                     your home directory",
+                    abs.display()
+                ));
+            }
+        }
+        if !extras.contains(&norm) {
+            extras.push(norm);
+        }
+    }
+    extras.sort();
+
+    // Disabled: validated by MEMBERSHIP in the authored default, not by `validate_entry`.
+    // Two consequences, both wanted: the default's `.claude/*.md` glob is uncheckable but
+    // never hand-writable, and an *extra* can only be removed by dropping it from
+    // `extras` — unchecking is for defaults only, which keeps the diff unambiguous.
+    let mut disabled: Vec<String> = Vec::with_capacity(req.disabled.len());
+    for raw in &req.disabled {
+        let candidate = raw.trim().to_string();
+        if candidate.is_empty() {
+            return bad("a `disabled` entry cannot be blank".to_string());
+        }
+        if !sandbox_profile::DEFAULT_FULL_ENTRIES
+            .iter()
+            .any(|d| d.path == candidate)
+        {
+            return bad(format!(
+                "`{candidate}` is not a built-in default entry, so it cannot be unchecked \
+                 — remove it from the extras instead"
+            ));
+        }
+        if !disabled.contains(&candidate) {
+            disabled.push(candidate);
+        }
+    }
+    disabled.sort();
+
+    if let Some(clash) = disabled.iter().find(|d| extras.contains(d)) {
+        return bad(format!(
+            "`{clash}` is both unchecked and added as an extra — pick one"
+        ));
+    }
+
+    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras).await {
+        Ok(_) => match sandbox_profile::resolve(&state.db, &name).await {
+            Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
+            Ok(None) | Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "profile written but not readable back" })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /settings/sandbox-profiles/{name}` — drop the materialised row.
+///
+/// **Unconditional** (ADR-0031 §7: a *soft* guard-rail, no referential integrity in the
+/// database). Deleting an edited `full`/`minimal` reverts it to its virtual default;
+/// deleting a user profile makes every future Run that references it fail loud. Neither
+/// repoints anything — which is precisely what the referents dialog must say before the
+/// user confirms.
+async fn delete_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    match sandbox_profile::delete(&state.db, &name).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!(
+                    "no materialised staging profile named `{name}` \
+                     (an unedited built-in default has no row to delete)"
+                )
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /settings/sandbox-profiles/{name}/referents` — who still points at this profile.
+///
+/// Server-side because the frontend **cannot** derive the third class: `RunListEntry`
+/// does not carry `sandbox` (only the full `RunState` does), so a client would need N
+/// requests. Three classes, and the distinction between the first two and the third is
+/// the whole point of the dialog:
+/// - `instance_default` / `triggers` — deleting will NOT repoint them, and the next Run
+///   they produce **fails**; it does not fall back to a default;
+/// - `runs` — live Runs that already froze their entry list at start (ADR-0031 §6) and
+///   are therefore **unaffected**.
+async fn get_sandbox_profile_referents(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    // Instance default: the RESOLVED tier, so a stored value shadowed by `PDO_DEFAULT_SANDBOX`
+    // is not reported as a referent when it is not the one that wins.
+    let stored_default = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.default_sandbox);
+    let instance_default =
+        event_log::default_sandbox_with(stored_default).profile() == Some(name.as_str());
+
+    let triggers: Vec<serde_json::Value> = match trigger_store::list(&state.db).await {
+        Ok(list) => list
+            .iter()
+            .filter(|t| {
+                t.sandbox
+                    .as_deref()
+                    .and_then(event_log::SandboxMode::parse)
+                    .as_ref()
+                    .and_then(event_log::SandboxMode::profile)
+                    == Some(name.as_str())
+            })
+            .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "enabled": t.enabled }))
+            .collect(),
+        Err(e) => {
+            error!("failed to list triggers for profile referents: {e}");
+            Vec::new()
+        }
+    };
+
+    // Live Runs: one indexed pass over `run_started` payloads, excluding any run that
+    // already emitted a terminal event. Cheaper than projecting each run, and terminality
+    // is exactly "a terminal event exists" for this purpose.
+    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
+        "SELECT e.run_id, e.payload FROM events e \
+         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
+               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived') \
+           ) \
+         ORDER BY e.ts DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+    let runs: Vec<serde_json::Value> = match rows {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|(run_id, payload)| {
+                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                if val.get("sandbox")?.as_str()? != name {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "run_id": run_id,
+                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
+                    "name": val.get("name").and_then(|v| v.as_str()),
+                }))
+            })
+            .collect(),
+        Err(e) => {
+            error!("failed to query runs for profile referents: {e}");
+            Vec::new()
+        }
+    };
+
+    Json(serde_json::json!({
+        "name": name,
+        "instance_default": instance_default,
+        "triggers": triggers,
+        "runs": runs,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -7017,7 +7566,7 @@ async fn get_run(
                     (home, sandbox)
                 });
             let projects_root = sandbox_run::transcripts_root(
-                run_state.sandbox,
+                !run_state.sandbox.is_off(),
                 &run_state.run_id,
                 &home_root,
                 &sandbox_root,
@@ -7576,8 +8125,12 @@ async fn run_stale_detection(state: &AppState) {
         // — the staged home while a sandboxed Run is live, `~/.claude/projects/`
         // otherwise. The per-node encoded dirname is still derived from the
         // node's `working_dir` inside the probe; the seam only swaps the base.
-        let projects_root =
-            sandbox_run::transcripts_root(run_state.sandbox, run_id, &home_root, &sandbox_root);
+        let projects_root = sandbox_run::transcripts_root(
+            !run_state.sandbox.is_off(),
+            run_id,
+            &home_root,
+            &sandbox_root,
+        );
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -7655,7 +8208,14 @@ async fn run_stale_detection(state: &AppState) {
                     // The session is already gone; reaping captures whatever
                     // remains (usually nothing) and is a no-op otherwise. Its
                     // slot freed. Re-drive throttled `waiting` nodes (#159).
-                    reap_node_session(state, &repo_root, run_id, node_id, *iter, run_state.sandbox);
+                    reap_node_session(
+                        state,
+                        &repo_root,
+                        run_id,
+                        node_id,
+                        *iter,
+                        !run_state.sandbox.is_off(),
+                    );
                     retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
@@ -8598,8 +9158,10 @@ async fn node_done(
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
-    // #407: the Run's (immutable) sandbox mode for the targeted container kill.
-    let tail_sandbox = pre_run_state.sandbox;
+    // #407/#432: whether this Run is sandboxed, for the targeted container kill. A
+    // `bool`, not the mode: the mode owns a String since profiles landed, and this value
+    // is captured into a detached `async move` where a reference cannot live.
+    let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail("node_done", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session,
         // so a completed node never holds a live session toward the tmux-collapse
@@ -8669,9 +9231,9 @@ async fn node_fail(
         // projection (the targeted container kill needs the mode).
         let (repo_root, tail_sandbox) = match load_events(&tail_state.db, &tail_run).await {
             Ok(evs) => event_log::project(&evs)
-                .map(|s| (effective_repo_root(&tail_state, &s), s.sandbox))
-                .unwrap_or_else(|| (tail_state.repo_root.clone(), event_log::SandboxMode::Off)),
-            Err(_) => (tail_state.repo_root.clone(), event_log::SandboxMode::Off),
+                .map(|s| (effective_repo_root(&tail_state, &s), !s.sandbox.is_off()))
+                .unwrap_or_else(|| (tail_state.repo_root.clone(), false)),
+            Err(_) => (tail_state.repo_root.clone(), false),
         };
         reap_node_session(
             &tail_state,
@@ -8773,7 +9335,7 @@ async fn node_skip(
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
     let reason = req.reason.clone();
-    let tail_sandbox = pre_run_state.sandbox;
+    let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
         reap_node_session(
@@ -9052,7 +9614,7 @@ async fn node_stop(
         &run_id,
         &node_id,
         iter,
-        run_state.sandbox,
+        !run_state.sandbox.is_off(),
     );
 
     let params = node_primitives::StopNodeParams {
@@ -9817,8 +10379,7 @@ async fn run_command(
             // reparented container process alive.
             let kill_sandbox = reload_run_state(&state, &run_id)
                 .await
-                .map(|(_, s)| s.sandbox)
-                .unwrap_or_default();
+                .is_some_and(|(_, s)| !s.sandbox.is_off());
             sandbox_run::kill_session_best_effort(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 kill_sandbox,
@@ -9914,8 +10475,7 @@ async fn run_command(
             // process doesn't linger alongside the new one.
             let restart_sandbox = reload_run_state(&state, &run_id)
                 .await
-                .map(|(_, s)| s.sandbox)
-                .unwrap_or_default();
+                .is_some_and(|(_, s)| !s.sandbox.is_off());
             sandbox_run::kill_session_best_effort(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 restart_sandbox,
@@ -10200,7 +10760,15 @@ async fn run_command(
                 // `Some` so it is treated as EXPLICIT at the chokepoint — the resolver
                 // must honour it exactly, never letting a changed instance default
                 // silently re-sandbox (or un-sandbox) a retried Run.
-                sandbox: Some(run_state.sandbox),
+                //
+                // #432: we HAVE `run_state.sandbox_entries` here and deliberately do NOT
+                // forward it. A retry is a NEW Run — new `run_id`, no node has staged
+                // anything yet — so there is no coherence to protect, and re-resolving is
+                // the only behaviour consistent with ADR-0031 §2 (a profile edited since
+                // must take effect). Do not "fix" this by threading the frozen list.
+                // Side effect, intended: a profile deleted since makes the retry 400,
+                // loudly, instead of quietly running something else.
+                sandbox: Some(run_state.sandbox.clone()),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -11983,7 +12551,7 @@ fn reap_node_session(
     run_id: &str,
     node_id: &str,
     iter: i64,
-    sandbox: event_log::SandboxMode,
+    sandboxed: bool,
 ) {
     let socket = state.tmux_socket();
     let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
@@ -12005,7 +12573,7 @@ fn reap_node_session(
     // no-op for `off`. Marker == the session name (so the /proc scan hits it).
     sandbox_run::kill_session_best_effort(
         state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        sandbox,
+        sandboxed,
         run_id,
         &session,
     );

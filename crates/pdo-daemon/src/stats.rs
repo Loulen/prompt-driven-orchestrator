@@ -413,15 +413,23 @@ pub async fn stats_cost(
         let project = repo_root.to_string_lossy().into_owned();
 
         // #408: read the transcripts from the sandboxed Run's staged home while it
-        // is live (else `~/.claude/projects/`). Parse `sandbox` straight off the
+        // is live (else `~/.claude/projects/`). Read `sandbox` straight off the
         // `run_started` payload (like `target_repo`/`pipeline_id`) — no full
         // RunState projection, so the SQL stays cheap (no fan-out regression).
-        let sandbox = payload
+        //
+        // #432: this stops being a *decoder*. It used to `from_value::<SandboxMode>`,
+        // which silently swallowed any token the closed enum did not know; all this
+        // fold ever needed is the off-ness, and asking the profile store whether the
+        // name resolves would be an N+1 inside a per-row loop of a SQL fan-out.
+        let sandboxed = payload
             .get("sandbox")
-            .and_then(|v| serde_json::from_value::<crate::event_log::SandboxMode>(v.clone()).ok())
-            .unwrap_or_default();
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| {
+                let t = s.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
+            });
         let projects_root =
-            crate::sandbox_run::transcripts_root(sandbox, &run_id, &home_root, &sandbox_root);
+            crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
 
         let cost = crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id);
         cost_rows.push(CostRow {

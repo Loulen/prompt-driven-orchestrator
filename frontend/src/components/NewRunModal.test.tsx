@@ -25,7 +25,7 @@ vi.mock("../api", () => ({
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
-    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
     dockerfile_path: {
       effective: "/home/user/.pdo/sandbox/Dockerfile",
       source: "default",
@@ -35,6 +35,12 @@ vi.mock("../api", () => ({
     },
     sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+    // #432: the sandbox `<select>` options are DATA now — the two virtual defaults.
+    sandbox_profiles: [
+      { name: "full", virtual: true },
+      { name: "minimal", virtual: true },
+    ],
+    home: "/home/user",
     updated_at: "2026-07-01T10:00:00.000Z",
   }),
   // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
@@ -1340,7 +1346,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
-      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       // #431: required fields on InstanceSettings; this modal reads neither, they are
       // here to satisfy the typed fixture.
       dockerfile_path: {
@@ -1352,6 +1358,12 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       },
       sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      // #432: the `<select>` options come from here. Both virtual defaults, no row.
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -1360,7 +1372,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
   it("prefills the run selector from the instance default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off" },
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
@@ -1374,7 +1386,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
         // The instance default is `minimal`, but Docker is down: greying wins.
-        default_sandbox: { effective: "minimal", source: "stored", stored: "minimal", env: null, default: "off" },
+        default_sandbox: { effective: "minimal", source: "stored", stored: "minimal", env: null, default: "off", reason: null },
         sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
       }),
     );
@@ -1394,7 +1406,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
   it("passes the chosen sandbox mode to createRun", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       settingsFixture({
-        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off" },
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([
@@ -1465,5 +1477,92 @@ describe("NewRunModal — sandbox selector (#410)", () => {
         expect.objectContaining({ sandbox: null }),
       );
     });
+  });
+
+  // -- #432: the options are DATA, and a vanished profile is a tombstone -------
+
+  it("lists off plus every staging profile the daemon serves", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        sandbox_profiles: [
+          { name: "full", virtual: true },
+          { name: "full-no-mcp", virtual: false },
+          { name: "minimal", virtual: true },
+        ],
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "off",
+        "full",
+        "full-no-mcp",
+        "minimal",
+      ]),
+    );
+  });
+
+  /**
+   * THE PHANTOM-PROFILE RULE (#432). A trigger whose stored profile has been deleted keeps
+   * a tombstone option and blocks Save.
+   *
+   * Without it React sets `selectedIndex = -1`, the field renders blank, and saving would
+   * PATCH `sandbox: null` — a SILENT FALLBACK to the instance default, exactly what
+   * ADR-0031 §7 forbids. Deliberately separate from the Docker clamp: clamping to `off` is
+   * legitimate for an unavailable Docker, and would be a silent demotion here.
+   */
+  it("tombstones a trigger's vanished profile and blocks the save", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    const trigger = {
+      id: "trg-gone",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: null,
+      overlap_policy: "skip",
+      // Materialised once, deleted since — the only way to get a dangling reference.
+      sandbox: "full-no-mcp",
+      enabled: true,
+      next_fire_at: null,
+      last_fired_at: null,
+      last_outcome: null,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    // The seeded value is NEVER rewritten: still selected, and visibly a tombstone.
+    await waitFor(() => expect(select.value).toBe("full-no-mcp"));
+    expect(screen.getByTestId("sandbox-missing-profile")).toBeInTheDocument();
+    expect(screen.getByTestId("sandbox-missing-profile-warning")).toHaveTextContent(
+      /does not fall back to a default/i,
+    );
+
+    vi.useRealTimers();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save trigger/i })).toBeDisabled(),
+    );
+    expect(updateTrigger).not.toHaveBeenCalled();
+  });
+
+  it("does not tombstone `off`, which is never a profile", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("off"));
+    expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
   });
 });

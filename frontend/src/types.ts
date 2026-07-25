@@ -77,6 +77,100 @@ export interface StringSettingField {
   default: string | null;
 }
 
+/**
+ * String sibling of {@link StringSettingField} carrying an advisory `reason` (#432).
+ *
+ * Only `default_sandbox` needs it: it is the one enum knob whose value space is OPEN (a
+ * staging-profile name), so it is the one that can point at nothing. `PUT /settings` gates
+ * the *stored* tier, but the **env** tier (`PDO_DEFAULT_SANDBOX`) passes through no
+ * validator at all — so the settings view is the only honest place to surface a dangling
+ * reference before the user launches something that will 400.
+ *
+ * `reason` is `null` when the winning tier resolves.
+ */
+export interface EnumSettingFieldWithReason extends StringSettingField {
+  reason: string | null;
+}
+
+/** One staging profile, as `GET /settings` lists it (#432): the NAME only. */
+export interface SandboxProfileRef {
+  name: string;
+  /** `full` / `minimal` — resolves with no DB row until edited (ADR-0031 §2). */
+  virtual: boolean;
+}
+
+/** What a profile entry points at (#432). `glob` is authored by the built-in default only. */
+export type SandboxEntryKind = "dir" | "file" | "glob";
+
+/** One resolved entry of a staging profile, as the editor shows it (#432). */
+export interface SandboxProfileEntry {
+  /** `$HOME`-relative path, or the default's one-level glob pattern. */
+  path: string;
+  kind: SandboxEntryKind;
+  /** From the built-in default (checkable) vs a user extra (removable). */
+  from_default: boolean;
+  enabled: boolean;
+  /**
+   * Class (b): unchecking does NOT make the file absent — the staging floor
+   * re-synthesises the keys it needs. Exactly two entries. The UI must say so, or
+   * unchecking reads as more destructive than it is.
+   */
+  resynthesised: boolean;
+  /** Server-owned advisory (disk cost, behaviour when unchecked). Never derived client-side. */
+  note: string | null;
+  /** Under `.ssh` / `.aws` / `.gnupg` — allowed with a warning (ADR-0031 §3). */
+  sensitive: boolean;
+  /** Present on the host right now; `null` when unknowable (a glob, or no `$HOME`). */
+  exists: boolean | null;
+}
+
+/**
+ * One class-(c) floor guarantee (#432): satisfied by the WHOLE file, so it is neither
+ * checkable nor addable. Rendered read-only — without this block a `minimal` profile's
+ * screen looks broken and the user wrongly concludes the container starts with no
+ * credentials.
+ */
+export interface SandboxFloorGuarantee {
+  id: string;
+  label: string;
+  path: string | null;
+}
+
+/** The full editor view of one staging profile (`GET|PUT /settings/sandbox-profiles/{name}`). */
+export interface SandboxProfile {
+  name: string;
+  virtual: boolean;
+  /** A DB row exists (the profile has been edited at least once). */
+  materialised: boolean;
+  /** The stored DIFF — the user's intention, never the effective list. */
+  disabled: string[];
+  extras: string[];
+  /** What a Run created NOW would freeze into `RunStarted`. */
+  resolved: string[];
+  entries: SandboxProfileEntry[];
+  /** Signalled no-ops, never errors (ADR-0031 §2). */
+  redundant_extras: string[];
+  inactive_disabled: string[];
+  floor: SandboxFloorGuarantee[];
+  sensitive_prefixes: string[];
+  updated_at: string | null;
+}
+
+/**
+ * Who still points at a profile (`GET …/{name}/referents`, #432). Server-side because the
+ * frontend cannot derive the third class: {@link RunListEntry} carries no `sandbox`.
+ *
+ * The distinction is the whole point of the delete dialog: `instance_default` and
+ * `triggers` are NOT repointed and their next Run **fails**, while `runs` already froze
+ * their entry list at start and are **unaffected**.
+ */
+export interface SandboxProfileReferents {
+  name: string;
+  instance_default: boolean;
+  triggers: { id: string; name: string; enabled: boolean }[];
+  runs: { run_id: string; pipeline_name: string | null; name: string | null }[];
+}
+
 /** The full `GET /settings` view (#129, ADR-0015; default_model #347; image_source #411). */
 export interface InstanceSettings {
   session_cap: SettingField;
@@ -91,12 +185,13 @@ export interface InstanceSettings {
    */
   image_source: StringSettingField;
   /**
-   * Instance-wide default sandbox mode (#410): `"off"` (host, default), `"full"`,
-   * or `"minimal"`. A closed enum with a built-in `off` default, so every tier is a
-   * present string — reuses {@link StringSettingField} (a superset) though it is
-   * never null. The create-run chokepoint resolves precedence run → trigger → this.
+   * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
+   * **staging profile**. No longer a closed enum — its value space is the user's profile
+   * namespace, which is why it carries a `reason` when the winning tier names a profile
+   * that does not exist. The create-run chokepoint resolves precedence
+   * run → trigger → this, and 400s on a dangling name (never a silent fallback).
    */
-  default_sandbox: StringSettingField;
+  default_sandbox: EnumSettingFieldWithReason;
   /**
    * Path to the sandbox Dockerfile (#431): `stored → env PDO_SANDBOX_DOCKERFILE →
    * the seeded `<sandbox_root>/Dockerfile``. Reuses {@link StringSettingField} as-is:
@@ -128,6 +223,20 @@ export interface InstanceSettings {
     reason: string | null;
     checked_at: string;
   };
+  /**
+   * Every staging profile the instance can serve (#432) — the two virtual defaults ∪ the
+   * materialised rows, sorted. **Names only**, by contract: this payload is on the launch
+   * dialog's hot path (it fetches settings on every open), so entry lists live behind
+   * `GET /settings/sandbox-profiles` instead. Drives the sandbox `<select>`.
+   */
+  sandbox_profiles: SandboxProfileRef[];
+  /**
+   * The host `$HOME` the daemon stages from (#432), honouring `sandbox_home_override`. An
+   * observed FACT, not a settings tier. Needed because the filesystem explorer's `onPick`
+   * yields an ABSOLUTE path while a profile entry is RELATIVE to `$HOME` — and nothing
+   * exposed `$HOME` before this. `null` when `HOME` is unset.
+   */
+  home: string | null;
   updated_at: string;
 }
 
@@ -146,9 +255,9 @@ export interface UpdateSettingsRequest {
   /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
    *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
   image_source?: string;
-  /** Default sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or `""` to clear
+  /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
-   *  `default_model`/`image_source`. */
+   *  `default_model`/`image_source`. The daemon 400s a name that does not resolve. */
   default_sandbox?: string;
   /** Sandbox Dockerfile path (#431): an absolute path to an existing regular file
    *  (the daemon 400s otherwise), or `""` to clear back to env → the seeded default.
@@ -208,7 +317,7 @@ export interface Trigger {
   overlap_policy: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; null = unbounded. */
   max_concurrent?: number | null;
-  /** Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or null/absent
+  /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/absent
    *  to inherit the instance default. Read at fire time. */
   sandbox?: string | null;
   enabled: boolean;
@@ -362,11 +471,21 @@ export interface RunState {
   target_repo?: string | null;
   source_branch?: string | null;
   /**
-   * Isolation mode for this Run (#403 / #407 / #410). Absent on host/historical
-   * runs (projected as `off` server-side and skipped from the payload when off).
-   * Immutable once the Run started.
+   * Isolation for this Run (#403 / #407 / #410 / #432): `"off"`, or the name of the
+   * **staging profile** it launched with. Absent on host/historical runs (projected as
+   * `off` server-side and skipped from the payload when off). Immutable once the Run
+   * started. Widened from the closed `off|full|minimal` union in #432 — a profile name is
+   * an open value space.
    */
-  sandbox?: "off" | "full" | "minimal";
+  sandbox?: string;
+  /**
+   * The profile's resolved entry list, **frozen at creation** (#432, ADR-0031 §6). Absent
+   * on `off` and on pre-#432 runs. `[]` is a legitimate value — that IS `minimal`.
+   *
+   * This is what `prepare` consumes, which is why editing (or deleting) a profile cannot
+   * retroactively change what a Run in flight staged.
+   */
+  sandbox_entries?: string[];
   /**
    * One-time image-prep visibility for a sandboxed Run (#410). `"pending"` while
    * the image is pulled/built at first use; `"ready"` once the container is about

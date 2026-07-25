@@ -160,10 +160,11 @@ pub(crate) async fn spawn_node(
         }
     }
 
-    // #407: the Run's isolation mode (immutable, projected from RunStarted). When
-    // not `off`, the tail below is wrapped to run inside `pdo-sbx-<run_id>`. Read
-    // from the guard projection — `sandbox` never changes over a Run's life.
-    let run_sandbox = projected.as_ref().map(|s| s.sandbox).unwrap_or_default();
+    // #407: whether the Run is sandboxed (immutable, projected from RunStarted). When
+    // it is, the tail below is wrapped to run inside `pdo-sbx-<run_id>`. Read from the
+    // guard projection — `sandbox` never changes over a Run's life. A `bool` and not
+    // the mode (#432): the profile name is owned, and only the off-ness matters here.
+    let run_sandboxed = projected.as_ref().is_some_and(|s| !s.sandbox.is_off());
 
     // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
     // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.
@@ -472,7 +473,7 @@ pub(crate) async fn spawn_node(
     // #407: wrap the tail in `docker exec … pdo-sbx-<run>` when sandboxed. The
     // marker MUST equal the session name (the kill path scans `/proc` for it), and
     // the workdir is the node's own working dir.
-    let sandbox_wrap = (!run_sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+    let sandbox_wrap = run_sandboxed.then(|| tmux_session_manager::SandboxWrap {
         docker_bin: deps.docker_cmd_override.unwrap_or("docker"),
         uid: crate::sandbox_container::host_uid(),
         gid: crate::sandbox_container::host_gid(),

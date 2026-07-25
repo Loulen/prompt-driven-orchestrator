@@ -1146,12 +1146,30 @@ mode), confondre avec `ensure_image`/`probe_state` (provisionnement/liveness par
 **Préparation du sandbox (`sandbox_prep`)** :
 État **additif** projeté sur le Run (`pending`|`ready`) qui rend visible la fenêtre de prep eager
 (ADR-0030 pt 4/10) : `SandboxPrepStarted` (avant `ensure_ready`) → `pending`, `SandboxPrepReady`
-(avant le 1er spawn) → `ready`. Événements **informationnels** (même grain que `NodeBlockedOnLimit` /
-`NodeAutoCompleteObserved`), émis au chokepoint `append_event`, **jamais** pour un Run `off`. N'altère
-**pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié). L'UI du Run
-affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge** `sandbox :
-minimal|full` persistant. _Éviter_ : « statut preparing » (écarté, pas un état de la machine à statut) ;
-l'inférence client (écartée : faux positifs advance-détaché/#159).
+(avant le 1er spawn) → `ready`. Émis au chokepoint `append_event`, **jamais** pour un Run `off`.
+N'altère **pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié).
+L'UI du Run affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge**
+`sandbox : minimal|full` persistant. Depuis #445 la paire n'est plus **seulement informationnelle** :
+elle porte la **précondition de spawn** ci-dessous, donc `SandboxPrepReady` est aussi émis par
+`resume_run` et la boot recovery quand elles ré-arment le conteneur d'un Run resté `pending`
+(amendement ADR-0030 §3 ; `open_run_shell` reste non émetteur — Run terminal). _Éviter_ : « statut
+preparing » (écarté, pas un état de la machine à statut) ; l'inférence client (écartée : faux positifs
+advance-détaché/#159) ; « événement purement informationnel » (plus vrai depuis #445).
+
+**Précondition de spawn du sandbox** (`RunState::sandbox_spawn_block`) :
+Règle « **un Run sandboxé dont la prep n'est pas `ready` n'est pas schedulable** », portée par
+`spawn_node` lui-même (après le garde de transition, avant l'admission et tout sous-worktree) et
+répétée en `409` par `force_spawn_node`, qui ne passe pas par le spawn. Décision **pure** sur la
+projection : `off` jamais bloqué, `ready` jamais bloqué, `pending` **et** `absent` bloqués. Le refus
+n'écrit **rien** — ni `NodeStarted` ni `NodeWaiting` — parce qu'un nœud sans état reste dans
+`compute_ready_to_spawn` : c'est ce qui permet le **rejeu** par l'`advance_run` qui suit
+`SandboxPrepReady`. Issue de spawn dédiée `SpawnOutcome::Deferred`, distincte de `Refused` (rien à
+reprendre) et de `Throttled` (réservation posée). Sans elle, un avancement déclenché par le watcher de
+pipeline ou par `retry_waiting_nodes` pendant la prep lançait un `docker exec` sur un conteneur
+inexistant → exit 1 en ~30 ms → `session_died` 25 s plus tard (#445, profil `full` inutilisable).
+_Éviter_ : « garde du watcher » (le défaut était l'absence de précondition au spawn, corriger le site
+d'appel laisse le suivant la réintroduire) ; confondre avec l'**admission** (cap de sessions
+concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeStarted`).
 
 ### Relations
 - Une **Sandbox** `minimal`/`full` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
@@ -1229,6 +1247,27 @@ l'inférence client (écartée : faux positifs advance-détaché/#159).
   content-type, forme additive, les 2 drapeaux, liens cassés et spéciaux invisibles ; `sandbox_tracer` :
   build depuis le chemin custom **sans pull**, et chemin disparu → `RunFailed` nommant chemin + tier)
   + FE (vitest) + FP-431 (L5, Docker réel).
+- **Réalisé (#445, amendement ADR-0030 « précondition du spawn »)** : la garantie du point 4 (« conteneur
+  prêt avant le premier spawn ») était rejouée par le **seul** parcours de création ; le watcher de
+  pipeline et `retry_waiting_nodes` atteignaient le spawn pendant la prep → `docker exec` sur un
+  conteneur inexistant → `session_died` (profil `full` mort 7 fois sur 7 en reproduction, et
+  **systématiquement dès qu'un onglet du Run était ouvert**, la lecture de `pipeline.yaml` réveillant le
+  watcher). La règle devient une **précondition portée par `spawn_node`** (voir le lexique ci-dessus),
+  répétée en `409` par `force_spawn_node` ; le refus n'écrit rien, donc le spawn est **rejoué** par
+  l'`advance_run` qui suit `SandboxPrepReady` — d'où l'extension des émetteurs de cet event
+  (`resume_run`, boot recovery) sans laquelle un Run ayant échoué *pendant* sa prep serait bloqué à vie.
+  `run_stall_reason` gagne une **grâce sandbox** de 15 min (une prep de 2 Go dure 83-87 s, davantage sur
+  un build froid : la fenêtre #279 de 120 s tuait précisément les Runs lents que la précondition sauve),
+  et une prep dont le Run est devenu terminal est **abandonnée** (ni event, ni spawn, `docker rm -f` du
+  conteneur ; le staging reste pour `merge_back`/`cleanup_run`). Couvert layer-1 (décision pure, table
+  complète) + unit (spawn différé sans event, `off` jamais bloqué, rejeu de bout en bout sur
+  `advance_run`, `409` du force-spawn, les deux bornes de la grâce sandbox) + FP-445 (L5, Docker réel,
+  recette `full-heavy`).
+- **Non traité, à ficher** : le réveil parasite du watcher. La première **lecture** de
+  `<run>/pipeline.yaml` produit un `pipeline_modified` mensonger (masque inotify `OPEN`, debouncer sans
+  filtre d'`EventKind`, `content_actually_changed` sans baseline pour un Run neuf —`seed_run_mtimes` ne
+  tourne qu'au boot ; `copy_pipeline_to_run` est en outre le seul écrivain de l'arbre qui n'appelle
+  jamais `mark_self_write`). Indépendant de #445 : la précondition tient quel que soit qui avance le Run.
 - **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
   Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
   (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).

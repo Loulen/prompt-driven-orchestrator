@@ -124,6 +124,15 @@ pub(crate) enum SpawnOutcome {
     /// The transition guard refused the spawn before any side effect
     /// (already live / already completed iteration).
     Refused { reason: String },
+    /// The Run is sandboxed and its container is not up yet (#445): the spawn was
+    /// declined before any side effect and **no event was appended**, so the node
+    /// keeps no state and the scheduler still reports it ready. It is replayed when
+    /// `SandboxPrepReady` drives the next `advance_run`.
+    ///
+    /// Distinct from [`SpawnOutcome::Refused`] (nothing to retry — the work is
+    /// already live or done) and from [`SpawnOutcome::Throttled`] (a `NodeWaiting`
+    /// reservation *was* appended and the cross-run admission sweep owns the retry).
+    Deferred { reason: String },
     /// The spawn aborted (empty script body, worktree creation failure,
     /// panic/error in the isolated span) — a failure was recorded.
     Failed { reason: String },
@@ -165,6 +174,32 @@ pub(crate) async fn spawn_node(
     // guard projection — `sandbox` never changes over a Run's life. A `bool` and not
     // the mode (#432): the profile name is owned, and only the off-ness matters here.
     let run_sandboxed = projected.as_ref().is_some_and(|s| !s.sandbox.is_off());
+
+    // #445: SANDBOX PRECONDITION — "a sandboxed Run whose prep is not `ready` is not
+    // schedulable". Carried by the spawn itself, deliberately NOT by its callers: the
+    // create path gated correctly (`lib.rs`, the detached prep task) while the pipeline
+    // watcher and `retry_waiting_nodes` reached the spawn with no idea a container was
+    // still being built, so the tail below `docker exec`ed into a name that did not
+    // exist yet → exit 1 in ~30 ms → the tmux window's command ended → `session_died`.
+    // Enforced HERE (after the transition guard, before admission and before any
+    // sub-worktree is created) so the invariant holds for every present and future
+    // caller, exactly as the transition guard does for illegal starts.
+    //
+    // Appends NOTHING and reserves nothing. That is load-bearing for the replay: a
+    // node with no state stays in `compute_ready_to_spawn`, so the `advance_run` that
+    // follows `SandboxPrepReady` starts it. A `NodeWaiting` reservation would flip it
+    // to `Waiting`, which `compute_ready_to_spawn` skips — the deferred spawn would
+    // then depend on the *cross-run* admission sweep and a Run whose only trigger was
+    // the watcher could wedge for ever. `run_stall_reason` knows about this window and
+    // will not read it as a silent spawn-abort (it fails loud only past its own
+    // sandbox-prep grace).
+    if let Some(reason) = projected.as_ref().and_then(|s| s.sandbox_spawn_block()) {
+        info!(
+            "spawn_node deferred for {} iter {iter}: {reason} (replayed on sandbox_prep_ready)",
+            node.id
+        );
+        return SpawnOutcome::Deferred { reason };
+    }
 
     // #248 / ADR-0017: refuse to spawn a `script` node with an empty body — it
     // would `bash <empty>` → exit 0 → a silent no-op masquerading as success.

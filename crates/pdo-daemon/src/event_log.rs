@@ -738,6 +738,50 @@ impl RunState {
                 .iter()
                 .all(|id| self.node_status(id) == Some(&NodeStatus::Completed))
     }
+
+    /// Why this Run is **not schedulable yet** because its sandbox is still being
+    /// prepared (#445) — `None` when a session may be launched.
+    ///
+    /// A sandboxed node's tmux window runs `docker exec … pdo-sbx-<run_id> …`. On a
+    /// container that does not exist yet, `docker exec` exits 1 in ~30 ms, the window's
+    /// command ends, the tmux session disappears, and ~25 s later the stale detector
+    /// renders `session_died` — a failure that names tmux while the real fault is the
+    /// ordering. The precondition therefore belongs to the *spawn*, not to the callers
+    /// that reach it: `create_run` gated correctly while the pipeline watcher
+    /// (`handle_run_pipeline_modifications`) and `retry_waiting_nodes` did not.
+    ///
+    /// | `sandbox` | `sandbox_prep` | verdict |
+    /// |---|---|---|
+    /// | `off` | (any) | `None` — the host path never grew a precondition |
+    /// | profile | `Ready` | `None` — image + container + staging are guaranteed |
+    /// | profile | `Pending` | blocked — the prep task is between its two events |
+    /// | profile | `None` | blocked — the prep task has not reached its head event |
+    ///
+    /// The `None` arm blocks deliberately: `RunStarted` and `SandboxPrepStarted` are
+    /// ~100 ms apart, and a read of `<run>/pipeline.yaml` inside that window wakes the
+    /// watcher (inotify reports the *first read* of a fresh run dir as a modification).
+    /// Blocking is also the fail-safe direction — the cost of a wrong `Some` is one
+    /// deferred spawn replayed on `SandboxPrepReady`, the cost of a wrong `None` is a
+    /// dead node.
+    ///
+    /// Pure: projected state in, decision out. The reason is the operator-facing
+    /// sentence, so it names the profile (the *why this Run and not that one*).
+    pub fn sandbox_spawn_block(&self) -> Option<String> {
+        let profile = self.sandbox.profile()?;
+        match self.sandbox_prep {
+            Some(SandboxPrepState::Ready) => None,
+            Some(SandboxPrepState::Pending) => Some(format!(
+                "sandbox prep for run {} (profile `{profile}`) is still in progress: \
+                 its container is not up, so no session can be launched yet",
+                self.run_id
+            )),
+            None => Some(format!(
+                "sandbox prep for run {} (profile `{profile}`) has not started yet: \
+                 its container does not exist, so no session can be launched yet",
+                self.run_id
+            )),
+        }
+    }
 }
 
 fn entry_node_ids(edges: &[EdgeInfo], node_defs: &[NodeDefInfo]) -> Vec<String> {
@@ -2062,6 +2106,56 @@ mod tests {
         assert_eq!(state.sandbox_prep, None);
         let value = serde_json::to_value(&state).unwrap();
         assert!(value.get("sandbox_prep").is_none());
+    }
+
+    // -- #445: the sandbox spawn precondition, decided on the projection alone ----
+
+    #[test]
+    fn sandbox_spawn_block_gates_on_the_projected_prep_state() {
+        // The whole decision table of `sandbox_spawn_block`, which is what stands
+        // between the pipeline watcher and a `docker exec` into a container that does
+        // not exist yet.
+        let sandboxed = |prep: Option<SandboxPrepState>| {
+            let mut s = RunState::new("r1".into(), "p".into());
+            s.sandbox = SandboxMode::Profile("full".into());
+            s.sandbox_prep = prep;
+            s
+        };
+
+        // Prep finished: the container is up, spawning is legal.
+        assert!(sandboxed(Some(SandboxPrepState::Ready))
+            .sandbox_spawn_block()
+            .is_none());
+
+        // Prep in flight — the reported failure window.
+        let pending = sandboxed(Some(SandboxPrepState::Pending))
+            .sandbox_spawn_block()
+            .expect("a pending prep must block the spawn");
+        assert!(
+            pending.contains("full") && pending.contains("r1"),
+            "the reason must name the profile and the run, got {pending:?}"
+        );
+
+        // No prep event yet: RunStarted and SandboxPrepStarted are ~100 ms apart, and
+        // a read of the fresh run dir inside that window wakes the watcher. Blocking
+        // is the fail-safe direction — a wrong block costs one replayed spawn, a wrong
+        // pass costs a dead node.
+        assert!(
+            sandboxed(None).sandbox_spawn_block().is_some(),
+            "a sandboxed Run whose prep has not even started must block"
+        );
+    }
+
+    #[test]
+    fn sandbox_spawn_block_never_gates_the_host_path() {
+        // An `off` Run has no prep events at all, so `sandbox_prep` is permanently
+        // `None`. Reading that as "not ready" would deadlock every non-sandboxed Run
+        // in the instance — the `off` parcours must stay byte-identical.
+        let mut s = RunState::new("r1".into(), "p".into());
+        assert!(s.sandbox_spawn_block().is_none());
+        // …and stays unblocked whatever the prep field says (defensive: `off` wins).
+        s.sandbox_prep = Some(SandboxPrepState::Pending);
+        assert!(s.sandbox_spawn_block().is_none());
     }
 
     #[test]

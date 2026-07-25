@@ -144,7 +144,20 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                     match tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
                         .await
                     {
-                        Ok(Ok(())) => {}
+                        // #445: record the container as ready, or the spawn precondition
+                        // would refuse every node of a Run whose prep task died with the
+                        // previous daemon (its projection is frozen at `pending`, and
+                        // nothing else would ever lift it). Only on the success arm: the
+                        // two `warn!` arms below leave the projection `pending` on
+                        // purpose, so the run is deferred rather than spawned into a
+                        // container that is not there. Gated on the Run actually being
+                        // blocked so the common case — every live sandboxed Run, already
+                        // `ready` — does not append one no-op event per Run per boot.
+                        Ok(Ok(())) => {
+                            if run_state.sandbox_spawn_block().is_some() {
+                                crate::mark_sandbox_prep_ready(state, run_id).await;
+                            }
+                        }
                         // KEPT as a `warn!`, deliberately. `ensure_ready` touches the
                         // Docker socket, and `service_unit.rs` emits
                         // `After=network-online.target` WITHOUT `After=docker.service` —

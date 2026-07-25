@@ -6424,7 +6424,12 @@ fn spawn_manager_session(
     name_hint: prompt_augmenter::RunNameHint,
     sandboxed: bool,
 ) {
-    let daemon_url = format!("http://localhost:{}", state.port);
+    // #447: the URL must be the one reachable from the side this manager will run
+    // on. A sandboxed manager execs into the Run's container, where `localhost` is
+    // the container — every `curl` of its own preamble hit nothing, and the manager
+    // reported the daemon dead (falsely, and with confidence) instead of issuing its
+    // commands. `sandboxed` is already in hand two lines below for the `SandboxWrap`.
+    let daemon_url = sandbox_container::daemon_url(state.port, sandboxed);
 
     let static_prompt = std::fs::read_to_string(
         state

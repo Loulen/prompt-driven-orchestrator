@@ -12,7 +12,11 @@
 //!   4. `cleanup_run` removes the container (`rm -f pdo-sbx-<run>`) + purges staging;
 //!   5. `boot_recovery` re-ensures a live sandboxed run's container;
 //!   6. killing a sandboxed node issues a targeted in-container `docker exec` kill
-//!      carrying the session marker.
+//!      carrying the session marker;
+//!   7. the **manager preamble text** names the daemon by the hostname reachable from
+//!      the side it will run on — the gateway when sandboxed, `localhost` when `off`
+//!      (#447). The preamble file is written before tmux is invoked, so this is
+//!      assertable without a real claude.
 //!
 //! The real end-to-end run (a live container, `pdo complete` from inside it) is
 //! the Layer-5 job — a fake `docker exec` cannot run the node's body, so tests
@@ -1604,5 +1608,106 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
     assert!(
         t.contains("exec") && t.contains(&format!("pdo-sbx-{run_id}")),
         "the replayed tail must run inside the Run's container; log:\n{t}"
+    );
+}
+
+// -- Test 12: the manager preamble carries the URL of the side it runs on (#447)
+
+/// The manager's runtime preamble as written to disk by `tmux_session_manager::spawn`
+/// (`<worktree>/.pdo/prompts/__manager__-iter-0.md`). Written *before* tmux is
+/// invoked, so it exists whether or not the harmless tail actually started.
+fn manager_preamble_path(daemon: &TestDaemon, run_id: &str) -> PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree/.pdo/prompts/__manager__-iter-0.md")
+}
+
+async fn read_manager_preamble(daemon: &TestDaemon, run_id: &str) -> String {
+    let path = manager_preamble_path(daemon, run_id);
+    assert!(
+        wait_until(|| path.exists()).await,
+        "the manager preamble must be written at {}",
+        path.display()
+    );
+    std::fs::read_to_string(&path).unwrap()
+}
+
+/// #447: a sandboxed manager execs into the Run's container, where `localhost` is
+/// the container — so the `curl` lines of its own preamble must name the host
+/// gateway. Before the fix the text said `localhost:<port>`, the manager obeyed it,
+/// got connection-refused on every call, and reported "the daemon is down" on a
+/// perfectly healthy daemon — losing its whole command surface (starting with the
+/// `rename_run` its preamble demands as a first action).
+///
+/// The assertion that matters is the ABSENCE of `localhost:<port>`: a preamble that
+/// merely *mentions* the gateway somewhere while still printing host-only `curl`
+/// commands reproduces the bug exactly.
+#[tokio::test]
+async fn sandboxed_manager_preamble_uses_the_container_side_url() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, _log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    // The manager is spawned by the prep task, right after `sandbox_prep_ready`.
+    wait_node_status(&daemon, &run_id, "running").await;
+
+    let port = daemon.addr.port();
+    let preamble = read_manager_preamble(&daemon, &run_id).await;
+
+    assert!(
+        preamble.contains(&format!(
+            "Daemon base URL: `http://host.docker.internal:{port}`"
+        )),
+        "preamble:\n{preamble}"
+    );
+    assert!(
+        !preamble.contains(&format!("localhost:{port}")),
+        "no line may keep the host-only URL — from inside the container it resolves \
+         to the container itself, so every command fails and the manager concludes \
+         the daemon is dead:\n{preamble}"
+    );
+    // The command endpoint specifically: this is the surface the bug removed.
+    assert!(
+        preamble.contains(&format!(
+            "POST http://host.docker.internal:{port}/runs/{run_id}/commands"
+        )),
+        "preamble:\n{preamble}"
+    );
+}
+
+/// Non-regression twin: an `off` Run's manager runs on the host, so its preamble
+/// must stay exactly as it was — `localhost`, and no gateway hostname anywhere.
+#[tokio::test]
+async fn off_run_manager_preamble_stays_on_localhost() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, None).await;
+    let port = daemon.addr.port();
+    let preamble = read_manager_preamble(&daemon, &run_id).await;
+
+    assert!(
+        preamble.contains(&format!("Daemon base URL: `http://localhost:{port}`")),
+        "preamble:\n{preamble}"
+    );
+    assert!(
+        !preamble.contains("host.docker.internal"),
+        "the host path must never be handed the container-only hostname:\n{preamble}"
+    );
+    // And the `off` parcours still never touches docker.
+    assert_eq!(
+        log_text(&log),
+        "",
+        "the `off` path must not invoke docker at all"
     );
 }

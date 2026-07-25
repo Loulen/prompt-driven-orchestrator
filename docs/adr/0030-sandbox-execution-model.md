@@ -303,6 +303,52 @@ n'aurait rien corrigé, puisque la précondition doit tenir quel que soit **qui*
 Le corps de cette ADR (points 1-10) est laissé **tel quel**, dans le vocabulaire d'avant #426 : y
 lire `full` partout où il dit `copy`, et `minimal` partout où il dit `pure`.
 
+## Amendement — L'URL du daemon a un résolveur unique ; le préambule en est un consommateur (#447)
+
+Le point 3 ne parlait que de **l'env** `PDO_DAEMON_URL`. Le **texte** des préambules construisait la
+sienne, codée en dur sur `localhost:<port>`, indépendamment du mode du Run. Un préambule de manager
+sandboxé listait donc des `curl` que le conteneur ne peut pas joindre : `localhost` y désigne le
+conteneur. Le manager obéissait, récoltait des refus de connexion sur **tous** ses appels, et en
+concluait — de bonne foi et avec assurance — que le daemon était mort, pendant que le pied de page de
+la même fenêtre affichait « Daemon: connected ». Reproduit 3 fois sur 3 sur stack isolée, avec
+contrôle négatif `off`.
+
+Ce n'était pas de la prose fausse mais une **perte de fonctionnalité** : toute la surface de commande
+du manager (`rename_run`, `restart_node`, `kill_node`, `mark_node_done`, `extend_cycle`,
+`cleanup_run`…) devenait inatteignable sur un Run sandboxé, en commençant par le `rename_run` que le
+préambule impose comme première action — d'où des Runs sandboxés restés sans nom. Et la panne est
+**intermittente** : sur deux Runs mesurés, un manager s'en est sorti en inspectant `$PDO_DAEMON_URL`
+de sa propre initiative, l'autre a refusé d'émettre quoi que ce soit. Le pire profil de panne :
+silencieuse, non déterministe, et affirmative.
+
+1. **Un résolveur pur unique, `sandbox_container::daemon_url(port, sandboxed)`.** Il vit dans le
+   module qui possède le `--add-host host.docker.internal:host-gateway`, parce que le hostname de la
+   gateway et la gateway elle-même sont **le même fait** : le littéral n'apparaît donc qu'une fois.
+   Le `-e PDO_DAEMON_URL` du create et le texte du préambule manager sont désormais deux
+   **consommateurs** du même appel — l'env et la prose ne peuvent plus diverger (leçon #373 : un seul
+   résolveur, zéro drift).
+
+2. **L'argument nomme le côté d'exécution, pas le mode du Run.** Nuance load-bearing : les exports
+   d'env côté hôte du wrapper (`wrap_with_env`, point 5) appellent avec `sandboxed = false` **même
+   pour un Run sandboxé**, parce qu'ils s'exécutent avant le `docker exec` et ne traversent pas. Y
+   plaquer le résolveur « selon le mode du Run » aurait inversé la logique, ou produit des octets
+   morts sur le chemin sandbox tout en cassant l'identité-octet du chemin `off`. Un résolveur partagé
+   n'autorise pas à unifier les sites sans distinguer les côtés.
+
+3. **Le préambule de nœud n'était pas le symptôme, et le reste.** `AugmentContext.daemon_url` n'a
+   **aucun consommateur** : aucun préambule de nœud n'imprime d'URL ni de `curl` (vérifié en
+   exécution, 489 octets sans URL). Les deux sites de nœud sont donc des valeurs mortes ; ils passent
+   quand même par le résolveur, pour qu'un futur préambule de nœud n'hérite pas du bug — mais la
+   preuve d'acceptation ne peut passer que par le manager, seul préambule qui imprime l'URL.
+
+4. **La preuve est un test de couche 3, pas un unit test.** `build_manager_preamble` prend l'URL en
+   paramètre : un unit test ne prouve que la composition, jamais que `spawn_manager_session` passe le
+   bon booléen — exactement ce que le bug ratait. Le test lit donc le **fichier de préambule écrit sur
+   disque** (`<worktree>/.pdo/prompts/__manager__-iter-0.md`, écrit avant l'appel à tmux, donc
+   assertable sans vrai claude) pour un Run `minimal` et pour son jumeau `off`. L'assertion portante
+   est l'**absence** de `localhost:<port>` : un préambule qui mentionne la gateway quelque part tout
+   en gardant des `curl` hôte reproduit le bug à l'identique.
+
 ## Relations
 
 - **ADR-0031** (profils de staging) : *ce que* le home stagé contient, là où cette ADR fixe *où* et

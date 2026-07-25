@@ -246,7 +246,16 @@ fn wrap_with_env(
         run_id_q = sh_single_quote(run_id),
         node_id_q = sh_single_quote(node_id),
         iter_q = sh_single_quote(&iter.to_string()),
-        daemon_url_q = sh_single_quote(&format!("http://localhost:{daemon_port}")),
+        // #447: `sandboxed = false` is NOT an oversight — these exports run on the
+        // HOST side of the `docker exec` wrapper (see `build_tmux_script`: the
+        // wrapped tail is the *argument* of `wrap_with_env`, so the exports execute
+        // before the exec and never cross into the container). Resolving to the
+        // gateway here would hand the host path a hostname it can't resolve, and
+        // would be dead bytes on the sandbox path — the `docker create` already
+        // posted the container-side value, which the exec deliberately never
+        // clobbers (ADR-0030 §5). Routed through the resolver anyway so the literal
+        // lives in exactly one module.
+        daemon_url_q = sh_single_quote(&crate::sandbox_container::daemon_url(daemon_port, false)),
     );
 
     format!("exec bash -c {}", sh_single_quote(&inner))

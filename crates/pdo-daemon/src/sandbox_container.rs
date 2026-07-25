@@ -44,6 +44,11 @@
 //!   donc `-e PDO_DAEMON_URL=http://host.docker.internal:<port>` (couplé à `--add-host`), et
 //!   [`exec_prefix`] ne re-passe JAMAIS cette var (un `-e PDO_DAEMON_URL` nu clobbererait la
 //!   gateway par le `localhost` hôte). L'exec ne forwarde que les vars PAR-NŒUD.
+//! - **[`daemon_url`] est le résolveur UNIQUE de cette URL (#447).** Ce module possède le
+//!   hostname de la gateway parce qu'il possède le `--add-host` qui la crée : le littéral
+//!   n'apparaît donc qu'ici. Le `-e PDO_DAEMON_URL` du create **et** le texte des préambules
+//!   (manager, ADR-0030 §8) passent par le même appel — c'est ce qui interdit qu'un chemin
+//!   résolve pendant que l'autre reste sur `localhost`.
 
 #![allow(dead_code)] // Tracer bullet : consommé/câblé par #407, non câblé dans cette slice.
 
@@ -57,6 +62,42 @@ use crate::sandbox_image::DOCKER_NOT_FOUND_MSG;
 /// Env var portée par CHAQUE `docker exec`, héritée par `claude` et toute sa descendance ;
 /// clé du kill ciblé (scan `/proc/*/environ`). N'est PAS un label Docker.
 pub(crate) const SESSION_MARKER_ENV: &str = "PDO_SBX_SESSION";
+
+// -- résolveur d'URL du daemon (#447) ----------------------------------------
+
+/// Hostname du daemon **vu depuis le côté hôte** : le conteneur exclu, `localhost`
+/// désigne bien la machine qui écoute.
+const HOST_SIDE_HOST: &str = "localhost";
+
+/// Hostname de la gateway hôte **vu depuis l'intérieur du conteneur**, matérialisée
+/// par le `--add-host host.docker.internal:host-gateway` de [`create_args`]. Dans le
+/// conteneur, `localhost` désigne le conteneur : c'est ce hostname-là, et lui seul,
+/// qui joint le daemon.
+const CONTAINER_SIDE_HOST: &str = "host.docker.internal";
+
+/// Résolveur PUR de l'URL du daemon **telle qu'elle est joignable depuis le côté où
+/// l'agent s'exécute** (#447).
+///
+/// Le bug qu'il ferme : l'URL existait sous DEUX représentations du même fait —
+/// l'env `PDO_DAEMON_URL` (résolue, donc correcte dans le conteneur) et le **texte**
+/// du préambule (codé en dur sur `localhost`). Un agent sandboxé qui obéissait aux
+/// `curl` de son propre préambule tapait dans le vide et en concluait, de bonne foi,
+/// que le daemon était mort — panne silencieuse, intermittente et *affirmative*.
+/// Un seul résolveur, consommé par les deux, rend la dérive impossible (leçon #373).
+///
+/// **Ce résolveur ne s'applique PAS aux exports d'env côté hôte du wrapper
+/// `docker exec`** (`tmux_session_manager::wrap_with_env`) : ceux-là tournent AVANT
+/// le `docker exec`, ne traversent pas dans le conteneur, et doivent donc rester
+/// `localhost` (ADR-0030 §5). Ils appellent avec `sandboxed = false` — l'argument
+/// nomme le côté d'exécution, pas le mode du Run.
+pub(crate) fn daemon_url(port: u16, sandboxed: bool) -> String {
+    let host = if sandboxed {
+        CONTAINER_SIDE_HOST
+    } else {
+        HOST_SIDE_HOST
+    };
+    format!("http://{host}:{port}")
+}
 
 // -- type valeur (assemblé par les résolveurs, nourrit les builders purs) ----
 
@@ -130,7 +171,7 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         format!("{}:{}", spec.uid, spec.gid),
         // --add-host : la gateway que `-e PDO_DAEMON_URL` ci-dessous pointe.
         "--add-host".to_string(),
-        "host.docker.internal:host-gateway".to_string(),
+        format!("{CONTAINER_SIDE_HOST}:host-gateway"),
         // -w au create (cosmétique, satisfait l'AC ; load-bearing = par-exec).
         "-w".to_string(),
         spec.run_worktree.display().to_string(),
@@ -138,10 +179,9 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         "-e".to_string(),
         format!("HOME={}", spec.host_home.display()),
         "-e".to_string(),
-        format!(
-            "PDO_DAEMON_URL=http://host.docker.internal:{}",
-            spec.daemon_port
-        ),
+        // #447 : la MÊME résolution que celle du texte des préambules. L'env et la
+        // prose ne peuvent plus diverger.
+        format!("PDO_DAEMON_URL={}", daemon_url(spec.daemon_port, true)),
         "-e".to_string(),
         format!("PDO_RUN_ID={run_id}"),
         "-e".to_string(),
@@ -713,6 +753,54 @@ mod tests {
                 .and_then(std::io::Error::raw_os_error)
                 == Some(26)
         })
+    }
+
+    // -- 0. résolveur d'URL du daemon (#447) ----------------------------------
+
+    /// Les deux côtés d'exécution rendent des hostnames DIFFÉRENTS, et le port suit.
+    /// C'est la propriété que le bug violait : une seule des deux formes existait.
+    #[test]
+    fn daemon_url_resolves_per_execution_side() {
+        assert_eq!(daemon_url(6193, false), "http://localhost:6193");
+        assert_eq!(
+            daemon_url(6193, true),
+            "http://host.docker.internal:6193",
+            "un agent dans le conteneur ne joint le daemon que par la gateway"
+        );
+        assert_ne!(daemon_url(6193, true), daemon_url(6193, false));
+    }
+
+    /// L'anti-dérive : la valeur de `-e PDO_DAEMON_URL` posée au create N'EST PAS un
+    /// littéral parallèle, c'est **le même appel** que celui du texte des préambules.
+    /// Si ce test tombe, l'env et la prose ont recommencé à diverger — le bug #447.
+    #[test]
+    fn create_env_daemon_url_comes_from_the_shared_resolver() {
+        let fx = Fixtures::sample();
+        let args = create_args("r1", &fx.spec());
+        let posed = args
+            .iter()
+            .find_map(|a| a.strip_prefix("PDO_DAEMON_URL="))
+            .expect("le create pose PDO_DAEMON_URL");
+        assert_eq!(posed, daemon_url(6172, true));
+    }
+
+    /// Le hostname de la gateway que le create **crée** (`--add-host`) est le même que
+    /// celui que le résolveur **rend**. Deux littéraux désynchronisés donneraient un
+    /// `PDO_DAEMON_URL` pointant vers un nom que le conteneur ne résout pas.
+    #[test]
+    fn add_host_and_resolver_name_the_same_gateway() {
+        let fx = Fixtures::sample();
+        let args = create_args("r1", &fx.spec());
+        let mapping = args
+            .iter()
+            .find(|a| a.ends_with(":host-gateway"))
+            .expect("le create pose --add-host");
+        let host = mapping.trim_end_matches(":host-gateway");
+        assert!(
+            daemon_url(6172, true).contains(host),
+            "--add-host {host} n'est pas le hostname du résolveur ({})",
+            daemon_url(6172, true)
+        );
     }
 
     // -- 1. create_args golden (AC#1, éclaté en trois en #432) ----------------

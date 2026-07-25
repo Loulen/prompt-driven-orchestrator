@@ -316,6 +316,12 @@ fn probe_state(docker_bin: &str, name: &str) -> Result<ContainerState> {
 /// Provisionneur IDEMPOTENT du conteneur (miroir de [`crate::sandbox_image::ensure_image`]) :
 /// sonde → up → no-op ; arrêté → `start` ; absent → `create` + `start`. Toute erreur de sonde
 /// (transitoire, docker absent) remonte via `?` sans jamais être traitée comme une absence.
+///
+/// **`spec` n'est consulté que sur le bras `Absent`.** `docker start` ne **réévalue jamais** les
+/// mounts d'un conteneur pré-existant : ils sont figés à `docker create`. Cohérent avec le gel
+/// d'ADR-0031 §6 — éditer un profil en cours de Run ne remonte rien, et ne doit rien remonter — mais
+/// jusqu'ici non dit, alors que la queue variable de [`ContainerSpec::extra_mounts`] (#432) rend la
+/// question naturelle.
 pub(crate) fn ensure_running(docker_bin: &str, run_id: &str, spec: &ContainerSpec) -> Result<()> {
     let name = container_name(run_id);
     match probe_state(docker_bin, &name)? {

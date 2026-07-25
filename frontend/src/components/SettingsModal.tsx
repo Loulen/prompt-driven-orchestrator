@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { Search, X } from "lucide-react";
+import FsExplorerModal from "./FsExplorerModal";
 import { useSettings } from "../hooks/useSettings";
 import { useEditStore } from "../stores/editStore";
 import type {
@@ -174,6 +175,15 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
   const [defaultSandbox, setDefaultSandbox] = useState<string>(
     () => settings.default_sandbox.effective ?? "off",
   );
+  // Sandbox Dockerfile path (#431). DELIBERATE DEVIATION from the `default_model`
+  // idiom: seeded from `stored`, not `effective`. This knob's default IS a real
+  // non-null path, so seeding from `effective` would show the seeded path in the input
+  // and make "clear the field" ambiguous (a clear, or an explicit pin of the default?).
+  // The resolved path is shown read-only alongside instead.
+  const [dockerfilePath, setDockerfilePath] = useState<string>(
+    () => settings.dockerfile_path.stored ?? "",
+  );
+  const [dockerfilePickerOpen, setDockerfilePickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -229,6 +239,13 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
     // changed. Like image_source, the select never emits "" (clear is backend-only).
     if (defaultSandbox !== settings.default_sandbox.effective) {
       patch.default_sandbox = defaultSandbox;
+    }
+
+    // Dockerfile path (#431): diffed against `stored` (the seed source), not
+    // `effective`. An emptied field sends the `""` clear sentinel; the daemon 400s a
+    // relative path or a non-file and the banner surfaces it verbatim.
+    if (dockerfilePath !== (settings.dockerfile_path.stored ?? "")) {
+      patch.dockerfile_path = dockerfilePath;
     }
 
     // Nothing changed → close without a round-trip.
@@ -407,6 +424,96 @@ function SettingsForm({ settings, liveSessions, save, onClose, onSaved }: FormPr
           </div>
         </div>
 
+        {/* Sandbox Dockerfile (#431): WHICH Dockerfile the sandbox image is built
+            from. Free text (a path, not a closed enum) + a loupe that opens the
+            generic FsExplorerModal in FILE mode. `showHidden` is not negotiable
+            here: the default lives at `~/.pdo/sandbox/Dockerfile`. */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="setting-dockerfile-path"
+            className="font-medium text-fg-2"
+            style={{ fontSize: "11.5px" }}
+          >
+            Sandbox Dockerfile
+          </label>
+          <div className="relative">
+            <input
+              id="setting-dockerfile-path"
+              data-testid="setting-dockerfile-path"
+              type="text"
+              value={dockerfilePath}
+              onChange={(e) => setDockerfilePath(e.target.value)}
+              placeholder={settings.dockerfile_path.default ?? ""}
+              className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 pr-9 font-mono text-fg placeholder:text-fg-4 transition-colors focus:border-acc focus:outline-none"
+              style={{ fontSize: "12px" }}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              onClick={() => setDockerfilePickerOpen(true)}
+              className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+              title="Browse for a Dockerfile"
+              aria-label="Browse for a Dockerfile"
+              data-testid="setting-dockerfile-path-browse"
+            >
+              <Search size={14} />
+            </button>
+          </div>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Point at a Dockerfile versioned in your repo to share it with the team. Leave
+            empty for the seeded default. It must be <strong>self-contained</strong> — the
+            build context is deliberately empty, so no <span className="font-mono">COPY</span>.
+          </div>
+          {/* The link the issue exists to make non-tribal: the resolved path AND the
+              tag it yields. Server-computed, so it only refreshes after Save (the PUT
+              returns the recomputed view; the modal closes, so it shows on re-open).
+              Computing a tag client-side would duplicate the SHA-256 and re-open
+              exactly the drift #373 cost us. */}
+          <div
+            className="truncate font-mono text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            title={settings.dockerfile_path.effective ?? undefined}
+            data-testid="setting-dockerfile-resolved"
+          >
+            Resolved: {settings.dockerfile_path.effective ?? "(unresolved)"}
+          </div>
+          <div
+            className="truncate font-mono text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-dockerfile-tag"
+          >
+            {settings.sandbox_image.tag
+              ? `Image tag: ${settings.sandbox_image.tag}`
+              : `Image tag: unavailable — ${settings.sandbox_image.reason ?? "unknown reason"}`}
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-dockerfile-path"
+          >
+            {dockerfilePathSourceNote(settings.dockerfile_path)}
+          </div>
+        </div>
+
+        {/* First modal-in-modal of SettingsModal. The explorer's backdrop is z-[60]
+            above this modal's z-50, and it stopPropagation's its own clicks, so the
+            settings backdrop's guard-less onClick={onClose} is never reached through
+            it. SettingsModal has no Escape handler, so the explorer's
+            stopPropagation is harmless here. */}
+        {dockerfilePickerOpen && (
+          <FsExplorerModal
+            mode="file"
+            showHidden
+            title="Choose a Dockerfile"
+            confirmLabel="Use this Dockerfile"
+            startPath={dockerfileStartDir(
+              dockerfilePath || settings.dockerfile_path.effective,
+            )}
+            onPick={setDockerfilePath}
+            onClose={() => setDockerfilePickerOpen(false)}
+          />
+        )}
+
         {error && (
           <div
             className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
@@ -547,6 +654,34 @@ function imageSourceSourceNote(field: StringSettingField): string {
     return `Source: env ${envDisplay ?? "PDO_SANDBOX_IMAGE_SOURCE"}.`;
   }
   return `Source: built-in default (${field.default ?? "registry"}).`;
+}
+
+/** Open-at directory for the Dockerfile picker (#431): the PARENT of the current
+ *  absolute path, so the explorer lands where the file lives rather than at `$HOME`.
+ *  Anything non-absolute (or absent) → undefined, i.e. the daemon's default chain. The
+ *  daemon also clamps a file path to its parent, but resolving it here keeps the very
+ *  first request honest about what it is asking for. */
+function dockerfileStartDir(path: string | null): string | undefined {
+  const trimmed = (path ?? "").trim();
+  if (!trimmed.startsWith("/")) return undefined;
+  const lastSlash = trimmed.lastIndexOf("/");
+  return lastSlash <= 0 ? "/" : trimmed.slice(0, lastSlash);
+}
+
+/** Which tier the sandbox Dockerfile path comes from (#431). Like image_source there IS
+ *  a built-in default — but it is a machine-specific PATH, not a constant, so the
+ *  default note names the seeded location. Discloses a shadowed env var too. */
+function dockerfilePathSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_SANDBOX_DOCKERFILE=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
+      : `Source: stored value (overrides env and default).`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_SANDBOX_DOCKERFILE"}.`;
+  }
+  return `Source: built-in default (${field.default ?? "the seeded Dockerfile"}).`;
 }
 
 /** Which tier the instance default_sandbox comes from (#410). Like image_source there

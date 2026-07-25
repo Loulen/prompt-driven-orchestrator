@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  browseFs,
   deletePipeline,
   duplicateLibraryPipeline,
   fetchPipeline,
@@ -245,5 +246,43 @@ describe("request core", () => {
     const resp = await request<Response>("DELETE", "/pipelines/p", { responseMode: "raw" });
     expect(resp.status).toBe(409);
     expect(await resp.json()).toMatchObject({ conflict: true });
+  });
+});
+
+// #431 — `browseRepos` → `browseFs` (`/repos/browse` → `/fs/browse`), plus two
+// optional flags. The wire contract IS the AC: with no options the URL must be
+// EXACTLY `/fs/browse`, query-string-free, so the daemon takes the byte-identical
+// pre-#431 default branch.
+describe("browseFs wire contract", () => {
+  const EMPTY = { path: "/", parent: null, entries: [], truncated: false, error: null };
+
+  it("hits /fs/browse with NO query string when called with no argument", async () => {
+    const fetchMock = captureFetch(200, EMPTY);
+    await browseFs();
+    expect(fetchMock.mock.calls[0][0]).toBe("/fs/browse");
+  });
+
+  it("encodes the path", async () => {
+    const fetchMock = captureFetch(200, EMPTY);
+    await browseFs("/a b");
+    expect(fetchMock.mock.calls[0][0]).toBe("/fs/browse?path=%2Fa%20b");
+  });
+
+  it("sends both flags as the lowercase literals the daemon accepts", async () => {
+    const fetchMock = captureFetch(200, EMPTY);
+    await browseFs("/x", { files: true, hidden: true });
+    expect(fetchMock.mock.calls[0][0]).toBe("/fs/browse?path=%2Fx&files=true&hidden=true");
+  });
+
+  it("keeps a false flag OFF the wire (no redundant explicit default)", async () => {
+    const fetchMock = captureFetch(200, EMPTY);
+    await browseFs("/x", { files: false, hidden: true });
+    expect(fetchMock.mock.calls[0][0]).toBe("/fs/browse?path=%2Fx&hidden=true");
+  });
+
+  it("omits path when only flags are given", async () => {
+    const fetchMock = captureFetch(200, EMPTY);
+    await browseFs(undefined, { files: true });
+    expect(fetchMock.mock.calls[0][0]).toBe("/fs/browse?files=true");
   });
 });

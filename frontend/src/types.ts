@@ -98,6 +98,26 @@ export interface InstanceSettings {
    */
   default_sandbox: StringSettingField;
   /**
+   * Path to the sandbox Dockerfile (#431): `stored → env PDO_SANDBOX_DOCKERFILE →
+   * the seeded `<sandbox_root>/Dockerfile``. Reuses {@link StringSettingField} as-is:
+   * unlike `default_model` the `default` tier is a real path, and unlike the closed
+   * enums both `effective` and `default` are nullable — resolving the default needs
+   * `$HOME` and can fail.
+   */
+  dockerfile_path: StringSettingField;
+  /**
+   * The image tag the RESOLVED Dockerfile yields (#431) — `pdo-sandbox:h-<hash>`,
+   * computed server-side by the same hash `ensure_image` uses, so "editing the
+   * Dockerfile changes the tag, hence a rebuild" is visible instead of tribal.
+   * Not a settings field (no tier), just an observed fact — mirror of
+   * {@link InstanceSettings.sandbox_docker}. `tag` is null when the file cannot be
+   * read, and `reason` says why; exactly one of the two is ever set.
+   */
+  sandbox_image: {
+    tag: string | null;
+    reason: string | null;
+  };
+  /**
    * Advisory Docker availability probe (#410), folded into `GET /settings` so the
    * NewRunModal learns the default AND whether Docker can run a sandbox in one fetch.
    * `available: false` grays out `full`/`minimal` (`reason` explains why); the
@@ -130,6 +150,10 @@ export interface UpdateSettingsRequest {
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`/`image_source`. */
   default_sandbox?: string;
+  /** Sandbox Dockerfile path (#431): an absolute path to an existing regular file
+   *  (the daemon 400s otherwise), or `""` to clear back to env → the seeded default.
+   *  Same `""`-sentinel discipline as the knobs above. */
+  dockerfile_path?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

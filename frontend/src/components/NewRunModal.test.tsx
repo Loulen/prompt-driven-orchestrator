@@ -26,8 +26,27 @@ vi.mock("../api", () => ({
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+    dockerfile_path: {
+      effective: "/home/user/.pdo/sandbox/Dockerfile",
+      source: "default",
+      stored: null,
+      env: null,
+      default: "/home/user/.pdo/sandbox/Dockerfile",
+    },
+    sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     updated_at: "2026-07-01T10:00:00.000Z",
+  }),
+  // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
+  // on a loupe click. No test clicks it today, but a missing key here would throw at
+  // FIRST ACCESS (`No "browseFs" export is defined`), not at import — a trap worth
+  // disarming rather than rediscovering.
+  browseFs: vi.fn().mockResolvedValue({
+    path: "/home/user",
+    parent: "/",
+    entries: [],
+    truncated: false,
+    error: null,
   }),
   createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
@@ -1322,6 +1341,16 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off" },
+      // #431: required fields on InstanceSettings; this modal reads neither, they are
+      // here to satisfy the typed fixture.
+      dockerfile_path: {
+        effective: "/home/user/.pdo/sandbox/Dockerfile",
+        source: "default",
+        stored: null,
+        env: null,
+        default: "/home/user/.pdo/sandbox/Dockerfile",
+      },
+      sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,

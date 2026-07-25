@@ -31,6 +31,11 @@ export default defineConfig({
       // #377: instance stats cockpit. New top-level `/stats` prefix, so it needs
       // its own proxy entry (else dev GET /stats/* lies with a SPA 200).
       '/stats': daemonTarget,
+      // #431: generic filesystem explorer, renamed from `/repos/browse`. New
+      // top-level `/fs` prefix, so it needs its own entry — same trap as `/nodes`
+      // (#345) and `/stats` (#377): without it a dev GET /fs/browse answers 200
+      // with the SPA and any smoke test would lie.
+      '/fs': daemonTarget,
     },
   },
   test: {

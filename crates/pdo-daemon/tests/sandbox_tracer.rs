@@ -1052,6 +1052,201 @@ async fn dockerfile_mode_builds_never_pulls() {
     );
 }
 
+// -- #431: dockerfile_path drives the -f flag AND skips the pull -------------
+
+/// `PUT /settings {"dockerfile_path": <path>}` against the real daemon.
+async fn put_dockerfile_path(daemon: &TestDaemon, path: &str) -> reqwest::StatusCode {
+    reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "dockerfile_path": path }))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+/// Argv of the `docker build` invocation in the log. Exactly 6 args
+/// (`build -t <tag> -f <dockerfile> <context>`), so we slice a fixed window rather
+/// than "to the end" — unlike the in-module helper, the build is NOT the last
+/// invocation here (the container create/start/exec follow it).
+fn build_argv(log: &Path) -> Vec<String> {
+    let content = log_text(log);
+    let lines: Vec<String> = content.lines().map(str::to_string).collect();
+    match lines.iter().position(|l| l == "build") {
+        Some(i) => lines[i..(i + 6).min(lines.len())].to_vec(),
+        None => Vec::new(),
+    }
+}
+
+/// Every event of the Run, from `GET /runs/<id>/events` — where a `RunFailed`'s
+/// `reason` lives (the Run projection carries no reason field).
+async fn run_events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
+    reqwest::get(format!("{}/runs/{run_id}/events", daemon.url()))
+        .await
+        .unwrap()
+        .json::<Vec<serde_json::Value>>()
+        .await
+        .unwrap()
+}
+
+/// The 12-hex content hash of `bytes`, the way `release.yml` and `sandbox_image`
+/// both compute it (`sha256sum | cut -c1-12`). Shelled out on purpose: it proves
+/// the daemon's Rust hash matches the canonical CI recipe, not just itself.
+fn content_tag(bytes: &[u8]) -> String {
+    use std::io::Write;
+    let mut child = Command::new("sha256sum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(bytes).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let hex = String::from_utf8(out.stdout).unwrap();
+    format!("pdo-sandbox:h-{}", &hex[..12])
+}
+
+#[tokio::test]
+async fn custom_dockerfile_path_builds_from_it_without_pulling() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker_image_absent();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    // A self-contained custom Dockerfile (no COPY: the build context is empty by
+    // design, ADR-0030 §5 as amended). Lives inside the daemon's repo — the use case
+    // the issue targets (versioned with the team's repo).
+    let custom = daemon.repo_root().join("docker").join("sbx.Dockerfile");
+    std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
+    let custom_bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo fp-431 custom dockerfile\n";
+    std::fs::write(&custom, custom_bytes).unwrap();
+
+    // BOTH knobs, before the run: without `image_source=registry` the "no pull"
+    // assertion would be vacuous (dockerfile mode never pulls anyway).
+    put_image_source(&daemon, "registry").await;
+    assert!(
+        put_dockerfile_path(&daemon, custom.to_str().unwrap())
+            .await
+            .is_success(),
+        "an existing absolute regular file must be accepted"
+    );
+
+    let _run_id = start_run(&daemon, Some("minimal")).await;
+
+    assert!(
+        wait_until(|| log_has_subcommand(&log, "build")).await,
+        "a custom Dockerfile must be built locally; log:\n{}",
+        log_text(&log)
+    );
+    // THE assertion: registry mode, yet no pull — the hash of a custom Dockerfile
+    // cannot exist upstream (the fake pull would have SUCCEEDED, so this is a real
+    // signal). And no retag either, since there was nothing to retag.
+    assert!(
+        !log_has_subcommand(&log, "pull"),
+        "a custom Dockerfile must skip the GHCR pull even in registry mode; log:\n{}",
+        log_text(&log)
+    );
+    assert!(
+        !log_has_subcommand(&log, "tag"),
+        "no pull ⇒ no retag; log:\n{}",
+        log_text(&log)
+    );
+
+    let argv = build_argv(&log);
+    // `-f` is exactly the custom path…
+    assert_eq!(
+        argv.iter().position(|a| a == "-f").map(|i| &argv[i + 1]),
+        Some(&custom.display().to_string()),
+        "`docker build -f` must point at the resolved custom Dockerfile; argv: {argv:?}"
+    );
+    // …the tag is the hash of ITS bytes, differing from the seeded default's…
+    let custom_tag = content_tag(custom_bytes);
+    let seeded_bytes = std::fs::read(daemon.repo_root().join(".pdo/sandbox/Dockerfile"))
+        .expect("the seed must still land at the default path");
+    assert_ne!(
+        custom_tag,
+        content_tag(&seeded_bytes),
+        "fixture bug: the two Dockerfiles must hash differently"
+    );
+    assert_eq!(
+        argv.iter().position(|a| a == "-t").map(|i| &argv[i + 1]),
+        Some(&custom_tag),
+        "the tag must be the content hash of the CUSTOM Dockerfile; argv: {argv:?}"
+    );
+    // …and the build context is still the dedicated EMPTY dir, never sandbox_root and
+    // never the repo (D8 / ADR-0030 §5).
+    let ctx = argv.last().unwrap();
+    assert_eq!(
+        ctx,
+        &daemon
+            .repo_root()
+            .join(".pdo/sandbox/.build-ctx")
+            .display()
+            .to_string(),
+        "the build context stays <sandbox_root>/.build-ctx; argv: {argv:?}"
+    );
+
+    // The custom Dockerfile was never overwritten by the seed.
+    assert_eq!(
+        std::fs::read(&custom).unwrap(),
+        custom_bytes,
+        "the seed must never write to a custom path"
+    );
+}
+
+#[tokio::test]
+async fn dockerfile_path_that_vanished_fails_the_run_naming_path_and_tier() {
+    // Realistic TOCTOU: the path passes `PUT /settings` validation, then disappears
+    // before the run. The prep must fail LOUD (ADR-0030 pt 4) — never silently build
+    // the seeded default, which would mean running an image the team never versioned.
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker_image_absent();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let custom = daemon.repo_root().join("docker").join("sbx.Dockerfile");
+    std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
+    std::fs::write(&custom, b"FROM ubuntu:24.04\nRUN echo gone-soon\n").unwrap();
+    assert!(put_dockerfile_path(&daemon, custom.to_str().unwrap())
+        .await
+        .is_success());
+
+    // …and now it's gone.
+    std::fs::remove_file(&custom).unwrap();
+
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    let run = wait_run_status(&daemon, &run_id, "failed").await;
+    assert_eq!(
+        run["status"], "failed",
+        "a vanished Dockerfile must fail the run, never fall back: {run}"
+    );
+
+    // The reason lives on the `run_failed` event, not on the Run projection.
+    let evs = run_events(&daemon, &run_id).await;
+    let failed = evs
+        .iter()
+        .find(|e| e["kind"] == "run_failed")
+        .unwrap_or_else(|| panic!("a RunFailed event must be recorded; events: {evs:#?}"));
+    let reason = serde_json::to_string(failed).unwrap();
+    assert!(
+        reason.contains(custom.to_str().unwrap()),
+        "the failure reason must name the path: {reason}"
+    );
+    assert!(
+        reason.contains("`stored` tier"),
+        "the failure reason must name the winning tier: {reason}"
+    );
+    // The bail precedes the fast-path AND the build: nothing was built.
+    assert!(
+        !log_has_subcommand(&log, "build"),
+        "no build must be attempted for an unnameable image; log:\n{}",
+        log_text(&log)
+    );
+}
+
 // -- #410: run-level exposure + sources of config ----------------------------
 
 async fn get_settings_json(daemon: &TestDaemon) -> serde_json::Value {

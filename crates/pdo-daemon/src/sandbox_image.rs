@@ -104,8 +104,10 @@ pub(crate) fn probe_docker(docker_bin: &str) -> DockerProbe {
 
 // -- path math (pur, sans IO) ------------------------------------------------
 
-/// `<sandbox_root>/Dockerfile` — emplacement canonique du Dockerfile seedé/buildé.
-pub(crate) fn dockerfile_path(sandbox_root: &Path) -> PathBuf {
+/// `<sandbox_root>/Dockerfile` — emplacement canonique du Dockerfile **seedé**, et le
+/// tier `default` de [`resolve_dockerfile`] (#431). Renommé depuis `dockerfile_path` :
+/// depuis que le chemin est réglable, un `dockerfile_path` nu serait un nom menteur.
+pub(crate) fn default_dockerfile_path(sandbox_root: &Path) -> PathBuf {
     sandbox_root.join("Dockerfile")
 }
 
@@ -150,11 +152,15 @@ pub(crate) fn registry_image_ref(dockerfile_bytes: &[u8]) -> String {
 
 // -- effets fs (sync std::fs, anyhow + .context) -----------------------------
 
-/// Écrit le Dockerfile `embedded` à son chemin canonique **si absent** ; sinon **ne touche
+/// Écrit le Dockerfile `embedded` à son chemin **par défaut** si absent ; sinon **ne touche
 /// à rien** (édition utilisateur préservée : une édition change le hash donc rebuild). Renvoie
 /// le chemin dans les deux cas.
+///
+/// #431 : n'écrit **JAMAIS** ailleurs qu'à [`default_dockerfile_path`], même quand un tier
+/// `stored`/`env` a désigné un autre chemin — écrire `EMBEDDED` dans un emplacement du repo
+/// que l'utilisateur a simplement *pointé* serait une mutation non demandée de son repo.
 pub(crate) fn seed_dockerfile(sandbox_root: &Path, embedded: &str) -> Result<PathBuf> {
-    let path = dockerfile_path(sandbox_root);
+    let path = default_dockerfile_path(sandbox_root);
     if path.exists() {
         return Ok(path); // édition utilisateur gagne
     }
@@ -268,8 +274,9 @@ pub(crate) fn tag_image(docker_bin: &str, src: &str, dst: &str) -> Result<()> {
 /// Provisionneur idempotent **hybride** (seul point d'entrée de #406/#407) : garantit que le ref
 /// local `pdo-sandbox:h-<hash>` existe et le retourne TOUJOURS (invariant `sandbox_container`).
 ///
-/// Ordre (D7) : seed → lit octets → `local_ref` → **fast-path `image_exists(local_ref)` (zéro
-/// réseau, offline-safe)** → si [`ImageSource::Registry`] : `docker pull` le `registry_ref`, OK →
+/// Ordre (D7) : seed → **contrôle `is_file()` du chemin résolu** → lit octets → `local_ref` →
+/// **fast-path `image_exists(local_ref)` (zéro réseau, offline-safe)** → si
+/// [`ImageSource::Registry`] **et** emplacement par défaut : `docker pull` le `registry_ref`, OK →
 /// `docker tag` vers `local_ref` → retour ; pull raté → fallthrough vers le build local → retour ;
 /// build KO → `Err`. [`ImageSource::Dockerfile`] : build direct, **jamais** de pull.
 ///
@@ -279,37 +286,63 @@ pub(crate) fn tag_image(docker_bin: &str, src: &str, dst: &str) -> Result<()> {
 pub(crate) fn ensure_image(
     docker_bin: &str,
     sandbox_root: &Path,
+    dockerfile: &ResolvedDockerfile,
     source: ImageSource,
 ) -> Result<String> {
-    // 1. Seed le Dockerfile si absent (édition utilisateur préservée).
+    // 1. Seed le Dockerfile PAR DÉFAUT si absent — TOUJOURS, même sous un chemin custom :
+    //    c'est la copie de référence que l'utilisateur édite et la matérialisation du tier
+    //    `default` pour quand le réglage est effacé. JAMAIS écrit à un chemin custom.
     seed_dockerfile(sandbox_root, EMBEDDED_DOCKERFILE)?;
-    // 2. Octets bruts sur disque = entrée EXACTE du hash ET du build (jamais normaliser).
-    let dockerfile = dockerfile_path(sandbox_root);
-    let bytes = std::fs::read(&dockerfile).with_context(|| {
-        format!(
-            "failed to read sandbox Dockerfile at {}",
-            dockerfile.display()
-        )
-    })?;
-    // 3. Ref local content-addressé = TOUJOURS la valeur de retour (invariant sandbox_container).
+    // 2. Le Dockerfile RÉSOLU (#431). Chemin absent / non-fichier-régulier = erreur DURE
+    //    nommant chemin + tier : jamais de repli silencieux vers le seedé (ADR-0030 pt 4,
+    //    amendement #431). `is_file()` et NON `exists()` — `exists()` est VRAI pour un
+    //    répertoire, et `is_file()` suit correctement un Dockerfile symlinké tout en
+    //    rejetant un lien pendant. Ce contrôle DOIT précéder le fast-path `image_exists` :
+    //    le tag EST le hash de ces octets, donc sans eux l'image est innommable.
+    let path = dockerfile.path.as_path();
+    if !path.is_file() {
+        anyhow::bail!(
+            "the sandbox Dockerfile resolved from the `{}` tier does not exist or is not a \
+             regular file: {} — fix `dockerfile_path` or clear it to fall back to the \
+             seeded default at {}",
+            dockerfile.source.as_str(),
+            path.display(),
+            default_dockerfile_path(sandbox_root).display(),
+        );
+    }
+    // 3. Octets bruts sur disque = entrée EXACTE du hash ET du build (jamais normaliser).
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read sandbox Dockerfile at {}", path.display()))?;
+    // 4. Ref local content-addressé = TOUJOURS la valeur de retour (invariant sandbox_container).
     let local_ref = local_image_ref(&bytes);
-    // 4. FAST PATH — précède TOUT réseau : image déjà locale → ni pull ni build (offline-safe).
+    // 5. FAST PATH — précède TOUT réseau : image déjà locale → ni pull ni build (offline-safe).
     if image_exists(docker_bin, &local_ref)? {
         return Ok(local_ref);
     }
-    // 5. Registry : PULL avant build. OK → retag sous le ref local → retour. Échec (offline / 404 /
-    //    registry down) → fallthrough vers le build local ci-dessous.
-    if matches!(source, ImageSource::Registry) {
+    // 6. Registry : PULL avant build, mais SEULEMENT pour l'emplacement seedé par défaut —
+    //    `release.yml` publie `h-<hash>` du Dockerfile d'un arbre de release, donc le hash
+    //    d'un Dockerfile custom ne peut pas exister en amont (ADR-0030 §5, précisé par
+    //    #431 : le prédicat porte sur le CHEMIN, pas sur les octets — comparer les octets
+    //    à l'embarqué classerait « custom » toute machine ayant mis PDO à jour, dont le
+    //    tag EXISTE sur GHCR, et lui imposerait un build local de plusieurs minutes).
+    //    OK → retag sous le ref local → retour. Échec (offline / 404 / registry down) →
+    //    fallthrough vers le build local ci-dessous.
+    if matches!(source, ImageSource::Registry) && dockerfile.is_default_location {
         let registry_ref = registry_image_ref(&bytes);
         if pull_image(docker_bin, &registry_ref)? {
             tag_image(docker_bin, &registry_ref, &local_ref)?;
             return Ok(local_ref);
         }
     }
-    // 6. Build local (mode dockerfile OU fallback d'un pull raté). Contexte dédié VIDE (D8 : jamais
-    //    sandbox_root, siblings = staging par-run). v1: double-build concurrent premier-run accepté
-    //    (deux `docker build -t <même tag>` sont sûrs — daemon sérialise + cache, la sonde
-    //    court-circuite le 2e run) ; ajouter un lock par tag si ça mord.
+    // 7. Build local (mode dockerfile, chemin custom, OU fallback d'un pull raté). Contexte dédié
+    //    VIDE (D8 : jamais sandbox_root, siblings = staging par-run) — inconditionnellement, y
+    //    compris sous un chemin custom, donc **un Dockerfile pointé doit être auto-porteur (pas de
+    //    `COPY`/`ADD`)** : suivre le parent du fichier pointé réouvrirait D8 et ferait du tag
+    //    adressé par contenu un mensonge que le fast-path figerait pour toujours (ADR-0030 §5,
+    //    amendement #431). Un `COPY` contre un contexte vide échoue bruyamment et `build_image`
+    //    bail avec ce stderr verbatim. v1: double-build concurrent premier-run accepté (deux
+    //    `docker build -t <même tag>` sont sûrs — daemon sérialise + cache, la sonde court-circuite
+    //    le 2e run) ; ajouter un lock par tag si ça mord.
     let context_dir = build_context_dir(sandbox_root);
     std::fs::create_dir_all(&context_dir).with_context(|| {
         format!(
@@ -317,7 +350,7 @@ pub(crate) fn ensure_image(
             context_dir.display()
         )
     })?;
-    build_image(docker_bin, &local_ref, &dockerfile, &context_dir)?;
+    build_image(docker_bin, &local_ref, path, &context_dir)?;
     Ok(local_ref)
 }
 
@@ -393,6 +426,94 @@ pub(crate) fn image_source_with(stored: Option<String>) -> ImageSource {
         .and_then(ImageSource::parse)
         .or_else(|| env_image_source().and_then(|s| ImageSource::parse(&s)))
         .unwrap_or(ImageSource::DEFAULT)
+}
+
+// -- Dockerfile résolu : réglage 3-tiers (#431) -------------------------------
+
+/// Quel tier a choisi le Dockerfile (#431). Miroir de la discipline `as_str` d'[`ImageSource`] ;
+/// surfacé par `GET /settings` **ET** par la `reason` du `RunFailed` — qui regarde un
+/// « no such file » a besoin de savoir QUI l'a dit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockerfileSource {
+    Stored,
+    Env,
+    Default,
+}
+
+impl DockerfileSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DockerfileSource::Stored => "stored",
+            DockerfileSource::Env => "env",
+            DockerfileSource::Default => "default",
+        }
+    }
+}
+
+/// Le Dockerfile que [`ensure_image`] hashe et builde, résolu UNE fois au bord (#431).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedDockerfile {
+    pub(crate) path: PathBuf,
+    pub(crate) source: DockerfileSource,
+    /// Prédicat de skip-pull (ADR-0030 §5, précisé par #431) : porte sur l'EMPLACEMENT par
+    /// défaut, **pas** sur le tier — un utilisateur peut épingler le chemin par défaut via le
+    /// picker, et ça doit continuer à puller. Égalité `PathBuf` volontairement nue :
+    /// `canonicalize` est de l'IO, échoue sur un chemin absent, et empoisonnerait la pureté du
+    /// résolveur. Mal classer est inoffensif dans les deux sens (un 404 gâché, ou un pull évité
+    /// qui aurait 404 de toute façon) — le skip-pull est une optimisation, pas un gate de
+    /// correction.
+    pub(crate) is_default_location: bool,
+}
+
+/// Env var pointant le Dockerfile de la sandbox (tier optionnel, #431). Lue UNE fois au bord,
+/// jamais dans le cœur — miroir de [`IMAGE_SOURCE_ENV`]. Contourne par construction la validation
+/// de `PUT /settings` : c'est l'échappatoire assumée pour un chemin sur volume amovible ; les deux
+/// tiers restent gatés au prep.
+pub(crate) const DOCKERFILE_PATH_ENV: &str = "PDO_SANDBOX_DOCKERFILE";
+
+/// Tier env pour la disclosure `GET /settings` : `Some(path)` si un [`DOCKERFILE_PATH_ENV`] non
+/// vide est posé, sinon `None`.
+pub(crate) fn env_dockerfile_path() -> Option<String> {
+    std::env::var(DOCKERFILE_PATH_ENV)
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Résolution 3-tiers **PURE** — testable sans toucher `std::env` (AC #431 : « précédence testée
+/// stored / env / défaut »). Une valeur vide est traitée comme unset aux deux tiers (miroir de la
+/// sentinelle `""` et du validateur PUT).
+///
+/// Ce découpage pur/bord est une amélioration délibérée sur [`image_source_with`], qui lit l'env
+/// dans lui-même et dont le test ne peut donc couvrir que stored+default.
+pub(crate) fn resolve_dockerfile(
+    stored: Option<&str>,
+    env: Option<&str>,
+    sandbox_root: &Path,
+) -> ResolvedDockerfile {
+    let default = default_dockerfile_path(sandbox_root);
+    let (path, source) = match stored.filter(|s| !s.is_empty()) {
+        Some(p) => (PathBuf::from(p), DockerfileSource::Stored),
+        None => match env.filter(|s| !s.is_empty()) {
+            Some(p) => (PathBuf::from(p), DockerfileSource::Env),
+            None => (default.clone(), DockerfileSource::Default),
+        },
+    };
+    ResolvedDockerfile {
+        is_default_location: path == default,
+        path,
+        source,
+    }
+}
+
+/// Wrapper de bord : lit [`DOCKERFILE_PATH_ENV`] UNE fois puis délègue au résolveur pur.
+/// SOURCE UNIQUE consommée par `sandbox_run::context_from_state` **ET** `build_settings_view`
+/// (0 drift, leçon #373).
+pub(crate) fn dockerfile_with(stored: Option<String>, sandbox_root: &Path) -> ResolvedDockerfile {
+    resolve_dockerfile(
+        stored.as_deref(),
+        env_dockerfile_path().as_deref(),
+        sandbox_root,
+    )
 }
 
 #[cfg(test)]
@@ -505,6 +626,17 @@ mod tests {
         bin.to_str().unwrap().to_string()
     }
 
+    /// The pre-#431 `ensure_image` input: the seeded default location, `default` tier.
+    /// Every legacy test threads this so its behaviour is pinned unchanged.
+    fn seeded(sandbox_root: &Path) -> ResolvedDockerfile {
+        resolve_dockerfile(None, None, sandbox_root)
+    }
+
+    /// A custom Dockerfile at `path`, as a `stored` tier would resolve it.
+    fn stored_at(path: &Path, sandbox_root: &Path) -> ResolvedDockerfile {
+        resolve_dockerfile(Some(path.to_str().unwrap()), None, sandbox_root)
+    }
+
     /// Under `cargo test --workspace`, exec-ing a **freshly written** binary can
     /// return `ETXTBSY` (os error 26): a sibling test that `fork`+`exec`s at the
     /// same instant transiently inherits the write fd of this test's fake docker
@@ -544,7 +676,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
@@ -568,7 +705,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
@@ -580,7 +722,7 @@ mod tests {
                 "-t".to_string(),
                 tag.clone(),
                 "-f".to_string(),
-                dockerfile_path(&sandbox_root).display().to_string(),
+                default_dockerfile_path(&sandbox_root).display().to_string(),
                 build_context_dir(&sandbox_root).display().to_string(),
             ]
         );
@@ -601,7 +743,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let err = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap_err();
 
@@ -625,6 +772,7 @@ mod tests {
         let err = ensure_image(
             &docker_str(&missing),
             &sandbox_root,
+            &seeded(&sandbox_root),
             ImageSource::Dockerfile,
         )
         .unwrap_err();
@@ -657,14 +805,19 @@ mod tests {
             },
         );
         let sandbox_root = tmp.path().join("sandbox");
-        assert!(!dockerfile_path(&sandbox_root).exists());
+        assert!(!default_dockerfile_path(&sandbox_root).exists());
 
         retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
-        let seeded = std::fs::read(dockerfile_path(&sandbox_root)).unwrap();
+        let seeded = std::fs::read(default_dockerfile_path(&sandbox_root)).unwrap();
         assert_eq!(
             seeded,
             EMBEDDED_DOCKERFILE.as_bytes(),
@@ -686,16 +839,21 @@ mod tests {
         // Pré-écrire un Dockerfile ÉDITÉ (différent de l'embarqué).
         std::fs::create_dir_all(&sandbox_root).unwrap();
         let edited: &[u8] = b"FROM ubuntu:24.04\nRUN echo edited\n";
-        std::fs::write(dockerfile_path(&sandbox_root), edited).unwrap();
+        std::fs::write(default_dockerfile_path(&sandbox_root), edited).unwrap();
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
         // (a) Octets inchangés : pas d'écrasement.
         assert_eq!(
-            std::fs::read(dockerfile_path(&sandbox_root)).unwrap(),
+            std::fs::read(default_dockerfile_path(&sandbox_root)).unwrap(),
             edited,
             "le seed ne doit jamais écraser un Dockerfile existant"
         );
@@ -718,7 +876,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
@@ -761,7 +924,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap();
 
@@ -799,7 +967,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap();
 
@@ -831,7 +1004,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap();
 
@@ -857,7 +1035,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap();
 
@@ -892,7 +1075,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let err = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap_err();
 
@@ -914,7 +1102,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Dockerfile)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Dockerfile,
+            )
         })
         .unwrap();
 
@@ -947,7 +1140,12 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(&docker_str(&docker), &sandbox_root, ImageSource::Registry)
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
         })
         .unwrap();
 
@@ -974,8 +1172,13 @@ mod tests {
 
         // Even in registry mode, Docker-absent is a hard error at the fast-path probe
         // — never a silent host fallback (US-16). Same guarantee as dockerfile mode.
-        let err =
-            ensure_image(&docker_str(&missing), &sandbox_root, ImageSource::Registry).unwrap_err();
+        let err = ensure_image(
+            &docker_str(&missing),
+            &sandbox_root,
+            &seeded(&sandbox_root),
+            ImageSource::Registry,
+        )
+        .unwrap_err();
 
         let msg = format!("{err:#}");
         assert!(
@@ -1030,6 +1233,310 @@ mod tests {
         assert_eq!(
             image_source_with(Some("registry".to_string())),
             ImageSource::Registry
+        );
+    }
+
+    // -- #431 : le Dockerfile résolu est un réglage 3-tiers -------------------
+
+    #[test]
+    fn resolve_dockerfile_precedence_stored_env_default() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let default = default_dockerfile_path(root);
+
+        // default tier: nothing stored, nothing in env.
+        let r = resolve_dockerfile(None, None, root);
+        assert_eq!(r.path, default);
+        assert_eq!(r.source, DockerfileSource::Default);
+        assert!(r.is_default_location);
+
+        // env tier wins over the default.
+        let r = resolve_dockerfile(None, Some("/env/Dockerfile"), root);
+        assert_eq!(r.path, Path::new("/env/Dockerfile"));
+        assert_eq!(r.source, DockerfileSource::Env);
+        assert!(!r.is_default_location);
+
+        // stored tier wins over env (ADR-0015).
+        let r = resolve_dockerfile(Some("/stored/Dockerfile"), Some("/env/Dockerfile"), root);
+        assert_eq!(r.path, Path::new("/stored/Dockerfile"));
+        assert_eq!(r.source, DockerfileSource::Stored);
+        assert!(!r.is_default_location);
+    }
+
+    #[test]
+    fn resolve_dockerfile_treats_empty_string_as_unset_at_both_tiers() {
+        // Mirror of the `""` clear sentinel + the PUT validator: an empty value must never
+        // win precedence at either tier.
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let default = default_dockerfile_path(root);
+
+        let r = resolve_dockerfile(Some(""), None, root);
+        assert_eq!(r.path, default);
+        assert_eq!(r.source, DockerfileSource::Default);
+
+        let r = resolve_dockerfile(Some(""), Some("/env/Dockerfile"), root);
+        assert_eq!(
+            r.source,
+            DockerfileSource::Env,
+            "empty stored falls through"
+        );
+
+        let r = resolve_dockerfile(None, Some(""), root);
+        assert_eq!(r.path, default);
+        assert_eq!(r.source, DockerfileSource::Default);
+    }
+
+    #[test]
+    fn is_default_location_is_about_the_path_not_the_tier() {
+        // THE tier-vs-path trap: pinning the DEFAULT path through the picker stores a
+        // value, so the tier is `stored` — but the location is still the seeded one, so
+        // the pull must still be attempted. `is_default_location` is path-math, not tier-math.
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let default = default_dockerfile_path(root);
+        let r = resolve_dockerfile(Some(default.to_str().unwrap()), None, root);
+        assert_eq!(r.source, DockerfileSource::Stored);
+        assert!(
+            r.is_default_location,
+            "a stored value pointing AT the default location must still pull"
+        );
+    }
+
+    #[test]
+    fn dockerfile_source_as_str_round_trips() {
+        assert_eq!(DockerfileSource::Stored.as_str(), "stored");
+        assert_eq!(DockerfileSource::Env.as_str(), "env");
+        assert_eq!(DockerfileSource::Default.as_str(), "default");
+    }
+
+    #[test]
+    fn custom_dockerfile_drives_the_tag_and_the_build_f_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(
+            tmp.path(),
+            &FakeSpec {
+                inspect_exit: 1,
+                ..Default::default()
+            },
+        );
+        let sandbox_root = tmp.path().join("sandbox");
+        let custom = tmp
+            .path()
+            .join("repo")
+            .join("docker")
+            .join("sbx.Dockerfile");
+        std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
+        let bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo custom-431\n";
+        std::fs::write(&custom, bytes).unwrap();
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&custom, &sandbox_root),
+                ImageSource::Dockerfile,
+            )
+        })
+        .unwrap();
+
+        // The tag is the hash of the CUSTOM bytes, never the seeded ones.
+        assert_eq!(tag, local_image_ref(bytes));
+        assert_ne!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        // The build points `-f` at the custom path, with the SAME empty context (D2:
+        // a custom Dockerfile must be self-contained — no COPY).
+        assert_eq!(
+            build_argv(&argv_log),
+            vec![
+                "build".to_string(),
+                "-t".to_string(),
+                tag.clone(),
+                "-f".to_string(),
+                custom.display().to_string(),
+                build_context_dir(&sandbox_root).display().to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_dockerfile_skips_the_pull_in_registry_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Registry-happy fake: were a pull attempted it would SUCCEED and retag, so the
+        // absence of `pull`/`tag` below is a real signal, not a coincidence.
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+        let custom = tmp.path().join("custom.Dockerfile");
+        std::fs::write(&custom, b"FROM ubuntu:24.04\nRUN echo custom\n").unwrap();
+
+        retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&custom, &sandbox_root),
+                ImageSource::Registry,
+            )
+        })
+        .unwrap();
+
+        assert!(
+            invocation(&argv_log, "pull").is_none(),
+            "a custom Dockerfile's hash cannot exist upstream — no pull; log:\n{}",
+            std::fs::read_to_string(&argv_log).unwrap_or_default()
+        );
+        assert!(invocation(&argv_log, "tag").is_none(), "no pull ⇒ no retag");
+        assert!(
+            !build_argv(&argv_log).is_empty(),
+            "it builds locally instead"
+        );
+    }
+
+    #[test]
+    fn edited_seeded_dockerfile_still_attempts_a_pull_in_registry_mode() {
+        // PINS THE NON-CHANGE (ADR-0030 §5 as amended by #431): the skip-pull predicate
+        // reads the PATH, not the bytes. A Dockerfile edited in place at the default
+        // location keeps trying the pull (which 404s and falls back to the build) —
+        // exactly the pre-#431 behaviour. A bytes-based predicate would break every
+        // machine that has ever updated PDO, whose on-disk Dockerfile comes from an
+        // earlier release and whose tag DOES exist on GHCR.
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(
+            tmp.path(),
+            &FakeSpec {
+                pull_exit: 1, // as a 404 for an unpublished hash would behave
+                ..Default::default()
+            },
+        );
+        let sandbox_root = tmp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox_root).unwrap();
+        let edited: &[u8] = b"FROM ubuntu:24.04\nRUN echo edited-in-place\n";
+        std::fs::write(default_dockerfile_path(&sandbox_root), edited).unwrap();
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &seeded(&sandbox_root),
+                ImageSource::Registry,
+            )
+        })
+        .unwrap();
+
+        assert_eq!(tag, local_image_ref(edited));
+        assert_eq!(
+            invocation(&argv_log, "pull"),
+            Some(vec!["pull".to_string(), registry_image_ref(edited)]),
+            "an edited SEEDED Dockerfile must still attempt the pull (path predicate)"
+        );
+        assert!(
+            !build_argv(&argv_log).is_empty(),
+            "the 404 falls back to the local build"
+        );
+    }
+
+    #[test]
+    fn missing_custom_dockerfile_is_a_hard_error_naming_path_and_tier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+        let missing = tmp.path().join("nope").join("Dockerfile");
+
+        let err = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&missing, &sandbox_root),
+                ImageSource::Registry,
+            )
+        })
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&missing.display().to_string()),
+            "the reason must name the path (US-16 actionable): {msg}"
+        );
+        assert!(
+            msg.contains("`stored` tier"),
+            "the reason must name the WINNING TIER: {msg}"
+        );
+        // No silent fallback to the seeded default: nothing was built, nothing probed.
+        assert!(
+            build_argv(&argv_log).is_empty(),
+            "a missing custom path must never fall back to building the seeded default"
+        );
+        assert!(
+            invocation(&argv_log, "image").is_none(),
+            "the is_file() bail must precede the image_exists fast-path (the tag IS the \
+             hash of those bytes, so without them the image is unnameable)"
+        );
+        assert!(
+            !build_context_dir(&sandbox_root).exists(),
+            "no build context must be created"
+        );
+    }
+
+    #[test]
+    fn dockerfile_path_pointing_at_a_directory_is_an_error() {
+        // The `exists()` vs `is_file()` trap: `Path::exists()` is TRUE for a directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+        let dir = tmp.path().join("a-directory");
+        std::fs::create_dir(&dir).unwrap();
+
+        let err = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&dir, &sandbox_root),
+                ImageSource::Dockerfile,
+            )
+        })
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("regular file") && msg.contains(&dir.display().to_string()),
+            "a directory must be rejected as not-a-regular-file: {msg}"
+        );
+    }
+
+    #[test]
+    fn seed_lands_at_the_default_path_even_while_a_custom_one_is_in_use() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _) = write_fake_docker(
+            tmp.path(),
+            &FakeSpec {
+                inspect_exit: 1,
+                ..Default::default()
+            },
+        );
+        let sandbox_root = tmp.path().join("sandbox");
+        let custom = tmp.path().join("custom.Dockerfile");
+        let custom_bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo custom\n";
+        std::fs::write(&custom, custom_bytes).unwrap();
+        assert!(!default_dockerfile_path(&sandbox_root).exists());
+
+        retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&custom, &sandbox_root),
+                ImageSource::Dockerfile,
+            )
+        })
+        .unwrap();
+
+        // The seed materialises the `default` tier (so clearing the setting lands on a
+        // real file) at the DEFAULT location…
+        assert_eq!(
+            std::fs::read(default_dockerfile_path(&sandbox_root)).unwrap(),
+            EMBEDDED_DOCKERFILE.as_bytes(),
+            "the seed must still land at the default path"
+        );
+        // …and NEVER writes to the custom path (that would mutate a repo the user only
+        // POINTED at).
+        assert_eq!(
+            std::fs::read(&custom).unwrap(),
+            custom_bytes,
+            "the seed must never overwrite the custom Dockerfile"
         );
     }
 

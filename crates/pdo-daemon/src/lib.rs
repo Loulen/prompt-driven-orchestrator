@@ -1846,14 +1846,30 @@ async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-// --- GET /repos/browse (issue #131): filesystem explorer ---
+// --- GET /fs/browse (issue #131, renamed + generalised in #431): filesystem explorer ---
 //
-// Lists directories one level at a time so the webapp can browse and pick a target
-// repo visually (the recents combobox covers the common case; this covers first-time
-// / visual selection). Read-only, single-level, no recursion. Deliberately NOT
-// hardened against path traversal — fs-exposure scoping is carved out to #260; this
-// endpoint only browses what the local 127.0.0.1 single-user daemon can already reach
-// via `/repos/validate`. The contract here mirrors its `/repos/*` siblings.
+// Lists one directory level at a time so the webapp can browse and pick a path
+// visually. Two consumers today: the New-Run modal's repo picker (dirs only — the
+// pre-#431 behaviour, bit for bit, under the flag defaults) and the settings
+// Dockerfile picker (`files=true&hidden=true`). Read-only, single-level, no
+// recursion.
+//
+// Exposure, stated exactly (the pre-#431 comment claimed the opposite on both
+// counts): the daemon binds `0.0.0.0` (not `127.0.0.1`), and #260 is CLOSED, not
+// deferred — the LAN reachability is assumed by the owner, so this surface has no
+// authentication and any LAN peer can enumerate, one level per request, whatever the
+// daemon's uid can traverse. #431's two flags widen that enumeration from directory
+// names to **file names** — never to file CONTENTS: this handler emits names, a path
+// and three booleans, and has no read path at all. The right boundary is
+// authenticating the whole HTTP surface, which is a separate piece of work; a partial
+// mitigation invented here would be worse than none (a false sense of a boundary) and
+// would break the staging-profile entry picker, whose entries live in `$HOME` dotfiles.
+
+/// Listing cap, applied **per genre** with directories claiming the budget first
+/// (#431). A single shared budget would let files starve directories, which is a
+/// functional failure of the picker rather than a cosmetic one: 50 000 files and two
+/// subdirectories in `~/Downloads` would yield zero navigable rows.
+const BROWSE_CAP: usize = 1000;
 
 #[derive(Deserialize)]
 struct BrowseQuery {
@@ -1862,6 +1878,22 @@ struct BrowseQuery {
     /// bug (→ 400).
     #[serde(default)]
     path: Option<String>,
+    /// List regular files alongside the navigable directories (#431). Default `false`
+    /// ≡ the pre-#431 dirs-only listing.
+    ///
+    /// **Wire vocabulary is strict**: axum's `Query` goes through `serde_urlencoded` →
+    /// `str::parse::<bool>()`, so only the lowercase literals `true` / `false` are
+    /// accepted. A valueless `?files`, `?files=1`, `?files=yes` or `?files=TRUE` is a
+    /// `400` with a `text/plain` body (`Failed to deserialize query string: …`), NOT a
+    /// silent `false`. Pinned by `browse_query_rejects_valueless_and_non_literal_flags`.
+    #[serde(default)]
+    files: bool,
+    /// Show dot-entries (`.claude`, `.pdo`, …) (#431). Default `false` ≡ the pre-#431
+    /// filter. Needed by the Dockerfile picker, whose default lives at
+    /// `~/.pdo/sandbox/Dockerfile`. Same strict `true`/`false` wire vocabulary as
+    /// [`BrowseQuery::files`].
+    #[serde(default)]
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -1873,8 +1905,75 @@ struct BrowseEntry {
     /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
     /// gate: every folder stays pickable and the authoritative validation runs at
     /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
+    /// Computed for directories only (#431); hard `false` for a file, where it has no
+    /// meaning — the JSON is unchanged (`/x/notes.txt/.git` already probed `false` via
+    /// `ENOTDIR`), we just spare one `stat(2)` per entry on a listing that is refetched
+    /// on every navigation click.
     is_git_repo: bool,
     is_symlink: bool,
+    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file (#431).
+    /// Always emitted, including under the dirs-only default where it is invariably
+    /// `true`, so an entry's shape never depends on the query.
+    ///
+    /// Declaration order is NOT load-bearing here, contrary to what this comment used to
+    /// claim: `fs_browse` builds its envelope with `json!`, which runs every entry through
+    /// `serde_json::to_value`, and `serde_json` is built without `preserve_order` — so each
+    /// entry lands in a `BTreeMap` and reaches the wire with its keys sorted
+    /// alphabetically (`is_dir` FIRST), whatever the order below. Pre-#431 responses went
+    /// through the same path and were already sorted, so the only wire delta remains the
+    /// added key — the AC holds, but by key-order irrelevance (RFC 8259), not by a trick.
+    is_dir: bool,
+}
+
+/// What a `read_dir` child is, for the purposes of this listing (#431).
+#[derive(Debug, PartialEq, Eq)]
+enum EntryKind {
+    Dir,
+    File,
+    /// Not offered in either mode.
+    Skip,
+}
+
+/// Classify one child. `meta` is [`std::fs::metadata`] (which **follows** symlinks);
+/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`, exactly as before #431.
+///
+/// The set of **discarded** entries is unchanged by #431; the flag only ADDS regular
+/// files. Special files (fifo / socket / device) are neither a dir nor a regular file →
+/// `Skip` in both modes, because nothing downstream can consume one: every consumer of
+/// a picked path resolves it (`/repos/validate`, this issue's `dockerfile_path`
+/// resolver), so the row would be unpickable by construction — and a fifo handed to
+/// `ensure_image` is a read that blocks forever. Surfacing a dangling link as
+/// `is_dir: false` would be a lie by omission too (it is not a file either).
+fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
+    match meta {
+        None => EntryKind::Skip,
+        Some(m) if m.is_dir() => EntryKind::Dir,
+        Some(m) if m.is_file() && include_files => EntryKind::File,
+        _ => EntryKind::Skip,
+    }
+}
+
+/// Merge the two genre buckets into the response list: each bucket sorted
+/// case-insensitively, directories first, **directories claim the budget first**, total
+/// `<= cap` (#431).
+///
+/// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
+/// genre: a `(cap + 1)`th survivor is all `truncated` needs. Under the flag defaults
+/// `files` is empty, so this is arithmetically the pre-#431 `sort_by_key(name) +
+/// truncate(cap)`.
+fn merge_browse_entries(
+    mut dirs: Vec<BrowseEntry>,
+    mut files: Vec<BrowseEntry>,
+    cap: usize,
+) -> (Vec<BrowseEntry>, bool) {
+    // Case-insensitive, stable sort within each genre (ties keep read_dir order).
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
+    let truncated = dirs.len() + files.len() > cap;
+    dirs.truncate(cap);
+    files.truncate(cap - dirs.len());
+    dirs.extend(files);
+    (dirs, truncated)
 }
 
 /// Why the requested browse root could not be resolved into a listable directory.
@@ -1943,10 +2042,7 @@ fn browse_io_label(e: &std::io::Error) -> &'static str {
     }
 }
 
-async fn repos_browse(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<BrowseQuery>,
-) -> Response {
+async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQuery>) -> Response {
     // The repo's idiom for the home dir — there is no `dirs` crate (cf.
     // stale_detector.rs). Injected into the pure resolver so the handler stays a thin
     // shell over testable logic.
@@ -1997,50 +2093,61 @@ async fn repos_browse(
         }
     };
 
-    const CAP: usize = 1000;
-    let mut entries: Vec<BrowseEntry> = Vec::new();
-    let mut truncated = false;
+    // Two genre buckets, each collecting at most `BROWSE_CAP + 1` entries: a
+    // (CAP+1)th survivor is all `truncated` needs, and stopping there keeps the
+    // dirs-only default path arithmetically identical to pre-#431.
+    let mut dirs: Vec<BrowseEntry> = Vec::new();
+    let mut files: Vec<BrowseEntry> = Vec::new();
     for child in read {
         let child = match child {
             Ok(c) => c,
             Err(_) => continue, // skip an entry that can't be stat'd mid-listing
         };
         let name = child.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue; // dotfiles hidden (MVP, no toggle); `.`/`..` never yielded here
+        if !q.hidden && name.starts_with('.') {
+            continue; // dot-entries hidden unless `?hidden=true`; `.`/`..` never yielded
         }
         // `file_type()` does NOT follow the link (cheap lstat) → correct for the flag.
         let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
         // TRAP: `DirEntry::metadata()` lstat's (no follow) and would report every
         // symlinked dir as non-dir. The FREE `std::fs::metadata` FOLLOWS the link —
-        // use it for the is-dir decision. Broken link / loop → Err → false → skipped.
-        let is_dir = std::fs::metadata(child.path())
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        if !is_dir {
-            continue; // dirs only; files and symlink-to-file dropped
+        // use it for the is-dir decision. Broken link / loop → Err → None → Skip.
+        let meta = std::fs::metadata(child.path()).ok();
+        let kind = classify_browse_entry(meta.as_ref(), q.files);
+        if kind == EntryKind::Skip {
+            continue;
         }
+        let is_dir = kind == EntryKind::Dir;
         let entry_path = canonical_dir.join(&name);
-        let is_git_repo = entry_path.join(".git").exists();
-        entries.push(BrowseEntry {
+        // Dirs only: `.git` inside a regular file is meaningless (and already probed
+        // `false` via ENOTDIR), so skip the syscall entirely.
+        let is_git_repo = is_dir && entry_path.join(".git").exists();
+        let entry = BrowseEntry {
             name,
             path: entry_path.to_string_lossy().into_owned(),
             is_git_repo,
             is_symlink,
-        });
-        if entries.len() > CAP {
-            // Early-stop: a (CAP+1)th surviving dir proves there are > CAP, which is
-            // all `truncated` needs — stop stat-ing the rest.
-            truncated = true;
+            is_dir,
+        };
+        let bucket = if is_dir { &mut dirs } else { &mut files };
+        if bucket.len() <= BROWSE_CAP {
+            bucket.push(entry);
+        }
+        // Early-stop, GATED on whether we are still collecting files: under the
+        // defaults `files` stays empty forever, so without the `!q.files` arm a
+        // directory with > CAP subdirectories would now be walked in full instead of
+        // stopping at CAP+1 — a perf regression on the default path.
+        if dirs.len() > BROWSE_CAP && (!q.files || files.len() > BROWSE_CAP) {
             break;
         }
     }
 
-    // Case-insensitive, stable sort (ties keep read_dir order).
-    entries.sort_by_key(|a| a.name.to_lowercase());
-    if entries.len() > CAP {
-        entries.truncate(CAP); // keep the alphabetically-first CAP
-    }
+    // Dirs-then-files, case-insensitive within each genre, dirs claiming the budget
+    // first. NOTE (pre-existing, not fixed here): when the early-stop fires, the
+    // collected CAP+1 entries are in arbitrary `read_dir` order, so the sort keeps the
+    // alphabetically-first CAP *of an arbitrary sample* — inherent to capping without a
+    // global sort.
+    let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
 
     Json(serde_json::json!({
         "path": canonical_dir.to_string_lossy(),
@@ -2964,9 +3071,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
-        // Filesystem explorer (#131). `/repos` is already whitelisted in the vite
-        // proxy and matches by prefix — no `vite.config.ts` edit needed.
-        .route("/repos/browse", get(repos_browse))
+        // Filesystem explorer (#131, renamed `/repos/browse` → `/fs/browse` in #431:
+        // nothing about it is repo-specific — it also serves the settings Dockerfile
+        // picker). `/fs` is a NEW top-level prefix, so it REQUIRES its own entry in the
+        // vite proxy whitelist (`frontend/vite.config.ts`) — same trap as `/nodes`
+        // (#345) and `/stats` (#377): without it a dev `GET /fs/browse` answers 200 with
+        // the SPA and any smoke test would lie.
+        .route("/fs/browse", get(fs_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
         // Static segment beside the `{trigger_id}` param: axum 0.8 allows this
         // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
@@ -6232,6 +6343,26 @@ fn settings_field_enum(
     })
 }
 
+/// String sibling of [`settings_field`] for a knob whose default is a
+/// machine-specific PATH (#431 `dockerfile_path`): unlike [`settings_field_str`] the
+/// `default` tier is a real value, and unlike [`settings_field_enum`] both `effective`
+/// and `default` are nullable — resolving the default needs `$HOME` and can fail.
+fn settings_field_path(
+    effective: Option<&str>,
+    source: &str,
+    stored: Option<&str>,
+    env: Option<&str>,
+    default: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
 /// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
 /// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
 /// round-trip, short enough that a user who starts Docker mid-session sees `full`/
@@ -6380,6 +6511,55 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- resolved sandbox Dockerfile (path ; default = <sandbox_root>/Dockerfile) (#431) ---
+    // `sandbox_home_roots` honours `sandbox_home_override` (the layer-3 seam, #181), so
+    // this view discloses the SAME path the prep will consume. A missing `$HOME` is
+    // pathological: degrade to null tiers + a `reason`, never 500 the settings page.
+    // `effective` comes from the SAME resolver `ensure_image` consumes (#373).
+    let dfp_stored = cfg.dockerfile_path.as_deref().filter(|s| !s.is_empty());
+    let dfp_env = sandbox_image::env_dockerfile_path();
+    let dfp_resolved = sandbox_run::sandbox_home_roots(state)
+        .ok()
+        .map(|(_, sandbox_root)| {
+            (
+                sandbox_image::dockerfile_with(cfg.dockerfile_path.clone(), &sandbox_root),
+                sandbox_image::default_dockerfile_path(&sandbox_root),
+            )
+        });
+    let dfp_effective = dfp_resolved
+        .as_ref()
+        .map(|(r, _)| r.path.to_string_lossy().into_owned());
+    let dfp_default = dfp_resolved
+        .as_ref()
+        .map(|(_, d)| d.to_string_lossy().into_owned());
+    // The winning tier comes from the resolver itself when it ran; with no `$HOME` the
+    // stored/env tiers still decide, and only the default tier is unknowable.
+    let dfp_source = match dfp_resolved.as_ref() {
+        Some((r, _)) => r.source.as_str(),
+        None if dfp_stored.is_some() => "stored",
+        None if dfp_env.is_some() => "env",
+        None => "default",
+    };
+
+    // --- the image tag that Dockerfile yields (#431) ---
+    // Mirror of `sandbox_docker`'s shape: no stored/env/default tier, just an observed
+    // fact. Computed by the SAME `dockerfile_hash`/`local_image_ref` as `ensure_image`
+    // (single source of truth, lesson #373) so "editing the Dockerfile changes the tag,
+    // hence a rebuild" stops being tribal knowledge. Best-effort read: an absent or
+    // unreadable file yields `tag: null` + a `reason`, never a 500. A ~3 KB read + a
+    // SHA-256 is far below what `list_pipelines` or `get_run` already do, and there is no
+    // `docker_probe_cached`-style TTL because a local read cannot hang for 3 s.
+    let (sandbox_image_tag, sandbox_image_reason) = match dfp_resolved.as_ref() {
+        None => (
+            None,
+            Some("HOME is not set; cannot resolve the sandbox Dockerfile".to_string()),
+        ),
+        Some((r, _)) => match std::fs::read(&r.path) {
+            Ok(bytes) => (Some(sandbox_image::local_image_ref(&bytes)), None),
+            Err(e) => (None, Some(format!("cannot read {}: {e}", r.path.display()))),
+        },
+    };
+
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
@@ -6406,6 +6586,17 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             sbx_env_val.as_deref(),
             event_log::SandboxMode::DEFAULT.as_str(),
         ),
+        "dockerfile_path": settings_field_path(
+            dfp_effective.as_deref(),
+            dfp_source,
+            dfp_stored,
+            dfp_env.as_deref(),
+            dfp_default.as_deref(),
+        ),
+        "sandbox_image": {
+            "tag": sandbox_image_tag,
+            "reason": sandbox_image_reason,
+        },
         "sandbox_docker": {
             "available": docker_probe.available,
             "reason": docker_probe.reason,
@@ -6473,6 +6664,30 @@ async fn put_settings(
         // non-variant → 400 (fail-fast, no silent default) (#410).
         if !s.is_empty() && event_log::SandboxMode::parse(s).is_none() {
             return bad("default_sandbox must be `off`, `full`, or `minimal`");
+        }
+    }
+    if let Some(p) = req.dockerfile_path.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`). Otherwise:
+        // an absolute path AND an existing regular file. `is_file()` and NOT `exists()`
+        // (which is TRUE for a directory).
+        //
+        // This is the FIRST put_settings validator that touches the filesystem (the
+        // others are pure: a numeric bound, an enum parse). One `stat(2)`, and
+        // `fs_browse` already does blocking IO in an async handler — precedent enough.
+        //
+        // Necessary but NOT sufficient, so it is a UX gate at the moment of the error
+        // (with the picker to hand), never the authoritative one: the **env** tier never
+        // passes through here at all, the file can be removed / renamed / its volume
+        // unmounted between save and run, and the DB can be carried to another machine.
+        // The authoritative gate is `ensure_image`'s `is_file()` bail at prep.
+        if !p.is_empty() {
+            let path = std::path::Path::new(p);
+            if !path.is_absolute() {
+                return bad("dockerfile_path must be an absolute path");
+            }
+            if !path.is_file() {
+                return bad("dockerfile_path must point to an existing regular file");
+            }
         }
     }
 
@@ -22449,7 +22664,7 @@ edges:
         assert_eq!(repos, vec!["/repo/real"]);
     }
 
-    // --- GET /repos/browse default-root resolution (issue #131) ---
+    // --- GET /fs/browse default-root resolution (issue #131) ---
     //
     // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
     // so these never touch the real `$HOME` and are safe under cargo's parallel test
@@ -22522,6 +22737,207 @@ edges:
         let got = resolve_browse_root(None, None, Path::new("/this/repo/root/does/not/exist/131"))
             .unwrap();
         assert_eq!(got, Path::new("/"));
+    }
+
+    // --- GET /fs/browse query vocabulary + entry classification (#431) ---
+
+    /// Deserialise a query string through the PRODUCTION extractor (`Query`'s own
+    /// `try_from_uri`, public in axum 0.8) — no HTTP, no router, but the exact
+    /// `serde_urlencoded` path a real request takes.
+    fn browse_query(query: &str) -> Result<BrowseQuery, axum::extract::rejection::QueryRejection> {
+        let uri: axum::http::Uri = format!("/fs/browse{query}").parse().unwrap();
+        Query::<BrowseQuery>::try_from_uri(&uri).map(|Query(q)| q)
+    }
+
+    #[test]
+    fn browse_query_defaults_are_dirs_only_hidden_off() {
+        // The load-bearing default: no query string ⇒ the pre-#431 listing, bit for bit.
+        let q = browse_query("").unwrap();
+        assert_eq!(q.path, None);
+        assert!(!q.files, "files must default to false (dirs only)");
+        assert!(
+            !q.hidden,
+            "hidden must default to false (dot-entries filtered)"
+        );
+    }
+
+    #[test]
+    fn browse_query_accepts_true_and_false() {
+        let q = browse_query("?path=/tmp&files=true&hidden=true").unwrap();
+        assert_eq!(q.path.as_deref(), Some("/tmp"));
+        assert!(q.files);
+        assert!(q.hidden);
+
+        let q = browse_query("?files=false&hidden=false").unwrap();
+        assert!(!q.files);
+        assert!(!q.hidden);
+    }
+
+    #[test]
+    fn browse_query_rejects_valueless_and_non_literal_flags() {
+        // Pins the STRICT wire vocabulary: `serde_urlencoded` defers to
+        // `str::parse::<bool>()`, so anything but the lowercase literals is a 400 —
+        // never a silent `false`. Documented on `BrowseQuery` so nobody discovers this
+        // by hand.
+        for q in [
+            "?files",
+            "?files=1",
+            "?files=0",
+            "?files=yes",
+            "?files=TRUE",
+            "?hidden",
+            "?hidden=yes",
+        ] {
+            assert!(
+                browse_query(q).is_err(),
+                "`{q}` must be rejected, not coerced"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_browse_entry_offers_dirs_always_and_files_only_on_demand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("a-dir");
+        std::fs::create_dir(&dir).unwrap();
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, "x").unwrap();
+        // A REAL symlink → dir, so `std::fs::metadata` genuinely follows it (the
+        // `DirEntry::metadata` trap this guards against).
+        let link = tmp.path().join("a-link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+
+        let m = |p: &Path| std::fs::metadata(p).ok();
+
+        // Directories are offered in BOTH modes.
+        assert_eq!(
+            classify_browse_entry(m(&dir).as_ref(), false),
+            EntryKind::Dir
+        );
+        assert_eq!(
+            classify_browse_entry(m(&dir).as_ref(), true),
+            EntryKind::Dir
+        );
+        // A symlink to a dir is a dir (metadata follows).
+        assert_eq!(
+            classify_browse_entry(m(&link).as_ref(), false),
+            EntryKind::Dir
+        );
+        // A regular file only when asked for.
+        assert_eq!(
+            classify_browse_entry(m(&file).as_ref(), false),
+            EntryKind::Skip
+        );
+        assert_eq!(
+            classify_browse_entry(m(&file).as_ref(), true),
+            EntryKind::File
+        );
+    }
+
+    #[test]
+    fn classify_browse_entry_skips_broken_links_and_specials_in_every_mode() {
+        // Unclassifiable (broken link / ELOOP): `metadata` errs → None.
+        assert_eq!(classify_browse_entry(None, false), EntryKind::Skip);
+        assert_eq!(
+            classify_browse_entry(None, true),
+            EntryKind::Skip,
+            "a dangling link must stay invisible even with files=true"
+        );
+
+        // A special file: `Some(meta)` that is neither a dir nor a regular file.
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let meta = std::fs::metadata(&sock).unwrap();
+        assert!(!meta.is_dir() && !meta.is_file(), "fixture must be special");
+        assert_eq!(classify_browse_entry(Some(&meta), false), EntryKind::Skip);
+        assert_eq!(
+            classify_browse_entry(Some(&meta), true),
+            EntryKind::Skip,
+            "a socket/fifo must stay invisible: nothing downstream can consume one"
+        );
+    }
+
+    fn browse_entry(name: &str, is_dir: bool) -> BrowseEntry {
+        BrowseEntry {
+            name: name.to_string(),
+            path: format!("/x/{name}"),
+            is_git_repo: false,
+            is_symlink: false,
+            is_dir,
+        }
+    }
+
+    #[test]
+    fn merge_browse_entries_puts_dirs_before_files() {
+        let (entries, truncated) = merge_browse_entries(
+            vec![browse_entry("z-dir", true)],
+            vec![browse_entry("a-file", false)],
+            BROWSE_CAP,
+        );
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["z-dir", "a-file"],
+            "genre beats name: a navigable dir is never buried under files"
+        );
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn merge_browse_entries_gives_dirs_first_claim() {
+        // 3 dirs + 2000 files: the dirs are never starved, files fill what's left.
+        let dirs: Vec<BrowseEntry> = (0..3)
+            .map(|i| browse_entry(&format!("d{i}"), true))
+            .collect();
+        let files: Vec<BrowseEntry> = (0..2000)
+            .map(|i| browse_entry(&format!("f{i:04}"), false))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
+        assert_eq!(entries.len(), 1000);
+        assert_eq!(entries.iter().filter(|e| e.is_dir).count(), 3);
+        assert_eq!(entries.iter().filter(|e| !e.is_dir).count(), 997);
+        assert!(entries[..3].iter().all(|e| e.is_dir), "dirs come first");
+        assert!(truncated);
+
+        // 1500 dirs + 10 files: dirs consume the whole budget, files get nothing.
+        let dirs: Vec<BrowseEntry> = (0..1500)
+            .map(|i| browse_entry(&format!("d{i:04}"), true))
+            .collect();
+        let files: Vec<BrowseEntry> = (0..10)
+            .map(|i| browse_entry(&format!("f{i}"), false))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
+        assert_eq!(entries.len(), 1000);
+        assert!(
+            entries.iter().all(|e| e.is_dir),
+            "dirs claim the budget first"
+        );
+        assert!(truncated);
+    }
+
+    #[test]
+    fn merge_browse_entries_dirs_only_matches_pre_431() {
+        // The default path: `files` empty ⇒ identical to the pre-#431
+        // `sort_by_key(name.to_lowercase()) + truncate(cap)`, and NOT truncated under
+        // the cap.
+        let dirs = vec![
+            browse_entry("Zeta", true),
+            browse_entry("alpha", true),
+            browse_entry("Beta", true),
+        ];
+        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), BROWSE_CAP);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "Beta", "Zeta"]);
+        assert!(!truncated);
+
+        // Exactly `cap` dirs is NOT truncated (the pre-#431 `len > cap` semantics).
+        let dirs: Vec<BrowseEntry> = (0..1000)
+            .map(|i| browse_entry(&format!("d{i:04}"), true))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), 1000);
+        assert_eq!(entries.len(), 1000);
+        assert!(!truncated, "exactly `cap` entries is not a truncation");
     }
 
     // --- prompt-optional run creation (#158) ---
@@ -22927,6 +23343,177 @@ edges:
         // Store untouched (still the default).
         let view = get_settings_json(&state).await;
         assert!(view["image_source"]["stored"].is_null());
+    }
+
+    // --- #431: dockerfile_path settings knob + the sandbox_image tag it yields ---
+
+    #[tokio::test]
+    async fn put_settings_persists_dockerfile_path_and_the_tag_follows() {
+        // Stored always wins over env/default, so these assertions are race-free
+        // (`lib.rs` convention: only stored-wins is safe at the HTTP level, since env
+        // reads a process-global var a concurrent test could shadow). The env-tier
+        // assertions live in `sandbox_image::resolve_dockerfile`'s pure tests.
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let custom = tmp.path().join("sbx.Dockerfile");
+        let bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo settings-431\n";
+        std::fs::write(&custom, bytes).unwrap();
+        let body = format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap());
+
+        let (status, view) = put_settings_resp(&state, &body).await;
+        assert_eq!(status, StatusCode::OK);
+        let f = &view["dockerfile_path"];
+        assert_eq!(f["stored"], custom.to_str().unwrap());
+        assert_eq!(f["source"], "stored");
+        assert_eq!(f["effective"], custom.to_str().unwrap());
+        assert!(
+            f["default"].is_string() || f["default"].is_null(),
+            "default is the seeded path, or null when HOME is unset: {f}"
+        );
+
+        // The disclosed tag is computed by the SAME hash `ensure_image` uses (#373), so
+        // "editing the Dockerfile changes the tag, hence a rebuild" is now visible.
+        assert_eq!(
+            view["sandbox_image"]["tag"],
+            sandbox_image::local_image_ref(bytes),
+            "the tag must be the hash of the RESOLVED file's bytes: {}",
+            view["sandbox_image"]
+        );
+        assert!(view["sandbox_image"]["reason"].is_null());
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["dockerfile_path"]["stored"], custom.to_str().unwrap());
+        assert_eq!(
+            reget["sandbox_image"]["tag"],
+            sandbox_image::local_image_ref(bytes)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_dockerfile_path_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null so
+        // the resolver falls back env → the seeded default (#431).
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let custom = tmp.path().join("sbx.Dockerfile");
+        std::fs::write(&custom, b"FROM ubuntu:24.04\n").unwrap();
+        put_settings_resp(
+            &state,
+            &format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap()),
+        )
+        .await;
+
+        let (status, view) = put_settings_resp(&state, r#"{"dockerfile_path": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["dockerfile_path"]["stored"].is_null(),
+            "empty string clears the stored Dockerfile path: {}",
+            view["dockerfile_path"]
+        );
+        // With nothing stored and no PDO_SANDBOX_DOCKERFILE, the seeded default wins and
+        // `effective == default` (both null only if HOME is unset).
+        let f = &view["dockerfile_path"];
+        assert_eq!(f["source"], "default");
+        assert_eq!(
+            f["effective"], f["default"],
+            "default tier: effective == default"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_relative_dockerfile_path() {
+        let state = test_state().await;
+        let (status, body) =
+            put_settings_resp(&state, r#"{"dockerfile_path": "relative/Dockerfile"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("absolute"),
+            "the error must name the absolute-path requirement: {body}"
+        );
+        // Store untouched.
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_nonexistent_dockerfile_path() {
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(
+            &state,
+            r#"{"dockerfile_path": "/this/path/does/not/exist/431/Dockerfile"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("regular file"),
+            "the error must name the regular-file requirement: {body}"
+        );
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_a_directory_as_dockerfile_path() {
+        // The `exists()` vs `is_file()` trap: `Path::exists()` is TRUE for a directory,
+        // so a validator written with `exists()` would accept this and defer the failure
+        // to the middle of a run.
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let (status, body) = put_settings_resp(
+            &state,
+            &format!(
+                r#"{{"dockerfile_path": "{}"}}"#,
+                tmp.path().to_str().unwrap()
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("regular file"),
+            "a directory must be rejected as not-a-regular-file: {body}"
+        );
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_settings_surfaces_the_dockerfile_field_and_image_tag_shape() {
+        // Shape only: `effective`/`default`/`tag` depend on the real `$HOME` (this state
+        // has no `sandbox_home_override`) and on whether that machine has ever seeded a
+        // Dockerfile, so the exact values belong to the stored-wins test above. What is
+        // invariant is that the keys are ALWAYS present and never 500 the page.
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+
+        let f = &view["dockerfile_path"];
+        assert!(
+            f["stored"].is_null(),
+            "dockerfile_path.stored must be null on a fresh row: {f}"
+        );
+        for key in ["effective", "source", "env", "default"] {
+            assert!(f.get(key).is_some(), "dockerfile_path.{key} missing: {f}");
+        }
+        assert!(f["source"].is_string());
+
+        let img = &view["sandbox_image"];
+        assert!(img.get("tag").is_some(), "sandbox_image.tag missing: {img}");
+        assert!(
+            img.get("reason").is_some(),
+            "sandbox_image.reason missing: {img}"
+        );
+        // Exactly one of the two is populated — a tag, or the reason there is none.
+        assert!(
+            img["tag"].is_null() != img["reason"].is_null(),
+            "exactly one of tag/reason must be set: {img}"
+        );
+        if let Some(tag) = img["tag"].as_str() {
+            assert!(tag.starts_with("pdo-sandbox:h-"), "unexpected tag: {tag}");
+        }
     }
 
     // --- #410: default_sandbox settings knob + sandbox_docker probe ---

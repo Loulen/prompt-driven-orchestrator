@@ -1446,3 +1446,163 @@ async fn trigger_without_sandbox_defers_to_instance_default() {
         "a null-sandbox Trigger must defer to the instance default (full): {run}"
     );
 }
+
+// -- Test 16 (#445): the watcher may not spawn into a container that isn't up --
+//
+// The reported failure, reproduced through the production trigger. `create_run`'s
+// detached prep task waits for `ensure_ready` before advancing the Run, but the
+// pipeline watcher did not: the FIRST read of a fresh `<run>/pipeline.yaml` is
+// reported by inotify as an external modification, so merely opening the Run in the
+// UI woke `handle_run_pipeline_modifications` mid-prep, which called the same
+// advance path with no precondition. The node's tail `docker exec`ed into a
+// container that did not exist yet — exit 1 in ~30 ms, the tmux window's command
+// ended, and ~25 s later the stale detector rendered `session_died`.
+//
+// A fake `docker` whose `create` SLEEPS gives a deterministic prep window (the real
+// trigger is ~1 GB of `~/.claude` staging, measured at 83-87 s for a 2 GB profile).
+// Under the same fixture the pre-#445 daemon appends `node_started` while
+// `sandbox_prep` is still `pending`, which is exactly what this asserts against.
+
+/// Like [`write_fake_docker`] but `create` sleeps `secs` first, holding the Run in
+/// `sandbox_prep = pending` long enough to fire a watcher event inside the window.
+fn write_slow_create_docker(secs: u64) -> (TempDir, String, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-docker");
+    let log = dir.path().join("argv.log");
+    let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         printf '%s\\n' \"$@\" >> {log}\n\
+         case \"$1\" in\n\
+         image) exit 0 ;;\n\
+         container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         create) sleep {secs}; exit 0 ;;\n\
+         *) exit 0 ;;\n\
+         esac\n",
+        log = sq(&log.display().to_string()),
+    );
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, bin.to_str().unwrap().to_string(), log)
+}
+
+async fn wait_for_event_kind(
+    daemon: &TestDaemon,
+    run_id: &str,
+    kind: &str,
+    within: Duration,
+) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if run_events(daemon, run_id)
+            .await
+            .iter()
+            .any(|e| e["kind"] == kind)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
+    ensure_pdo_on_path();
+    // 6s: comfortably longer than the watcher's ~1s debounce plus the round trips
+    // below, so the `pipeline_modified` advance provably lands inside the window.
+    let (_fake_dir, docker, log) = write_slow_create_docker(6);
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, Some("full")).await;
+
+    // The prep has started and is blocked in `docker create`.
+    assert!(
+        wait_for_event_kind(
+            &daemon,
+            &run_id,
+            "sandbox_prep_started",
+            Duration::from_secs(10)
+        )
+        .await,
+        "the detached prep task must announce itself before we probe the window"
+    );
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(
+        run["sandbox_prep"], "pending",
+        "precondition: the Run must be mid-prep for this test to mean anything: {run}"
+    );
+
+    // Wake the watcher exactly as the UI does — an external touch of the run-scoped
+    // YAML. In production this is a *read*; a write is the same event to the daemon
+    // and is what a test can trigger deterministically.
+    let yaml_path = daemon
+        .repo_root()
+        .join(".pdo")
+        .join("runs")
+        .join(&run_id)
+        .join("pipeline.yaml");
+    let bumped = std::fs::read_to_string(&yaml_path)
+        .unwrap()
+        .replace("version: \"1.0\"", "version: \"1.1\"");
+    std::fs::write(&yaml_path, bumped).unwrap();
+
+    assert!(
+        wait_for_event_kind(
+            &daemon,
+            &run_id,
+            "pipeline_modified",
+            Duration::from_secs(5)
+        )
+        .await,
+        "the external write must reach the watcher — without this event the test \
+         proves nothing about the spawn path it drives"
+    );
+
+    // THE ASSERTION. The watcher-driven advance ran; the container is still absent.
+    let events = run_events(&daemon, &run_id).await;
+    let prep_ready_seen = events.iter().any(|e| e["kind"] == "sandbox_prep_ready");
+    assert!(
+        !prep_ready_seen,
+        "precondition: the prep must still be in flight at this point"
+    );
+    assert!(
+        !events.iter().any(|e| e["kind"] == "node_started"),
+        "the watcher-driven advance must NOT start a node while the container is \
+         still being created — that spawn is what dies as session_died: {events:#?}"
+    );
+    assert_eq!(
+        get_run(&daemon, &run_id).await["status"],
+        "running",
+        "and the Run must still be alive, not failed"
+    );
+
+    // THE OTHER HALF: the deferred spawn is replayed once the container is up.
+    assert!(
+        wait_for_event_kind(
+            &daemon,
+            &run_id,
+            "sandbox_prep_ready",
+            Duration::from_secs(20)
+        )
+        .await,
+        "the prep must finish"
+    );
+    let run = wait_node_status(&daemon, &run_id, "running").await;
+    assert_eq!(
+        run["nodes"][NODE_ID]["status"], "running",
+        "the spawn deferred during the prep must be replayed after \
+         sandbox_prep_ready — a Run whose only trigger was the watcher would \
+         otherwise wedge for ever: {run}"
+    );
+
+    // And it entered the container, not the host.
+    let t = log_text(&log);
+    assert!(
+        t.contains("exec") && t.contains(&format!("pdo-sbx-{run_id}")),
+        "the replayed tail must run inside the Run's container; log:\n{t}"
+    );
+}

@@ -5271,6 +5271,18 @@ pub(crate) async fn retry_waiting_nodes(state: &AppState) {
 /// so the daemon's two "idle past N" notions agree.
 const SPAWN_STALL_GRACE_SECS: i64 = 120;
 
+/// Idle window (#445) after which a sandboxed Run stuck at `sandbox_prep = pending` is
+/// treated as a lost preparation rather than one still working.
+///
+/// Deliberately an order of magnitude above [`SPAWN_STALL_GRACE_SECS`], because the two
+/// measure different things: 120 s bounds an *event-driven spawn*, which is milliseconds
+/// of work, while this bounds staging up to a couple of gigabytes of `~/.claude` plus a
+/// cold `docker build` — measured at 83-87 s for a 2 GB profile with a warm image, and
+/// legitimately minutes on the first build of a machine. 15 minutes is comfortably past
+/// any healthy prep and still short enough that a Run whose prep task died with a
+/// previous daemon is reported the same hour rather than sitting `Running` for ever.
+const SANDBOX_PREP_STALL_GRACE_SECS: i64 = 900;
+
 /// Seconds elapsed since the run's most recent event, or `None` when no event
 /// carries a parseable RFC3339 timestamp. The most recent event has the
 /// *smallest* age, so this is the `min` over ages — i.e. "how long since the run
@@ -5390,6 +5402,33 @@ fn run_stall_reason(
         .as_ref()
         .is_some_and(|mr| mr.status == event_log::NodeStatus::Running);
     if has_live_node || resolver_active {
+        return None;
+    }
+
+    // (#445) A sandboxed Run between `SandboxPrepStarted` and `SandboxPrepReady` looks
+    // EXACTLY like a #279 silent spawn-abort: a ready node, no live node, and — since
+    // the prep emits no event of its own while it works — an idle clock that ticks up
+    // for the whole prep. It is not one: `spawn_node` is deliberately deferring, and
+    // `SandboxPrepReady` will replay it. Staging ~2 GB of `~/.claude` plus a cold
+    // `docker build` overruns the 120 s spawn-stall window comfortably, so without this
+    // arm the reconciler would kill precisely the slow Runs the precondition just saved.
+    //
+    // Deferring for ever would only trade a false failure for a silent stall, which
+    // ADR-0004 forbids just as strongly — so this is a LONGER grace, not an exemption:
+    // past it, the prep task is genuinely gone (killed with a previous daemon, panicked
+    // outside its catch) and the Run is failed with a cause that names the sandbox
+    // rather than blaming tmux. Placed before the `ready` / `loop_seed` arms because it
+    // explains the whole class: while the prep is pending NOTHING in this Run can start,
+    // whatever the scheduler proposes.
+    if let Some(block) = run_state.sandbox_spawn_block() {
+        if idle_secs.is_some_and(|s| s >= SANDBOX_PREP_STALL_GRACE_SECS) {
+            return Some(format!(
+                "run_stalled: {block}; idle {}s past the {SANDBOX_PREP_STALL_GRACE_SECS}s \
+                 sandbox-prep grace — the preparation task is gone and nothing will \
+                 re-drive this run (#445)",
+                idle_secs.unwrap_or_default()
+            ));
+        }
         return None;
     }
 
@@ -6232,17 +6271,25 @@ async fn create_run_inner(
             // `spawn_blocking`, which also isolates its panic into a `JoinError`.
             match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
                 Ok(Ok(())) => {
+                    // #445: the Run may have gone terminal WHILE the prep ran (a stop /
+                    // kill, or — before the spawn precondition existed — the very
+                    // `session_died` this prep caused). Emitting `SandboxPrepReady` and
+                    // spawning into a dead Run leaves a container nobody will ever exec
+                    // into, so abandon instead: no event, no node, no manager, and the
+                    // container is removed. Idempotent — a later `resume_run` re-runs
+                    // `ensure_ready` and recreates it.
+                    if abandon_prep_if_run_is_terminal(&task_state, &task_run_id).await {
+                        return;
+                    }
                     // #410: image ready, container about to receive the first session.
                     // Emitted just before the spawn so the prep banner clears exactly
                     // when work can start. A failed prep emits `RunFailed` instead (no
                     // dedicated failed-prep event).
-                    emit_run_event(
-                        &task_state,
-                        &task_run_id,
-                        event_log::EventKind::SandboxPrepReady,
-                        None,
-                    )
-                    .await;
+                    //
+                    // #445: this pair — the event, then the advance — is now the single
+                    // REPLAY point for every spawn `spawn_node` deferred while the prep
+                    // was in flight, which is why `mark_sandbox_prep_ready` owns it.
+                    mark_sandbox_prep_ready(&task_state, &task_run_id).await;
                     spawn_ready_after_event(&task_state, &task_run_id).await;
                     spawn_manager_session(
                         &task_state,
@@ -6275,6 +6322,79 @@ async fn create_run_inner(
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
     Ok(run_id)
+}
+
+/// Record that a sandboxed Run's container is up (#410 `SandboxPrepReady`), which
+/// since #445 is also the moment the spawns deferred by
+/// [`event_log::RunState::sandbox_spawn_block`] become legal.
+///
+/// The event is the ONLY thing that lifts the spawn precondition, so every path that
+/// makes the container real must go through here: the create-time prep task, `resume_run`
+/// re-arming a terminal Run, and boot recovery reconciling a live one. Without this a Run
+/// whose prep completed outside the create path (daemon restart mid-prep, resume of a
+/// Run that failed *during* its prep) would keep a `pending` projection for ever and
+/// every spawn would be deferred for ever — the deadlock the precondition must not
+/// create.
+///
+/// Idempotent: the projection assigns `Ready`, so a second call is a no-op in effect.
+/// It deliberately does NOT advance the Run — the create path pairs it with
+/// `spawn_ready_after_event`, `resume_run` with `re_evaluate_after_command`, and boot
+/// recovery with its own reconciliation, and folding an advance in here would make this
+/// a scheduling entry point (ADR-0009).
+pub(crate) async fn mark_sandbox_prep_ready(state: &AppState, run_id: &str) {
+    emit_run_event(state, run_id, event_log::EventKind::SandboxPrepReady, None).await;
+}
+
+/// Abandon a just-finished sandbox prep whose Run went terminal while it ran (#445),
+/// returning whether it abandoned.
+///
+/// The observed damage this closes: on a Run killed by the spawn race, `container
+/// Created` landed 27-35 s *after* `run_failed`, then `sandbox_prep_ready` was emitted
+/// on a terminal Run — a container nobody can ever exec into, plus a prep-ready banner
+/// on a corpse. The spawn precondition removes the cause; this removes the residue for
+/// the cases that remain legitimate (the user stops or kills a Run mid-prep).
+///
+/// Removes the container (`docker rm -f`, idempotent and best-effort) but deliberately
+/// KEEPS the staging: staging is purged by `cleanup_run` at archive, and destroying it
+/// here would also destroy the transcripts `merge_back` harvests. The in-flight
+/// filesystem walk itself is not interrupted — `sandbox_staging::prepare` is a sync walk
+/// in a pure module with no cancellation seam — so a Run stopped mid-staging still pays
+/// for the copy already under way. Bounded and inert: no container, no event, no spawn.
+async fn abandon_prep_if_run_is_terminal(state: &AppState, run_id: &str) -> bool {
+    let Some((_, run_state)) = reload_run_state(state, run_id).await else {
+        // No projection at all: the Run was forgotten (#328) under the prep. Same
+        // verdict — nothing may be spawned, and the container must not linger.
+        warn!("Run {run_id}: sandbox prep finished for a run with no projected state — abandoning");
+        remove_sandbox_container_best_effort(state, run_id);
+        return true;
+    };
+    if !run_state.status.is_terminal() {
+        return false;
+    }
+    warn!(
+        "Run {run_id}: sandbox prep finished but the run is already {:?} — abandoning \
+         (no prep-ready event, no spawn); removing its container",
+        run_state.status
+    );
+    remove_sandbox_container_best_effort(state, run_id);
+    true
+}
+
+/// `docker rm -f pdo-sbx-<run_id>` on a blocking thread, best-effort (#445). Split out
+/// so the abandonment path reads as one line and never blocks the executor.
+fn remove_sandbox_container_best_effort(state: &AppState, run_id: &str) {
+    let docker_bin = state
+        .docker_cmd_override
+        .clone()
+        .unwrap_or_else(|| "docker".to_string());
+    let rid = run_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = sandbox_container::remove(&docker_bin, &rid) {
+            warn!(
+                "Run {rid}: failed to remove the abandoned sandbox container (best-effort): {e:#}"
+            );
+        }
+    });
 }
 
 /// Fail a sandboxed Run *loud* when its eager prep can't complete (#407 D4).
@@ -9446,6 +9566,20 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         .map(|ns| ns.iter + 1)
         .unwrap_or(1);
 
+    // #445: the SECOND spawn path. This one does not route through `spawn_node` (it
+    // drives `node_primitives::start_node`), so it needs the sandbox precondition
+    // stated again — the same `docker exec` on a container that does not exist yet
+    // would die the same way. 409 rather than a silent defer: "start now" must not
+    // queue, and the operator who pressed the button deserves to read why (mirrors the
+    // session-cap arm below, which fails fast for exactly that reason).
+    if let Some(reason) = run_state.sandbox_spawn_block() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": reason })),
+        )
+            .into_response();
+    }
+
     // D4 (#204): pre-validate the start against the SAME transition guard that
     // backstops `append_event`, BEFORE the primitive spawns a tmux session — so
     // a start refused by the backstop never leaves an orphan session behind.
@@ -10355,6 +10489,16 @@ async fn run_command(
                     )
                         .into_response();
                 }
+                // #445: the container is up again — say so in the log, or the spawn
+                // precondition would refuse every node the re-evaluation below proposes.
+                // Load-bearing for the Run that failed *during* its own prep: its
+                // projection is still `pending`, and resuming it is the operator's only
+                // recovery path. Emitted only after `ensure_ready` returned `Ok` (so the
+                // event never claims a container that isn't there) and only when the Run
+                // is actually blocked (so a routine resume adds no no-op event).
+                if run_state.sandbox_spawn_block().is_some() {
+                    mark_sandbox_prep_ready(&state, &run_id).await;
+                }
             }
 
             let summary = re_evaluate_after_command(&state, &run_id).await;
@@ -10812,9 +10956,12 @@ impl ReEvalSummary {
             SpawnOutcome::Throttled => self.skipped.push(format!(
                 "node '{node_id}' iter {iter} throttled into waiting (session cap)"
             )),
-            SpawnOutcome::Refused { reason } | SpawnOutcome::Failed { reason } => {
-                self.skipped.push(reason)
-            }
+            // #445: `Deferred` joins the two here rather than getting its own arm —
+            // its reason already reads as the operator sentence, and every consumer of
+            // `skipped` is a "why did nothing start" message.
+            SpawnOutcome::Refused { reason }
+            | SpawnOutcome::Deferred { reason }
+            | SpawnOutcome::Failed { reason } => self.skipped.push(reason),
         }
     }
 
@@ -16115,6 +16262,76 @@ mod tests {
             )
             .is_none(),
             "a ready node within the grace window is about to be driven — never fail it"
+        );
+    }
+
+    /// A sandboxed Run mid-prep with a `full` staging profile — the projection the
+    /// reconciler sees while the spawn is legitimately deferred (#445).
+    fn run_state_sandbox_mid_prep(run_id: &str) -> event_log::RunState {
+        let mut rs = event_log::RunState::new(run_id.into(), "linear".into());
+        rs.sandbox = event_log::SandboxMode::Profile("full".into());
+        rs.sandbox_prep = Some(event_log::SandboxPrepState::Pending);
+        rs
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_sandboxed_run_still_preparing_past_the_spawn_grace() {
+        // #445, the false-positive half. A sandboxed Run between SandboxPrepStarted
+        // and SandboxPrepReady has an entry node the scheduler reports ready, no live
+        // node, and — because the prep emits nothing while it works — an idle clock
+        // that keeps ticking. That is the #279 orphan signature exactly, so without a
+        // sandbox arm the reconciler would fail every prep slower than 120 s: measured
+        // 83-87 s for a 2 GB profile, and minutes on a cold `docker build`. Failing
+        // those Runs would defeat the precondition that just saved them.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_sandbox_mid_prep("20260725-sbx-preparing");
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            !ready.is_empty(),
+            "precondition: the deferred entry node is still in the ready set"
+        );
+
+        assert!(
+            run_stall_reason(
+                &pipeline,
+                &run_state,
+                &ready,
+                &loop_seed,
+                Some(SPAWN_STALL_GRACE_SECS * 2),
+            )
+            .is_none(),
+            "a Run whose container is still being built is preparing, not stalled — \
+             it must survive well past the 120s spawn-stall window"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_sandbox_prep_lost_past_its_own_grace() {
+        // The other half: deferring for ever would trade a false failure for a silent
+        // stall, which ADR-0004 forbids just as strongly. Past the sandbox-prep grace
+        // the preparation task is genuinely gone (killed with a previous daemon,
+        // panicked outside its catch) and nothing will ever emit SandboxPrepReady, so
+        // the Run is failed with a cause that names the sandbox instead of blaming
+        // tmux — the diagnosability complaint in the report.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_sandbox_mid_prep("20260725-sbx-lost");
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        let reason = run_stall_reason(
+            &pipeline,
+            &run_state,
+            &ready,
+            &loop_seed,
+            Some(SANDBOX_PREP_STALL_GRACE_SECS),
+        )
+        .expect("a prep pending past its grace window is a lost preparation, not work in flight");
+        assert!(
+            reason.contains("sandbox prep") && reason.contains("#445"),
+            "cause {reason:?} must name the sandbox preparation rather than tmux"
         );
     }
 
@@ -22641,6 +22858,252 @@ edges: []
         assert_eq!(
             iter1_starts, 1,
             "the live iter-1 NodeStarted must be untouched by the refused iter-2 spawn"
+        );
+    }
+
+    // --- #445: the sandbox spawn precondition (block + replay) ------------------
+    //
+    // The defect: a sandboxed Run's node session runs `docker exec … pdo-sbx-<run>`,
+    // and `create_run`'s detached prep task was the ONLY thing that waited for the
+    // container. The pipeline watcher (woken by the first *read* of the fresh run
+    // dir's `pipeline.yaml`) called the same advance path with no such wait, so the
+    // exec hit a container that did not exist → exit 1 in ~30 ms → the tmux window's
+    // command ended → `session_died` ~25 s later. The precondition now lives in
+    // `spawn_node`, which is why these tests drive the spawn and the advance rather
+    // than the watcher's mpsc plumbing: `handle_run_pipeline_modifications` calls
+    // `spawn_ready_after_event` == `advance_run`, the exact entry point exercised in
+    // `sandbox_pending_run_is_not_schedulable_until_prep_ready`.
+
+    /// Seed a sandboxed Run whose prep has STARTED but not finished — the projection
+    /// the watcher used to spawn into (`sandbox_prep = pending`).
+    async fn seed_sandboxed_run_mid_prep(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
+        let started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": pipeline_name,
+                "sandbox": "full",
+                "sandbox_entries": [".claude/plugins"],
+            })),
+        };
+        append_event(state, &started).await.unwrap();
+        emit_run_event(
+            state,
+            run_id,
+            event_log::EventKind::SandboxPrepStarted,
+            None,
+        )
+        .await;
+    }
+
+    /// AC "blocage", at the chokepoint: a sandboxed Run mid-prep defers the spawn
+    /// before ANY side effect — no `NodeStarted` (which would be the lie the stale
+    /// detector later reports as `session_died`) and, just as important, no
+    /// `NodeWaiting` either: a `Waiting` node leaves `compute_ready_to_spawn`, so the
+    /// reservation would move the replay onto the cross-run admission sweep and a Run
+    /// whose only trigger was the watcher could wedge for ever.
+    #[tokio::test]
+    async fn spawn_node_defers_while_sandbox_prep_is_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let run_id = "spawn-unit-sbx-pending";
+        seed_sandboxed_run_mid_prep(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        let SpawnOutcome::Deferred { reason } = outcome else {
+            panic!(
+                "a spawn into a Run whose container is not up must be Deferred, got {outcome:?}"
+            );
+        };
+        assert!(
+            reason.contains("sandbox prep") && reason.contains("full"),
+            "the deferral must name the sandbox prep and the profile, got {reason:?}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "a deferred spawn must append NO NodeStarted — that event is what makes the \
+             stale detector report session_died 25s later"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeWaiting),
+            "a deferred spawn must reserve NOTHING: a Waiting node leaves \
+             compute_ready_to_spawn and would never be replayed by advance_run"
+        );
+    }
+
+    /// The precondition must not leak onto the host path: an `off` Run has no prep
+    /// events at all, and `sandbox_prep = None` must not be read as "not ready" for
+    /// it — that would deadlock every non-sandboxed Run in the instance.
+    #[tokio::test]
+    async fn spawn_node_never_defers_a_host_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let run_id = "spawn-unit-host";
+        // RunStarted with no `sandbox` key at all → SandboxMode::Off, prep = None.
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Spawned),
+            "an `off` Run must spawn exactly as before the precondition, got {outcome:?}"
+        );
+    }
+
+    /// Both ACs on the real advance path, in order — this is the regression test for
+    /// the reported failure and for the deadlock a naive fix would introduce.
+    ///
+    /// 1. **Blocage**: `advance_run` (what the pipeline watcher calls, via
+    ///    `spawn_ready_after_event`) starts nothing while the prep is pending.
+    /// 2. **Rejeu**: `mark_sandbox_prep_ready` + the following `advance_run` — the
+    ///    exact pair the create-time prep task runs — starts the node that was
+    ///    deferred. Without this half, a Run whose only trigger was the watcher would
+    ///    stay `Running` with nothing live for ever, which is strictly worse than the
+    ///    bug being fixed.
+    #[tokio::test]
+    async fn sandbox_pending_run_is_not_schedulable_until_prep_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "sbx-advance-replay";
+        // The default `prompt_required: true` keeps the spawn off the `_input`
+        // artifact read; `worker` has no incoming edge, so it is a root the readiness
+        // sweep reports ready from the very first tick.
+        let yaml = format!(
+            "name: sbx-advance\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        let yaml = yaml.as_str();
+        let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
+
+        seed_sandboxed_run_mid_prep(&state, run_id, "sbx-advance").await;
+
+        // (1) The watcher's tick, mid-prep: nothing may start.
+        spawn_ready_after_event(&state, run_id).await;
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "the watcher-driven advance must start no node while the container is \
+             still being prepared"
+        );
+
+        // The node kept NO state, so the scheduler still sees it as ready — that is
+        // what makes the replay below possible at all.
+        let run_state = event_log::project(&events).unwrap();
+        let parsed = pipeline::parse_pipeline(yaml).unwrap().pipeline;
+        assert_eq!(
+            scheduler_dispatcher::compute_ready_to_spawn(&parsed, &run_state)
+                .into_iter()
+                .map(|r| r.node_id)
+                .collect::<Vec<_>>(),
+            vec!["worker".to_string()],
+            "a deferred node must stay in the ready set, or nothing could replay it"
+        );
+
+        // (2) Prep finishes: the create-time pair replays the deferred spawn.
+        mark_sandbox_prep_ready(&state, run_id).await;
+        spawn_ready_after_event(&state, run_id).await;
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "the spawn deferred during the prep MUST be replayed once \
+             sandbox_prep_ready lands — otherwise the run wedges for ever"
+        );
+    }
+
+    /// The force-spawn path (`POST …/nodes/<id>/start`, and the manager's
+    /// `start_node`) does not route through `spawn_node`: it drives
+    /// `node_primitives::start_node`, so it states the precondition itself. 409 with a
+    /// reason, not a silent queue — "start now" must not defer, and the operator who
+    /// pressed the button gets told why.
+    #[tokio::test]
+    async fn force_spawn_is_refused_while_sandbox_prep_is_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        write_test_pipeline(repo_root, "sbx-force");
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "sbx-force-spawn";
+        seed_sandboxed_run_mid_prep(&state, run_id, "sbx-force").await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/start"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sandbox prep"),
+            "the 409 must explain that the sandbox is still being prepared, got {json}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "a refused force-spawn must start nothing"
         );
     }
 

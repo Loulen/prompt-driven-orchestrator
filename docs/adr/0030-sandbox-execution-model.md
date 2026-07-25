@@ -224,6 +224,82 @@ modèle d'*exécution*.
    installé, auto-updater off, `$HOME` inscriptible au chemin hôte) et rouvrirait une question
    d'auth que le pull anonyme évite.
 
+## Amendement — La garantie du point 4 devient une précondition du spawn (#445)
+
+Le point 4 promet « image + conteneur + staging garantis prêts **avant le premier spawn** ». Cette
+garantie n'était **pas** portée par le spawn : elle était rejouée par le seul parcours de création,
+qui attend `ensure_ready` avant `spawn_ready_after_event`. Les autres déclencheurs d'avancement
+n'en savaient rien — le watcher de pipeline (`handle_run_pipeline_modifications`) et le balayage
+d'admission cross-Run (`retry_waiting_nodes`) atteignaient le spawn pendant la prep. La tail
+`docker exec … pdo-sbx-<run>` tombait alors sur un conteneur inexistant : **exit 1 en ~30 ms**, la
+commande de la fenêtre tmux se terminait, et ~25 s plus tard le détecteur de sessions mortes rendait
+`session_died`. Reproduit 7 fois sur stack isolée ; le profil `full` était **inutilisable dès qu'on
+regardait son Run** (l'onglet ouvert lit `<run>/pipeline.yaml`, ce que le watcher rapporte comme une
+modification externe la première fois — inotify `OPEN`, pas d'édition).
+
+1. **La précondition est portée par `spawn_node`, pas par ses appelants** : « un Run sandboxé dont la
+   prep n'est pas `ready` n'est pas schedulable ». Décision pure
+   (`event_log::RunState::sandbox_spawn_block`) évaluée sur la projection déjà chargée pour le garde
+   de transition, **après** lui et **avant** l'admission comme avant toute création de sous-worktree.
+   Corriger le site d'appel du watcher aurait laissé le prochain appelant réintroduire le défaut ;
+   c'est le même argument qui a mis le garde de transition (#212) dans le spawn. Un `off` n'est
+   **jamais** bloqué (invariant byte-identique). Une prep *absente* bloque comme une prep *pendante* :
+   `RunStarted` et `SandboxPrepStarted` sont à ~100 ms l'un de l'autre et la course y tient déjà ;
+   bloquer est en outre le sens fail-safe (un blocage à tort coûte un spawn rejoué, un passage à tort
+   coûte un nœud mort).
+
+2. **Le refus n'écrit RIEN — et c'est ce qui rend le rejeu possible.** Pas de `NodeStarted` (l'event
+   qui, seul, fait rendre `session_died` 25 s plus tard), et pas de `NodeWaiting` non plus : un nœud
+   `Waiting` sort de `compute_ready_to_spawn`, donc la réservation déplacerait le rejeu sur le
+   balayage d'admission cross-Run et un Run dont le seul déclencheur était le watcher pourrait rester
+   coincé pour toujours. Sans état, le nœud reste dans l'ensemble prêt et le premier `advance_run`
+   suivant `SandboxPrepReady` le démarre. Nouvelle issue de `SpawnOutcome` (`Deferred`), distincte de
+   `Refused` (rien à reprendre) et de `Throttled` (réservation posée, retry cross-Run).
+
+3. **Le point 10 est amendé : `SandboxPrepReady` n'est plus seulement informationnel.** Il devient
+   le fait qui lève la précondition, donc **tout** parcours qui rend le conteneur réel doit l'émettre
+   — ce qui **renverse** le « non émis au ré-armement » du point 10 pour `resume_run` et la boot
+   recovery. Sans ça, un Run qui a échoué *pendant* sa prep garde une projection `pending` pour
+   toujours et chaque spawn est différé pour toujours : l'interblocage que la précondition ne doit
+   pas créer. Émis seulement après un `ensure_ready` en `Ok` (l'event ne prétend jamais qu'un
+   conteneur est là), et seulement si le Run était effectivement bloqué (un resume ou un boot de
+   routine n'ajoute pas d'event no-op). `open_run_shell` reste **non émetteur** : il ressuscite un Run
+   terminal, où rien ne sera spawné — un resume ultérieur repasse par `ensure_ready` de toute façon.
+
+4. **La réconciliation de stall devient sandbox-consciente.** Un Run en prep présente *exactement* la
+   signature #279 d'un spawn silencieusement avorté (nœud prêt, aucun nœud vivant, horloge d'inactivité
+   qui monte — la prep n'émet rien pendant qu'elle travaille). Sans arme dédiée, `run_stall_reason`
+   tuait donc précisément les Runs lents que la précondition venait de sauver (83-87 s mesurés pour un
+   profil de 2 Go, davantage sur un `docker build` froid, contre une fenêtre de 120 s). D'où une
+   **grâce plus longue et non une exemption** (`SANDBOX_PREP_STALL_GRACE_SECS`, 15 min) : au-delà, la
+   tâche de prep est réellement perdue (morte avec un daemon précédent) et le Run échoue avec une
+   cause qui **nomme la sandbox** au lieu d'accuser tmux. Différer indéfiniment aurait échangé un faux
+   échec contre un stall silencieux, qu'ADR-0004 interdit tout autant.
+
+5. **Le chemin force-spawn répète la précondition, en `409`.** `force_spawn_node` (bouton Start de
+   l'UI, `start_node` du manager) ne passe pas par `spawn_node` : il pilote
+   `node_primitives::start_node`. Il refuse donc explicitement plutôt que de différer — « démarrer
+   maintenant » ne doit pas se mettre en file — en miroir du fail-fast au cap de sessions.
+
+6. **Une prep dont le Run est devenu terminal est abandonnée.** Observé : `container Created` +27 à
+   +35 s **après** `run_failed`, puis un `sandbox_prep_ready` sur un cadavre — un conteneur que
+   personne n'exécutera jamais. Le point 1 supprime la cause ; il reste les cas légitimes (l'humain
+   stoppe ou tue un Run en cours de prep). À la fin d'`ensure_ready`, si le Run est terminal : aucun
+   event, aucun spawn, aucun manager, et `docker rm -f` du conteneur (idempotent, best-effort — un
+   `resume_run` le recrée). Le staging est **conservé** : c'est `cleanup_run` qui le purge, et le
+   détruire ici détruirait les transcripts que `merge_back` moissonne. **Résidu assumé** : la marche
+   filesystem déjà lancée n'est pas interrompue — `sandbox_staging::prepare` est un module pur sans
+   seam d'annulation, et y ajouter un jeton de cancellation pour ce seul cas coûterait plus que le
+   gigaoctet qu'il économise. Le gaspillage est borné à une copie, sans conteneur ni event derrière.
+
+Non traité ici, et **volontairement** : le réveil parasite du watcher lui-même. La première *lecture*
+de `<run>/pipeline.yaml` est rapportée comme une modification externe (masque inotify `OPEN` armé par
+`notify`, aucun filtrage d'`EventKind` par le debouncer, et `content_actually_changed` renvoie `true`
+faute de baseline pour un Run neuf — `seed_run_mtimes` ne tourne qu'au boot ; `copy_pipeline_to_run`
+est par ailleurs le seul écrivain de l'arbre qui n'appelle jamais `mark_self_write`). C'est un
+`pipeline_modified` mensonger, une fois par Run, à traiter pour lui-même : supprimer ce déclencheur
+n'aurait rien corrigé, puisque la précondition doit tenir quel que soit **qui** avance le Run.
+
 Le corps de cette ADR (points 1-10) est laissé **tel quel**, dans le vocabulaire d'avant #426 : y
 lire `full` partout où il dit `copy`, et `minimal` partout où il dit `pure`.
 

@@ -27,9 +27,18 @@ Two levels:
 | ID | Title | Covers | Status |
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | pipeline authoring, library, unified canvas | active |
-| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats | active |
+| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **sandbox A/B (`full` vs `off`)** | active |
 | HP-03 | *(reserved — free slot)* | candidate: Triggers, once it is core | — |
 
 The 3rd slot is intentionally free. To add it: allocate `HP-03`, follow `SCENARIO-FORMAT.md`, update
 this table, and run it once to confirm it's executable — within the **max 3** limit (otherwise merge
 two journeys, drop a non-critical one, or graft drive-by).
+
+**Sandbox (PRD #403) is grafted onto HP-02 as an A/B drive-by rather than given its own slot.** The
+pair `full` + `off` is what makes it meaningful: the `off` twin is the control (a Run that silently
+fell back to the host path also looks green), and `full` — not `minimal` — is what makes the
+"no node before the sandbox is ready" guarantee testable at all. Two consequences worth knowing
+before running the suite: each execution copies ~1 GB of staging and spends tens of seconds
+preparing, and the journey must **stay on the Run** during preparation (see HP-02's notes for why
+that is load-bearing). The day the instance default stops being `off` — a VPS deployment, where
+most Runs will be sandboxed — this drive-by is the natural candidate to be promoted to `HP-03`.

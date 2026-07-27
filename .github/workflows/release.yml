@@ -83,9 +83,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `pattern` est LOAD-BEARING : sans filtre, cette étape télécharge TOUS les artefacts du run,
+      # y compris le build record `*.dockerbuild` publié par docker/build-push-action dans le job
+      # `image`. Ce n'est pas un zip exploitable par l'action → « Unable to download and extract
+      # artifact » après 5 retries, et la release entière échoue (v1.0.0, run 30272375005). Le job
+      # `image` se croit isolé parce qu'il n'a pas de `needs:`, mais le couplage passe par le
+      # magasin d'artefacts, et il est INTERMITTENT : si le job `image` finit après cette étape,
+      # l'artefact n'existe pas encore et la release passe.
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: pdo-*
           merge-multiple: true
 
       - name: Generate checksums

@@ -241,20 +241,41 @@ export function deriveLoopRegions(
 }
 
 /**
+ * xyflow's `elevateNodesOnSelect` (on by default) adds `SELECTED_NODE_Z = 1000`
+ * to whichever node is selected. Region chrome has to outrank even that: a
+ * selected card overlapping the header is precisely when a user reaches for the
+ * region, and anything ≤ 1000 would leave the header unreachable right then.
+ */
+const REGION_CHROME_Z = 1001;
+
+/**
  * Builds the decorative xyflow `loopRegion` nodes that back each box-form
- * bounded region (ADR-0011 / #148). One node per `>= 2`-member region; single-
- * member regions render as a badge on the member card (no box) and produce no
- * node here.
+ * bounded region (ADR-0011 / #148). TWO nodes per `>= 2`-member region; single-
+ * member regions render as a badge on the member card (no box) and produce
+ * neither.
  *
- * The region box sits BEHIND the member cards and must never intercept pointer
- * events: an edge whose path crosses the box has to stay clickable/selectable
- * (#167). xyflow gives every node wrapper `pointer-events: all` whenever the
- * canvas registers node mouse handlers (it does, for the drag-highlight), so
- * pinning the inner div to `pointer-events: none` is not enough — the wrapper
- * still swallows the click. We override the wrapper's pointer-events to `none`
- * via the node's own `style` (xyflow spreads `node.style` AFTER its own
- * `pointerEvents`, so this wins without `!important`). The region header keeps
- * its own `pointer-events: auto` and stays clickable as a descendant.
+ * Neither node may intercept pointer events at the wrapper level: an edge whose
+ * path crosses the box has to stay clickable/selectable (#167). xyflow gives
+ * every node wrapper `pointer-events: all` whenever the canvas registers node
+ * mouse handlers (it does, for the drag-highlight), so pinning the inner div to
+ * `pointer-events: none` is not enough — the wrapper still swallows the click.
+ * Both specs override the wrapper back to `none` via the node's own `style`
+ * (xyflow spreads `node.style` AFTER its own `pointerEvents`, so this wins
+ * without `!important`), and the individual chips opt back in.
+ *
+ * WHY TWO NODES (#455). The box must paint BEHIND the member cards; the header
+ * and the exhausted badge — which carries the #152 "route from manager" button —
+ * must sit ABOVE them. Those are opposed, and one node cannot do both: a
+ * positioned wrapper with a numeric `z-index` IS a stacking context, so no
+ * descendant of the `zIndex: 0` box can ever paint above a sibling card. With
+ * the chrome inside the box, any node overlapping the header band stole its
+ * clicks and the RegionInspector became unreachable. So: a `box` layer at
+ * `zIndex: 0`, and a `chrome` layer at {@link REGION_CHROME_Z} covering the same
+ * rectangle. `LoopRegionNode` renders one or the other on `data.layer`.
+ *
+ * Both keep `type: "loopRegion"` on purpose — every `n.type === "loopRegion"`
+ * guard in `EditCanvas` (drag-stop, context menu, node click) then covers the
+ * chrome for free instead of needing a parallel set of guards for a 5th type.
  */
 export function buildLoopRegionNodes(
   pipeline: PipelineDef,
@@ -262,11 +283,9 @@ export function buildLoopRegionNodes(
 ): Node[] {
   return deriveLoopRegions(pipeline, runState)
     .filter((r) => r.box != null)
-    .map((r) => ({
-      id: `region-${r.id}`,
-      type: "loopRegion",
-      position: { x: r.box!.x, y: r.box!.y },
-      data: {
+    .flatMap((r) => {
+      const position = { x: r.box!.x, y: r.box!.y };
+      const data = {
         regionId: r.id,
         kind: r.kind,
         counterText: r.counterText,
@@ -276,17 +295,32 @@ export function buildLoopRegionNodes(
         runId: runState?.run_id ?? null,
         width: r.box!.width,
         height: r.box!.height,
-      },
-      draggable: false,
-      selectable: false,
-      connectable: false,
-      focusable: false,
-      zIndex: 0,
-      // `pointerEvents: "none"` defeats xyflow's wrapper-level `all` so edges
-      // under the box remain clickable (#167); `zIndex: 0` keeps the box behind
-      // the member cards.
-      style: { zIndex: 0, pointerEvents: "none" },
-    }));
+      };
+      const inert = {
+        type: "loopRegion",
+        position,
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        focusable: false,
+      } as const;
+      return [
+        {
+          ...inert,
+          id: `region-${r.id}`,
+          data: { ...data, layer: "box" as const },
+          zIndex: 0,
+          style: { zIndex: 0, pointerEvents: "none" },
+        },
+        {
+          ...inert,
+          id: `region-chrome-${r.id}`,
+          data: { ...data, layer: "chrome" as const },
+          zIndex: REGION_CHROME_Z,
+          style: { zIndex: REGION_CHROME_Z, pointerEvents: "none" },
+        },
+      ];
+    });
 }
 
 /**

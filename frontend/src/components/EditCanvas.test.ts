@@ -601,7 +601,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
   });
 });
 
-describe("buildLoopRegionNodes — region box must not intercept edge clicks (issue #167)", () => {
+describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () => {
   function regionPipeline(): PipelineDef {
     return {
       name: "loop-region-review-loop",
@@ -632,10 +632,15 @@ describe("buildLoopRegionNodes — region box must not intercept edge clicks (is
     };
   }
 
+  function layer(nodes: ReturnType<typeof buildLoopRegionNodes>, want: string) {
+    const found = nodes.filter((n) => (n.data as { layer?: string }).layer === want);
+    expect(found).toHaveLength(1);
+    return found[0];
+  }
+
   it("renders the box region as a `loopRegion` node positioned at the box origin", () => {
     const nodes = buildLoopRegionNodes(regionPipeline(), null);
-    expect(nodes).toHaveLength(1);
-    const region = nodes[0];
+    const region = layer(nodes, "box");
     expect(region.id).toBe("region-review_loop");
     expect(region.type).toBe("loopRegion");
     expect(region.position.x).toBeLessThan(280);
@@ -648,12 +653,12 @@ describe("buildLoopRegionNodes — region box must not intercept edge clicks (is
     // clicks meant for the edges it overlaps. The node spec must override that
     // back to `none`. xyflow spreads `node.style` after its own pointerEvents,
     // so this is the override that wins.
-    const region = buildLoopRegionNodes(regionPipeline(), null)[0];
+    const region = layer(buildLoopRegionNodes(regionPipeline(), null), "box");
     expect((region.style as { pointerEvents?: string }).pointerEvents).toBe("none");
   });
 
   it("keeps the region non-selectable, non-draggable, and non-focusable (decorative only)", () => {
-    const region = buildLoopRegionNodes(regionPipeline(), null)[0];
+    const region = layer(buildLoopRegionNodes(regionPipeline(), null), "box");
     expect(region.selectable).toBe(false);
     expect(region.draggable).toBe(false);
     expect(region.focusable).toBe(false);
@@ -663,6 +668,50 @@ describe("buildLoopRegionNodes — region box must not intercept edge clicks (is
     const p = regionPipeline();
     p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
     expect(buildLoopRegionNodes(p, null)).toHaveLength(0);
+  });
+
+  /**
+   * #455: the header (and the exhausted badge, which carries the #152 "route
+   * from manager" BUTTON) used to live INSIDE the box node. A positioned wrapper
+   * with `z-index: 0` is a stacking context, so no descendant of it can paint
+   * above a sibling card — a node overlapping the header band stole every click,
+   * and the RegionInspector became unreachable. The two requirements are
+   * genuinely opposed (fill behind the cards, chrome above them), so they need
+   * two stacking layers: two nodes.
+   */
+  describe("interactive chrome sits above the member cards (#455)", () => {
+    it("emits a chrome node per boxed region, geometrically on top of the box", () => {
+      const nodes = buildLoopRegionNodes(regionPipeline(), null);
+      expect(nodes).toHaveLength(2);
+      const box = layer(nodes, "box");
+      const chrome = layer(nodes, "chrome");
+      expect(chrome.id).toBe("region-chrome-review_loop");
+      expect(chrome.type).toBe("loopRegion");
+      expect(chrome.position).toEqual(box.position);
+      expect(chrome.data.width).toBe(box.data.width);
+      expect(chrome.data.height).toBe(box.data.height);
+    });
+
+    it("outranks even a SELECTED card", () => {
+      // Cards carry no explicit zIndex (→ 0), but xyflow's `elevateNodesOnSelect`
+      // adds SELECTED_NODE_Z = 1000 to whichever one is selected. Anything at or
+      // below 1000 leaves the header unreachable while a card is selected, which
+      // is exactly when a user is most likely to reach for the region.
+      const chrome = layer(buildLoopRegionNodes(regionPipeline(), null), "chrome");
+      expect(chrome.zIndex).toBeGreaterThan(1000);
+      expect((chrome.style as { zIndex?: number }).zIndex).toBeGreaterThan(1000);
+    });
+
+    it("still lets clicks through everywhere except its own chips", () => {
+      // The chrome node spans the whole box, so its WRAPPER must stay
+      // pass-through or it would re-break #167 the other way round — and
+      // swallow every click on the member cards it now covers.
+      const chrome = layer(buildLoopRegionNodes(regionPipeline(), null), "chrome");
+      expect((chrome.style as { pointerEvents?: string }).pointerEvents).toBe("none");
+      expect(chrome.selectable).toBe(false);
+      expect(chrome.draggable).toBe(false);
+      expect(chrome.focusable).toBe(false);
+    });
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { edgeConditionFields } from "./edgeFields";
+import { edgeConditionFields, operatorsForField, clampOperator } from "./edgeFields";
+import { OPERATORS } from "./whenClause";
 import type { PipelineDef, EdgeDef } from "../types";
 
 function pipeline(): PipelineDef {
@@ -88,5 +89,41 @@ describe("isBoolField helper", () => {
     expect(isBoolField(fields, "is_blocking")).toBe(true);
     expect(isBoolField(fields, "verdict")).toBe(false);
     expect(isBoolField(fields, "iter")).toBe(false);
+  });
+});
+
+// #456: the operator set is a function of the field's type. A bool admits only
+// equality — `approved >= true` was authorable before this, and the engine has no
+// useful ordering to apply to it.
+describe("operatorsForField", () => {
+  it("restricts a bool field to equality", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(operatorsForField(fields, "is_blocking")).toEqual(["eq", "neq"]);
+  });
+
+  it("leaves every other field with the full operator set", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(operatorsForField(fields, "iter")).toEqual(OPERATORS);
+    expect(operatorsForField(fields, "verdict")).toEqual(OPERATORS);
+    expect(operatorsForField(fields, "$threshold")).toEqual(OPERATORS);
+  });
+
+  it("falls back to the full set for a field it does not know", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(operatorsForField(fields, "not_declared_anywhere")).toEqual(OPERATORS);
+  });
+});
+
+describe("clampOperator", () => {
+  it("rewrites an order operator to eq when the field is a bool", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(clampOperator(fields, "is_blocking", "gte")).toBe("eq");
+    expect(clampOperator(fields, "is_blocking", "in")).toBe("eq");
+  });
+
+  it("keeps an operator the field already admits", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(clampOperator(fields, "is_blocking", "neq")).toBe("neq");
+    expect(clampOperator(fields, "iter", "gte")).toBe("gte");
   });
 });

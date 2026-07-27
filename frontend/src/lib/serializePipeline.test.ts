@@ -558,4 +558,74 @@ describe("exportNodeAsYaml (#345)", () => {
   it("is library-entry-shaped: name + type at the root", () => {
     expect(exportNodeAsYaml(node(), "p").startsWith("name: Reviewer\ntype: doc-only")).toBe(true);
   });
+
+  // #457: the third frontmatter emit site — same null-stripping rule.
+  it("drops a null allowed from a node-library entry too", () => {
+    const yaml = exportNodeAsYaml(
+      node({
+        outputs: [{
+          name: "review", repeated: false, side: "right",
+          frontmatter: { approved: { type: "bool", allowed: null } },
+        }],
+      }),
+      "p",
+    );
+    expect(yaml).toContain("type: bool");
+    expect(yaml).not.toContain("allowed:");
+  });
+});
+
+/**
+ * #457: `allowed` is `Option<Vec<String>>` on the daemon, so `GET /pipelines/...`
+ * ships `allowed: null` for every non-enum field. The emitters copied the
+ * declaration verbatim, so the FIRST save after a page load rewrote
+ * `{type: bool}` as `{allowed: null, type: bool}` — then stayed put, because the
+ * reloaded pipeline already carried the null. A parasitic diff on a
+ * git-versioned pipeline, and the Library stores YAML byte-for-byte, so it also
+ * reads as twin drift.
+ */
+describe("serializePipeline strips null frontmatter keys (#457)", () => {
+  function withFrontmatter(frontmatter: NodeDef["outputs"][number]["frontmatter"]): PipelineDef {
+    return {
+      name: "fm-test", version: "1.0", variables: {},
+      nodes: [{
+        id: "reviewer", name: "reviewer", type: "doc-only",
+        inputs: [{ name: "code", repeated: false, side: "left", frontmatter }],
+        outputs: [{ name: "review", repeated: false, side: "right", frontmatter }],
+        interactive: false, view: { x: 0, y: 0 },
+      }],
+      edges: [],
+    };
+  }
+
+  it("omits allowed when it is null", () => {
+    const yaml = serializePipeline(withFrontmatter({ approved: { type: "bool", allowed: null } }));
+    expect(yaml).toContain("type: bool");
+    expect(yaml).not.toContain("allowed:");
+  });
+
+  it("keeps allowed on an enum", () => {
+    const yaml = serializePipeline(
+      withFrontmatter({ verdict: { type: "enum", allowed: ["PASS", "FAIL"] } }),
+    );
+    expect(yaml).toContain("allowed:");
+    expect(yaml).toContain("PASS");
+  });
+
+  it("keeps an explicitly empty allowed — [] is not null", () => {
+    const yaml = serializePipeline(withFrontmatter({ verdict: { type: "enum", allowed: [] } }));
+    expect(yaml).toContain("allowed:");
+  });
+
+  /**
+   * The actual defect, stated as the invariant: what the daemon hands back
+   * (`allowed: null`) and what the user authored (key absent) must serialize to
+   * the same bytes. Both emit sites are covered — the inline one in
+   * `pipelineToYamlObject` (inputs AND outputs) and `portToYamlObject`.
+   */
+  it("emits the same bytes for a null allowed and an absent one", () => {
+    const fromDaemon = serializePipeline(withFrontmatter({ approved: { type: "bool", allowed: null } }));
+    const fromAuthor = serializePipeline(withFrontmatter({ approved: { type: "bool" } }));
+    expect(fromDaemon).toBe(fromAuthor);
+  });
 });

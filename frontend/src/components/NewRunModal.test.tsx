@@ -75,6 +75,11 @@ const noop = () => {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` wipes recorded calls but KEEPS implementations, so a
+  // `mockResolvedValue` set inside one test leaks into every later one. The
+  // repo-switch tests (#454) re-point this mock per repo, so restore the
+  // documented default here rather than trusting each test to clean up.
+  vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
   vi.useFakeTimers({ shouldAdvanceTime: true });
   useEditStore.setState({
     openTabs: [],
@@ -302,6 +307,90 @@ describe("NewRunModal — multi-repo form flow", () => {
       expect(options).toContain("main");
       expect(options).toContain("dev");
       expect(options).toContain("feature-x");
+    });
+  });
+
+  /**
+   * #454: the `!sourceBranch` guard blocked re-selection when the repo changed.
+   * The `<select>` then DISPLAYED the new repo's only option while the state
+   * still held a branch that repo does not have → launch refused with
+   * `branch 'main' does not exist`. Same shows-one-sends-another family as #452.
+   */
+  describe("changing the target repo re-selects the source branch (#454)", () => {
+    /**
+     * Asserting `branchSelect.value` CANNOT catch this bug, and that is the whole
+     * point of it: a `<select>` whose React value matches none of its options
+     * reports the FIRST option's value. So the DOM read `master` even while the
+     * state held `main` — the read that looks like a check and passes either way.
+     * Only what the form actually submits distinguishes the two.
+     */
+    it("launches against the re-selected branch, not the stale one", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([
+        makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      ]);
+      vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
+      renderModal();
+      await enterValidRepo("/home/user/project-a"); // → main
+
+      vi.mocked(listBranches).mockResolvedValue(["master"]);
+      await enterValidRepo("/home/user/project-b");
+
+      const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
+      await waitFor(() => {
+        expect(Array.from(branchSelect.options).map((o) => o.value)).toEqual(["master"]);
+      });
+
+      fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+      fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+        target: { value: "do the thing" },
+      });
+
+      vi.useRealTimers();
+      fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+      await waitFor(() => {
+        // Pre-fix this was `main`, a branch project-b does not have → the daemon
+        // refused the launch with `branch 'main' does not exist`.
+        expect(createRun).toHaveBeenCalledWith(
+          expect.objectContaining({ source_branch: "master" }),
+        );
+      });
+    });
+
+    /**
+     * Guard against over-correcting: resetting unconditionally on every repo
+     * change would throw away a deliberate choice that the new repo still honours.
+     * This one passes before the fix too — it is here to keep the fix honest, not
+     * to prove the bug.
+     */
+    it("keeps the user's branch when the new repo still has it", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([
+        makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      ]);
+      vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
+      renderModal();
+      await enterValidRepo("/home/user/project-a");
+
+      const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
+      fireEvent.change(branchSelect, { target: { value: "feature-x" } });
+      expect(branchSelect.value).toBe("feature-x");
+
+      vi.mocked(listBranches).mockResolvedValue(["main", "feature-x"]);
+      await enterValidRepo("/home/user/project-b");
+
+      fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+      fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+        target: { value: "do the thing" },
+      });
+
+      vi.useRealTimers();
+      fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+      await waitFor(() => {
+        expect(createRun).toHaveBeenCalledWith(
+          expect.objectContaining({ source_branch: "feature-x" }),
+        );
+      });
     });
   });
 

@@ -64,6 +64,9 @@ function props(data: Partial<LoopRegionNodeData>): NodeProps<Node<LoopRegionNode
     runId: null,
     width: 400,
     height: 200,
+    // Every test below drives the header or the exhausted badge, which live on
+    // the chrome layer (#455). The box layer is covered by its own describe.
+    layer: "chrome",
   };
   return {
     id: "region-review_loop",
@@ -219,5 +222,66 @@ describe("LoopRegionNode — route from manager (#152)", () => {
     expect(
       screen.queryByTestId("loop-region-route-from-manager"),
     ).toBeNull();
+  });
+});
+
+/**
+ * #455: the two layers are exclusive. The box draws the grouping rectangle and
+ * nothing interactive; the chrome draws the chips and no rectangle. If either
+ * leaked into the other, the fix would be undone — chrome under a card again, or
+ * a filled rectangle painted over the cards it is supposed to sit behind.
+ */
+describe("LoopRegionNode — box / chrome layer split (#455)", () => {
+  beforeEach(() => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "none", id: null },
+    });
+  });
+
+  it("the box layer draws the rectangle and NO interactive chrome", () => {
+    seedStore([reviewLoop]);
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ layer: "box", exhausted: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    const box = screen.getByTestId("loop-region");
+    expect(box.style.border).toContain("dashed");
+    expect(box.style.background).not.toBe("");
+    expect(screen.queryByTestId("loop-region-header")).toBeNull();
+    expect(screen.queryByTestId("loop-region-block")).toBeNull();
+    expect(screen.queryByTestId("loop-region-route-from-manager")).toBeNull();
+  });
+
+  it("the chrome layer draws the chips and NO rectangle over the cards", () => {
+    seedStore([reviewLoop]);
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ layer: "chrome", exhausted: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-header")).toBeTruthy();
+    expect(screen.getByTestId("loop-region-block")).toBeTruthy();
+    // No `loop-region` box: the chrome covers the member cards, so a border or a
+    // fill here would hide them.
+    expect(screen.queryByTestId("loop-region")).toBeNull();
+    const chrome = screen.getByTestId("loop-region-chrome");
+    expect(chrome.style.border).toBe("");
+    expect(chrome.style.background).toBe("");
+  });
+
+  it("keeps the chrome container itself pass-through, only the chips clickable", () => {
+    seedStore([reviewLoop]);
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ layer: "chrome" })} />
+      </Wrapper>,
+    );
+    // The container spans the whole box and now sits ABOVE the member cards, so
+    // it must not swallow their clicks (#167, the other way round).
+    expect(screen.getByTestId("loop-region-chrome").className).toContain("pointer-events-none");
+    expect(screen.getByTestId("loop-region-header").className).toContain("pointer-events-auto");
   });
 });

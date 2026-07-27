@@ -1,3 +1,4 @@
+import { OPERATORS, type Operator } from "./whenClause";
 import type { PipelineDef, EdgeDef, FrontmatterFieldDecl } from "../types";
 
 /**
@@ -45,4 +46,39 @@ export function edgeConditionFields(
 /** Whether the named field is declared as a boolean (drives the true/false toggle). */
 export function isBoolField(fields: EdgeConditionField[], name: string): boolean {
   return fields.find((f) => f.name === name)?.decl?.type === "bool";
+}
+
+/** Equality only — a boolean has no ordering the predicate grammar can use (#456). */
+const BOOL_OPERATORS: readonly Operator[] = ["eq", "neq"];
+
+/**
+ * The operators admissible on a given field (#456). A `bool` takes equality
+ * only: `approved >= true` was authorable and savable before this, and ADR-0002
+ * gives the engine no ordering to apply to it.
+ *
+ * Every other field keeps the full set — including a field this resolver does
+ * not know (a stale `when:` referencing a since-renamed port). Narrowing an
+ * unknown field would be guessing, and the panel's job is to stop nonsense, not
+ * to hide what the YAML already says.
+ */
+export function operatorsForField(
+  fields: EdgeConditionField[],
+  name: string,
+): readonly Operator[] {
+  return isBoolField(fields, name) ? BOOL_OPERATORS : OPERATORS;
+}
+
+/**
+ * Coerces `op` into what `name` admits, defaulting to `eq`. Called when the
+ * field of a condition row changes: without it, switching an `iter >= 3` row
+ * over to a bool field would leave `gte` in place and write the very clause
+ * this restriction exists to prevent.
+ */
+export function clampOperator(
+  fields: EdgeConditionField[],
+  name: string,
+  op: Operator,
+): Operator {
+  const allowed = operatorsForField(fields, name);
+  return allowed.includes(op) ? op : "eq";
 }

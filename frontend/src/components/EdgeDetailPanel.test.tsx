@@ -131,6 +131,55 @@ describe("EdgeDetailPanel", () => {
     expect(typeof (edge.when!.is_blocking as Record<string, unknown>).eq).toBe("boolean");
   });
 
+  // #456: the operator dropdown is typed. A bool has no useful ordering, so
+  // offering `<`/`≤`/`>`/`≥` (and the list operators) let `is_blocking >= true`
+  // be authored and saved.
+  describe("operator set is typed (#456)", () => {
+    it("offers only = and ≠ for a boolean field", () => {
+      seedEdge({ ...baseEdge, when: { is_blocking: { eq: true } } });
+      render(<EdgeDetailPanel />);
+      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
+      expect(Array.from(opSel.options).map((o) => o.value)).toEqual(["eq", "neq"]);
+    });
+
+    it("keeps the full operator set for iter and for an enum field", () => {
+      seedEdge({ ...baseEdge, when: { iter: { gte: 3 } } });
+      render(<EdgeDetailPanel />);
+      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
+      expect(Array.from(opSel.options).map((o) => o.value)).toEqual([
+        "eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in",
+      ]);
+    });
+
+    it("clamps the operator to eq when the field is switched to a bool", () => {
+      seedEdge({ ...baseEdge, when: { iter: { gte: 3 } } });
+      render(<EdgeDetailPanel />);
+
+      fireEvent.change(screen.getByTestId("field-dropdown"), {
+        target: { value: "is_blocking" },
+      });
+
+      const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+      // `gte` would have survived the field change and written `is_blocking >= true`.
+      expect(edge.when).toEqual({ is_blocking: { eq: true } });
+    });
+
+    /**
+     * A pipeline authored before the fix (or by hand) can carry `is_blocking:
+     * {gte: true}`. Dropping `gte` from the options would leave the `<select>`
+     * DISPLAYING `=` while the row still holds `gte` — the same
+     * shows-one-thing-sends-another trap as #454. The panel already keeps that
+     * escape hatch for an unknown field; the operator needs it too.
+     */
+    it("still renders an out-of-range operator already present on the edge", () => {
+      seedEdge({ ...baseEdge, when: { is_blocking: { gte: true } } });
+      render(<EdgeDetailPanel />);
+      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
+      expect(opSel.value).toBe("gte");
+      expect(Array.from(opSel.options).map((o) => o.value)).toContain("gte");
+    });
+  });
+
   it("offers iter as a selectable condition field", () => {
     seedEdge(baseEdge);
     render(<EdgeDetailPanel />);

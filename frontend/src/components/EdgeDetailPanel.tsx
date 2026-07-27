@@ -3,13 +3,18 @@ import { ArrowRight, Plus, X, Activity, RefreshCw, CornerDownRight } from "lucid
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, EdgeTriggerStatus } from "../types";
 import {
-  OPERATORS,
   whenToRows,
   rowsToWhen,
   type ConditionRow,
   type Operator,
 } from "../lib/whenClause";
-import { edgeConditionFields, isBoolField, type EdgeConditionField } from "../lib/edgeFields";
+import {
+  edgeConditionFields,
+  isBoolField,
+  operatorsForField,
+  clampOperator,
+  type EdgeConditionField,
+} from "../lib/edgeFields";
 import { SectionHead } from "./InspectorPrimitives";
 
 interface Props {
@@ -96,9 +101,20 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
   const handleUpdateRow = (i: number, updates: Partial<ConditionRow>) => {
     const next = rows.map((r, idx) => {
       if (idx !== i) return r;
-      // A field change resets the value and recomputes the bool type hint.
+      // A field change resets the value, recomputes the bool type hint, and
+      // clamps the operator to what the new field admits (#456) — otherwise a
+      // `gte` carried over from `iter` would land on a bool.
       const merged = { ...r, ...updates };
-      return withTypeHint(updates.field !== undefined ? { ...merged, value: defaultValueFor(merged.field, fields) } : merged, fields);
+      return withTypeHint(
+        updates.field !== undefined
+          ? {
+              ...merged,
+              op: clampOperator(fields, merged.field, merged.op),
+              value: defaultValueFor(merged.field, fields),
+            }
+          : merged,
+        fields,
+      );
     });
     commitRows(next);
   };
@@ -271,6 +287,7 @@ function ConditionRowEditor({
   const isEnum = selectedField?.decl?.type === "enum" && selectedField.decl.allowed;
   const isBool = isBoolField(fields, row.field);
   const isList = row.op === "in" || row.op === "not_in";
+  const allowedOps = operatorsForField(fields, row.field);
 
   return (
     <div className="flex items-center gap-1" data-testid="condition-row">
@@ -299,7 +316,15 @@ function ConditionRowEditor({
         style={{ fontSize: "10.5px" }}
         data-testid="op-dropdown"
       >
-        {OPERATORS.map((op) => (
+        {/* An operator the field no longer admits can still sit in a hand-written
+            or pre-#456 YAML. Keep it selectable, exactly as the field dropdown
+            above keeps an unknown field: dropping it would leave the `<select>`
+            DISPLAYING `=` while the row still holds `gte` — the
+            shows-one-sends-another trap of #454. */}
+        {!allowedOps.includes(row.op) && (
+          <option value={row.op}>{OP_SYMBOLS[row.op]}</option>
+        )}
+        {allowedOps.map((op) => (
           <option key={op} value={op}>
             {OP_SYMBOLS[op]}
           </option>

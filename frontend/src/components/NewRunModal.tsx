@@ -269,7 +269,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           try {
             const branchList = await listBranches(targetRepo.trim());
             setBranches(branchList);
-            if (branchList.length > 0 && !sourceBranch) {
+            // #454: re-select whenever the held branch is not one THIS repo has.
+            // The old `!sourceBranch` guard only ever seeded an empty field, so
+            // switching repos kept a branch the new one lacks — and a `<select>`
+            // whose value matches no option renders its FIRST option, so the field
+            // DISPLAYED `master` while the state still held `main`. The launch then
+            // failed with `branch 'main' does not exist`, blaming the daemon for a
+            // value the UI never showed. Testing membership instead subsumes the
+            // empty case and still preserves a deliberate choice the new repo honours.
+            if (branchList.length > 0 && !branchList.includes(sourceBranch)) {
               const main = branchList.find((b) => b === "main")
                 ?? branchList.find((b) => b === "master")
                 ?? branchList[0];

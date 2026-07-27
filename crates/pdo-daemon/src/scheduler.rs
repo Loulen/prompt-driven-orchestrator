@@ -42,6 +42,10 @@ pub enum SchedulerAction {
     CollectionStarted {
         region_id: String,
         entry: String,
+        /// Every member of the region, projected into `CollectionState` so the
+        /// transition guard can recognise a parallel item lap without reading
+        /// the pipeline file (#453).
+        members: Vec<String>,
         total_items: i64,
         items: Vec<serde_yaml::Value>,
     },
@@ -53,6 +57,35 @@ pub enum SchedulerAction {
     CollectionDone {
         region_id: String,
     },
+}
+
+/// The `collection_started` event payload for a [`SchedulerAction::CollectionStarted`].
+///
+/// Lives here, next to the producer, so the emitter (`lib::emit_collection_action`)
+/// and the seam test that replays the fan-out share ONE definition of the wire
+/// shape. The projection reads `members` back out to recognise a parallel item lap
+/// (#453); a test that hand-rolled the payload could drift from the emitter and go
+/// green while production stayed broken.
+///
+/// Returns `None` for any other action.
+pub(crate) fn collection_started_payload(action: &SchedulerAction) -> Option<serde_json::Value> {
+    match action {
+        SchedulerAction::CollectionStarted {
+            region_id,
+            entry,
+            members,
+            total_items,
+            ..
+        } => Some(serde_json::json!({
+            "region_id": region_id,
+            "entry": entry,
+            // #453: the region's shape, so the transition guard can tell a
+            // parallel item lap from an illegal concurrent iteration.
+            "members": members,
+            "total_items": total_items,
+        })),
+        _ => None,
+    }
 }
 
 /// Bootstraps Loop nodes whose `in` port is fed by a Start node (or a node
@@ -832,6 +865,7 @@ fn handle_collection_entry(
     actions.push(SchedulerAction::CollectionStarted {
         region_id: region.id.clone(),
         entry: fanout.entry.clone(),
+        members: region.members.clone(),
         total_items: fanout.total,
         items: fanout.items,
     });
@@ -3836,6 +3870,7 @@ mod tests {
         assert!(actions.contains(&SchedulerAction::CollectionStarted {
             region_id: "fan".into(),
             entry: "worker".into(),
+            members: vec!["worker".into()],
             total_items: 3,
             items: vec![
                 serde_yaml::Value::String("item-1".into()),
@@ -3910,6 +3945,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -3945,6 +3982,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -3986,6 +4025,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -4015,6 +4056,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -4043,6 +4086,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -4064,6 +4109,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: true,
             },
         );
@@ -4089,6 +4136,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 2,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -4133,6 +4182,8 @@ mod tests {
             crate::event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );
@@ -4239,6 +4290,7 @@ loops:
             actions.contains(&SchedulerAction::CollectionStarted {
                 region_id: "per-issue".into(),
                 entry: "ab000003".into(),
+                members: vec!["ab000003".into()],
                 total_items: 3,
                 items: vec![
                     serde_yaml::Value::String("a".into()),

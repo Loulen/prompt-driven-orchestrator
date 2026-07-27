@@ -182,14 +182,25 @@ export function deriveLoopRegions(
     const maxNum =
       typeof region.max_iter === "number" ? region.max_iter : null;
     // A collection region (#151) never "exhausts" — the lap count is the
-    // collection size, not a bounded cap. Its counter reads the fan-out (`N
-    // items`), not a `i/N` loop counter; idle shows the `over` driver.
+    // collection size, not a bounded cap. Idle shows the `over` driver.
     const isCollection = region.kind === "collection";
     const exhausted =
       !isCollection && live && maxNum != null && currentIter >= maxNum;
+    // #453: on a live run the collection badge reads `laps/total`, where the
+    // total is the region's RESOLVED size (`collection_states[id].total_items`),
+    // not `max(iter)` across members. `max(iter)` is the last lap *reached*, so
+    // a region wedged at lap 1 of 2 rendered exactly like a finished 1-item
+    // region — the canvas contradicted nothing and the failure was invisible.
+    // Falls back to the bare lap count when the region has no projected state
+    // yet (the fan-out has not resolved its `over` list).
+    const totalItems = live
+      ? (runState?.collection_states?.[region.id]?.total_items ?? null)
+      : null;
     const counterText = isCollection
       ? live
-        ? `${currentIter} items`
+        ? totalItems != null
+          ? `${currentIter}/${totalItems} items`
+          : `${currentIter} items`
         : region.over
           ? `over ${region.over}`
           : "items"

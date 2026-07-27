@@ -643,6 +643,8 @@ mod tests {
             event_log::CollectionState {
                 region_id: "fan".into(),
                 total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
                 done: false,
             },
         );

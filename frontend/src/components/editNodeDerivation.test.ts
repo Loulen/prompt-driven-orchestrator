@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, runReachedEnd } from "./editNodeDerivation";
-import type { LoopRegion, NodeDef, NodeType, PipelineDef, PortSide, RunStatus } from "../types";
+import type {
+  LoopRegion,
+  NodeDef,
+  NodeType,
+  PipelineDef,
+  PortSide,
+  RunState,
+  RunStatus,
+} from "../types";
 
 describe("runReachedEnd", () => {
   it("is true only when the run completed successfully", () => {
@@ -250,6 +258,77 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     expect(badge?.text).toContain("↻");
     expect(badge?.text).toContain("max 4");
     expect(badge?.text).not.toContain("⇉");
+  });
+
+  /// A live run where `fixer` reached lap `lapsReached`, inside a collection
+  /// region resolved to `totalItems` (omit for a run with no projected region).
+  function liveRun(lapsReached: number, totalItems?: number): RunState {
+    return {
+      run_id: "run-1",
+      pipeline_name: "p",
+      status: "running",
+      input: null,
+      started_at: null,
+      completed_at: null,
+      nodes: {
+        fixer: {
+          node_id: "fixer",
+          status: "completed",
+          iter: lapsReached,
+          started_at: null,
+          completed_at: null,
+          failure_reason: null,
+          iterations: [],
+        },
+      },
+      edges: [],
+      node_defs: [],
+      start_node: null,
+      end_node: null,
+      merge_resolver: null,
+      ...(totalItems == null
+        ? {}
+        : {
+            collection_states: {
+              "per-issue": {
+                region_id: "per-issue",
+                total_items: totalItems,
+                done: false,
+              },
+            },
+          }),
+    };
+  }
+
+  const collectionPipeline = () =>
+    pipelineWith(
+      [node("fixer", "code-mutating", ["fix"])],
+      [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
+    );
+
+  it("reads the live collection badge as laps/total, not max(iter) (#453)", () => {
+    // The denominator is the RESOLVED collection size, from the region's own
+    // projected state — the only value that says how much work the region owes.
+    const regions = deriveLoopRegions(collectionPipeline(), liveRun(1, 2));
+    expect(regions[0].counterText).toBe("1/2 items");
+  });
+
+  it("distinguishes a region wedged at lap 1 of 2 from a finished 1-item region", () => {
+    // THE #453 readability defect. Both runs have `max(iter) === 1`, so both used
+    // to render `⇉ 1 items` on an all-green canvas: nothing on screen contradicted
+    // "it's finished" while one of the two was frozen for ever.
+    const wedged = deriveLoopRegions(collectionPipeline(), liveRun(1, 2))[0];
+    const finished = deriveLoopRegions(collectionPipeline(), liveRun(1, 1))[0];
+    expect(wedged.counterText).not.toBe(finished.counterText);
+    expect(finished.counterText).toBe("1/1 items");
+  });
+
+  it("falls back to the bare lap count when the region has no projected state", () => {
+    // Between the run starting and the fan-out resolving its `over` list there is
+    // no `collection_states` entry; the badge must degrade, never print `1/0`.
+    expect(deriveLoopRegions(collectionPipeline(), liveRun(1))[0].counterText).toBe(
+      "1 items",
+    );
   });
 
   it("does not attach a loop badge to a node that is no member", () => {

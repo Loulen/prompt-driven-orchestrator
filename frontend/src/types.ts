@@ -452,6 +452,21 @@ export interface ForEachStateInfo {
   done: boolean;
 }
 
+/**
+ * Barrier accounting for a `kind: collection` region (ADR-0011 / #269), keyed by
+ * region id. `total_items` is the resolved size of the `over` list — the ONLY
+ * truthful denominator for the canvas badge (#453): member `iter` counts the
+ * last lap *reached*, which reads `1 items` on a region wedged at lap 1 of 2 and
+ * on a healthy 1-item region alike.
+ */
+export interface CollectionStateInfo {
+  region_id: string;
+  total_items: number;
+  done: boolean;
+  entry?: string;
+  members?: string[];
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -468,6 +483,7 @@ export interface RunState {
   merge_resolver: MergeResolverInfo | null;
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
+  collection_states?: Record<string, CollectionStateInfo>;
   target_repo?: string | null;
   source_branch?: string | null;
   /**

@@ -486,11 +486,38 @@ pub struct ForEachState {
 /// Barrier accounting for a `kind: collection` loop region (ADR-0011 / #269),
 /// keyed by region id — the region twin of [`ForEachState`]. Tracks the
 /// resolved collection size and whether the barrier has fired.
+///
+/// `entry` and `members` (#453) make the region's **shape** readable from the
+/// projection alone, not just from the pipeline file. The transition guard needs
+/// them: a collection region fans its entry out in parallel (one live lap per
+/// item), which is the exact opposite of the "at most one live iteration per
+/// node" invariant the guard enforces everywhere else. Carrying the shape in the
+/// projection keeps `transition_guard` pure — no pipeline plumbing through every
+/// caller — and scopes the exemption to the region's own members while its
+/// barrier is open.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionState {
     pub region_id: String,
     pub total_items: i64,
     pub done: bool,
+    /// The member fanned out once per item. Empty for a `CollectionEmpty`
+    /// region (no fan-out happened) and for runs whose `CollectionStarted`
+    /// predates #453.
+    #[serde(default)]
+    pub entry: String,
+    /// Every member of the region. Falls back to `[entry]` on a pre-#453
+    /// payload; empty when even `entry` is unknown.
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+impl CollectionState {
+    /// Is `node_id` a node whose iterations this region governs? Such a node is
+    /// spawned once per item, so several of its iterations are legitimately live
+    /// at the same time (#453).
+    pub fn governs(&self, node_id: &str) -> bool {
+        self.members.iter().any(|m| m == node_id) || self.entry == node_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1485,6 +1512,29 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                         .get("total_items")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
+                    let entry = payload
+                        .get("entry")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    // Pre-#453 payloads carry `entry` but no `members`: fall
+                    // back to the entry alone, which is the whole region for the
+                    // common single-member collection.
+                    let members: Vec<String> = payload
+                        .get("members")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_else(|| {
+                            if entry.is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![entry.clone()]
+                            }
+                        });
                     state
                         .collection_states
                         .entry(region_id.to_string())
@@ -1492,6 +1542,8 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                             region_id: region_id.to_string(),
                             total_items,
                             done: false,
+                            entry,
+                            members,
                         });
                 }
             }
@@ -1506,6 +1558,8 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                             region_id: region_id.to_string(),
                             total_items: 0,
                             done: false,
+                            entry: String::new(),
+                            members: Vec::new(),
                         });
                     cs.done = true;
                 }
@@ -5081,8 +5135,13 @@ mod tests {
                 "fe2": { "break_received": false, "done": true, "foreach_node_id": "fe2", "total_items": 0 }
             },
             "collection_states": {
-                "fan1": { "done": true, "region_id": "fan1", "total_items": 2 },
-                "fan2": { "done": true, "region_id": "fan2", "total_items": 0 }
+                // #453: `fan1`'s CollectionStarted payload predates `members`
+                // (it carries `entry` only) — the projection falls back to the
+                // entry alone, which is the whole region for a single-member
+                // collection. `fan2` never fanned out (CollectionEmpty), so its
+                // shape is unknown and both fields stay empty.
+                "fan1": { "done": true, "region_id": "fan1", "total_items": 2, "entry": "worker", "members": ["worker"] },
+                "fan2": { "done": true, "region_id": "fan2", "total_items": 0, "entry": "", "members": [] }
             },
             "input": "exercise every concern",
             "loop_states": {

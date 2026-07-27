@@ -313,4 +313,314 @@ mod tests {
             SpawnAdmission::Admit
         );
     }
+
+    // ---------------------------------------------------------------------
+    // #453 — THE SEAM: N `Spawn` on the same node → guard → projected state
+    // ---------------------------------------------------------------------
+    //
+    // A collection region fans its entry out with `Spawn { entry, iter: 1..=N }`
+    // in ONE burst, and the drivers `await` those actions one at a time.
+    // `interpret` never re-projects (INV-2), but `spawn_node` does: it reloads
+    // the run state and runs a `NodeStarted` guard probe before any side effect.
+    // So lap 2's probe meets lap 1's freshly-appended `NodeStarted` — and until
+    // #453 the guard refused it as "iter 1 is still live: refusing concurrent
+    // iter 2", deterministically, 1 ms after the fan-out started.
+    //
+    // Both halves were already unit-tested and both were right on their own:
+    // `handle_collection_entry` produced N `Spawn`s (green), and `validate_start`
+    // refused a concurrent iteration (green, its contract since #212). The bug
+    // lived only where the interpreter runs them in sequence, which nothing
+    // covered. That is why these tests replay the *composition* — real scheduler
+    // actions, real payload builder, real projection, real guard — instead of
+    // asserting on either half.
+    //
+    // What is faked: only tmux and the DB. `replay_spawn_seam` performs exactly
+    // the two steps `spawn_node` performs before it touches the world (project
+    // the log, probe the guard) and appends the same `NodeStarted` reservation.
+
+    use crate::scheduler::{self, SchedulerAction};
+    use std::collections::HashMap;
+
+    /// The repro pipeline of #453, reduced to its skeleton: an external producer
+    /// feeding a single-member `kind: collection` region over a frontmatter list.
+    const COLLECTION_YAML: &str = r#"
+name: collection-seam
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: producer
+    name: Producer
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+        frontmatter:
+          topics:
+            type: list
+  - id: itemizer
+    name: Itemizer
+    type: doc-only
+    inputs:
+      - name: plan
+    outputs:
+      - name: item_note
+  - id: sibling
+    name: Sibling
+    type: doc-only
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: producer, port: task }
+  - source: { node: producer, port: plan }
+    target: { node: itemizer, port: plan }
+  - source: { node: itemizer, port: item_note }
+    target: { node: end, port: result }
+loops:
+  - id: topics_fanout
+    kind: collection
+    over: topics
+    members: [itemizer]
+"#;
+
+    fn ev_with(kind: EventKind, node_id: Option<&str>, payload: serde_json::Value) -> Event {
+        Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: now_iso(),
+            kind,
+            node_id: node_id.map(String::from),
+            iter: None,
+            payload: Some(payload),
+        }
+    }
+
+    /// Run the fan-out of `topics` through the REAL scheduler and return the
+    /// event log it would produce, plus every guard refusal met on the way.
+    ///
+    /// Mirrors the production sequence: `evaluate_outgoing_edges_full` on the
+    /// producer's completion → for each action, either emit the collection event
+    /// (via the emitter's own payload builder) or replay the spawn seam.
+    fn replay_fanout(topics: &[&str]) -> (Vec<Event>, Vec<String>) {
+        let pipeline = crate::pipeline::parse_pipeline(COLLECTION_YAML)
+            .expect("fixture parses")
+            .pipeline;
+
+        let mut events = vec![
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("producer"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("producer"), Some(1)),
+        ];
+
+        let mut frontmatter = HashMap::new();
+        frontmatter.insert(
+            "topics".to_string(),
+            serde_yaml::Value::Sequence(
+                topics
+                    .iter()
+                    .map(|t| serde_yaml::Value::String((*t).to_string()))
+                    .collect(),
+            ),
+        );
+
+        let actions = scheduler::evaluate_outgoing_edges_full(
+            &pipeline,
+            &project(&events).expect("projected"),
+            "producer",
+            &HashMap::new(),
+            &frontmatter,
+            &HashMap::new(),
+        );
+
+        let mut refusals = Vec::new();
+        for action in &actions {
+            match action {
+                SchedulerAction::CollectionStarted { .. } => {
+                    events.push(ev_with(
+                        EventKind::CollectionStarted,
+                        None,
+                        scheduler::collection_started_payload(action).expect("payload"),
+                    ));
+                }
+                SchedulerAction::Spawn { node_id, iter } => {
+                    // === the seam: exactly what spawn_node does up front ===
+                    let projected = project(&events).expect("projected");
+                    let probe = ev(EventKind::NodeStarted, Some(node_id), Some(*iter));
+                    match transition_guard::validate_transition(Some(&projected), &probe) {
+                        transition_guard::Verdict::Allow => events.push(probe),
+                        transition_guard::Verdict::NoOp { reason }
+                        | transition_guard::Verdict::Reject { reason } => refusals.push(reason),
+                    }
+                }
+                _ => {}
+            }
+        }
+        (events, refusals)
+    }
+
+    fn live_iters(events: &[Event], node_id: &str) -> Vec<i64> {
+        let state = project(events).expect("projected");
+        let mut iters: Vec<i64> = state
+            .nodes
+            .get(node_id)
+            .map(|n| n.iterations.iter().map(|i| i.iter).collect())
+            .unwrap_or_default();
+        iters.sort_unstable();
+        iters
+    }
+
+    #[test]
+    fn collection_fanout_starts_every_lap_through_the_spawn_guard() {
+        // THE regression test. Before the fix this failed on `refusals`:
+        //   ["node itemizer iter 1 is still live: refusing concurrent iter 2"]
+        // and on the lap set, which was `[1]` instead of `[1, 2]`.
+        let (events, refusals) = replay_fanout(&["alpha", "beta"]);
+        assert!(
+            refusals.is_empty(),
+            "every item lap must clear the spawn guard; refused: {refusals:?}"
+        );
+        assert_eq!(live_iters(&events, "itemizer"), vec![1, 2]);
+    }
+
+    #[test]
+    fn collection_fanout_scales_past_two_laps() {
+        // 3 items produced TWO refusals before the fix (iter 2 and iter 3), so
+        // the bug was never about the second lap specifically.
+        let (events, refusals) = replay_fanout(&["alpha", "beta", "gamma"]);
+        assert!(refusals.is_empty(), "refused: {refusals:?}");
+        assert_eq!(live_iters(&events, "itemizer"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn single_item_collection_still_starts_its_only_lap() {
+        // The control that passed BEFORE the fix too (issue #453 §5): a green
+        // 1-item run proves nothing on its own, so it is pinned as a control.
+        let (events, refusals) = replay_fanout(&["alpha"]);
+        assert!(refusals.is_empty(), "refused: {refusals:?}");
+        assert_eq!(live_iters(&events, "itemizer"), vec![1]);
+    }
+
+    #[test]
+    fn every_lap_completing_fires_the_barrier_and_completes_the_run() {
+        // The end of the causal chain the issue describes: laps → barrier →
+        // CollectionDone → the run may complete. Without the guard fix lap 2
+        // never exists, `collection_barrier_reached` stays false and
+        // `should_complete_run` can never fire.
+        let pipeline = crate::pipeline::parse_pipeline(COLLECTION_YAML)
+            .expect("fixture parses")
+            .pipeline;
+        let (mut events, _) = replay_fanout(&["alpha", "beta"]);
+        for iter in [1, 2] {
+            events.push(ev(EventKind::NodeCompleted, Some("itemizer"), Some(iter)));
+        }
+
+        let state = project(&events).expect("projected");
+        let region = &pipeline.loops[0];
+        let actions = scheduler::evaluate_collection_barrier(&pipeline, &state, region);
+        assert!(
+            actions.contains(&SchedulerAction::CollectionDone {
+                region_id: "topics_fanout".into(),
+            }),
+            "the barrier must fire once both laps completed; got {actions:?}"
+        );
+        // The region's only exit is `End`, so the barrier completes the run.
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn the_exemption_does_not_leak_to_a_node_outside_the_region() {
+        // ADR-0026 buys the fan-out a NARROW exemption, and #212's chokepoint is
+        // shared with restart_node, the liveness sweep and boot recovery. This is
+        // the negative control the arbitration demands: with a collection region
+        // WIDE OPEN in the very same run, a restart-shaped `NodeStarted` on a
+        // non-member node with a live iteration is still refused.
+        let (mut events, _) = replay_fanout(&["alpha", "beta"]);
+        events.push(ev(EventKind::NodeStarted, Some("sibling"), Some(1)));
+        let state = project(&events).expect("projected");
+        assert!(!state.collection_states["topics_fanout"].done);
+
+        let probe = ev(EventKind::NodeStarted, Some("sibling"), Some(2));
+        match transition_guard::validate_transition(Some(&state), &probe) {
+            transition_guard::Verdict::Reject { reason } => {
+                assert!(reason.contains("refusing concurrent iter 2"), "{reason}")
+            }
+            other => panic!("a non-member must keep the #212 refusal, got {other:?}"),
+        }
+    }
+
+    /// One live lap on `itemizer`, inside a 2-item region that is open or closed.
+    fn region_state(done: bool) -> Vec<Event> {
+        let mut events = vec![
+            ev(EventKind::RunStarted, None, None),
+            ev_with(
+                EventKind::CollectionStarted,
+                None,
+                serde_json::json!({
+                    "region_id": "topics_fanout",
+                    "entry": "itemizer",
+                    "members": ["itemizer"],
+                    "total_items": 2,
+                }),
+            ),
+            ev(EventKind::NodeStarted, Some("itemizer"), Some(1)),
+        ];
+        if done {
+            events.push(ev_with(
+                EventKind::CollectionDone,
+                None,
+                serde_json::json!({ "region_id": "topics_fanout" }),
+            ));
+        }
+        events
+    }
+
+    #[test]
+    fn the_exemption_closes_again_once_the_barrier_has_fired() {
+        // Membership is not a permanent licence. Same node, same probe, the ONLY
+        // difference being whether the barrier has fired — open admits the
+        // sibling lap, closed restores the #212 refusal.
+        let probe = ev(EventKind::NodeStarted, Some("itemizer"), Some(2));
+
+        let open = project(&region_state(false)).expect("projected");
+        assert_eq!(
+            transition_guard::validate_transition(Some(&open), &probe),
+            transition_guard::Verdict::Allow
+        );
+
+        let closed = project(&region_state(true)).expect("projected");
+        assert!(
+            matches!(
+                transition_guard::validate_transition(Some(&closed), &probe),
+                transition_guard::Verdict::Reject { .. }
+            ),
+            "a closed region must not keep exempting its members"
+        );
+    }
+
+    #[test]
+    fn an_iteration_beyond_the_collection_size_is_not_a_lap() {
+        // The exemption is bounded by the resolved collection: `iter` outside
+        // `1..=total_items` is not an item lap and keeps the refusal, so a stray
+        // proposal can never smuggle a concurrent iteration through the region.
+        let open = project(&region_state(false)).expect("projected");
+        let probe = ev(EventKind::NodeStarted, Some("itemizer"), Some(3));
+        assert!(
+            matches!(
+                transition_guard::validate_transition(Some(&open), &probe),
+                transition_guard::Verdict::Reject { .. }
+            ),
+            "iter 3 of a 2-item region is not a lap"
+        );
+    }
 }

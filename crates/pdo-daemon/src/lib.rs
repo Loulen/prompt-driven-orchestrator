@@ -3418,21 +3418,12 @@ async fn emit_collection_action(
     action: &scheduler::SchedulerAction,
 ) {
     match action {
-        scheduler::SchedulerAction::CollectionStarted {
-            region_id,
-            entry,
-            total_items,
-            ..
-        } => {
+        scheduler::SchedulerAction::CollectionStarted { .. } => {
             emit_run_event(
                 state,
                 run_id,
                 event_log::EventKind::CollectionStarted,
-                Some(serde_json::json!({
-                    "region_id": region_id,
-                    "entry": entry,
-                    "total_items": total_items,
-                })),
+                scheduler::collection_started_payload(action),
             )
             .await;
         }
@@ -5461,6 +5452,48 @@ fn run_stall_reason(
     // Manager's to drive (and an exhausted-unrouted region is deferred just
     // below). Not a fail-fast stall.
     if !loop_seed.is_empty() {
+        return None;
+    }
+
+    // (#453) An open collection region with no live node is the shape the
+    // previous comment at the bottom of this function called "a scheduler-shape
+    // we have not characterised": every node projects Pending or Completed, no
+    // session is alive, `ready` is empty (the barrier target is correctly
+    // not-ready), and `is_stalled` says `false` for ever because nothing will
+    // ever be marked `Stale` — the liveness sweep only inspects live tmux
+    // sessions and there are none.
+    //
+    // It IS characterised now: laps of the region were never started, so the
+    // barrier can never fire, so `should_complete_run` can never complete the
+    // run. Deliberately NOT folded into the `open_region` arm below: an open
+    // loop/foreach is deferred because the Pipeline Manager can unstick it by
+    // id, whereas a collection region exposes no such recovery — nothing
+    // re-proposes a missing lap, so deferring here would be the silent stall
+    // ADR-0004 forbids. Same idle grace as the #279 arm above, so a fan-out
+    // burst caught mid-flight (items deposited, laps about to spawn) is never
+    // mistaken for a wedge.
+    let missing_laps: Vec<String> = run_state
+        .collection_states
+        .values()
+        .filter(|cs| !cs.done)
+        .flat_map(|cs| {
+            let node = run_state.nodes.get(cs.entry.as_str());
+            (1..=cs.total_items)
+                .filter(move |lap| {
+                    !node.is_some_and(|n| n.iterations.iter().any(|it| it.iter == *lap))
+                })
+                .map(|lap| format!("{}#{lap}/{}", cs.region_id, cs.total_items))
+        })
+        .collect();
+    if !missing_laps.is_empty() {
+        if idle_secs.is_some_and(|s| s >= SPAWN_STALL_GRACE_SECS) {
+            return Some(format!(
+                "run_stalled: collection region lap(s) never started — no live node, \
+                 idle {}s; the barrier can never fire (#453): {}",
+                idle_secs.unwrap_or_default(),
+                missing_laps.join(", ")
+            ));
+        }
         return None;
     }
 
@@ -16377,6 +16410,124 @@ mod tests {
         assert!(
             run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, Some(100_000)).is_none(),
             "a live Running node is never a stall, regardless of how long the log has been idle"
+        );
+    }
+
+    /// The #453 projection: a `collection` region open at `total_items`, whose
+    /// entry ran `started_laps` of them and completed every one it ran. Every
+    /// node projects Completed, no session is alive, nothing is `Stale` — the
+    /// exact shape `run_stall_reason` used to walk through without biting.
+    fn run_state_collection_wedged(
+        run_id: &str,
+        total_items: i64,
+        started_laps: i64,
+    ) -> event_log::RunState {
+        let mut rs = event_log::RunState::new(run_id.into(), "linear".into());
+        rs.status = event_log::RunStatus::Running;
+        rs.collection_states.insert(
+            "topics_fanout".into(),
+            event_log::CollectionState {
+                region_id: "topics_fanout".into(),
+                total_items,
+                done: false,
+                entry: "b".into(),
+                members: vec!["b".into()],
+            },
+        );
+        for (node_id, iters) in [("a", 1), ("b", started_laps)] {
+            rs.nodes.insert(
+                node_id.into(),
+                event_log::NodeState {
+                    node_id: node_id.into(),
+                    status: event_log::NodeStatus::Completed,
+                    iter: iters,
+                    started_at: None,
+                    completed_at: None,
+                    failure_reason: None,
+                    iterations: (1..=iters)
+                        .map(|iter| event_log::IterationInfo {
+                            iter,
+                            status: event_log::NodeStatus::Completed,
+                            started_at: None,
+                            completed_at: None,
+                        })
+                        .collect(),
+                    frontmatter_retries: 0,
+                    frontmatter_violations: Vec::new(),
+                },
+            );
+        }
+        rs
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_collection_region_whose_laps_never_started() {
+        // #453, the silent half. The engine fix means this state should no longer
+        // occur, but nothing else in the daemon can see it if it does: `is_stalled`
+        // needs a `Stale` node and only live tmux sessions ever become `Stale`, and
+        // there are none. So the run reported `"stalled": false` for ever while the
+        // barrier could never fire. Characterised now, and failed loud.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-wedged", 2, 1);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            run_state.nodes.values().all(|n| !n.status.can_progress()),
+            "precondition: no live node — the wedge signature"
+        );
+
+        let reason = run_stall_reason(
+            &pipeline,
+            &run_state,
+            &ready,
+            &loop_seed,
+            Some(SPAWN_STALL_GRACE_SECS),
+        )
+        .expect("an open collection region missing a lap, with no live node, is a stall");
+        assert!(
+            reason.contains("#453") && reason.contains("topics_fanout#2/2"),
+            "cause {reason:?} must name the region and the missing lap"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_collection_fan_out_within_the_grace_window() {
+        // The healthy transient: `CollectionStarted` is appended and the laps are
+        // spawning right now. Below the grace window nothing is failed.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-fanning-out", 2, 1);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(
+                &pipeline,
+                &run_state,
+                &ready,
+                &loop_seed,
+                Some(SPAWN_STALL_GRACE_SECS - 1),
+            )
+            .is_none(),
+            "a fan-out caught mid-burst is not a wedge"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_ignores_a_collection_region_whose_laps_all_ran() {
+        // The control: every lap started (the post-fix world). The region is still
+        // open — the barrier fires on the next sweep — so this must NOT be read as
+        // a stall, whatever the idle clock says.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-all-laps", 2, 2);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, Some(100_000)).is_none(),
+            "every lap accounted for is not a missing-lap stall"
         );
     }
 

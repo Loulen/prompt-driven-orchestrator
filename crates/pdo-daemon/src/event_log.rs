@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeInfo {
@@ -114,6 +115,17 @@ pub enum EventKind {
     RunResumed,
     RunArchived,
     RunRenamed,
+    /// Informational (#410): a sandboxed Run's image is being prepared (pull/build)
+    /// at the head of the detached prep task, before the first session spawns. Emitted
+    /// only on the create path and only when the resolved mode is `full`/`minimal` (the
+    /// `off` path stays byte-identical). Non-terminal: `status` stays `Running`, only
+    /// `RunState::sandbox_prep` moves to `pending`. Wire form: `"sandbox_prep_started"`.
+    SandboxPrepStarted,
+    /// Informational (#410): the sandbox image is ready and the container is about to
+    /// receive the first session. Projects `RunState::sandbox_prep` to `ready`. A
+    /// prep failure emits `RunFailed` instead (no dedicated failed-prep event). Wire
+    /// form: `"sandbox_prep_ready"`.
+    SandboxPrepReady,
     CommandIssued,
 }
 
@@ -175,6 +187,180 @@ impl RunStatus {
     pub fn is_terminal(&self) -> bool {
         !self.is_live()
     }
+}
+
+/// How a Run is isolated (#403 / #407 / #432). A **per-Run, immutable** property
+/// carried on `RunStarted`, projected once into [`RunState::sandbox`], never mutated
+/// for the Run's whole life — a resumed session matches its transcript by working-dir
+/// path, so flipping the mode mid-life would break `claude --continue`.
+///
+/// - `Off` — historical host execution (no Docker, byte-identical legacy launch);
+/// - `Profile(name)` — sandboxed, with the **staging profile** `name` deciding what
+///   the staged home carries (ADR-0031 §5). `full` and `minimal` are the two
+///   *virtual defaults* (no DB row until edited), so `"full"`/`"minimal"` keep
+///   round-tripping byte-identically through every historical payload.
+///
+/// The wire form is a **bare string**: `off`, or the profile name verbatim. Serde is
+/// hand-written for exactly that reason — `untagged` would emit `null` for the unit
+/// variant, and `#[serde(from = "String")]` would demand an infallible conversion
+/// while a blank token must fail.
+///
+/// [`SandboxMode::parse`] is purely **syntactic** since #432: `None` no longer means
+/// *unknown*, it means *blank*. Whether a profile **exists** is a database question,
+/// answered at the edge (create-run, `PUT /settings`, trigger create/patch) and never
+/// here — this module is pure and its projection runs inside `append_event`.
+/// `Default` is `Off`, so an absent payload field (historical runs, bare-API creates)
+/// projects to the host path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum SandboxMode {
+    #[default]
+    Off,
+    /// Canonicalised by [`SandboxMode::parse`]: trimmed, never empty, never `off`.
+    Profile(String),
+}
+
+/// Wire tokens of the pre-#426 two-position switch. They were dropped **without
+/// alias**, and since #432 `parse` accepts any non-blank token as a profile name —
+/// so a historical payload carrying one would now project to `Profile("copy")`, an
+/// unknown profile, and fail the Run hard. That is a worse answer than the #426
+/// behaviour for a Run created before the rename even existed, so the projection
+/// keeps mapping these two tokens to `Off` + a `warn!`. NOT consulted anywhere the
+/// user can still type a value (a stored `copy` in `instance_config` or on a Trigger
+/// now fails loud at the create chokepoint, which is the point of ADR-0031 §7).
+const LEGACY_SANDBOX_TOKENS: &[&str] = &["copy", "pure"];
+
+impl SandboxMode {
+    /// The default tier (never `None`), surfaced by `GET /settings` and used as the
+    /// precedence floor: an install with no `default_sandbox` set runs `Off`, so the
+    /// legacy host path stays byte-identical (#410). Mirror of [`crate::sandbox_image::ImageSource::DEFAULT`].
+    pub const DEFAULT: SandboxMode = SandboxMode::Off;
+
+    /// The wire token of [`SandboxMode::Off`]. A `const &str` rather than
+    /// `DEFAULT.as_str()` because `as_str` now borrows from `self` (the profile name
+    /// is owned), which no `const fn` can do.
+    pub const OFF_WIRE: &'static str = "off";
+
+    /// Whether this Run runs on the host (the legacy, no-Docker path). The whole
+    /// sandbox wiring is gated on `!is_off()`, so the `off` parcours never touches
+    /// a single new line.
+    pub fn is_off(&self) -> bool {
+        matches!(self, SandboxMode::Off)
+    }
+
+    /// The exact wire form: `off`, or the profile name verbatim. Consumed by
+    /// `build_settings_view` and the enum validators (#410).
+    pub fn as_str(&self) -> &str {
+        match self {
+            SandboxMode::Off => Self::OFF_WIRE,
+            SandboxMode::Profile(name) => name.as_str(),
+        }
+    }
+
+    /// The staging profile this Run uses, or `None` for `off`. The ONE consumer that
+    /// needs the name rather than the off-ness (#432 D2) is the sandbox context
+    /// assembly, which resolves it to a frozen entry list.
+    pub fn profile(&self) -> Option<&str> {
+        match self {
+            SandboxMode::Off => None,
+            SandboxMode::Profile(name) => Some(name.as_str()),
+        }
+    }
+
+    /// Parse the wire form. **Purely syntactic** (#432): `off` (case/whitespace
+    /// tolerant, the three closed tokens of the old enum are gone) yields `Off`, a
+    /// blank string yields `None`, and anything else is a profile name — trimmed but
+    /// otherwise **verbatim**, never lowercased.
+    ///
+    /// The asymmetry with [`crate::sandbox_profile::validate_profile_name`] (which
+    /// rejects an uppercase name outright instead of folding it) is deliberate and
+    /// load-bearing: `off` is a closed token whose spelling nobody owns, while a
+    /// profile name is a user namespace where accepting `Foo` and silently storing
+    /// `foo` would make the UI search a list it does not display. Do not "fix" it.
+    pub fn parse(s: &str) -> Option<SandboxMode> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.eq_ignore_ascii_case(Self::OFF_WIRE) {
+            return Some(SandboxMode::Off);
+        }
+        Some(SandboxMode::Profile(trimmed.to_string()))
+    }
+}
+
+impl Serialize for SandboxMode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        SandboxMode::parse(&raw).ok_or_else(|| {
+            serde::de::Error::custom(
+                "sandbox must be `off` or the name of a staging profile, not blank",
+            )
+        })
+    }
+}
+
+/// Env var overriding the stored instance default (optional tier). Read ONCE at the
+/// edge (create-run chokepoint + `build_settings_view` disclosure), never in the
+/// resolver core — mirror of [`crate::sandbox_image::IMAGE_SOURCE_ENV`] (#410).
+pub const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
+
+/// Env tier for the settings disclosure / resolver: `Some(mode)` if a valid
+/// `PDO_DEFAULT_SANDBOX` is set, else `None` (unset/invalid).
+fn env_default_sandbox() -> Option<SandboxMode> {
+    std::env::var(DEFAULT_SANDBOX_ENV)
+        .ok()
+        .as_deref()
+        .and_then(SandboxMode::parse)
+}
+
+/// Instance default, precedence `stored → env → default(Off)`. A stored empty value is
+/// treated as unset (mirror of the `""` sentinel + PUT validator). SINGLE source shared
+/// by `create_run_inner` AND `build_settings_view` (0 drift, lesson #373).
+///
+/// #432: no `warn!` for an unparseable stored token any more — `parse` is syntactic, so
+/// the only stored value it rejects is blank, which the `""` filter already handles.
+/// A stored name that does not *exist* is no longer demoted to `off` at all: it wins the
+/// tier, and the create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent
+/// fallback toward less isolation).
+pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
+    stored
+        .filter(|s| !s.is_empty())
+        .as_deref()
+        .and_then(SandboxMode::parse)
+        .or_else(env_default_sandbox)
+        .unwrap_or(SandboxMode::DEFAULT)
+}
+
+/// Precedence resolver (#410): `explicit → trigger → instance_default` (first `Some`
+/// wins, `instance_default` is the floor). Pure — no `AppState`/DB/Docker in scope;
+/// this is the layer-1 unit the "précédence testée" AC pins. `explicit` and `trigger`
+/// are mutually exclusive in production (a Run has one origin), but the 3-arg form is
+/// the canonical statement of the chain and keeps every arm exercised by the test.
+pub fn effective_sandbox(
+    explicit: Option<SandboxMode>,
+    trigger: Option<SandboxMode>,
+    instance_default: SandboxMode,
+) -> SandboxMode {
+    explicit.or(trigger).unwrap_or(instance_default)
+}
+
+/// Visibility of a sandboxed Run's one-time image preparation (#410). Additive to
+/// [`RunState`]: `status` is untouched (stays `Running`), so no status consumer is
+/// affected. Absent for `off` Runs and for historical/host runs. Projected from the
+/// additive [`EventKind::SandboxPrepStarted`]/[`EventKind::SandboxPrepReady`] pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPrepState {
+    /// The image is being pulled/built and the container has not yet received a session.
+    Pending,
+    /// The image is ready; the first session is about to spawn (or already has).
+    Ready,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,11 +486,38 @@ pub struct ForEachState {
 /// Barrier accounting for a `kind: collection` loop region (ADR-0011 / #269),
 /// keyed by region id — the region twin of [`ForEachState`]. Tracks the
 /// resolved collection size and whether the barrier has fired.
+///
+/// `entry` and `members` (#453) make the region's **shape** readable from the
+/// projection alone, not just from the pipeline file. The transition guard needs
+/// them: a collection region fans its entry out in parallel (one live lap per
+/// item), which is the exact opposite of the "at most one live iteration per
+/// node" invariant the guard enforces everywhere else. Carrying the shape in the
+/// projection keeps `transition_guard` pure — no pipeline plumbing through every
+/// caller — and scopes the exemption to the region's own members while its
+/// barrier is open.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionState {
     pub region_id: String,
     pub total_items: i64,
     pub done: bool,
+    /// The member fanned out once per item. Empty for a `CollectionEmpty`
+    /// region (no fan-out happened) and for runs whose `CollectionStarted`
+    /// predates #453.
+    #[serde(default)]
+    pub entry: String,
+    /// Every member of the region. Falls back to `[entry]` on a pre-#453
+    /// payload; empty when even `entry` is unknown.
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+impl CollectionState {
+    /// Is `node_id` a node whose iterations this region governs? Such a node is
+    /// spawned once per item, so several of its iterations are legitimately live
+    /// at the same time (#453).
+    pub fn governs(&self, node_id: &str) -> bool {
+        self.members.iter().any(|m| m == node_id) || self.entry == node_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +586,36 @@ pub struct RunState {
     pub switch_states: HashMap<String, SwitchState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+    /// Isolation mode for this Run (#403 / #407 / #432) — `off`, or the name of the
+    /// staging profile it was launched with. Immutable: set once from the
+    /// `RunStarted` payload, never mutated. Absent payload field → `Off` (the
+    /// legacy host path), so historical runs and bare-API creates stay off.
+    #[serde(default)]
+    pub sandbox: SandboxMode,
+    /// The staging profile's **resolved entry list, frozen at creation** (#432,
+    /// ADR-0031 §6). Written to `RunStarted` as the sibling key `sandbox_entries`,
+    /// always together with `sandbox` or not at all, so editing (or deleting) a
+    /// profile can never retroactively rewrite what a Run in flight already staged.
+    ///
+    /// The `Option` is **load-bearing**: `Some(vec![])` is a legitimate resolution
+    /// (that IS `minimal`), so a bare `Vec` would confuse "legacy payload, re-resolve"
+    /// with "empty profile, stage the floor only".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_entries: Option<Vec<String>>,
+    /// The raw `sandbox_entries` payload value when the key was **present but
+    /// unreadable** (#432). Internal to the projection — `skip`ped on the wire — and
+    /// exists only so the sandbox prep can fail LOUD with the offending value in its
+    /// reason. Silently re-resolving would change what the nodes that already
+    /// launched saw, which is exactly what the freeze protects against.
+    #[serde(skip)]
+    pub sandbox_entries_raw_error: Option<String>,
+    /// One-time image-prep visibility for a sandboxed Run (#410). Additive: `None`
+    /// for `off`/historical runs; `pending` while the image is pulled/built at first
+    /// use; `ready` once the container is about to run. `status` is never touched —
+    /// this drives a banner, not admission/overlap/liveness logic. Survives a daemon
+    /// restart by event replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
     /// Provenance: the id of the Trigger that created this Run, if any.
@@ -427,6 +670,10 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             target_repo: None,
+            sandbox: SandboxMode::Off,
+            sandbox_entries: None,
+            sandbox_entries_raw_error: None,
+            sandbox_prep: None,
             source_branch: None,
             triggered_by: None,
             pipeline_id: None,
@@ -518,6 +765,50 @@ impl RunState {
                 .iter()
                 .all(|id| self.node_status(id) == Some(&NodeStatus::Completed))
     }
+
+    /// Why this Run is **not schedulable yet** because its sandbox is still being
+    /// prepared (#445) — `None` when a session may be launched.
+    ///
+    /// A sandboxed node's tmux window runs `docker exec … pdo-sbx-<run_id> …`. On a
+    /// container that does not exist yet, `docker exec` exits 1 in ~30 ms, the window's
+    /// command ends, the tmux session disappears, and ~25 s later the stale detector
+    /// renders `session_died` — a failure that names tmux while the real fault is the
+    /// ordering. The precondition therefore belongs to the *spawn*, not to the callers
+    /// that reach it: `create_run` gated correctly while the pipeline watcher
+    /// (`handle_run_pipeline_modifications`) and `retry_waiting_nodes` did not.
+    ///
+    /// | `sandbox` | `sandbox_prep` | verdict |
+    /// |---|---|---|
+    /// | `off` | (any) | `None` — the host path never grew a precondition |
+    /// | profile | `Ready` | `None` — image + container + staging are guaranteed |
+    /// | profile | `Pending` | blocked — the prep task is between its two events |
+    /// | profile | `None` | blocked — the prep task has not reached its head event |
+    ///
+    /// The `None` arm blocks deliberately: `RunStarted` and `SandboxPrepStarted` are
+    /// ~100 ms apart, and a read of `<run>/pipeline.yaml` inside that window wakes the
+    /// watcher (inotify reports the *first read* of a fresh run dir as a modification).
+    /// Blocking is also the fail-safe direction — the cost of a wrong `Some` is one
+    /// deferred spawn replayed on `SandboxPrepReady`, the cost of a wrong `None` is a
+    /// dead node.
+    ///
+    /// Pure: projected state in, decision out. The reason is the operator-facing
+    /// sentence, so it names the profile (the *why this Run and not that one*).
+    pub fn sandbox_spawn_block(&self) -> Option<String> {
+        let profile = self.sandbox.profile()?;
+        match self.sandbox_prep {
+            Some(SandboxPrepState::Ready) => None,
+            Some(SandboxPrepState::Pending) => Some(format!(
+                "sandbox prep for run {} (profile `{profile}`) is still in progress: \
+                 its container is not up, so no session can be launched yet",
+                self.run_id
+            )),
+            None => Some(format!(
+                "sandbox prep for run {} (profile `{profile}`) has not started yet: \
+                 its container does not exist, so no session can be launched yet",
+                self.run_id
+            )),
+        }
+    }
 }
 
 fn entry_node_ids(edges: &[EdgeInfo], node_defs: &[NodeDefInfo]) -> Vec<String> {
@@ -579,7 +870,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::RunPaused
             | EventKind::RunResumed
             | EventKind::RunRenamed
-            | EventKind::RunArchived => apply_run_event(&mut state, event),
+            | EventKind::RunArchived
+            | EventKind::SandboxPrepStarted
+            | EventKind::SandboxPrepReady => apply_run_event(&mut state, event),
 
             EventKind::NodeWaiting
             | EventKind::NodeStarted
@@ -682,6 +975,62 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {
                     state.target_repo = Some(tr.to_string());
+                }
+                // #407: isolation mode, projected once and never mutated. Absent
+                // (or malformed) → the `Off` default (host path). Never panics —
+                // this applier runs before the transition guard.
+                match payload.get("sandbox") {
+                    None => {}
+                    // #426/#432: the two pre-rename tokens are mapped to `Off` + a
+                    // `warn!` BEFORE `parse` sees them — `parse` is syntactic now and
+                    // would happily read `copy` as a profile name, turning a Run that
+                    // predates the rename into a hard `RunFailed`. Only the payload
+                    // arm keeps this compatibility; the tiers a user can still type
+                    // (instance default, Trigger) fail loud by design (ADR-0031 §7).
+                    Some(raw)
+                        if raw
+                            .as_str()
+                            .is_some_and(|s| LEGACY_SANDBOX_TOKENS.contains(&s.trim())) =>
+                    {
+                        warn!(
+                            "run_started carries the pre-#426 `sandbox` token ({raw}); \
+                             projecting `off` (host path). `copy`/`pure` were renamed to \
+                             `full`/`minimal` in #426, without alias."
+                        )
+                    }
+                    Some(raw) => match serde_json::from_value::<SandboxMode>(raw.clone()) {
+                        Ok(sandbox) => state.sandbox = sandbox,
+                        // A blank / non-string value. The degradation goes toward LESS
+                        // isolation (`Off` → host bash in `run-shell`, `cleanup_run`
+                        // skipping `merge_back`/`teardown`, cost reading the wrong
+                        // transcripts root). Silent is not an option: ADR-0030 pt 4
+                        // forbids an unlogged host fallback.
+                        Err(_) => warn!(
+                            "run_started carries an unreadable `sandbox` value ({raw}); \
+                             projecting `off` (host path)."
+                        ),
+                    },
+                }
+                // #432 (ADR-0031 §6): the sibling FROZEN entry list. Written together
+                // with `sandbox` or not at all, so an absent key on a `sandbox` payload
+                // can only mean "created by a pre-profiles daemon" — which the prep
+                // resolves (virtual default) or fails (user profile), per its own
+                // decision table. A present-but-unreadable value is kept verbatim in
+                // `sandbox_entries_raw_error` so the prep can name it: re-resolving
+                // would silently change what the already-spawned nodes saw.
+                match payload.get("sandbox_entries") {
+                    None => {}
+                    Some(raw) => match serde_json::from_value::<Vec<String>>(raw.clone()) {
+                        Ok(entries) => state.sandbox_entries = Some(entries),
+                        Err(_) => {
+                            state.sandbox_entries_raw_error = Some(raw.to_string());
+                            warn!(
+                                "run_started carries an unreadable `sandbox_entries` value \
+                                 ({raw}); the sandbox prep will fail this Run loud rather \
+                                 than re-resolve a different list."
+                            );
+                        }
+                    },
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
@@ -793,6 +1142,15 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             state.status = RunStatus::Archived;
             state.start_node = None;
             state.end_node = None;
+        }
+        // #410: additive image-prep visibility. Non-terminal — `status` untouched,
+        // only `sandbox_prep` moves. Emitted only for a sandboxed create (`full`/`minimal`);
+        // `off`/historical runs never carry these, so the field stays `None`.
+        EventKind::SandboxPrepStarted => {
+            state.sandbox_prep = Some(SandboxPrepState::Pending);
+        }
+        EventKind::SandboxPrepReady => {
+            state.sandbox_prep = Some(SandboxPrepState::Ready);
         }
         _ => {}
     }
@@ -1154,6 +1512,29 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                         .get("total_items")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
+                    let entry = payload
+                        .get("entry")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    // Pre-#453 payloads carry `entry` but no `members`: fall
+                    // back to the entry alone, which is the whole region for the
+                    // common single-member collection.
+                    let members: Vec<String> = payload
+                        .get("members")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_else(|| {
+                            if entry.is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![entry.clone()]
+                            }
+                        });
                     state
                         .collection_states
                         .entry(region_id.to_string())
@@ -1161,6 +1542,8 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                             region_id: region_id.to_string(),
                             total_items,
                             done: false,
+                            entry,
+                            members,
                         });
                 }
             }
@@ -1175,6 +1558,8 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
                             region_id: region_id.to_string(),
                             total_items: 0,
                             done: false,
+                            entry: String::new(),
+                            members: Vec::new(),
                         });
                     cs.done = true;
                 }
@@ -1495,6 +1880,336 @@ mod tests {
             iter: None,
             payload: Some(payload),
         }
+    }
+
+    // -- Slice A (#410): precedence resolver + instance-default helper ---------
+    //
+    // #432 note: the closed `Full`/`Minimal` variants became `Profile("full")` /
+    // `Profile("minimal")`. The precedence rules themselves are UNCHANGED — these tests
+    // are the same assertions written against the new constructor.
+
+    fn full() -> SandboxMode {
+        SandboxMode::Profile("full".into())
+    }
+    fn minimal() -> SandboxMode {
+        SandboxMode::Profile("minimal".into())
+    }
+
+    #[test]
+    fn explicit_off_beats_full_default() {
+        // The bug #410 exists to fix: an explicit `off` must survive a `full`/`minimal`
+        // instance default — otherwise the default could never be overridden downward.
+        assert_eq!(
+            effective_sandbox(Some(SandboxMode::Off), None, full()),
+            SandboxMode::Off
+        );
+    }
+
+    #[test]
+    fn explicit_wins_over_trigger_and_default() {
+        assert_eq!(
+            effective_sandbox(Some(minimal()), Some(full()), SandboxMode::Off),
+            minimal()
+        );
+    }
+
+    #[test]
+    fn trigger_used_when_no_explicit() {
+        assert_eq!(
+            effective_sandbox(None, Some(minimal()), SandboxMode::Off),
+            minimal()
+        );
+        // A trigger's explicit `off` also stands over a `full` instance default.
+        assert_eq!(
+            effective_sandbox(None, Some(SandboxMode::Off), full()),
+            SandboxMode::Off
+        );
+    }
+
+    #[test]
+    fn all_none_falls_to_instance_default() {
+        assert_eq!(effective_sandbox(None, None, full()), full());
+        assert_eq!(
+            effective_sandbox(None, None, SandboxMode::DEFAULT),
+            SandboxMode::Off
+        );
+    }
+
+    #[test]
+    fn default_sandbox_with_precedence() {
+        // stored valid wins.
+        assert_eq!(default_sandbox_with(Some("minimal".into())), minimal());
+        assert_eq!(default_sandbox_with(Some("full".into())), full());
+        // empty sentinel → unset → default (Off) (env not set in this harness).
+        assert_eq!(default_sandbox_with(Some(String::new())), SandboxMode::Off);
+        // absent → default.
+        assert_eq!(default_sandbox_with(None), SandboxMode::Off);
+    }
+
+    /// #432, the behaviour change worth pinning: an unrecognised stored token is NO
+    /// LONGER demoted to `off`. It is a PROFILE NAME, it wins the tier, and the
+    /// create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent fallback
+    /// toward less isolation). `default_sandbox_with` is pure and cannot know whether
+    /// the profile exists; that is the edge's job.
+    #[test]
+    fn a_stored_unknown_name_stays_the_winning_tier() {
+        assert_eq!(
+            default_sandbox_with(Some("full-no-mcp".into())),
+            SandboxMode::Profile("full-no-mcp".into())
+        );
+        // Even the two pre-#426 tokens: they are just names now, and they will fail loud
+        // at launch instead of quietly demoting the whole instance to the host path.
+        assert_eq!(
+            default_sandbox_with(Some("copy".into())),
+            SandboxMode::Profile("copy".into())
+        );
+    }
+
+    #[test]
+    fn sandbox_mode_parse_and_as_str_round_trip() {
+        for mode in [SandboxMode::Off, full(), minimal()] {
+            assert_eq!(SandboxMode::parse(mode.as_str()), Some(mode));
+        }
+        // `off` is case / whitespace tolerant (a closed token nobody owns the spelling of).
+        assert_eq!(SandboxMode::parse("  OFF "), Some(SandboxMode::Off));
+        // A profile name is trimmed but NEVER lowercased — see the asymmetry documented on
+        // `parse` and on `sandbox_profile::validate_profile_name`.
+        assert_eq!(
+            SandboxMode::parse("  Full-No-MCP "),
+            Some(SandboxMode::Profile("Full-No-MCP".into()))
+        );
+        // Blank is the ONLY `None`: `parse` is syntactic since #432, existence is a
+        // database question answered at the edge.
+        assert_eq!(SandboxMode::parse(""), None);
+        assert_eq!(SandboxMode::parse("   "), None);
+        assert_eq!(
+            SandboxMode::parse("nope"),
+            Some(SandboxMode::Profile("nope".into()))
+        );
+    }
+
+    /// The wire form is a BARE STRING, byte-identical to the pre-#432 enum for the two
+    /// names that existed. Every historical `RunStarted` payload must round-trip
+    /// unchanged, which is what makes this a type change and not a data migration.
+    #[test]
+    fn sandbox_mode_serialises_as_a_bare_string() {
+        for wire in ["off", "full", "minimal", "full-no-mcp"] {
+            let parsed = SandboxMode::parse(wire).unwrap();
+            let json = serde_json::to_value(&parsed).unwrap();
+            assert_eq!(json, serde_json::json!(wire), "{wire} must round-trip");
+            assert_eq!(
+                serde_json::from_value::<SandboxMode>(json).unwrap(),
+                parsed,
+                "{wire} must deserialise back"
+            );
+        }
+        // A blank / non-string value fails deserialisation rather than becoming `Off`.
+        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!("")).is_err());
+        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!(null)).is_err());
+        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!(3)).is_err());
+    }
+
+    /// #426: a pre-rename `copy`/`pure` in a persisted `RunStarted` degrades to
+    /// `Off` — the host path. The degradation is DELIBERATE (no alias, ADR-0031 §1)
+    /// but it goes toward LESS isolation, so `apply_run_event` logs it. This test
+    /// pins the choice so nobody "fixes" it into an alias by accident.
+    ///
+    /// #432 makes it load-bearing in a NEW way: `parse` would now happily read `copy` as
+    /// a profile name, so without the explicit legacy-token arm a Run that predates the
+    /// rename would `RunFailed` at its next boot recovery instead of running on the host.
+    #[test]
+    fn run_started_with_a_pre_rename_sandbox_token_projects_off() {
+        for token in ["copy", "pure"] {
+            let events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p", "sandbox": token }),
+            )];
+            let state = project(&events).unwrap();
+            assert_eq!(state.sandbox, SandboxMode::Off, "token {token}");
+            assert_eq!(state.sandbox_prep, None);
+            assert_eq!(state.sandbox_entries, None);
+        }
+    }
+
+    // -- Slice K (#432): the FROZEN entry list ---------------------------------
+
+    /// The `Option` on `sandbox_entries` is load-bearing: `Some(vec![])` is a legitimate
+    /// resolution — it IS `minimal` — while `None` means "no key, a pre-profiles
+    /// payload". Confusing the two would send `minimal` Runs down the re-resolve arm.
+    #[test]
+    fn an_empty_frozen_list_projects_as_some_not_none() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "minimal",
+                "sandbox_entries": [],
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox, SandboxMode::Profile("minimal".into()));
+        assert_eq!(state.sandbox_entries, Some(Vec::new()));
+        assert_eq!(state.sandbox_entries_raw_error, None);
+    }
+
+    #[test]
+    fn a_frozen_list_projects_verbatim() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "full-no-mcp",
+                "sandbox_entries": [".claude/skills", ".gitconfig"],
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox, SandboxMode::Profile("full-no-mcp".into()));
+        assert_eq!(
+            state.sandbox_entries,
+            Some(vec![".claude/skills".to_string(), ".gitconfig".to_string()])
+        );
+    }
+
+    /// A legacy payload: `sandbox` present, no `sandbox_entries`. The prep's decision
+    /// table then re-resolves a virtual default and fails a user profile — but the
+    /// PROJECTION must simply report the absence, never invent a list.
+    #[test]
+    fn a_legacy_sandbox_payload_projects_no_frozen_list() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "sandbox": "full" }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox, SandboxMode::Profile("full".into()));
+        assert_eq!(state.sandbox_entries, None);
+        assert_eq!(state.sandbox_entries_raw_error, None);
+    }
+
+    /// A present-but-unreadable list keeps its RAW value, so the prep can name it in the
+    /// failure reason. Silently re-resolving would change what the already-spawned nodes
+    /// saw — the one thing the freeze exists to prevent.
+    #[test]
+    fn an_unreadable_frozen_list_is_kept_raw_for_the_failure_reason() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "full",
+                "sandbox_entries": 42,
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox_entries, None);
+        assert_eq!(state.sandbox_entries_raw_error.as_deref(), Some("42"));
+    }
+
+    /// `sandbox_entries` is INTERNAL to the projection when it is unreadable: the wire
+    /// view of a Run must not grow a field nothing consumes.
+    #[test]
+    fn the_raw_error_is_never_serialised() {
+        let mut state = RunState::new("r1".into(), "p".into());
+        state.sandbox_entries_raw_error = Some("42".into());
+        let value = serde_json::to_value(&state).unwrap();
+        assert!(value.get("sandbox_entries_raw_error").is_none());
+        // …and an absent list is skipped entirely (back-compat of the `off` shape).
+        assert!(value.get("sandbox_entries").is_none());
+    }
+
+    // -- Slice E (#410): sandbox-prep projection ------------------------------
+
+    #[test]
+    fn sandbox_prep_started_projects_pending_then_ready() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p", "sandbox": "minimal" }),
+            ),
+            make_event(EventKind::SandboxPrepStarted, None, None),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox_prep, Some(SandboxPrepState::Pending));
+        // status untouched by the informational event.
+        assert_eq!(state.status, RunStatus::Running);
+
+        let mut ready = events;
+        ready.push(make_event(EventKind::SandboxPrepReady, None, None));
+        let state = project(&ready).unwrap();
+        assert_eq!(state.sandbox_prep, Some(SandboxPrepState::Ready));
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn off_run_never_carries_sandbox_prep() {
+        // Byte-identical `off` invariant: no prep events, field stays None (and is
+        // skipped from serialization).
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("n1"), Some(1)),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox_prep, None);
+        let value = serde_json::to_value(&state).unwrap();
+        assert!(value.get("sandbox_prep").is_none());
+    }
+
+    // -- #445: the sandbox spawn precondition, decided on the projection alone ----
+
+    #[test]
+    fn sandbox_spawn_block_gates_on_the_projected_prep_state() {
+        // The whole decision table of `sandbox_spawn_block`, which is what stands
+        // between the pipeline watcher and a `docker exec` into a container that does
+        // not exist yet.
+        let sandboxed = |prep: Option<SandboxPrepState>| {
+            let mut s = RunState::new("r1".into(), "p".into());
+            s.sandbox = SandboxMode::Profile("full".into());
+            s.sandbox_prep = prep;
+            s
+        };
+
+        // Prep finished: the container is up, spawning is legal.
+        assert!(sandboxed(Some(SandboxPrepState::Ready))
+            .sandbox_spawn_block()
+            .is_none());
+
+        // Prep in flight — the reported failure window.
+        let pending = sandboxed(Some(SandboxPrepState::Pending))
+            .sandbox_spawn_block()
+            .expect("a pending prep must block the spawn");
+        assert!(
+            pending.contains("full") && pending.contains("r1"),
+            "the reason must name the profile and the run, got {pending:?}"
+        );
+
+        // No prep event yet: RunStarted and SandboxPrepStarted are ~100 ms apart, and
+        // a read of the fresh run dir inside that window wakes the watcher. Blocking
+        // is the fail-safe direction — a wrong block costs one replayed spawn, a wrong
+        // pass costs a dead node.
+        assert!(
+            sandboxed(None).sandbox_spawn_block().is_some(),
+            "a sandboxed Run whose prep has not even started must block"
+        );
+    }
+
+    #[test]
+    fn sandbox_spawn_block_never_gates_the_host_path() {
+        // An `off` Run has no prep events at all, so `sandbox_prep` is permanently
+        // `None`. Reading that as "not ready" would deadlock every non-sandboxed Run
+        // in the instance — the `off` parcours must stay byte-identical.
+        let mut s = RunState::new("r1".into(), "p".into());
+        assert!(s.sandbox_spawn_block().is_none());
+        // …and stays unblocked whatever the prep field says (defensive: `off` wins).
+        s.sandbox_prep = Some(SandboxPrepState::Pending);
+        assert!(s.sandbox_spawn_block().is_none());
     }
 
     #[test]
@@ -4420,8 +5135,13 @@ mod tests {
                 "fe2": { "break_received": false, "done": true, "foreach_node_id": "fe2", "total_items": 0 }
             },
             "collection_states": {
-                "fan1": { "done": true, "region_id": "fan1", "total_items": 2 },
-                "fan2": { "done": true, "region_id": "fan2", "total_items": 0 }
+                // #453: `fan1`'s CollectionStarted payload predates `members`
+                // (it carries `entry` only) — the projection falls back to the
+                // entry alone, which is the whole region for a single-member
+                // collection. `fan2` never fanned out (CollectionEmpty), so its
+                // shape is unknown and both fields stay empty.
+                "fan1": { "done": true, "region_id": "fan1", "total_items": 2, "entry": "worker", "members": ["worker"] },
+                "fan2": { "done": true, "region_id": "fan2", "total_items": 0, "entry": "", "members": [] }
             },
             "input": "exercise every concern",
             "loop_states": {
@@ -4509,7 +5229,8 @@ mod tests {
                 "sw": { "chosen_branch": "pass", "evaluated_at": "2026-02-01T00:05:00.000Z", "switch_node_id": "sw" }
             },
             "target_repo": "Loulen/prompt-driven-orchestrator",
-            "triggered_by": "trigger-7"
+            "triggered_by": "trigger-7",
+            "sandbox": "off"
         });
         assert_eq!(actual, expected);
     }

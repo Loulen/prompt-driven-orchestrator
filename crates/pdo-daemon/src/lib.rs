@@ -31,6 +31,11 @@ mod prompt_augmenter;
 mod pty_bridge;
 mod run_advance;
 mod run_cost;
+mod sandbox_container;
+mod sandbox_image;
+mod sandbox_profile;
+mod sandbox_run;
+mod sandbox_staging;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
@@ -214,6 +219,15 @@ struct AppState {
     /// [`DaemonConfig`] by `TestDaemon::spawn`, so no test ever launches real
     /// claude and no `std::env::set_var` race can clobber it (#181).
     tmux_cmd_override: Option<String>,
+    /// Per-daemon override for the `docker` binary the sandbox wiring shells out
+    /// to (#407). `None` in production (real `docker`); `Some(cmd)` in the
+    /// layer-3 harness. Seeded via [`DaemonConfig`], mirroring `tmux_cmd_override`
+    /// (#181) — never a process-global `std::env` read in the hot path.
+    docker_cmd_override: Option<String>,
+    /// Per-daemon sandbox home-root override (#407). `None` in production (real
+    /// `$HOME`); `Some(dir)` in the layer-3 harness so staging lands under the
+    /// test's tempdir. Seeded via [`DaemonConfig`].
+    sandbox_home_override: Option<PathBuf>,
     /// Epoch-millis of the **start** of the most recent Trigger scheduler tick,
     /// or `0` if it has never ticked. Process-lifetime only (a restart resets it
     /// *and* revives the scheduler). Surfaced by `GET /triggers/health` so a
@@ -275,6 +289,14 @@ struct AppState {
     /// Surfaced as the `service` object on `/sessions`; drives the status bar's
     /// `ephemeral` pill.
     service_health: Arc<ServiceHealth>,
+    /// TTL cache (~10 s) of the Docker availability probe (#410), surfaced as
+    /// `sandbox_docker` on `GET /settings` so the NewRunModal can gray out
+    /// `full`/`minimal` when Docker is unreachable. Lazily refreshed by
+    /// `build_settings_view` when stale — never boot-once (a user may start Docker
+    /// mid-session) and never per-fetch (a `PUT` of an unrelated knob would pay a
+    /// docker round-trip). The refresh runs under `spawn_blocking` + a short
+    /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
+    docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
 }
 
 impl AppState {
@@ -323,6 +345,14 @@ struct CreateRunRequest {
     /// the trigger scheduler; absent for manual runs.
     #[serde(default)]
     triggered_by: Option<String>,
+    /// Isolation mode for this Run (#403 / #407 / #410). `Option`, NOT
+    /// `SandboxMode`: `#[serde(default)]` → `None` distinguishes an **omitted** field
+    /// (defer to trigger/instance default) from an **explicit** `"off"` (which nothing
+    /// may override upward). This distinction is the fix that makes the "précédence"
+    /// AC satisfiable — see [`event_log::effective_sandbox`]. The chokepoint
+    /// (`create_run_inner`) resolves it once against the fresh instance default.
+    #[serde(default)]
+    sandbox: Option<event_log::SandboxMode>,
 }
 
 #[derive(Serialize)]
@@ -1440,6 +1470,20 @@ pub struct DaemonConfig {
     /// detection). Armed by `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|
     /// `unknown`); tests set it directly.
     pub service_health_override: Option<ServiceHealthOverride>,
+    /// Per-daemon override for the `docker` binary invoked by the sandbox wiring
+    /// (#407). Mirrors `tmux_cmd_override` (#181): `None` in production (real
+    /// `docker`); `Some(cmd)` in the layer-3 harness points every sandbox docker
+    /// call at a fake executable, so no test needs a real daemon or a global
+    /// `std::env::set_var` race. Read once at boot from
+    /// [`sandbox_image::DOCKER_CMD_OVERRIDE_ENV`].
+    pub docker_cmd_override: Option<String>,
+    /// Per-daemon override for the sandbox **home root** (#407 testability seam).
+    /// `None` in production → the real `$HOME` (staging under `$HOME/.pdo/sandbox`,
+    /// `.claude` copied from `$HOME/.claude`). `Some(dir)` points staging + the
+    /// `.claude` source + the container-home mount at `dir` instead, so a layer-3
+    /// test stages under its own tempdir and never touches the real home. Read
+    /// once at boot from `PDO_SANDBOX_HOME_OVERRIDE`.
+    pub sandbox_home_override: Option<PathBuf>,
 }
 
 impl DaemonConfig {
@@ -1469,6 +1513,14 @@ impl DaemonConfig {
             service_health_override: std::env::var("PDO_SERVICE_HEALTH")
                 .ok()
                 .and_then(|v| ServiceHealthOverride::parse(&v)),
+            // Sandbox docker seam (#407), sibling of PDO_TMUX_CMD_OVERRIDE — read
+            // once at boot, `None`/unset in prod (real docker).
+            docker_cmd_override: std::env::var(sandbox_image::DOCKER_CMD_OVERRIDE_ENV).ok(),
+            // Sandbox home-root seam (#407) — `None`/unset in prod (real $HOME).
+            sandbox_home_override: std::env::var("PDO_SANDBOX_HOME_OVERRIDE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -1560,6 +1612,8 @@ pub async fn serve_with_config(
         recent_writes,
         run_watcher: run_watcher.clone(),
         tmux_cmd_override: config.tmux_cmd_override,
+        docker_cmd_override: config.docker_cmd_override,
+        sandbox_home_override: config.sandbox_home_override,
         last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_trigger_name: config.panic_on_trigger_name,
         last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -1571,6 +1625,7 @@ pub async fn serve_with_config(
         node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
+        docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -1792,14 +1847,30 @@ async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-// --- GET /repos/browse (issue #131): filesystem explorer ---
+// --- GET /fs/browse (issue #131, renamed + generalised in #431): filesystem explorer ---
 //
-// Lists directories one level at a time so the webapp can browse and pick a target
-// repo visually (the recents combobox covers the common case; this covers first-time
-// / visual selection). Read-only, single-level, no recursion. Deliberately NOT
-// hardened against path traversal — fs-exposure scoping is carved out to #260; this
-// endpoint only browses what the local 127.0.0.1 single-user daemon can already reach
-// via `/repos/validate`. The contract here mirrors its `/repos/*` siblings.
+// Lists one directory level at a time so the webapp can browse and pick a path
+// visually. Two consumers today: the New-Run modal's repo picker (dirs only — the
+// pre-#431 behaviour, bit for bit, under the flag defaults) and the settings
+// Dockerfile picker (`files=true&hidden=true`). Read-only, single-level, no
+// recursion.
+//
+// Exposure, stated exactly (the pre-#431 comment claimed the opposite on both
+// counts): the daemon binds `0.0.0.0` (not `127.0.0.1`), and #260 is CLOSED, not
+// deferred — the LAN reachability is assumed by the owner, so this surface has no
+// authentication and any LAN peer can enumerate, one level per request, whatever the
+// daemon's uid can traverse. #431's two flags widen that enumeration from directory
+// names to **file names** — never to file CONTENTS: this handler emits names, a path
+// and three booleans, and has no read path at all. The right boundary is
+// authenticating the whole HTTP surface, which is a separate piece of work; a partial
+// mitigation invented here would be worse than none (a false sense of a boundary) and
+// would break the staging-profile entry picker, whose entries live in `$HOME` dotfiles.
+
+/// Listing cap, applied **per genre** with directories claiming the budget first
+/// (#431). A single shared budget would let files starve directories, which is a
+/// functional failure of the picker rather than a cosmetic one: 50 000 files and two
+/// subdirectories in `~/Downloads` would yield zero navigable rows.
+const BROWSE_CAP: usize = 1000;
 
 #[derive(Deserialize)]
 struct BrowseQuery {
@@ -1808,6 +1879,22 @@ struct BrowseQuery {
     /// bug (→ 400).
     #[serde(default)]
     path: Option<String>,
+    /// List regular files alongside the navigable directories (#431). Default `false`
+    /// ≡ the pre-#431 dirs-only listing.
+    ///
+    /// **Wire vocabulary is strict**: axum's `Query` goes through `serde_urlencoded` →
+    /// `str::parse::<bool>()`, so only the lowercase literals `true` / `false` are
+    /// accepted. A valueless `?files`, `?files=1`, `?files=yes` or `?files=TRUE` is a
+    /// `400` with a `text/plain` body (`Failed to deserialize query string: …`), NOT a
+    /// silent `false`. Pinned by `browse_query_rejects_valueless_and_non_literal_flags`.
+    #[serde(default)]
+    files: bool,
+    /// Show dot-entries (`.claude`, `.pdo`, …) (#431). Default `false` ≡ the pre-#431
+    /// filter. Needed by the Dockerfile picker, whose default lives at
+    /// `~/.pdo/sandbox/Dockerfile`. Same strict `true`/`false` wire vocabulary as
+    /// [`BrowseQuery::files`].
+    #[serde(default)]
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -1819,8 +1906,75 @@ struct BrowseEntry {
     /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
     /// gate: every folder stays pickable and the authoritative validation runs at
     /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
+    /// Computed for directories only (#431); hard `false` for a file, where it has no
+    /// meaning — the JSON is unchanged (`/x/notes.txt/.git` already probed `false` via
+    /// `ENOTDIR`), we just spare one `stat(2)` per entry on a listing that is refetched
+    /// on every navigation click.
     is_git_repo: bool,
     is_symlink: bool,
+    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file (#431).
+    /// Always emitted, including under the dirs-only default where it is invariably
+    /// `true`, so an entry's shape never depends on the query.
+    ///
+    /// Declaration order is NOT load-bearing here, contrary to what this comment used to
+    /// claim: `fs_browse` builds its envelope with `json!`, which runs every entry through
+    /// `serde_json::to_value`, and `serde_json` is built without `preserve_order` — so each
+    /// entry lands in a `BTreeMap` and reaches the wire with its keys sorted
+    /// alphabetically (`is_dir` FIRST), whatever the order below. Pre-#431 responses went
+    /// through the same path and were already sorted, so the only wire delta remains the
+    /// added key — the AC holds, but by key-order irrelevance (RFC 8259), not by a trick.
+    is_dir: bool,
+}
+
+/// What a `read_dir` child is, for the purposes of this listing (#431).
+#[derive(Debug, PartialEq, Eq)]
+enum EntryKind {
+    Dir,
+    File,
+    /// Not offered in either mode.
+    Skip,
+}
+
+/// Classify one child. `meta` is [`std::fs::metadata`] (which **follows** symlinks);
+/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`, exactly as before #431.
+///
+/// The set of **discarded** entries is unchanged by #431; the flag only ADDS regular
+/// files. Special files (fifo / socket / device) are neither a dir nor a regular file →
+/// `Skip` in both modes, because nothing downstream can consume one: every consumer of
+/// a picked path resolves it (`/repos/validate`, this issue's `dockerfile_path`
+/// resolver), so the row would be unpickable by construction — and a fifo handed to
+/// `ensure_image` is a read that blocks forever. Surfacing a dangling link as
+/// `is_dir: false` would be a lie by omission too (it is not a file either).
+fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
+    match meta {
+        None => EntryKind::Skip,
+        Some(m) if m.is_dir() => EntryKind::Dir,
+        Some(m) if m.is_file() && include_files => EntryKind::File,
+        _ => EntryKind::Skip,
+    }
+}
+
+/// Merge the two genre buckets into the response list: each bucket sorted
+/// case-insensitively, directories first, **directories claim the budget first**, total
+/// `<= cap` (#431).
+///
+/// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
+/// genre: a `(cap + 1)`th survivor is all `truncated` needs. Under the flag defaults
+/// `files` is empty, so this is arithmetically the pre-#431 `sort_by_key(name) +
+/// truncate(cap)`.
+fn merge_browse_entries(
+    mut dirs: Vec<BrowseEntry>,
+    mut files: Vec<BrowseEntry>,
+    cap: usize,
+) -> (Vec<BrowseEntry>, bool) {
+    // Case-insensitive, stable sort within each genre (ties keep read_dir order).
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
+    let truncated = dirs.len() + files.len() > cap;
+    dirs.truncate(cap);
+    files.truncate(cap - dirs.len());
+    dirs.extend(files);
+    (dirs, truncated)
 }
 
 /// Why the requested browse root could not be resolved into a listable directory.
@@ -1889,10 +2043,7 @@ fn browse_io_label(e: &std::io::Error) -> &'static str {
     }
 }
 
-async fn repos_browse(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<BrowseQuery>,
-) -> Response {
+async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQuery>) -> Response {
     // The repo's idiom for the home dir — there is no `dirs` crate (cf.
     // stale_detector.rs). Injected into the pure resolver so the handler stays a thin
     // shell over testable logic.
@@ -1943,50 +2094,61 @@ async fn repos_browse(
         }
     };
 
-    const CAP: usize = 1000;
-    let mut entries: Vec<BrowseEntry> = Vec::new();
-    let mut truncated = false;
+    // Two genre buckets, each collecting at most `BROWSE_CAP + 1` entries: a
+    // (CAP+1)th survivor is all `truncated` needs, and stopping there keeps the
+    // dirs-only default path arithmetically identical to pre-#431.
+    let mut dirs: Vec<BrowseEntry> = Vec::new();
+    let mut files: Vec<BrowseEntry> = Vec::new();
     for child in read {
         let child = match child {
             Ok(c) => c,
             Err(_) => continue, // skip an entry that can't be stat'd mid-listing
         };
         let name = child.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue; // dotfiles hidden (MVP, no toggle); `.`/`..` never yielded here
+        if !q.hidden && name.starts_with('.') {
+            continue; // dot-entries hidden unless `?hidden=true`; `.`/`..` never yielded
         }
         // `file_type()` does NOT follow the link (cheap lstat) → correct for the flag.
         let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
         // TRAP: `DirEntry::metadata()` lstat's (no follow) and would report every
         // symlinked dir as non-dir. The FREE `std::fs::metadata` FOLLOWS the link —
-        // use it for the is-dir decision. Broken link / loop → Err → false → skipped.
-        let is_dir = std::fs::metadata(child.path())
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        if !is_dir {
-            continue; // dirs only; files and symlink-to-file dropped
+        // use it for the is-dir decision. Broken link / loop → Err → None → Skip.
+        let meta = std::fs::metadata(child.path()).ok();
+        let kind = classify_browse_entry(meta.as_ref(), q.files);
+        if kind == EntryKind::Skip {
+            continue;
         }
+        let is_dir = kind == EntryKind::Dir;
         let entry_path = canonical_dir.join(&name);
-        let is_git_repo = entry_path.join(".git").exists();
-        entries.push(BrowseEntry {
+        // Dirs only: `.git` inside a regular file is meaningless (and already probed
+        // `false` via ENOTDIR), so skip the syscall entirely.
+        let is_git_repo = is_dir && entry_path.join(".git").exists();
+        let entry = BrowseEntry {
             name,
             path: entry_path.to_string_lossy().into_owned(),
             is_git_repo,
             is_symlink,
-        });
-        if entries.len() > CAP {
-            // Early-stop: a (CAP+1)th surviving dir proves there are > CAP, which is
-            // all `truncated` needs — stop stat-ing the rest.
-            truncated = true;
+            is_dir,
+        };
+        let bucket = if is_dir { &mut dirs } else { &mut files };
+        if bucket.len() <= BROWSE_CAP {
+            bucket.push(entry);
+        }
+        // Early-stop, GATED on whether we are still collecting files: under the
+        // defaults `files` stays empty forever, so without the `!q.files` arm a
+        // directory with > CAP subdirectories would now be walked in full instead of
+        // stopping at CAP+1 — a perf regression on the default path.
+        if dirs.len() > BROWSE_CAP && (!q.files || files.len() > BROWSE_CAP) {
             break;
         }
     }
 
-    // Case-insensitive, stable sort (ties keep read_dir order).
-    entries.sort_by_key(|a| a.name.to_lowercase());
-    if entries.len() > CAP {
-        entries.truncate(CAP); // keep the alphabetically-first CAP
-    }
+    // Dirs-then-files, case-insensitive within each genre, dirs claiming the budget
+    // first. NOTE (pre-existing, not fixed here): when the early-stop fires, the
+    // collected CAP+1 entries are in arbitrary `read_dir` order, so the sort keeps the
+    // alphabetically-first CAP *of an arbitrary sample* — inherent to capping without a
+    // global sort.
+    let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
 
     Json(serde_json::json!({
         "path": canonical_dir.to_string_lossy(),
@@ -2023,10 +2185,46 @@ struct CreateTriggerRequest {
     /// unbounded. Inert unless `overlap_policy == "allow"`.
     #[serde(default)]
     max_concurrent: Option<i64>,
+    /// Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or absent/`null`
+    /// to inherit the instance default. Read at fire time and folded into the create
+    /// request's explicit tier.
+    #[serde(default)]
+    sandbox: Option<String>,
 }
 
 fn default_overlap_policy() -> String {
     "skip".to_string()
+}
+
+/// The SHARED existence gate for any `sandbox` reference a client can store (#432,
+/// ADR-0031 §7): the per-Trigger mode (create + patch) and the instance
+/// `default_sandbox`. `""` is the *clear* sentinel and `off` means "no sandbox", so both
+/// are always valid; anything else must name a profile that resolves — one of the two
+/// virtual defaults, or a materialised row.
+///
+/// A **write-time** gate, deliberately not the authoritative one (the create-run
+/// chokepoint is, and it re-resolves at every fire). It exists so the error lands where
+/// the user can fix it, at the moment they typed it — same posture as #431's
+/// `dockerfile_path` `is_file()` check. The `env` tier (`PDO_DEFAULT_SANDBOX`) never
+/// passes through here at all, which is why `build_settings_view` also discloses a
+/// `reason` on `default_sandbox`.
+async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), String> {
+    let Some(mode) = event_log::SandboxMode::parse(raw) else {
+        return Ok(()); // "" / whitespace = the clear sentinel
+    };
+    let Some(name) = mode.profile() else {
+        return Ok(()); // `off`
+    };
+    match sandbox_profile::exists(db, name).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "unknown sandbox profile `{name}`: use `off`, `{}`, `{}`, or a profile you \
+             created under Settings → Staging profiles",
+            sandbox_profile::MINIMAL_PROFILE,
+            sandbox_profile::FULL_PROFILE,
+        )),
+        Err(e) => Err(format!("sandbox profile store error: {e}")),
+    }
 }
 
 /// Validate a `max_concurrent` cap (#239): when present it must be >= 1. `None`
@@ -2207,6 +2405,17 @@ async fn create_trigger(
             .into_response();
     }
 
+    // A per-Trigger sandbox reference, when present, must resolve (#410/#432).
+    if let Some(raw) = req.sandbox.as_deref() {
+        if let Err(msg) = validate_sandbox_ref(&state.db, raw).await {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
     // Resolve the target pipeline and its prompt_required flag.
     let yaml =
         library_store::pipelines::get_yaml(&state.repo_root, &req.pipeline_id).or_else(|| {
@@ -2292,6 +2501,9 @@ async fn create_trigger(
             "skip".to_string()
         },
         max_concurrent: req.max_concurrent,
+        // #410: normalise `Some("")` to `None` (inherit the instance default), so an
+        // empty selector value never persists as a bogus stored mode.
+        sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
         next_fire_at,
     };
 
@@ -2431,6 +2643,12 @@ struct PatchTriggerRequest {
     /// where present-`null` collapses to `None` and cannot clear).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     max_concurrent: Option<Option<i64>>,
+    /// Per-Trigger sandbox mode (#410), double-wrapped like `max_concurrent`: absent =
+    /// leave, present `null` = clear back to inheriting the instance default, `"mode"`
+    /// = set. The custom deserializer makes present-`null` → `Some(None)` reachable
+    /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    sandbox: Option<Option<String>>,
 }
 
 async fn patch_trigger(
@@ -2591,6 +2809,18 @@ async fn patch_trigger(
         }
     }
 
+    // Validate a sandbox edit (Some(Some(mode)) sets; Some(None) clears to inherit)
+    // (#410/#432 — same shared existence gate as create and `PUT /settings`).
+    if let Some(Some(ref mode)) = req.sandbox {
+        if let Err(msg) = validate_sandbox_ref(&state.db, mode).await {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    }
+
     // Re-apply the fire_decision reject rule against the *resulting* config: if
     // the pipeline requires a prompt and the edit would leave neither a guard
     // nor an input template, refuse (mirrors create-time validation).
@@ -2640,6 +2870,10 @@ async fn patch_trigger(
             }
         }),
         max_concurrent: req.max_concurrent,
+        // #410: `Some(Some(mode))` sets, `Some(None)` clears back to inheriting the
+        // instance default, `None` leaves it. The FE maps the "use instance default"
+        // option to `null`, so an empty string never reaches here.
+        sandbox: req.sandbox,
         next_fire_at,
         // Fold the enable/disable toggle into the single UpdateTrigger write
         // (#372): the enable bit and the forward next_fire_at land in one atomic
@@ -2860,9 +3094,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
-        // Filesystem explorer (#131). `/repos` is already whitelisted in the vite
-        // proxy and matches by prefix — no `vite.config.ts` edit needed.
-        .route("/repos/browse", get(repos_browse))
+        // Filesystem explorer (#131, renamed `/repos/browse` → `/fs/browse` in #431:
+        // nothing about it is repo-specific — it also serves the settings Dockerfile
+        // picker). `/fs` is a NEW top-level prefix, so it REQUIRES its own entry in the
+        // vite proxy whitelist (`frontend/vite.config.ts`) — same trap as `/nodes`
+        // (#345) and `/stats` (#377): without it a dev `GET /fs/browse` answers 200 with
+        // the SPA and any smoke test would lie.
+        .route("/fs/browse", get(fs_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
         // Static segment beside the `{trigger_id}` param: axum 0.8 allows this
         // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
@@ -2889,6 +3127,28 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the
         // stored tier (fail-fast validation).
         .route("/settings", get(get_settings).put(put_settings))
+        // Staging profiles (#432, ADR-0031 §2-§7). Deliberately UNDER `/settings`
+        // rather than a new top-level prefix: the vite proxy key is a PREFIX, so
+        // `'/settings': daemonTarget` already covers every sub-path — no proxy edit,
+        // and none of the traps `/nodes` (#345), `/stats` (#377) and `/fs` (#431) each
+        // paid, where a missing proxy line makes a dev GET answer 200 with the SPA.
+        // Static-segment-beside-a-param is fine in axum 0.8 (precedents:
+        // `/triggers/health`, `/library/pipelines/{id}/duplicate`).
+        //
+        // The shared prefix is a **routing** decision, NOT a claim about the schema:
+        // profiles are ROWS, not a `{effective, source, stored, env, default}` knob, and
+        // they must NOT be folded into `build_settings_view` beyond the name list.
+        .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
+        .route(
+            "/settings/sandbox-profiles/{name}",
+            get(get_sandbox_profile)
+                .put(put_sandbox_profile)
+                .delete(delete_sandbox_profile),
+        )
+        .route(
+            "/settings/sandbox-profiles/{name}/referents",
+            get(get_sandbox_profile_referents),
+        )
         // Instance stats cockpit (#377, ADR-0029). New top-level `/stats` prefix
         // → added to the vite dev proxy whitelist so a dev-mode GET hits the
         // daemon instead of the SPA fallback. `overview` is cheap indexed SQL;
@@ -2953,6 +3213,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     instance_config::init(db)
         .await
         .context("failed to create instance_config table")?;
+
+    // #432: staging profiles. A brand-new table with NO seed row — `minimal` and
+    // `full` are virtual defaults (ADR-0031 §2), so an untouched install has zero
+    // rows here and still resolves both names.
+    sandbox_profile::init(db)
+        .await
+        .context("failed to create sandbox_profiles table")?;
 
     Ok(())
 }
@@ -3031,8 +3298,27 @@ pub(crate) async fn append_event_with(
 /// Thin `AppState` wrapper over [`append_event_with`] — the name every
 /// in-process caller already uses. The db-only core exists so `spawn_node`
 /// (#356) can append through a narrow `SpawnDeps` without the full `AppState`.
+///
+/// #408: this wrapper is also the single chokepoint for the terminal
+/// `merge_back` — the ~14 emitters of the 4 terminal Run events (§3.B of the
+/// plan) all funnel through here, and only here is `&AppState` available. After a
+/// SUCCESSFUL append of a terminal event, a sandboxed Run's staged transcripts
+/// are merged into `~/.claude/projects/` so cost + stale-detection see them once
+/// the staging is eventually purged. [`sandbox_run::merge_back_best_effort`] fires
+/// the walk on a detached task, so it never adds latency or a failure mode to the
+/// terminal transition (ADR-0023); it is idempotent, so a double-fire is safe.
 async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
-    append_event_with(&state.db, &state.event_tx, event).await
+    append_event_with(&state.db, &state.event_tx, event).await?;
+    if matches!(
+        event.kind,
+        event_log::EventKind::RunCompleted
+            | event_log::EventKind::RunFailed
+            | event_log::EventKind::RunSkipped
+            | event_log::EventKind::RunHalted
+    ) {
+        sandbox_run::merge_back_best_effort(state, &event.run_id).await;
+    }
+    Ok(())
 }
 
 /// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
@@ -3132,21 +3418,12 @@ async fn emit_collection_action(
     action: &scheduler::SchedulerAction,
 ) {
     match action {
-        scheduler::SchedulerAction::CollectionStarted {
-            region_id,
-            entry,
-            total_items,
-            ..
-        } => {
+        scheduler::SchedulerAction::CollectionStarted { .. } => {
             emit_run_event(
                 state,
                 run_id,
                 event_log::EventKind::CollectionStarted,
-                Some(serde_json::json!({
-                    "region_id": region_id,
-                    "entry": entry,
-                    "total_items": total_items,
-                })),
+                scheduler::collection_started_payload(action),
             )
             .await;
         }
@@ -3455,7 +3732,7 @@ fn detach_terminal_tail<F>(
 
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
-async fn run_trigger_scheduler_tick(state: &AppState) {
+async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     // At most one tick in flight: see `AppState::trigger_tick_lock`.
     let _tick = state.trigger_tick_lock.lock().await;
     let now = chrono::Utc::now();
@@ -3542,7 +3819,7 @@ async fn run_trigger_scheduler_tick(state: &AppState) {
 /// Returns the persisted audit record (with `run_id` filled on a fire), or
 /// `None` when the evaluation was a silent no-op.
 async fn fire_one_trigger(
-    state: &AppState,
+    state: &Arc<AppState>,
     trigger: &trigger_store::Trigger,
     now: chrono::DateTime<chrono::Utc>,
     source: trigger_scheduler::FireSource,
@@ -3616,6 +3893,22 @@ async fn fire_one_trigger(
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
+                // #410: fold the Trigger's stored mode into the request's explicit
+                // tier. A Run has a single origin (a trigger fire is never also a
+                // run-level choice), so this is the sole non-`None` tier here; the
+                // chokepoint's `effective_sandbox(req.sandbox, None, default)` then
+                // resolves it against the instance default. A blank/absent stored value
+                // defers to the instance default.
+                //
+                // #432: no unparseable-token `warn!` any more — `parse` is syntactic, so
+                // a stored `copy` now reads as the profile NAME `copy`, and the chokepoint
+                // 400s it by name. That 400's message becomes this fire's `FireRecord`
+                // reason (the `Err` arm below), which is visibly red in the Trigger
+                // history — the fail-hard ADR-0031 §7 asks for, with zero new code.
+                sandbox: trigger
+                    .sandbox
+                    .as_deref()
+                    .and_then(event_log::SandboxMode::parse),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -4969,6 +5262,18 @@ pub(crate) async fn retry_waiting_nodes(state: &AppState) {
 /// so the daemon's two "idle past N" notions agree.
 const SPAWN_STALL_GRACE_SECS: i64 = 120;
 
+/// Idle window (#445) after which a sandboxed Run stuck at `sandbox_prep = pending` is
+/// treated as a lost preparation rather than one still working.
+///
+/// Deliberately an order of magnitude above [`SPAWN_STALL_GRACE_SECS`], because the two
+/// measure different things: 120 s bounds an *event-driven spawn*, which is milliseconds
+/// of work, while this bounds staging up to a couple of gigabytes of `~/.claude` plus a
+/// cold `docker build` — measured at 83-87 s for a 2 GB profile with a warm image, and
+/// legitimately minutes on the first build of a machine. 15 minutes is comfortably past
+/// any healthy prep and still short enough that a Run whose prep task died with a
+/// previous daemon is reported the same hour rather than sitting `Running` for ever.
+const SANDBOX_PREP_STALL_GRACE_SECS: i64 = 900;
+
 /// Seconds elapsed since the run's most recent event, or `None` when no event
 /// carries a parseable RFC3339 timestamp. The most recent event has the
 /// *smallest* age, so this is the `min` over ages — i.e. "how long since the run
@@ -5091,6 +5396,33 @@ fn run_stall_reason(
         return None;
     }
 
+    // (#445) A sandboxed Run between `SandboxPrepStarted` and `SandboxPrepReady` looks
+    // EXACTLY like a #279 silent spawn-abort: a ready node, no live node, and — since
+    // the prep emits no event of its own while it works — an idle clock that ticks up
+    // for the whole prep. It is not one: `spawn_node` is deliberately deferring, and
+    // `SandboxPrepReady` will replay it. Staging ~2 GB of `~/.claude` plus a cold
+    // `docker build` overruns the 120 s spawn-stall window comfortably, so without this
+    // arm the reconciler would kill precisely the slow Runs the precondition just saved.
+    //
+    // Deferring for ever would only trade a false failure for a silent stall, which
+    // ADR-0004 forbids just as strongly — so this is a LONGER grace, not an exemption:
+    // past it, the prep task is genuinely gone (killed with a previous daemon, panicked
+    // outside its catch) and the Run is failed with a cause that names the sandbox
+    // rather than blaming tmux. Placed before the `ready` / `loop_seed` arms because it
+    // explains the whole class: while the prep is pending NOTHING in this Run can start,
+    // whatever the scheduler proposes.
+    if let Some(block) = run_state.sandbox_spawn_block() {
+        if idle_secs.is_some_and(|s| s >= SANDBOX_PREP_STALL_GRACE_SECS) {
+            return Some(format!(
+                "run_stalled: {block}; idle {}s past the {SANDBOX_PREP_STALL_GRACE_SECS}s \
+                 sandbox-prep grace — the preparation task is gone and nothing will \
+                 re-drive this run (#445)",
+                idle_secs.unwrap_or_default()
+            ));
+        }
+        return None;
+    }
+
     // (#279, Layer 2) A node the scheduler can spawn but no live node to run it.
     // `compute_ready_to_spawn` only returns nodes with NO state (or a Completed
     // loop-back), so a node here that an `advance_run` reached would already be
@@ -5120,6 +5452,48 @@ fn run_stall_reason(
     // Manager's to drive (and an exhausted-unrouted region is deferred just
     // below). Not a fail-fast stall.
     if !loop_seed.is_empty() {
+        return None;
+    }
+
+    // (#453) An open collection region with no live node is the shape the
+    // previous comment at the bottom of this function called "a scheduler-shape
+    // we have not characterised": every node projects Pending or Completed, no
+    // session is alive, `ready` is empty (the barrier target is correctly
+    // not-ready), and `is_stalled` says `false` for ever because nothing will
+    // ever be marked `Stale` — the liveness sweep only inspects live tmux
+    // sessions and there are none.
+    //
+    // It IS characterised now: laps of the region were never started, so the
+    // barrier can never fire, so `should_complete_run` can never complete the
+    // run. Deliberately NOT folded into the `open_region` arm below: an open
+    // loop/foreach is deferred because the Pipeline Manager can unstick it by
+    // id, whereas a collection region exposes no such recovery — nothing
+    // re-proposes a missing lap, so deferring here would be the silent stall
+    // ADR-0004 forbids. Same idle grace as the #279 arm above, so a fan-out
+    // burst caught mid-flight (items deposited, laps about to spawn) is never
+    // mistaken for a wedge.
+    let missing_laps: Vec<String> = run_state
+        .collection_states
+        .values()
+        .filter(|cs| !cs.done)
+        .flat_map(|cs| {
+            let node = run_state.nodes.get(cs.entry.as_str());
+            (1..=cs.total_items)
+                .filter(move |lap| {
+                    !node.is_some_and(|n| n.iterations.iter().any(|it| it.iter == *lap))
+                })
+                .map(|lap| format!("{}#{lap}/{}", cs.region_id, cs.total_items))
+        })
+        .collect();
+    if !missing_laps.is_empty() {
+        if idle_secs.is_some_and(|s| s >= SPAWN_STALL_GRACE_SECS) {
+            return Some(format!(
+                "run_stalled: collection region lap(s) never started — no live node, \
+                 idle {}s; the barrier can never fire (#453): {}",
+                idle_secs.unwrap_or_default(),
+                missing_laps.join(", ")
+            ));
+        }
         return None;
     }
 
@@ -5300,6 +5674,11 @@ async fn parse_multipart_create_run(
     let mut target_repo = None;
     let mut source_branch = None;
     let mut name = None;
+    // #410: an explicit sandbox mode may ride the multipart (browser) create when
+    // images are attached. Parsed into `Option<SandboxMode>` so an omitted field
+    // defers to the trigger/instance default at the chokepoint. An unknown token is
+    // treated as unset (defensive; the FE only ever sends valid variants).
+    let mut sandbox: Option<event_log::SandboxMode> = None;
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -5367,6 +5746,20 @@ async fn parse_multipart_create_run(
                     name = Some(v);
                 }
             }
+            "sandbox" => {
+                // #410: parse the explicit mode off the multipart form. Empty → leave
+                // `None` (defer to trigger/instance default). #432: `parse` is syntactic
+                // now, so a non-`off` token becomes `Profile(name)` and an unknown NAME
+                // is a hard 400 at the chokepoint — no longer silently demoted to the
+                // instance default (ADR-0031 §7).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field sandbox: {e}"))?;
+                if !v.is_empty() {
+                    sandbox = event_log::SandboxMode::parse(&v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -5396,6 +5789,10 @@ async fn parse_multipart_create_run(
         source_branch,
         name,
         triggered_by: None,
+        // #410: the explicit sandbox mode threaded off the multipart form (browser
+        // create with attached images). `None` when the field is absent — the
+        // chokepoint then defers to the trigger/instance default.
+        sandbox,
     };
     Ok((req, images))
 }
@@ -5496,7 +5893,7 @@ fn run_name_hint(name: Option<&str>, input: &str) -> prompt_augmenter::RunNameHi
 }
 
 async fn create_run_core(
-    state: &AppState,
+    state: &Arc<AppState>,
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Response {
@@ -5511,7 +5908,7 @@ async fn create_run_core(
 /// `Response`; the trigger scheduler calls it directly to learn the run id for
 /// `triggered_by` provenance.
 async fn create_run_inner(
-    state: &AppState,
+    state: &Arc<AppState>,
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Result<String, (StatusCode, serde_json::Value)> {
@@ -5639,6 +6036,80 @@ async fn create_run_inner(
 
     let run_id = event_log::generate_run_id();
 
+    // #410 CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
+    // multipart, and trigger-fire create paths converge — just before the mode is
+    // frozen into `RunStarted`. `req.sandbox` already carries either the explicit
+    // run-level choice (JSON/multipart) OR the trigger's mode (folded in at fire time,
+    // Slice C — a Run has a single origin), so the trigger arm stays `None` in
+    // production; the 3-arg resolver is still the canonical precedence chain, exercised
+    // by the layer-1 test. `default_sandbox` is read FRESH from the DB at the edge
+    // (mirror `image_source`, `sandbox_run.rs`), so a `PUT /settings` bites on the very
+    // next create with no restart. Absent everywhere → `Off` → the payload and events
+    // stay byte-identical to the legacy host path.
+    let stored_default = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.default_sandbox);
+    let explicit_tier = req.sandbox.is_some();
+    let sandbox = event_log::effective_sandbox(
+        req.sandbox.clone(),
+        None,
+        event_log::default_sandbox_with(stored_default),
+    );
+
+    // #432 (ADR-0031 §6 + §7): resolve the winning tier's staging profile to its entry
+    // list HERE, at the same chokepoint, so the name AND the list are frozen together
+    // into `RunStarted` — editing (or deleting) the profile afterwards can never rewrite
+    // what this Run stages. Only the WINNER is resolved: an unknown name sitting in the
+    // instance default is not an error for a Run that explicitly picks another profile,
+    // because nothing ever consults it.
+    //
+    // An unknown name **fails hard**, never falls back to the instance default or to
+    // `off`. This is before `append_event(run_started)` and before `create_worktree`, so
+    // "no Run is created" holds in the strict sense. A Trigger fire needs ZERO new code:
+    // `fire_one_trigger`'s `Err((_, body))` arm already turns this 400's message into a
+    // `FireRecord { outcome: "error", reason }` that the history renders red — which is
+    // why the wording below is the deliverable, not an afterthought.
+    let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
+        None => None,
+        Some(name) => match sandbox_profile::resolve(&state.db, name).await {
+            Ok(Some(resolved)) => Some(resolved.resolved.entries),
+            Ok(None) => {
+                let error = if explicit_tier {
+                    if req.triggered_by.is_some() {
+                        format!(
+                            "unknown sandbox profile `{name}`: the Trigger's sandbox setting \
+                             names a staging profile that does not exist. Recreate it under \
+                             Settings → Staging profiles, or point the Trigger at `off`."
+                        )
+                    } else {
+                        format!(
+                            "unknown sandbox profile `{name}`: no such staging profile. \
+                             Create it under Settings → Staging profiles, or use `off`."
+                        )
+                    }
+                } else {
+                    format!(
+                        "unknown sandbox profile `{name}`: the instance default sandbox names \
+                         a staging profile that does not exist. Fix it under \
+                         Settings → Default sandbox."
+                    )
+                };
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": error }),
+                ));
+            }
+            Err(e) => {
+                error!("failed to resolve sandbox profile `{name}`: {e}");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": "sandbox profile store error" }),
+                ));
+            }
+        },
+    };
+
     let edge_infos: Vec<event_log::EdgeInfo> =
         pipeline.edges.iter().map(edge_info_from_pipeline).collect();
 
@@ -5662,6 +6133,20 @@ async fn create_run_inner(
     }
     if let Some(ref target) = req.target_repo {
         run_payload["target_repo"] = serde_json::json!(target);
+    }
+    // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
+    // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
+    // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
+    // written together or not at all, which is the invariant that makes the replay table
+    // decidable (a `sandbox` with no entries can only mean "pre-profiles daemon").
+    // Nesting them (`sandbox: {name, entries}`) is disqualified by permanent
+    // back-compat: every historical payload carries `"sandbox": "full"` as a bare
+    // string, so both readers would have to accept `String | Object` for ever.
+    if !sandbox.is_off() {
+        run_payload["sandbox"] = serde_json::json!(sandbox);
+        run_payload["sandbox_entries"] = serde_json::json!(sandbox_entries
+            .as_ref()
+            .expect("a non-off sandbox always resolves an entry list at this chokepoint"));
     }
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
@@ -5763,13 +6248,206 @@ async fn create_run_inner(
         }
     }
 
-    spawn_ready_after_event(state, &run_id).await;
-
-    spawn_manager_session(state, &run_id, &worktree_dir, name_hint);
+    if sandbox.is_off() {
+        // Historical host path — inline, byte-identical to pre-#407. NO docker.
+        spawn_ready_after_event(state, &run_id).await;
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false);
+    } else {
+        // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
+        // (mirror ADR-0023 — the 201 must not block on a first-run `docker
+        // build`). Image + container + staging are guaranteed BEFORE the first
+        // node/manager spawn; any Docker unavailability → `RunFailed`, ZERO host
+        // spawn (never a silent host fallback for a sandboxed Run's work, US-16).
+        let task_state = state.clone();
+        let task_run_id = run_id.clone();
+        let task_worktree = worktree_dir.clone();
+        tokio::spawn(async move {
+            // #410: image-prep visibility. Informational, non-terminal — emitted at
+            // the HEAD of the detached task (before the long `ensure_ready`) so the UI
+            // shows "préparation du sandbox…" instead of a seemingly-stuck Run. Only
+            // reachable in this `sandbox != off` branch, so the `off` path stays
+            // byte-identical. Broadcast + `refreshRun` ride the `append_event`
+            // chokepoint for free.
+            emit_run_event(
+                &task_state,
+                &task_run_id,
+                event_log::EventKind::SandboxPrepStarted,
+                None,
+            )
+            .await;
+            // Build the sandbox context from the just-projected Run (mode is
+            // immutable). A vanished/half-projected state → fail loud.
+            let ctx = match reload_run_state(&task_state, &task_run_id).await {
+                Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs).await {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        fail_run_sandbox_prep(
+                            &task_state,
+                            &task_run_id,
+                            &format!("sandbox prep failed: {e:#}"),
+                        )
+                        .await;
+                        return;
+                    }
+                },
+                None => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        "sandbox prep failed: run state disappeared before prep",
+                    )
+                    .await;
+                    return;
+                }
+            };
+            // `ensure_ready` is blocking (docker build/probe) → run it under
+            // `spawn_blocking`, which also isolates its panic into a `JoinError`.
+            match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
+                Ok(Ok(())) => {
+                    // #445: the Run may have gone terminal WHILE the prep ran (a stop /
+                    // kill, or — before the spawn precondition existed — the very
+                    // `session_died` this prep caused). Emitting `SandboxPrepReady` and
+                    // spawning into a dead Run leaves a container nobody will ever exec
+                    // into, so abandon instead: no event, no node, no manager, and the
+                    // container is removed. Idempotent — a later `resume_run` re-runs
+                    // `ensure_ready` and recreates it.
+                    if abandon_prep_if_run_is_terminal(&task_state, &task_run_id).await {
+                        return;
+                    }
+                    // #410: image ready, container about to receive the first session.
+                    // Emitted just before the spawn so the prep banner clears exactly
+                    // when work can start. A failed prep emits `RunFailed` instead (no
+                    // dedicated failed-prep event).
+                    //
+                    // #445: this pair — the event, then the advance — is now the single
+                    // REPLAY point for every spawn `spawn_node` deferred while the prep
+                    // was in flight, which is why `mark_sandbox_prep_ready` owns it.
+                    mark_sandbox_prep_ready(&task_state, &task_run_id).await;
+                    spawn_ready_after_event(&task_state, &task_run_id).await;
+                    spawn_manager_session(
+                        &task_state,
+                        &task_run_id,
+                        &task_worktree,
+                        name_hint,
+                        true,
+                    );
+                }
+                Ok(Err(e)) => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        &format!("sandbox prep failed: {e:#}"),
+                    )
+                    .await;
+                }
+                Err(join_err) => {
+                    fail_run_sandbox_prep(
+                        &task_state,
+                        &task_run_id,
+                        &format!("sandbox prep panicked: {join_err}"),
+                    )
+                    .await;
+                }
+            }
+        });
+    }
 
     info!("Run {run_id} started for pipeline {}", pipeline.name);
 
     Ok(run_id)
+}
+
+/// Record that a sandboxed Run's container is up (#410 `SandboxPrepReady`), which
+/// since #445 is also the moment the spawns deferred by
+/// [`event_log::RunState::sandbox_spawn_block`] become legal.
+///
+/// The event is the ONLY thing that lifts the spawn precondition, so every path that
+/// makes the container real must go through here: the create-time prep task, `resume_run`
+/// re-arming a terminal Run, and boot recovery reconciling a live one. Without this a Run
+/// whose prep completed outside the create path (daemon restart mid-prep, resume of a
+/// Run that failed *during* its prep) would keep a `pending` projection for ever and
+/// every spawn would be deferred for ever — the deadlock the precondition must not
+/// create.
+///
+/// Idempotent: the projection assigns `Ready`, so a second call is a no-op in effect.
+/// It deliberately does NOT advance the Run — the create path pairs it with
+/// `spawn_ready_after_event`, `resume_run` with `re_evaluate_after_command`, and boot
+/// recovery with its own reconciliation, and folding an advance in here would make this
+/// a scheduling entry point (ADR-0009).
+pub(crate) async fn mark_sandbox_prep_ready(state: &AppState, run_id: &str) {
+    emit_run_event(state, run_id, event_log::EventKind::SandboxPrepReady, None).await;
+}
+
+/// Abandon a just-finished sandbox prep whose Run went terminal while it ran (#445),
+/// returning whether it abandoned.
+///
+/// The observed damage this closes: on a Run killed by the spawn race, `container
+/// Created` landed 27-35 s *after* `run_failed`, then `sandbox_prep_ready` was emitted
+/// on a terminal Run — a container nobody can ever exec into, plus a prep-ready banner
+/// on a corpse. The spawn precondition removes the cause; this removes the residue for
+/// the cases that remain legitimate (the user stops or kills a Run mid-prep).
+///
+/// Removes the container (`docker rm -f`, idempotent and best-effort) but deliberately
+/// KEEPS the staging: staging is purged by `cleanup_run` at archive, and destroying it
+/// here would also destroy the transcripts `merge_back` harvests. The in-flight
+/// filesystem walk itself is not interrupted — `sandbox_staging::prepare` is a sync walk
+/// in a pure module with no cancellation seam — so a Run stopped mid-staging still pays
+/// for the copy already under way. Bounded and inert: no container, no event, no spawn.
+async fn abandon_prep_if_run_is_terminal(state: &AppState, run_id: &str) -> bool {
+    let Some((_, run_state)) = reload_run_state(state, run_id).await else {
+        // No projection at all: the Run was forgotten (#328) under the prep. Same
+        // verdict — nothing may be spawned, and the container must not linger.
+        warn!("Run {run_id}: sandbox prep finished for a run with no projected state — abandoning");
+        remove_sandbox_container_best_effort(state, run_id);
+        return true;
+    };
+    if !run_state.status.is_terminal() {
+        return false;
+    }
+    warn!(
+        "Run {run_id}: sandbox prep finished but the run is already {:?} — abandoning \
+         (no prep-ready event, no spawn); removing its container",
+        run_state.status
+    );
+    remove_sandbox_container_best_effort(state, run_id);
+    true
+}
+
+/// `docker rm -f pdo-sbx-<run_id>` on a blocking thread, best-effort (#445). Split out
+/// so the abandonment path reads as one line and never blocks the executor.
+fn remove_sandbox_container_best_effort(state: &AppState, run_id: &str) {
+    let docker_bin = state
+        .docker_cmd_override
+        .clone()
+        .unwrap_or_else(|| "docker".to_string());
+    let rid = run_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = sandbox_container::remove(&docker_bin, &rid) {
+            warn!(
+                "Run {rid}: failed to remove the abandoned sandbox container (best-effort): {e:#}"
+            );
+        }
+    });
+}
+
+/// Fail a sandboxed Run *loud* when its eager prep can't complete (#407 D4).
+/// `RunFailed` is terminal + unguarded (mirror `fail_spawn_before_start`): a Run
+/// whose container never came up must move terminal, never wedge `Running` with
+/// no live node — and NEVER fall back to a host spawn.
+pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason: &str) {
+    error!("Run {run_id}: sandbox prep failed — {reason}");
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    if let Err(e) = append_event(state, &run_failed).await {
+        error!("Run {run_id}: failed to append RunFailed after sandbox prep failure: {e}");
+    }
 }
 
 fn spawn_manager_session(
@@ -5777,8 +6455,14 @@ fn spawn_manager_session(
     run_id: &str,
     worktree_dir: &std::path::Path,
     name_hint: prompt_augmenter::RunNameHint,
+    sandboxed: bool,
 ) {
-    let daemon_url = format!("http://localhost:{}", state.port);
+    // #447: the URL must be the one reachable from the side this manager will run
+    // on. A sandboxed manager execs into the Run's container, where `localhost` is
+    // the container — every `curl` of its own preamble hit nothing, and the manager
+    // reported the daemon dead (falsely, and with confidence) instead of issuing its
+    // commands. `sandboxed` is already in hand two lines below for the `SandboxWrap`.
+    let daemon_url = sandbox_container::daemon_url(state.port, sandboxed);
 
     let static_prompt = std::fs::read_to_string(
         state
@@ -5793,6 +6477,15 @@ fn spawn_manager_session(
         prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
+    // #407: the manager runs inside the Run's container too when sandboxed. Marker
+    // = the manager session name; workdir = the pipeline worktree.
+    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: worktree_dir,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -5804,6 +6497,7 @@ fn spawn_manager_session(
         state.tmux_cmd_override.as_deref(),
         // manager has no NodeDef — always an agent at the account default (#296)
         tmux_session_manager::SessionTail::Agent { model: None },
+        sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -5901,11 +6595,101 @@ fn settings_field_str(
     })
 }
 
+/// String sibling of [`settings_field`] for an *enum* knob with a built-in NON-null
+/// default (#411 `image_source`). Same `{effective, source, stored, env, default}`
+/// shape as [`settings_field_str`], but `effective`/`default` are always present
+/// strings (there is a meaningful built-in default, unlike `default_model`).
+fn settings_field_enum(
+    effective: &str,
+    source: &str,
+    stored: Option<&str>,
+    env: Option<&str>,
+    default: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
+/// String sibling of [`settings_field`] for a knob whose default is a
+/// machine-specific PATH (#431 `dockerfile_path`): unlike [`settings_field_str`] the
+/// `default` tier is a real value, and unlike [`settings_field_enum`] both `effective`
+/// and `default` are nullable — resolving the default needs `$HOME` and can fail.
+fn settings_field_path(
+    effective: Option<&str>,
+    source: &str,
+    stored: Option<&str>,
+    env: Option<&str>,
+    default: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
+/// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
+/// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
+/// round-trip, short enough that a user who starts Docker mid-session sees `full`/
+/// `minimal` un-gray within seconds.
+const DOCKER_PROBE_TTL: Duration = Duration::from_secs(10);
+/// Hard cap on how long the probe may block the `/settings` response (#410). A cold
+/// or wedged Docker daemon must never hang the settings page — on timeout we report
+/// `available: false` for this fetch and re-probe on the next.
+const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Return the cached Docker availability probe, refreshing it under `spawn_blocking`
+/// with a short `timeout` when the cache is empty or older than [`DOCKER_PROBE_TTL`]
+/// (#410). Never shells out on the runtime thread; a timeout yields an
+/// `available: false` result (advisory only — the run-advance fail-fast stays the
+/// authoritative gate). Mirrors the `docker_bin` edge-resolution of the rest of the
+/// sandbox wiring.
+async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
+    let mut guard = state.docker_probe_cache.lock().await;
+    if let Some((at, probe)) = guard.as_ref() {
+        if at.elapsed() < DOCKER_PROBE_TTL {
+            return probe.clone();
+        }
+    }
+    let docker_bin = state
+        .docker_cmd_override
+        .as_deref()
+        .unwrap_or("docker")
+        .to_string();
+    let probe = match tokio::time::timeout(
+        DOCKER_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || sandbox_image::probe_docker(&docker_bin)),
+    )
+    .await
+    {
+        Ok(Ok(p)) => p,
+        // Timed out or the blocking task panicked/joined-error: treat as unavailable
+        // for this fetch (advisory), and don't cache the transient failure long — a
+        // fresh probe runs next time the TTL check sees an entry we still stamp now.
+        _ => sandbox_image::DockerProbe {
+            available: false,
+            reason: Some(sandbox_image::DOCKER_DAEMON_UNREACHABLE_MSG.to_string()),
+        },
+    };
+    *guard = Some((Instant::now(), probe.clone()));
+    probe
+}
+
 /// Build the `GET /settings` view: per knob, the effective value, the winning
 /// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
 /// computed by each knob's own resolver, so it can never drift from what the
-/// daemon uses at spawn / sweep / tick time.
-async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value, sqlx::Error> {
+/// daemon uses at spawn / sweep / tick time. Also folds in the advisory
+/// `sandbox_docker` probe (#410) so the NewRunModal fetches the default AND Docker
+/// availability in one round-trip.
+async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx::Error> {
+    let db = &state.db;
     let cfg = instance_config::get(db).await?;
 
     // --- session cap (count) ---
@@ -5964,11 +6748,176 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
         "default"
     };
 
+    // --- sandbox image source (enum ; built-in default `registry`) (#411) ---
+    // The empty-string filter mirrors the resolver: a stored `""` is treated as
+    // unset. `effective` is computed by the SAME resolver ensure_image consumes, so
+    // the disclosed value can never drift from what the daemon actually uses (#373).
+    let img_stored = cfg.image_source.as_deref().filter(|s| !s.is_empty());
+    let img_env = sandbox_image::env_image_source();
+    let img_effective = sandbox_image::image_source_with(cfg.image_source.clone());
+    let img_source = if img_stored.is_some() {
+        "stored"
+    } else if img_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
+    // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
+    // Same discipline as `image_source`: the empty-string filter treats a stored `""`
+    // as unset, and `effective` is computed by the SAME resolver the create-run
+    // chokepoint consumes, so the disclosed value can never drift (#373).
+    let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
+    let sbx_env = event_log::DEFAULT_SANDBOX_ENV;
+    let sbx_env_val = std::env::var(sbx_env)
+        .ok()
+        .as_deref()
+        .and_then(event_log::SandboxMode::parse)
+        .map(|m| m.as_str().to_string());
+    let sbx_effective = event_log::default_sandbox_with(cfg.default_sandbox.clone());
+    let sbx_source = if sbx_stored.is_some() {
+        "stored"
+    } else if sbx_env_val.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+    // #432: the winning tier may name a staging profile that does not exist, and every
+    // Run it would produce dies with a 400. `put_settings` gates the *stored* tier, but
+    // the **env** tier (`PDO_DEFAULT_SANDBOX`) passes through no validator at all by
+    // construction — so the only honest place to surface it is here, as an advisory
+    // `reason` beside the value (mirror of `sandbox_docker.reason`).
+    let sbx_reason = match sbx_effective.profile() {
+        None => None,
+        Some(name) => match sandbox_profile::exists(db, name).await {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "no staging profile named `{name}` — every Run that falls back to this \
+                 default will fail at launch (tier: {sbx_source})"
+            )),
+            Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
+        },
+    };
+
+    // --- resolved sandbox Dockerfile (path ; default = <sandbox_root>/Dockerfile) (#431) ---
+    // `sandbox_home_roots` honours `sandbox_home_override` (the layer-3 seam, #181), so
+    // this view discloses the SAME path the prep will consume. A missing `$HOME` is
+    // pathological: degrade to null tiers + a `reason`, never 500 the settings page.
+    // `effective` comes from the SAME resolver `ensure_image` consumes (#373).
+    let dfp_stored = cfg.dockerfile_path.as_deref().filter(|s| !s.is_empty());
+    let dfp_env = sandbox_image::env_dockerfile_path();
+    let dfp_resolved = sandbox_run::sandbox_home_roots(state)
+        .ok()
+        .map(|(_, sandbox_root)| {
+            (
+                sandbox_image::dockerfile_with(cfg.dockerfile_path.clone(), &sandbox_root),
+                sandbox_image::default_dockerfile_path(&sandbox_root),
+            )
+        });
+    let dfp_effective = dfp_resolved
+        .as_ref()
+        .map(|(r, _)| r.path.to_string_lossy().into_owned());
+    let dfp_default = dfp_resolved
+        .as_ref()
+        .map(|(_, d)| d.to_string_lossy().into_owned());
+    // The winning tier comes from the resolver itself when it ran; with no `$HOME` the
+    // stored/env tiers still decide, and only the default tier is unknowable.
+    let dfp_source = match dfp_resolved.as_ref() {
+        Some((r, _)) => r.source.as_str(),
+        None if dfp_stored.is_some() => "stored",
+        None if dfp_env.is_some() => "env",
+        None => "default",
+    };
+
+    // --- the image tag that Dockerfile yields (#431) ---
+    // Mirror of `sandbox_docker`'s shape: no stored/env/default tier, just an observed
+    // fact. Computed by the SAME `dockerfile_hash`/`local_image_ref` as `ensure_image`
+    // (single source of truth, lesson #373) so "editing the Dockerfile changes the tag,
+    // hence a rebuild" stops being tribal knowledge. Best-effort read: an absent or
+    // unreadable file yields `tag: null` + a `reason`, never a 500. A ~3 KB read + a
+    // SHA-256 is far below what `list_pipelines` or `get_run` already do, and there is no
+    // `docker_probe_cached`-style TTL because a local read cannot hang for 3 s.
+    let (sandbox_image_tag, sandbox_image_reason) = match dfp_resolved.as_ref() {
+        None => (
+            None,
+            Some("HOME is not set; cannot resolve the sandbox Dockerfile".to_string()),
+        ),
+        Some((r, _)) => match std::fs::read(&r.path) {
+            Ok(bytes) => (Some(sandbox_image::local_image_ref(&bytes)), None),
+            Err(e) => (None, Some(format!("cannot read {}: {e}", r.path.display()))),
+        },
+    };
+
+    // --- advisory Docker availability probe (#410) ---
+    // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
+    // so the modal learns the default AND whether Docker can run a sandbox in ONE
+    // fetch. Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
+    // (ADR-0030 pt 4) stays the authoritative gate.
+    let docker_probe = docker_probe_cached(state).await;
+
+    // --- staging profiles: NAMES ONLY, plus the host $HOME (#432) ---
+    // NAMES ONLY is part of the contract, not an oversight: this payload is on the hot
+    // path of the launch dialog (which fetches settings on every open). Serving resolved
+    // entry lists here would make a future slice quietly pay a per-profile fold for a
+    // `<select>` that needs three strings. The editor reads
+    // `GET /settings/sandbox-profiles` for the rest.
+    //
+    // `home` is an observed FACT (shape of `sandbox_image`/`sandbox_docker`, no tier):
+    // `onPick` from the filesystem explorer yields an ABSOLUTE path while an entry is
+    // RELATIVE to `$HOME`, and no endpoint exposed `$HOME` before this. It MUST honour
+    // `sandbox_home_override` — otherwise the layer-3 harness and the daemon would
+    // disagree about what "under $HOME" means.
+    let profile_names = sandbox_profile::list_names(db).await?;
+    let sandbox_profiles: Vec<serde_json::Value> = profile_names
+        .iter()
+        .map(|(name, is_virtual)| serde_json::json!({ "name": name, "virtual": is_virtual }))
+        .collect();
+    let host_home = sandbox_run::sandbox_home_roots(state)
+        .ok()
+        .map(|(home, _)| home.to_string_lossy().into_owned());
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
+        "image_source": settings_field_enum(
+            img_effective.as_str(),
+            img_source,
+            img_stored,
+            img_env.as_deref(),
+            sandbox_image::ImageSource::DEFAULT.as_str(),
+        ),
+        "default_sandbox": {
+            "effective": sbx_effective.as_str(),
+            "source": sbx_source,
+            "stored": sbx_stored,
+            "env": sbx_env_val,
+            "default": event_log::SandboxMode::OFF_WIRE,
+            // #432: additive sixth key, `null` when the winning tier resolves. Only
+            // `default_sandbox` carries it — it is the one enum knob whose value space
+            // is open (a profile name), hence the one that can point at nothing.
+            "reason": sbx_reason,
+        },
+        // #432: names only (see the note above), and the host `$HOME` as an observed fact.
+        "sandbox_profiles": sandbox_profiles,
+        "home": host_home,
+        "dockerfile_path": settings_field_path(
+            dfp_effective.as_deref(),
+            dfp_source,
+            dfp_stored,
+            dfp_env.as_deref(),
+            dfp_default.as_deref(),
+        ),
+        "sandbox_image": {
+            "tag": sandbox_image_tag,
+            "reason": sandbox_image_reason,
+        },
+        "sandbox_docker": {
+            "available": docker_probe.available,
+            "reason": docker_probe.reason,
+            "checked_at": event_log::now_iso(),
+        },
         "updated_at": cfg.updated_at,
     }))
 }
@@ -5977,7 +6926,7 @@ async fn build_settings_view(db: &sqlx::SqlitePool) -> Result<serde_json::Value,
 /// `{effective, source, stored, env, default}` (#129, ADR-0015). `GET /sessions`
 /// stays the lean status-bar view; this is the settings page's rich view.
 async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
-    match build_settings_view(&state.db).await {
+    match build_settings_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6019,9 +6968,48 @@ async fn put_settings(
             return bad("guard_timeout_secs must be between 1 and 600 seconds");
         }
     }
+    if let Some(s) = req.image_source.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
+        // non-variant → 400 (fail-fast, no silent default) (#411).
+        if !s.is_empty() && sandbox_image::ImageSource::parse(s).is_none() {
+            return bad("image_source must be `registry` or `dockerfile`");
+        }
+    }
+    if let Some(s) = req.default_sandbox.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`); anything else
+        // must be `off` or a staging profile that RESOLVES → 400 otherwise (fail-fast,
+        // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
+        if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
+            return bad(&msg);
+        }
+    }
+    if let Some(p) = req.dockerfile_path.as_deref() {
+        // "" = clear sentinel (accepted, normalised to NULL by `update`). Otherwise:
+        // an absolute path AND an existing regular file. `is_file()` and NOT `exists()`
+        // (which is TRUE for a directory).
+        //
+        // This is the FIRST put_settings validator that touches the filesystem (the
+        // others are pure: a numeric bound, an enum parse). One `stat(2)`, and
+        // `fs_browse` already does blocking IO in an async handler — precedent enough.
+        //
+        // Necessary but NOT sufficient, so it is a UX gate at the moment of the error
+        // (with the picker to hand), never the authoritative one: the **env** tier never
+        // passes through here at all, the file can be removed / renamed / its volume
+        // unmounted between save and run, and the DB can be carried to another machine.
+        // The authoritative gate is `ensure_image`'s `is_file()` bail at prep.
+        if !p.is_empty() {
+            let path = std::path::Path::new(p);
+            if !path.is_absolute() {
+                return bad("dockerfile_path must be an absolute path");
+            }
+            if !path.is_file() {
+                return bad("dockerfile_path must point to an existing regular file");
+            }
+        }
+    }
 
     match instance_config::update(&state.db, req).await {
-        Ok(_) => match build_settings_view(&state.db).await {
+        Ok(_) => match build_settings_view(&state).await {
             Ok(view) => Json(view).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -6035,6 +7023,396 @@ async fn put_settings(
         )
             .into_response(),
     }
+}
+
+// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
+
+/// Serialise one resolved entry for the editor: the path, what it points at, whether it
+/// comes from the built-in default or the user's extras, whether it is currently on, and
+/// the server-owned advisories.
+///
+/// Advisories are computed **here, server-side** — deliberately. Deriving the ≈1 GB
+/// warning or the sensitivity flag in the client would re-open exactly the drift #373
+/// cost us, and the size figure is a measurement recorded in `sandbox_staging`, not
+/// something a browser can know. `exists` is one `symlink_metadata` per entry (≤ a dozen
+/// per profile) — nothing like the recursive `plugins/**/node_modules` walk the settings
+/// handler explicitly budgets against.
+fn sandbox_entry_view(
+    home_root: Option<&std::path::Path>,
+    path: &str,
+    default_entry: Option<&sandbox_profile::DefaultEntry>,
+    enabled: bool,
+) -> serde_json::Value {
+    let sensitive = sandbox_profile::SENSITIVE_PREFIXES
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")));
+    // A glob is never stat-ed: the pattern itself is not a path.
+    let is_glob = default_entry.is_some_and(|d| d.kind == sandbox_profile::EntryKind::Glob);
+    let on_disk = match (home_root, is_glob) {
+        (Some(home), false) => Some(home.join(path)),
+        _ => None,
+    };
+    let exists = on_disk
+        .as_ref()
+        .map(|p| std::fs::symlink_metadata(p).is_ok());
+    let kind = match default_entry.map(|d| d.kind) {
+        Some(k) => k,
+        // An extra's kind is an OBSERVED fact — the picker knows it, but the stored diff
+        // does not, and re-deriving it here keeps the row honest after a `rm -rf`.
+        None => match on_disk.as_ref().map(|p| p.is_dir()) {
+            Some(true) => sandbox_profile::EntryKind::Dir,
+            _ => sandbox_profile::EntryKind::File,
+        },
+    };
+    serde_json::json!({
+        "path": path,
+        "kind": kind,
+        "from_default": default_entry.is_some(),
+        "enabled": enabled,
+        "resynthesised": default_entry.is_some_and(|d| d.resynthesised),
+        "note": default_entry.and_then(|d| d.note),
+        "sensitive": sensitive,
+        "exists": exists,
+    })
+}
+
+/// The full editor view of one resolved profile.
+fn sandbox_profile_view(
+    home_root: Option<&std::path::Path>,
+    profile: &sandbox_profile::ResolvedProfile,
+) -> serde_json::Value {
+    let base = sandbox_profile::base_entries(&profile.name);
+    // Default entries first, in the constant's own reading order (NOT sorted): the editor
+    // shows a stable checklist, and reordering it on every edit would be hostile.
+    let mut entries: Vec<serde_json::Value> = sandbox_profile::DEFAULT_FULL_ENTRIES
+        .iter()
+        .filter(|d| base.contains(&d.path))
+        .map(|d| {
+            let enabled = profile.resolved.entries.iter().any(|e| e == d.path);
+            sandbox_entry_view(home_root, d.path, Some(d), enabled)
+        })
+        .collect();
+    // Then the extras, in stored order.
+    for extra in &profile.extras {
+        let enabled = profile.resolved.entries.iter().any(|e| e == extra);
+        entries.push(sandbox_entry_view(home_root, extra, None, enabled));
+    }
+    let floor: Vec<serde_json::Value> = sandbox_profile::FLOOR_GUARANTEES
+        .iter()
+        .map(|g| serde_json::json!({ "id": g.id, "label": g.label, "path": g.path }))
+        .collect();
+    serde_json::json!({
+        "name": profile.name,
+        "virtual": profile.is_virtual,
+        "materialised": profile.materialised,
+        "disabled": profile.disabled,
+        "extras": profile.extras,
+        // The FROZEN-shaped list: exactly what a Run created now would stage.
+        "resolved": profile.resolved.entries,
+        "entries": entries,
+        // Signalled no-ops, never errors (ADR-0031 §2): the default may lose an entry
+        // tomorrow, and a `disabled` for an entry this version does not have yet must be
+        // remembered.
+        "redundant_extras": profile.resolved.redundant_extras,
+        "inactive_disabled": profile.resolved.inactive_disabled,
+        "floor": floor,
+        "sensitive_prefixes": sandbox_profile::SENSITIVE_PREFIXES,
+        "updated_at": profile.updated_at,
+    })
+}
+
+/// `GET /settings/sandbox-profiles` — every profile the instance can serve: the two
+/// virtual defaults ∪ the materialised rows, each fully resolved.
+async fn list_sandbox_profiles(State(state): State<Arc<AppState>>) -> Response {
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+    let names = match sandbox_profile::list_names(&state.db).await {
+        Ok(n) => n,
+        Err(e) => {
+            error!("failed to list sandbox profiles: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let mut out = Vec::with_capacity(names.len());
+    for (name, _) in &names {
+        match sandbox_profile::resolve(&state.db, name).await {
+            Ok(Some(p)) => out.push(sandbox_profile_view(home_root.as_deref(), &p)),
+            // Unreachable: the name came from the same store one statement ago.
+            Ok(None) => warn!("sandbox profile `{name}` vanished mid-list"),
+            Err(e) => {
+                error!("failed to resolve sandbox profile `{name}`: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "profiles": out,
+        "home": home_root.map(|h| h.to_string_lossy().into_owned()),
+    }))
+    .into_response()
+}
+
+/// `GET /settings/sandbox-profiles/{name}` — one resolved profile, or 404.
+async fn get_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+    match sandbox_profile::resolve(&state.db, &name).await {
+        Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("no staging profile named `{name}`") })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// The body of `PUT /settings/sandbox-profiles/{name}` — the **diff**, never a snapshot
+/// (ADR-0031 §2). Both fields default to empty so a bare `{}` means "materialise this
+/// profile exactly as the current default".
+#[derive(Deserialize)]
+struct UpsertSandboxProfileRequest {
+    #[serde(default)]
+    disabled: Vec<String>,
+    #[serde(default)]
+    extras: Vec<String>,
+}
+
+/// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
+///
+/// `upsert` and not create-then-update: the caller cannot know whether `full` already has
+/// a row, and ADR-0031 §2 says editing it *is* what materialises one.
+///
+/// Validation, all fail-fast before anything is written:
+/// - the name against the grammar (`off` and `""` reserved, no case folding);
+/// - each `extras` path through [`sandbox_profile::validate_entry`] — absolute, `..`,
+///   backslash, NUL, glob, `.claude` bare, `.pdo`, and the three floor-owned paths are
+///   rejected — and it must **exist under `$HOME` right now**, an early UX gate in the
+///   same spirit as #431's `dockerfile_path` (necessary, never sufficient: `prepare`
+///   warns-and-skips, and mount rule M1 handles a path that vanishes later);
+/// - each `disabled` name by **membership in the built-in default**, which is also what
+///   makes the default's `.claude/*.md` glob unauthorable by hand;
+/// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would freeze
+///   into `RunStarted` a winner the user never picked.
+async fn put_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+    Json(req): Json<UpsertSandboxProfileRequest>,
+) -> Response {
+    let bad = |msg: String| -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response()
+    };
+
+    let name = match sandbox_profile::validate_profile_name(&name) {
+        Ok(n) => n,
+        Err(msg) => return bad(msg),
+    };
+
+    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
+
+    // Extras: validate → normalise → (exists under $HOME) → sort → dedup.
+    let mut extras: Vec<String> = Vec::with_capacity(req.extras.len());
+    for raw in &req.extras {
+        let norm = match sandbox_profile::validate_entry(raw) {
+            Ok(n) => n,
+            Err(msg) => return bad(msg),
+        };
+        if let Some(home) = home_root.as_deref() {
+            let abs = home.join(&norm);
+            if std::fs::symlink_metadata(&abs).is_err() {
+                return bad(format!(
+                    "`{norm}`: nothing at {} — pick a file or folder that exists under \
+                     your home directory",
+                    abs.display()
+                ));
+            }
+        }
+        if !extras.contains(&norm) {
+            extras.push(norm);
+        }
+    }
+    extras.sort();
+
+    // Disabled: validated by MEMBERSHIP in the authored default, not by `validate_entry`.
+    // Two consequences, both wanted: the default's `.claude/*.md` glob is uncheckable but
+    // never hand-writable, and an *extra* can only be removed by dropping it from
+    // `extras` — unchecking is for defaults only, which keeps the diff unambiguous.
+    let mut disabled: Vec<String> = Vec::with_capacity(req.disabled.len());
+    for raw in &req.disabled {
+        let candidate = raw.trim().to_string();
+        if candidate.is_empty() {
+            return bad("a `disabled` entry cannot be blank".to_string());
+        }
+        if !sandbox_profile::DEFAULT_FULL_ENTRIES
+            .iter()
+            .any(|d| d.path == candidate)
+        {
+            return bad(format!(
+                "`{candidate}` is not a built-in default entry, so it cannot be unchecked \
+                 — remove it from the extras instead"
+            ));
+        }
+        if !disabled.contains(&candidate) {
+            disabled.push(candidate);
+        }
+    }
+    disabled.sort();
+
+    if let Some(clash) = disabled.iter().find(|d| extras.contains(d)) {
+        return bad(format!(
+            "`{clash}` is both unchecked and added as an extra — pick one"
+        ));
+    }
+
+    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras).await {
+        Ok(_) => match sandbox_profile::resolve(&state.db, &name).await {
+            Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
+            Ok(None) | Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "profile written but not readable back" })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /settings/sandbox-profiles/{name}` — drop the materialised row.
+///
+/// **Unconditional** (ADR-0031 §7: a *soft* guard-rail, no referential integrity in the
+/// database). Deleting an edited `full`/`minimal` reverts it to its virtual default;
+/// deleting a user profile makes every future Run that references it fail loud. Neither
+/// repoints anything — which is precisely what the referents dialog must say before the
+/// user confirms.
+async fn delete_sandbox_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    match sandbox_profile::delete(&state.db, &name).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!(
+                    "no materialised staging profile named `{name}` \
+                     (an unedited built-in default has no row to delete)"
+                )
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /settings/sandbox-profiles/{name}/referents` — who still points at this profile.
+///
+/// Server-side because the frontend **cannot** derive the third class: `RunListEntry`
+/// does not carry `sandbox` (only the full `RunState` does), so a client would need N
+/// requests. Three classes, and the distinction between the first two and the third is
+/// the whole point of the dialog:
+/// - `instance_default` / `triggers` — deleting will NOT repoint them, and the next Run
+///   they produce **fails**; it does not fall back to a default;
+/// - `runs` — live Runs that already froze their entry list at start (ADR-0031 §6) and
+///   are therefore **unaffected**.
+async fn get_sandbox_profile_referents(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    // Instance default: the RESOLVED tier, so a stored value shadowed by `PDO_DEFAULT_SANDBOX`
+    // is not reported as a referent when it is not the one that wins.
+    let stored_default = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|c| c.default_sandbox);
+    let instance_default =
+        event_log::default_sandbox_with(stored_default).profile() == Some(name.as_str());
+
+    let triggers: Vec<serde_json::Value> = match trigger_store::list(&state.db).await {
+        Ok(list) => list
+            .iter()
+            .filter(|t| {
+                t.sandbox
+                    .as_deref()
+                    .and_then(event_log::SandboxMode::parse)
+                    .as_ref()
+                    .and_then(event_log::SandboxMode::profile)
+                    == Some(name.as_str())
+            })
+            .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "enabled": t.enabled }))
+            .collect(),
+        Err(e) => {
+            error!("failed to list triggers for profile referents: {e}");
+            Vec::new()
+        }
+    };
+
+    // Live Runs: one indexed pass over `run_started` payloads, excluding any run that
+    // already emitted a terminal event. Cheaper than projecting each run, and terminality
+    // is exactly "a terminal event exists" for this purpose.
+    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
+        "SELECT e.run_id, e.payload FROM events e \
+         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
+               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived') \
+           ) \
+         ORDER BY e.ts DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+    let runs: Vec<serde_json::Value> = match rows {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|(run_id, payload)| {
+                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                if val.get("sandbox")?.as_str()? != name {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "run_id": run_id,
+                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
+                    "name": val.get("name").and_then(|v| v.as_str()),
+                }))
+            })
+            .collect(),
+        Err(e) => {
+            error!("failed to query runs for profile referents: {e}");
+            Vec::new()
+        }
+    };
+
+    Json(serde_json::json!({
+        "name": name,
+        "instance_default": instance_default,
+        "triggers": triggers,
+        "runs": runs,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -6336,7 +7714,22 @@ async fn get_run(
     match event_log::project(&events) {
         Some(mut run_state) => {
             let repo_root = effective_repo_root(&state, &run_state);
-            augment_run_state_from_disk(&mut run_state, &repo_root);
+            // #408: read the cost transcripts from the sandboxed Run's staged home
+            // while it is live, `~/.claude/projects/` otherwise. HOME absent →
+            // degrade to the host root (never fail a read).
+            let (home_root, sandbox_root) =
+                sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+                    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+                    let sandbox = home.join(".pdo").join("sandbox");
+                    (home, sandbox)
+                });
+            let projects_root = sandbox_run::transcripts_root(
+                !run_state.sandbox.is_off(),
+                &run_state.run_id,
+                &home_root,
+                &sandbox_root,
+            );
+            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root);
             Json(run_state).into_response()
         }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
@@ -6762,6 +8155,12 @@ struct SweepNodeProbes<'a> {
     socket: &'a str,
     session_name: &'a str,
     working_dir: &'a Path,
+    /// The Claude Code `projects/` root to read this node's transcript from (#408
+    /// observability seam): the sandboxed Run's staged home while it is live,
+    /// `~/.claude/projects/` otherwise. Resolved once per Run in the sweep via
+    /// [`sandbox_run::transcripts_root`]; the encoded cwd segment is still derived
+    /// from `working_dir` (the single source of truth), never re-encoded here.
+    projects_root: &'a Path,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
     run_id: &'a str,
@@ -6776,7 +8175,7 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn jsonl_mtime(&self) -> Option<std::time::SystemTime> {
-        stale_detector::find_session_jsonl(self.working_dir)
+        stale_detector::find_session_jsonl(self.projects_root, self.working_dir)
             .and_then(|p| std::fs::metadata(&p).ok())
             .and_then(|m| m.modified().ok())
     }
@@ -6837,6 +8236,22 @@ async fn run_stale_detection(state: &AppState) {
     let socket = state.tmux_socket();
     let now = std::time::SystemTime::now();
 
+    // #408: resolve the sandbox home roots once for the whole sweep. HOME absent
+    // must NOT abort the sweep (unlike `context_from_state` at create, which
+    // fails loud) — degrade to the host `~/.claude` root and log. `off` runs
+    // ignore `sandbox_root` anyway (the seam returns the host root for them).
+    let (home_root, sandbox_root) = match sandbox_run::sandbox_home_roots(state) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(
+                "stale sweep: cannot resolve sandbox home roots, treating all runs as host ({e:#})"
+            );
+            let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+            let sandbox = home.join(".pdo").join("sandbox");
+            (home, sandbox)
+        }
+    };
+
     // #290 (Slice 1, observability only): count of live nodes found stuck on
     // Claude Code's usage-limit menu across this whole sweep. Recomputed each
     // sweep (leak-free — a node that leaves the live set drops out naturally);
@@ -6864,6 +8279,17 @@ async fn run_stale_detection(state: &AppState) {
         let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
         let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
 
+        // #408: the Claude Code `projects/` root this Run's transcripts live under
+        // — the staged home while a sandboxed Run is live, `~/.claude/projects/`
+        // otherwise. The per-node encoded dirname is still derived from the
+        // node's `working_dir` inside the probe; the seam only swaps the base.
+        let projects_root = sandbox_run::transcripts_root(
+            !run_state.sandbox.is_off(),
+            run_id,
+            &home_root,
+            &sandbox_root,
+        );
+
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
             let node_type = find_node_type(&run_state, node_id);
@@ -6885,6 +8311,7 @@ async fn run_stale_detection(state: &AppState) {
                 socket: &socket,
                 session_name: &session_name,
                 working_dir: &working_dir,
+                projects_root: &projects_root,
                 pipeline_path: &pipeline_path,
                 artifacts_dir: &artifacts_dir,
                 run_id,
@@ -6939,7 +8366,14 @@ async fn run_stale_detection(state: &AppState) {
                     // The session is already gone; reaping captures whatever
                     // remains (usually nothing) and is a no-op otherwise. Its
                     // slot freed. Re-drive throttled `waiting` nodes (#159).
-                    reap_node_session(state, &repo_root, run_id, node_id, *iter);
+                    reap_node_session(
+                        state,
+                        &repo_root,
+                        run_id,
+                        node_id,
+                        *iter,
+                        !run_state.sandbox.is_off(),
+                    );
                     retry_waiting_nodes(state).await;
                 }
                 stale_detector::Detection::AutoComplete => {
@@ -7164,6 +8598,16 @@ async fn node_pane(
         );
 
         if working_dir.exists() {
+            // #407: a resumed sandboxed session re-enters its container (6th tail
+            // path). Marker = the session name; workdir = the node's working dir.
+            let sandbox_wrap =
+                (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+                    docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                    uid: sandbox_container::host_uid(),
+                    gid: sandbox_container::host_gid(),
+                    marker: &session_name,
+                    workdir: &working_dir,
+                });
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -7172,6 +8616,7 @@ async fn node_pane(
                 iter,
                 state.port,
                 state.tmux_cmd_override.as_deref(),
+                sandbox_wrap.as_ref(),
             ) {
                 warn!("Failed to resume session {session_name}: {e}");
                 return Json(PaneResponse {
@@ -7420,6 +8865,13 @@ async fn spawn_merge_resolver(
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
+    // #407: the merge resolver runs inside the Run's container when sandboxed.
+    // Project the (immutable) mode; default `off` if the state can't be reloaded.
+    let sandbox_mode = reload_run_state(state, run_id)
+        .await
+        .map(|(_, s)| s.sandbox)
+        .unwrap_or_default();
+
     let resolver_started = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -7435,6 +8887,13 @@ async fn spawn_merge_resolver(
     };
     let _ = append_event(state, &resolver_started).await;
 
+    let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: worktree_dir,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -7446,6 +8905,7 @@ async fn spawn_merge_resolver(
         state.tmux_cmd_override.as_deref(),
         // __merge_resolver__ has no NodeDef — agent at the account default (#296)
         tmux_session_manager::SessionTail::Agent { model: None },
+        sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -7856,11 +9316,22 @@ async fn node_done(
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
+    // #407/#432: whether this Run is sandboxed, for the targeted container kill. A
+    // `bool`, not the mode: the mode owns a String since profiles landed, and this value
+    // is captured into a detached `async move` where a reference cannot live.
+    let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail("node_done", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session,
         // so a completed node never holds a live session toward the tmux-collapse
         // point (#77/#78). Post-mortem inspection survives via the snapshot.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
         // run, re-drive throttled waiters, then the single completion gate. Everything
@@ -7914,13 +9385,22 @@ async fn node_fail(
     detach_terminal_tail("node_fail", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
         // Post-mortem inspection of the failed node survives via the snapshot.
-        let repo_root = match load_events(&tail_state.db, &tail_run).await {
+        // #407: capture repo_root AND the immutable sandbox mode from the same
+        // projection (the targeted container kill needs the mode).
+        let (repo_root, tail_sandbox) = match load_events(&tail_state.db, &tail_run).await {
             Ok(evs) => event_log::project(&evs)
-                .map(|s| effective_repo_root(&tail_state, &s))
-                .unwrap_or_else(|| tail_state.repo_root.clone()),
-            Err(_) => tail_state.repo_root.clone(),
+                .map(|s| (effective_repo_root(&tail_state, &s), !s.sandbox.is_off()))
+                .unwrap_or_else(|| (tail_state.repo_root.clone(), false)),
+            Err(_) => (tail_state.repo_root.clone(), false),
         };
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // Mark the run as failed
         let run_failed = event_log::Event {
@@ -8013,9 +9493,17 @@ async fn node_skip(
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
     let reason = req.reason.clone();
+    let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session.
-        reap_node_session(&tail_state, &repo_root, &tail_run, &tail_node, iter);
+        reap_node_session(
+            &tail_state,
+            &repo_root,
+            &tail_run,
+            &tail_node,
+            iter,
+            tail_sandbox,
+        );
 
         // End the run as a graceful no-op (#245) — distinct from RunFailed. This
         // short-circuits downstream: `spawn_ready_after_event` only spawns for a
@@ -8116,6 +9604,20 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         .map(|ns| ns.iter + 1)
         .unwrap_or(1);
 
+    // #445: the SECOND spawn path. This one does not route through `spawn_node` (it
+    // drives `node_primitives::start_node`), so it needs the sandbox precondition
+    // stated again — the same `docker exec` on a container that does not exist yet
+    // would die the same way. 409 rather than a silent defer: "start now" must not
+    // queue, and the operator who pressed the button deserves to read why (mirrors the
+    // session-cap arm below, which fails fast for exactly that reason).
+    if let Some(reason) = run_state.sandbox_spawn_block() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": reason })),
+        )
+            .into_response();
+    }
+
     // D4 (#204): pre-validate the start against the SAME transition guard that
     // backstops `append_event`, BEFORE the primitive spawns a tmux session — so
     // a start refused by the backstop never leaves an orphan session behind.
@@ -8175,6 +9677,7 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: resolve fresh so a force-spawn honours the instance default too
         // (wiring only one seam would leave this path at the account default —
         // a silent bug visible only on a manual force-spawn).
@@ -8277,7 +9780,14 @@ async fn node_stop(
     // killed, so the stopped node's post-mortem pane survives. `stop_node`
     // kills the session too (idempotent — reap already killed it).
     let repo_root = effective_repo_root(&state, &run_state);
-    reap_node_session(&state, &repo_root, &run_id, &node_id, iter);
+    reap_node_session(
+        &state,
+        &repo_root,
+        &run_id,
+        &node_id,
+        iter,
+        !run_state.sandbox.is_off(),
+    );
 
     let params = node_primitives::StopNodeParams {
         run_id: &run_id,
@@ -8425,6 +9935,7 @@ async fn node_retry(
         resolved_vars: &resolved_vars,
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
+        docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: retry honours the instance default like the live scheduler path.
         default_model: stored_default_model(&state.db).await,
     };
@@ -8990,6 +10501,44 @@ async fn run_command(
                 &tmux_session_manager::shell_session_name(&run_id),
             );
 
+            // #408 D5: resuming a sandboxed Run must re-arm its container before
+            // the scheduler `docker exec`s into it. Containers are created without
+            // `--restart` and `boot_recovery` skips terminal Runs, so after a host
+            // reboot the container is down — reviving a terminal sandboxed Run
+            // would otherwise spawn into a dead container ("failed to spawn tmux
+            // session"). Resurrect it (via `spawn_blocking`, `ensure_ready` may
+            // `docker build`) or fail EXPLICITLY — never a silent host fallback.
+            // Mirrors the run-shell guard (#407 D11).
+            if !run_state.sandbox.is_off() {
+                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                        .await
+                        .unwrap_or_else(|je| {
+                            Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
+                        }),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = prep {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("sandbox container unavailable: {e:#}")
+                        })),
+                    )
+                        .into_response();
+                }
+                // #445: the container is up again — say so in the log, or the spawn
+                // precondition would refuse every node the re-evaluation below proposes.
+                // Load-bearing for the Run that failed *during* its own prep: its
+                // projection is still `pending`, and resuming it is the operator's only
+                // recovery path. Emitted only after `ensure_ready` returned `Ok` (so the
+                // event never claims a container that isn't there) and only when the Run
+                // is actually blocked (so a routine resume adds no no-op event).
+                if run_state.sandbox_spawn_block().is_some() {
+                    mark_sandbox_prep_ready(&state, &run_id).await;
+                }
+            }
+
             let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("resume_run: run {run_id}");
@@ -9007,6 +10556,18 @@ async fn run_command(
 
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            // #407: also kill the process tree inside the container (best-effort,
+            // no-op for `off`). The tmux-side `docker exec` client death leaves the
+            // reparented container process alive.
+            let kill_sandbox = reload_run_state(&state, &run_id)
+                .await
+                .is_some_and(|(_, s)| !s.sandbox.is_off());
+            sandbox_run::kill_session_best_effort(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                kill_sandbox,
+                &run_id,
+                &session_name,
+            );
 
             let fail_event = event_log::Event {
                 id: None,
@@ -9091,6 +10652,18 @@ async fn run_command(
             // Kill existing session
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            // #407: also kill the in-container process tree before the re-spawn
+            // (best-effort, no-op for `off`) so the old session's container
+            // process doesn't linger alongside the new one.
+            let restart_sandbox = reload_run_state(&state, &run_id)
+                .await
+                .is_some_and(|(_, s)| !s.sandbox.is_off());
+            sandbox_run::kill_session_best_effort(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                restart_sandbox,
+                &run_id,
+                &session_name,
+            );
 
             let cmd_event = event_log::Event {
                 id: None,
@@ -9364,6 +10937,20 @@ async fn run_command(
                 source_branch,
                 name: None,
                 triggered_by: None,
+                // #407/#410: a retry preserves the original Run's isolation mode
+                // (immutable per-Run property projected from RunStarted). Wrapped in
+                // `Some` so it is treated as EXPLICIT at the chokepoint — the resolver
+                // must honour it exactly, never letting a changed instance default
+                // silently re-sandbox (or un-sandbox) a retried Run.
+                //
+                // #432: we HAVE `run_state.sandbox_entries` here and deliberately do NOT
+                // forward it. A retry is a NEW Run — new `run_id`, no node has staged
+                // anything yet — so there is no coherence to protect, and re-resolving is
+                // the only behaviour consistent with ADR-0031 §2 (a profile edited since
+                // must take effect). Do not "fix" this by threading the frozen list.
+                // Side effect, intended: a profile deleted since makes the retry 400,
+                // loudly, instead of quietly running something else.
+                sandbox: Some(run_state.sandbox.clone()),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -9407,9 +10994,12 @@ impl ReEvalSummary {
             SpawnOutcome::Throttled => self.skipped.push(format!(
                 "node '{node_id}' iter {iter} throttled into waiting (session cap)"
             )),
-            SpawnOutcome::Refused { reason } | SpawnOutcome::Failed { reason } => {
-                self.skipped.push(reason)
-            }
+            // #445: `Deferred` joins the two here rather than getting its own arm —
+            // its reason already reads as the operator sentence, and every consumer of
+            // `skipped` is a "why did nothing start" message.
+            SpawnOutcome::Refused { reason }
+            | SpawnOutcome::Deferred { reason }
+            | SpawnOutcome::Failed { reason } => self.skipped.push(reason),
         }
     }
 
@@ -9923,7 +11513,45 @@ async fn open_run_shell(
             .into_response();
     }
 
-    match tmux_session_manager::spawn_shell(&session, &worktree, &run_id, state.port) {
+    // #407 D11: a sandboxed run's shell must enter its container. The container
+    // lives from create to cleanup_run (= archive), coextensive with shell
+    // eligibility — EXCEPT after a host reboot, where boot_recovery skips terminal
+    // runs, so the container may be down. Resurrect it here, or fail EXPLICITLY —
+    // never fall back to a silent host bash.
+    if !run_state.sandbox.is_off() {
+        let prep = match sandbox_run::context_from_state(&state, &run_state).await {
+            Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                .await
+                .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = prep {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("sandbox container unavailable: {e:#}")
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // #407: the run shell enters the Run's container when sandboxed. Marker =
+    // the shell session name; workdir = the pipeline worktree.
+    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session,
+        workdir: &worktree,
+    });
+    match tmux_session_manager::spawn_shell(
+        &session,
+        &worktree,
+        &run_id,
+        state.port,
+        sandbox_wrap.as_ref(),
+    ) {
         Ok(()) => {
             info!("Opened run shell {session} in {}", worktree.display());
             (
@@ -10092,6 +11720,28 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     // #316: kill any ad-hoc run shell before the worktree is torn down.
     let shell_session = tmux_session_manager::shell_session_name(run_id);
     tmux_session_manager::kill(&socket, &shell_session);
+
+    // #407 D9 + #408 D-4: merge the transcripts back, then destroy the sandbox
+    // container + purge its staging, all BEFORE any `git worktree remove` below —
+    // the container bind-mounts the repo, so a live worktree removal under it
+    // would hit a busy mount. The tmux sessions were killed just above, so the
+    // staging is quiescent for the merge. `cleanup` merges first ("harvest before
+    // purge"), capturing any post-terminal growth (resume, late subagent flushes)
+    // the detached terminal merge missed; idempotent, so the double-merge is safe.
+    // Best-effort. No-op for `off`.
+    if !run_state.sandbox.is_off() {
+        match sandbox_run::sandbox_home_roots(state) {
+            Ok((home_root, sandbox_root)) => sandbox_run::cleanup(
+                state.docker_cmd_override.as_deref().unwrap_or("docker"),
+                &home_root,
+                &sandbox_root,
+                run_id,
+            ),
+            Err(e) => {
+                warn!("cleanup_run: cannot merge/purge sandbox staging for run {run_id}: {e:#}")
+            }
+        }
+    }
 
     let repo_root = effective_repo_root(state, &run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
@@ -10710,14 +12360,20 @@ fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_lo
     Some(parse_numstat(&stdout))
 }
 
-fn augment_run_state_from_disk(run_state: &mut event_log::RunState, repo_root: &std::path::Path) {
+fn augment_run_state_from_disk(
+    run_state: &mut event_log::RunState,
+    projects_root: &std::path::Path,
+    repo_root: &std::path::Path,
+) {
     // LOC is independent of the run YAML: the run branch lives in `repo_root`,
     // not the run dir, so a missing/unparseable YAML must not suppress an
     // otherwise-valid LOC. Compute it before the YAML early-return below.
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
     // Estimated cost (#272), likewise independent of the run YAML: it reads the
-    // Claude Code transcripts under `~/.claude/projects/`, not the run dir.
-    run_state.cost = run_cost::compute_run_cost(repo_root, &run_state.run_id);
+    // Claude Code transcripts under `projects_root` (the #408 seam — the staged
+    // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
+    // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
+    run_state.cost = run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -11080,6 +12736,7 @@ fn reap_node_session(
     run_id: &str,
     node_id: &str,
     iter: i64,
+    sandboxed: bool,
 ) {
     let socket = state.tmux_socket();
     let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
@@ -11095,6 +12752,16 @@ fn reap_node_session(
     }
 
     tmux_session_manager::kill(&socket, &session);
+    // #407 D8: killing the tmux-side `docker exec` client leaves the container
+    // process (reparented onto PID 1) alive — double it with a targeted in-
+    // container kill that scans `/proc` for this session's marker. Best-effort,
+    // no-op for `off`. Marker == the session name (so the /proc scan hits it).
+    sandbox_run::kill_session_best_effort(
+        state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        sandboxed,
+        run_id,
+        &session,
+    );
     info!("Reaped tmux session {session} on terminal transition");
 }
 
@@ -11461,6 +13128,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -11475,6 +13144,7 @@ mod tests {
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -11501,6 +13171,8 @@ mod tests {
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
             run_watcher: Arc::new(Mutex::new(None)),
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -11510,6 +13182,7 @@ mod tests {
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -13242,6 +14915,85 @@ mod tests {
         );
     }
 
+    /// #408 (F4): `cleanup_run` merges a sandboxed Run's staged transcripts into
+    /// `~/.claude/projects/` (recursively — subagent jsonl included, non-jsonl
+    /// siblings excluded) BEFORE the staging is purged, via the real route. This
+    /// is the tmux-independent proof that `cleanup_run` → `sandbox_run::cleanup` →
+    /// `merge_back` is wired; the synchronous cleanup merge means no waiting.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cleanup_run_merges_sandbox_transcripts_to_host() {
+        let home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "cleanup-merge";
+        // `docker rm -f` → `true` (no-op), so no real docker is ever spawned.
+        let state = test_state_with_dir_and_docker(tmp.path(), Some("true".to_string())).await;
+
+        // Seed a sandboxed (`full`) run: RunStarted projects `sandbox=full`.
+        append_event_with(
+            &state.db,
+            &state.event_tx,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": "sbx-obs",
+                    "input": "x",
+                    "sandbox": "full",
+                })),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Plant a staged transcript tree: a top-level jsonl, a nested subagent
+        // jsonl (locks the recursion), and a non-jsonl sibling that must NOT land.
+        let staged_projects = home
+            .path()
+            .join(".pdo/sandbox")
+            .join(run_id)
+            .join("claude-home/projects");
+        let enc = "-some-enc-worktree";
+        let proj = staged_projects.join(enc);
+        std::fs::create_dir_all(proj.join("uuid-1/subagents")).unwrap();
+        std::fs::write(proj.join("main.jsonl"), "{\"line\":1}\n").unwrap();
+        std::fs::write(proj.join("uuid-1/subagents/side.jsonl"), "{\"line\":2}\n").unwrap();
+        std::fs::write(proj.join("notes.txt"), "not a transcript").unwrap();
+
+        assert_eq!(post_cleanup_run(&state, run_id).await, StatusCode::OK);
+
+        // Merged to the host projects dir, recursively, jsonl-only.
+        let host = home.path().join(".claude/projects").join(enc);
+        assert_eq!(
+            std::fs::read_to_string(host.join("main.jsonl")).unwrap(),
+            "{\"line\":1}\n",
+            "top-level transcript must be merged verbatim"
+        );
+        assert_eq!(
+            std::fs::read_to_string(host.join("uuid-1/subagents/side.jsonl")).unwrap(),
+            "{\"line\":2}\n",
+            "nested subagent transcript must be merged (recursion)"
+        );
+        assert!(
+            !host.join("notes.txt").exists(),
+            "non-jsonl siblings must NOT be merged"
+        );
+        // Staging purged after the merge; run Archived.
+        assert!(
+            !home.path().join(".pdo/sandbox").join(run_id).exists(),
+            "cleanup must purge the staging after merging"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Archived
+        );
+    }
+
     /// R2: after archive (worktree gone), `GET /nodes/<n>/io` serves the correct
     /// payload from the durable store — the shape matches the live-run contract.
     #[tokio::test]
@@ -14551,6 +16303,76 @@ mod tests {
         );
     }
 
+    /// A sandboxed Run mid-prep with a `full` staging profile — the projection the
+    /// reconciler sees while the spawn is legitimately deferred (#445).
+    fn run_state_sandbox_mid_prep(run_id: &str) -> event_log::RunState {
+        let mut rs = event_log::RunState::new(run_id.into(), "linear".into());
+        rs.sandbox = event_log::SandboxMode::Profile("full".into());
+        rs.sandbox_prep = Some(event_log::SandboxPrepState::Pending);
+        rs
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_sandboxed_run_still_preparing_past_the_spawn_grace() {
+        // #445, the false-positive half. A sandboxed Run between SandboxPrepStarted
+        // and SandboxPrepReady has an entry node the scheduler reports ready, no live
+        // node, and — because the prep emits nothing while it works — an idle clock
+        // that keeps ticking. That is the #279 orphan signature exactly, so without a
+        // sandbox arm the reconciler would fail every prep slower than 120 s: measured
+        // 83-87 s for a 2 GB profile, and minutes on a cold `docker build`. Failing
+        // those Runs would defeat the precondition that just saved them.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_sandbox_mid_prep("20260725-sbx-preparing");
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            !ready.is_empty(),
+            "precondition: the deferred entry node is still in the ready set"
+        );
+
+        assert!(
+            run_stall_reason(
+                &pipeline,
+                &run_state,
+                &ready,
+                &loop_seed,
+                Some(SPAWN_STALL_GRACE_SECS * 2),
+            )
+            .is_none(),
+            "a Run whose container is still being built is preparing, not stalled — \
+             it must survive well past the 120s spawn-stall window"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_sandbox_prep_lost_past_its_own_grace() {
+        // The other half: deferring for ever would trade a false failure for a silent
+        // stall, which ADR-0004 forbids just as strongly. Past the sandbox-prep grace
+        // the preparation task is genuinely gone (killed with a previous daemon,
+        // panicked outside its catch) and nothing will ever emit SandboxPrepReady, so
+        // the Run is failed with a cause that names the sandbox instead of blaming
+        // tmux — the diagnosability complaint in the report.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_sandbox_mid_prep("20260725-sbx-lost");
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        let reason = run_stall_reason(
+            &pipeline,
+            &run_state,
+            &ready,
+            &loop_seed,
+            Some(SANDBOX_PREP_STALL_GRACE_SECS),
+        )
+        .expect("a prep pending past its grace window is a lost preparation, not work in flight");
+        assert!(
+            reason.contains("sandbox prep") && reason.contains("#445"),
+            "cause {reason:?} must name the sandbox preparation rather than tmux"
+        );
+    }
+
     #[test]
     fn run_stall_reason_defers_a_ready_node_when_idle_is_unknown() {
         // Unknown idle (no parseable event timestamp) must never trigger the
@@ -14588,6 +16410,124 @@ mod tests {
         assert!(
             run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, Some(100_000)).is_none(),
             "a live Running node is never a stall, regardless of how long the log has been idle"
+        );
+    }
+
+    /// The #453 projection: a `collection` region open at `total_items`, whose
+    /// entry ran `started_laps` of them and completed every one it ran. Every
+    /// node projects Completed, no session is alive, nothing is `Stale` — the
+    /// exact shape `run_stall_reason` used to walk through without biting.
+    fn run_state_collection_wedged(
+        run_id: &str,
+        total_items: i64,
+        started_laps: i64,
+    ) -> event_log::RunState {
+        let mut rs = event_log::RunState::new(run_id.into(), "linear".into());
+        rs.status = event_log::RunStatus::Running;
+        rs.collection_states.insert(
+            "topics_fanout".into(),
+            event_log::CollectionState {
+                region_id: "topics_fanout".into(),
+                total_items,
+                done: false,
+                entry: "b".into(),
+                members: vec!["b".into()],
+            },
+        );
+        for (node_id, iters) in [("a", 1), ("b", started_laps)] {
+            rs.nodes.insert(
+                node_id.into(),
+                event_log::NodeState {
+                    node_id: node_id.into(),
+                    status: event_log::NodeStatus::Completed,
+                    iter: iters,
+                    started_at: None,
+                    completed_at: None,
+                    failure_reason: None,
+                    iterations: (1..=iters)
+                        .map(|iter| event_log::IterationInfo {
+                            iter,
+                            status: event_log::NodeStatus::Completed,
+                            started_at: None,
+                            completed_at: None,
+                        })
+                        .collect(),
+                    frontmatter_retries: 0,
+                    frontmatter_violations: Vec::new(),
+                },
+            );
+        }
+        rs
+    }
+
+    #[test]
+    fn run_stall_reason_flags_a_collection_region_whose_laps_never_started() {
+        // #453, the silent half. The engine fix means this state should no longer
+        // occur, but nothing else in the daemon can see it if it does: `is_stalled`
+        // needs a `Stale` node and only live tmux sessions ever become `Stale`, and
+        // there are none. So the run reported `"stalled": false` for ever while the
+        // barrier could never fire. Characterised now, and failed loud.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-wedged", 2, 1);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+        assert!(
+            run_state.nodes.values().all(|n| !n.status.can_progress()),
+            "precondition: no live node — the wedge signature"
+        );
+
+        let reason = run_stall_reason(
+            &pipeline,
+            &run_state,
+            &ready,
+            &loop_seed,
+            Some(SPAWN_STALL_GRACE_SECS),
+        )
+        .expect("an open collection region missing a lap, with no live node, is a stall");
+        assert!(
+            reason.contains("#453") && reason.contains("topics_fanout#2/2"),
+            "cause {reason:?} must name the region and the missing lap"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_defers_a_collection_fan_out_within_the_grace_window() {
+        // The healthy transient: `CollectionStarted` is appended and the laps are
+        // spawning right now. Below the grace window nothing is failed.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-fanning-out", 2, 1);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(
+                &pipeline,
+                &run_state,
+                &ready,
+                &loop_seed,
+                Some(SPAWN_STALL_GRACE_SECS - 1),
+            )
+            .is_none(),
+            "a fan-out caught mid-burst is not a wedge"
+        );
+    }
+
+    #[test]
+    fn run_stall_reason_ignores_a_collection_region_whose_laps_all_ran() {
+        // The control: every lap started (the post-fix world). The region is still
+        // open — the barrier fires on the next sweep — so this must NOT be read as
+        // a stall, whatever the idle clock says.
+        let pipeline = linear_two_node_pipeline();
+        let run_state = run_state_collection_wedged("20260727-all-laps", 2, 2);
+
+        let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+        let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &HashMap::new());
+
+        assert!(
+            run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, Some(100_000)).is_none(),
+            "every lap accounted for is not a missing-lap stall"
         );
     }
 
@@ -14934,6 +16874,16 @@ mod tests {
     }
 
     async fn test_state_with_dir(dir: &std::path::Path) -> Arc<AppState> {
+        test_state_with_dir_and_docker(dir, None).await
+    }
+
+    /// Like [`test_state_with_dir`] but with an explicit `docker_cmd_override` —
+    /// e.g. `Some("true")` so a sandboxed `cleanup_run`'s `docker rm -f` is a
+    /// no-op (never spawns the real `docker`, whether or not it is installed).
+    async fn test_state_with_dir_and_docker(
+        dir: &std::path::Path,
+        docker_cmd_override: Option<String>,
+    ) -> Arc<AppState> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -14957,6 +16907,8 @@ mod tests {
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -14971,6 +16923,7 @@ mod tests {
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -19398,6 +21351,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -19412,6 +21367,7 @@ edges: []
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let app = build_router(state);
 
@@ -19585,6 +21541,8 @@ edges: []
             // spawn path, the node session runs `true` and exits immediately —
             // never real claude, never a lingering session (#181).
             tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: None,
+            sandbox_home_override: None,
             last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -19599,6 +21557,7 @@ edges: []
                 supervisor: "none".to_string(),
                 persistent: None,
             }),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let app = build_router(state);
 
@@ -21177,6 +23136,252 @@ edges: []
         );
     }
 
+    // --- #445: the sandbox spawn precondition (block + replay) ------------------
+    //
+    // The defect: a sandboxed Run's node session runs `docker exec … pdo-sbx-<run>`,
+    // and `create_run`'s detached prep task was the ONLY thing that waited for the
+    // container. The pipeline watcher (woken by the first *read* of the fresh run
+    // dir's `pipeline.yaml`) called the same advance path with no such wait, so the
+    // exec hit a container that did not exist → exit 1 in ~30 ms → the tmux window's
+    // command ended → `session_died` ~25 s later. The precondition now lives in
+    // `spawn_node`, which is why these tests drive the spawn and the advance rather
+    // than the watcher's mpsc plumbing: `handle_run_pipeline_modifications` calls
+    // `spawn_ready_after_event` == `advance_run`, the exact entry point exercised in
+    // `sandbox_pending_run_is_not_schedulable_until_prep_ready`.
+
+    /// Seed a sandboxed Run whose prep has STARTED but not finished — the projection
+    /// the watcher used to spawn into (`sandbox_prep = pending`).
+    async fn seed_sandboxed_run_mid_prep(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
+        let started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": pipeline_name,
+                "sandbox": "full",
+                "sandbox_entries": [".claude/plugins"],
+            })),
+        };
+        append_event(state, &started).await.unwrap();
+        emit_run_event(
+            state,
+            run_id,
+            event_log::EventKind::SandboxPrepStarted,
+            None,
+        )
+        .await;
+    }
+
+    /// AC "blocage", at the chokepoint: a sandboxed Run mid-prep defers the spawn
+    /// before ANY side effect — no `NodeStarted` (which would be the lie the stale
+    /// detector later reports as `session_died`) and, just as important, no
+    /// `NodeWaiting` either: a `Waiting` node leaves `compute_ready_to_spawn`, so the
+    /// reservation would move the replay onto the cross-run admission sweep and a Run
+    /// whose only trigger was the watcher could wedge for ever.
+    #[tokio::test]
+    async fn spawn_node_defers_while_sandbox_prep_is_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let run_id = "spawn-unit-sbx-pending";
+        seed_sandboxed_run_mid_prep(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        let SpawnOutcome::Deferred { reason } = outcome else {
+            panic!(
+                "a spawn into a Run whose container is not up must be Deferred, got {outcome:?}"
+            );
+        };
+        assert!(
+            reason.contains("sandbox prep") && reason.contains("full"),
+            "the deferral must name the sandbox prep and the profile, got {reason:?}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "a deferred spawn must append NO NodeStarted — that event is what makes the \
+             stale detector report session_died 25s later"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeWaiting),
+            "a deferred spawn must reserve NOTHING: a Waiting node leaves \
+             compute_ready_to_spawn and would never be replayed by advance_run"
+        );
+    }
+
+    /// The precondition must not leak onto the host path: an `off` Run has no prep
+    /// events at all, and `sandbox_prep = None` must not be read as "not ready" for
+    /// it — that would deadlock every non-sandboxed Run in the instance.
+    #[tokio::test]
+    async fn spawn_node_never_defers_a_host_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let run_id = "spawn-unit-host";
+        // RunStarted with no `sandbox` key at all → SandboxMode::Off, prep = None.
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Spawned),
+            "an `off` Run must spawn exactly as before the precondition, got {outcome:?}"
+        );
+    }
+
+    /// Both ACs on the real advance path, in order — this is the regression test for
+    /// the reported failure and for the deadlock a naive fix would introduce.
+    ///
+    /// 1. **Blocage**: `advance_run` (what the pipeline watcher calls, via
+    ///    `spawn_ready_after_event`) starts nothing while the prep is pending.
+    /// 2. **Rejeu**: `mark_sandbox_prep_ready` + the following `advance_run` — the
+    ///    exact pair the create-time prep task runs — starts the node that was
+    ///    deferred. Without this half, a Run whose only trigger was the watcher would
+    ///    stay `Running` with nothing live for ever, which is strictly worse than the
+    ///    bug being fixed.
+    #[tokio::test]
+    async fn sandbox_pending_run_is_not_schedulable_until_prep_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "sbx-advance-replay";
+        // The default `prompt_required: true` keeps the spawn off the `_input`
+        // artifact read; `worker` has no incoming edge, so it is a root the readiness
+        // sweep reports ready from the very first tick.
+        let yaml = format!(
+            "name: sbx-advance\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        let yaml = yaml.as_str();
+        let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
+
+        seed_sandboxed_run_mid_prep(&state, run_id, "sbx-advance").await;
+
+        // (1) The watcher's tick, mid-prep: nothing may start.
+        spawn_ready_after_event(&state, run_id).await;
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "the watcher-driven advance must start no node while the container is \
+             still being prepared"
+        );
+
+        // The node kept NO state, so the scheduler still sees it as ready — that is
+        // what makes the replay below possible at all.
+        let run_state = event_log::project(&events).unwrap();
+        let parsed = pipeline::parse_pipeline(yaml).unwrap().pipeline;
+        assert_eq!(
+            scheduler_dispatcher::compute_ready_to_spawn(&parsed, &run_state)
+                .into_iter()
+                .map(|r| r.node_id)
+                .collect::<Vec<_>>(),
+            vec!["worker".to_string()],
+            "a deferred node must stay in the ready set, or nothing could replay it"
+        );
+
+        // (2) Prep finishes: the create-time pair replays the deferred spawn.
+        mark_sandbox_prep_ready(&state, run_id).await;
+        spawn_ready_after_event(&state, run_id).await;
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "the spawn deferred during the prep MUST be replayed once \
+             sandbox_prep_ready lands — otherwise the run wedges for ever"
+        );
+    }
+
+    /// The force-spawn path (`POST …/nodes/<id>/start`, and the manager's
+    /// `start_node`) does not route through `spawn_node`: it drives
+    /// `node_primitives::start_node`, so it states the precondition itself. 409 with a
+    /// reason, not a silent queue — "start now" must not defer, and the operator who
+    /// pressed the button gets told why.
+    #[tokio::test]
+    async fn force_spawn_is_refused_while_sandbox_prep_is_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        write_test_pipeline(repo_root, "sbx-force");
+        let state = test_state_with_dir(repo_root).await;
+
+        let run_id = "sbx-force-spawn";
+        seed_sandboxed_run_mid_prep(&state, run_id, "sbx-force").await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/start"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sandbox prep"),
+            "the 409 must explain that the sandbox is still being prepared, got {json}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted),
+            "a refused force-spawn must start nothing"
+        );
+    }
+
     #[tokio::test]
     async fn node_retry_returns_404_for_unknown_run() {
         let state = test_state().await;
@@ -21765,7 +23970,7 @@ edges:
         assert_eq!(repos, vec!["/repo/real"]);
     }
 
-    // --- GET /repos/browse default-root resolution (issue #131) ---
+    // --- GET /fs/browse default-root resolution (issue #131) ---
     //
     // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
     // so these never touch the real `$HOME` and are safe under cargo's parallel test
@@ -21838,6 +24043,207 @@ edges:
         let got = resolve_browse_root(None, None, Path::new("/this/repo/root/does/not/exist/131"))
             .unwrap();
         assert_eq!(got, Path::new("/"));
+    }
+
+    // --- GET /fs/browse query vocabulary + entry classification (#431) ---
+
+    /// Deserialise a query string through the PRODUCTION extractor (`Query`'s own
+    /// `try_from_uri`, public in axum 0.8) — no HTTP, no router, but the exact
+    /// `serde_urlencoded` path a real request takes.
+    fn browse_query(query: &str) -> Result<BrowseQuery, axum::extract::rejection::QueryRejection> {
+        let uri: axum::http::Uri = format!("/fs/browse{query}").parse().unwrap();
+        Query::<BrowseQuery>::try_from_uri(&uri).map(|Query(q)| q)
+    }
+
+    #[test]
+    fn browse_query_defaults_are_dirs_only_hidden_off() {
+        // The load-bearing default: no query string ⇒ the pre-#431 listing, bit for bit.
+        let q = browse_query("").unwrap();
+        assert_eq!(q.path, None);
+        assert!(!q.files, "files must default to false (dirs only)");
+        assert!(
+            !q.hidden,
+            "hidden must default to false (dot-entries filtered)"
+        );
+    }
+
+    #[test]
+    fn browse_query_accepts_true_and_false() {
+        let q = browse_query("?path=/tmp&files=true&hidden=true").unwrap();
+        assert_eq!(q.path.as_deref(), Some("/tmp"));
+        assert!(q.files);
+        assert!(q.hidden);
+
+        let q = browse_query("?files=false&hidden=false").unwrap();
+        assert!(!q.files);
+        assert!(!q.hidden);
+    }
+
+    #[test]
+    fn browse_query_rejects_valueless_and_non_literal_flags() {
+        // Pins the STRICT wire vocabulary: `serde_urlencoded` defers to
+        // `str::parse::<bool>()`, so anything but the lowercase literals is a 400 —
+        // never a silent `false`. Documented on `BrowseQuery` so nobody discovers this
+        // by hand.
+        for q in [
+            "?files",
+            "?files=1",
+            "?files=0",
+            "?files=yes",
+            "?files=TRUE",
+            "?hidden",
+            "?hidden=yes",
+        ] {
+            assert!(
+                browse_query(q).is_err(),
+                "`{q}` must be rejected, not coerced"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_browse_entry_offers_dirs_always_and_files_only_on_demand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("a-dir");
+        std::fs::create_dir(&dir).unwrap();
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, "x").unwrap();
+        // A REAL symlink → dir, so `std::fs::metadata` genuinely follows it (the
+        // `DirEntry::metadata` trap this guards against).
+        let link = tmp.path().join("a-link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+
+        let m = |p: &Path| std::fs::metadata(p).ok();
+
+        // Directories are offered in BOTH modes.
+        assert_eq!(
+            classify_browse_entry(m(&dir).as_ref(), false),
+            EntryKind::Dir
+        );
+        assert_eq!(
+            classify_browse_entry(m(&dir).as_ref(), true),
+            EntryKind::Dir
+        );
+        // A symlink to a dir is a dir (metadata follows).
+        assert_eq!(
+            classify_browse_entry(m(&link).as_ref(), false),
+            EntryKind::Dir
+        );
+        // A regular file only when asked for.
+        assert_eq!(
+            classify_browse_entry(m(&file).as_ref(), false),
+            EntryKind::Skip
+        );
+        assert_eq!(
+            classify_browse_entry(m(&file).as_ref(), true),
+            EntryKind::File
+        );
+    }
+
+    #[test]
+    fn classify_browse_entry_skips_broken_links_and_specials_in_every_mode() {
+        // Unclassifiable (broken link / ELOOP): `metadata` errs → None.
+        assert_eq!(classify_browse_entry(None, false), EntryKind::Skip);
+        assert_eq!(
+            classify_browse_entry(None, true),
+            EntryKind::Skip,
+            "a dangling link must stay invisible even with files=true"
+        );
+
+        // A special file: `Some(meta)` that is neither a dir nor a regular file.
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let meta = std::fs::metadata(&sock).unwrap();
+        assert!(!meta.is_dir() && !meta.is_file(), "fixture must be special");
+        assert_eq!(classify_browse_entry(Some(&meta), false), EntryKind::Skip);
+        assert_eq!(
+            classify_browse_entry(Some(&meta), true),
+            EntryKind::Skip,
+            "a socket/fifo must stay invisible: nothing downstream can consume one"
+        );
+    }
+
+    fn browse_entry(name: &str, is_dir: bool) -> BrowseEntry {
+        BrowseEntry {
+            name: name.to_string(),
+            path: format!("/x/{name}"),
+            is_git_repo: false,
+            is_symlink: false,
+            is_dir,
+        }
+    }
+
+    #[test]
+    fn merge_browse_entries_puts_dirs_before_files() {
+        let (entries, truncated) = merge_browse_entries(
+            vec![browse_entry("z-dir", true)],
+            vec![browse_entry("a-file", false)],
+            BROWSE_CAP,
+        );
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["z-dir", "a-file"],
+            "genre beats name: a navigable dir is never buried under files"
+        );
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn merge_browse_entries_gives_dirs_first_claim() {
+        // 3 dirs + 2000 files: the dirs are never starved, files fill what's left.
+        let dirs: Vec<BrowseEntry> = (0..3)
+            .map(|i| browse_entry(&format!("d{i}"), true))
+            .collect();
+        let files: Vec<BrowseEntry> = (0..2000)
+            .map(|i| browse_entry(&format!("f{i:04}"), false))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
+        assert_eq!(entries.len(), 1000);
+        assert_eq!(entries.iter().filter(|e| e.is_dir).count(), 3);
+        assert_eq!(entries.iter().filter(|e| !e.is_dir).count(), 997);
+        assert!(entries[..3].iter().all(|e| e.is_dir), "dirs come first");
+        assert!(truncated);
+
+        // 1500 dirs + 10 files: dirs consume the whole budget, files get nothing.
+        let dirs: Vec<BrowseEntry> = (0..1500)
+            .map(|i| browse_entry(&format!("d{i:04}"), true))
+            .collect();
+        let files: Vec<BrowseEntry> = (0..10)
+            .map(|i| browse_entry(&format!("f{i}"), false))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
+        assert_eq!(entries.len(), 1000);
+        assert!(
+            entries.iter().all(|e| e.is_dir),
+            "dirs claim the budget first"
+        );
+        assert!(truncated);
+    }
+
+    #[test]
+    fn merge_browse_entries_dirs_only_matches_pre_431() {
+        // The default path: `files` empty ⇒ identical to the pre-#431
+        // `sort_by_key(name.to_lowercase()) + truncate(cap)`, and NOT truncated under
+        // the cap.
+        let dirs = vec![
+            browse_entry("Zeta", true),
+            browse_entry("alpha", true),
+            browse_entry("Beta", true),
+        ];
+        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), BROWSE_CAP);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "Beta", "Zeta"]);
+        assert!(!truncated);
+
+        // Exactly `cap` dirs is NOT truncated (the pre-#431 `len > cap` semantics).
+        let dirs: Vec<BrowseEntry> = (0..1000)
+            .map(|i| browse_entry(&format!("d{i:04}"), true))
+            .collect();
+        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), 1000);
+        assert_eq!(entries.len(), 1000);
+        assert!(!truncated, "exactly `cap` entries is not a truncation");
     }
 
     // --- prompt-optional run creation (#158) ---
@@ -22062,6 +24468,27 @@ edges:
         // `env` reads the process-global PDO_DEFAULT_MODEL; a concurrent
         // env-mutating unit test could transiently shadow it, so we assert the
         // effective/source pairing only in the stored-wins tests below.
+
+        // image_source (#411): enum knob with a built-in default `registry`. On a
+        // fresh row (and no PDO_SANDBOX_IMAGE_SOURCE — no test ever sets it) the
+        // stored tier is null and the resolver falls through to the built-in default.
+        let img = &view["image_source"];
+        assert!(
+            img["stored"].is_null(),
+            "image_source.stored must be null on a fresh row: {img}"
+        );
+        assert_eq!(
+            img["default"], "registry",
+            "built-in default is registry: {img}"
+        );
+        assert_eq!(
+            img["effective"], "registry",
+            "effective falls to default: {img}"
+        );
+        assert_eq!(
+            img["source"], "default",
+            "source is the built-in default: {img}"
+        );
     }
 
     #[tokio::test]
@@ -22171,5 +24598,299 @@ edges:
         // The second edit must not clear the cap set by the first.
         assert_eq!(view["session_cap"]["stored"], 7);
         assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
+    }
+
+    #[tokio::test]
+    async fn put_settings_persists_image_source() {
+        // Stored always wins over env/default, so the effective/source assertions
+        // are race-free (#411).
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["image_source"]["stored"], "dockerfile");
+        assert_eq!(view["image_source"]["source"], "stored");
+        assert_eq!(view["image_source"]["effective"], "dockerfile");
+        assert_eq!(view["image_source"]["default"], "registry");
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["image_source"]["stored"], "dockerfile");
+        assert_eq!(reget["image_source"]["effective"], "dockerfile");
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_image_source_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to
+        // null so the resolver falls back to the built-in default `registry` (#411).
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"image_source": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["image_source"]["stored"].is_null(),
+            "empty string clears the stored image source: {}",
+            view["image_source"]
+        );
+        assert_eq!(view["image_source"]["source"], "default");
+        assert_eq!(view["image_source"]["effective"], "registry");
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_invalid_image_source() {
+        // A non-variant token is rejected 400 before anything is persisted (#411).
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"image_source": "ecr"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].is_string(), "400 must carry an error: {body}");
+        // Store untouched (still the default).
+        let view = get_settings_json(&state).await;
+        assert!(view["image_source"]["stored"].is_null());
+    }
+
+    // --- #431: dockerfile_path settings knob + the sandbox_image tag it yields ---
+
+    #[tokio::test]
+    async fn put_settings_persists_dockerfile_path_and_the_tag_follows() {
+        // Stored always wins over env/default, so these assertions are race-free
+        // (`lib.rs` convention: only stored-wins is safe at the HTTP level, since env
+        // reads a process-global var a concurrent test could shadow). The env-tier
+        // assertions live in `sandbox_image::resolve_dockerfile`'s pure tests.
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let custom = tmp.path().join("sbx.Dockerfile");
+        let bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo settings-431\n";
+        std::fs::write(&custom, bytes).unwrap();
+        let body = format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap());
+
+        let (status, view) = put_settings_resp(&state, &body).await;
+        assert_eq!(status, StatusCode::OK);
+        let f = &view["dockerfile_path"];
+        assert_eq!(f["stored"], custom.to_str().unwrap());
+        assert_eq!(f["source"], "stored");
+        assert_eq!(f["effective"], custom.to_str().unwrap());
+        assert!(
+            f["default"].is_string() || f["default"].is_null(),
+            "default is the seeded path, or null when HOME is unset: {f}"
+        );
+
+        // The disclosed tag is computed by the SAME hash `ensure_image` uses (#373), so
+        // "editing the Dockerfile changes the tag, hence a rebuild" is now visible.
+        assert_eq!(
+            view["sandbox_image"]["tag"],
+            sandbox_image::local_image_ref(bytes),
+            "the tag must be the hash of the RESOLVED file's bytes: {}",
+            view["sandbox_image"]
+        );
+        assert!(view["sandbox_image"]["reason"].is_null());
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["dockerfile_path"]["stored"], custom.to_str().unwrap());
+        assert_eq!(
+            reget["sandbox_image"]["tag"],
+            sandbox_image::local_image_ref(bytes)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_dockerfile_path_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null so
+        // the resolver falls back env → the seeded default (#431).
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let custom = tmp.path().join("sbx.Dockerfile");
+        std::fs::write(&custom, b"FROM ubuntu:24.04\n").unwrap();
+        put_settings_resp(
+            &state,
+            &format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap()),
+        )
+        .await;
+
+        let (status, view) = put_settings_resp(&state, r#"{"dockerfile_path": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["dockerfile_path"]["stored"].is_null(),
+            "empty string clears the stored Dockerfile path: {}",
+            view["dockerfile_path"]
+        );
+        // With nothing stored and no PDO_SANDBOX_DOCKERFILE, the seeded default wins and
+        // `effective == default` (both null only if HOME is unset).
+        let f = &view["dockerfile_path"];
+        assert_eq!(f["source"], "default");
+        assert_eq!(
+            f["effective"], f["default"],
+            "default tier: effective == default"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_relative_dockerfile_path() {
+        let state = test_state().await;
+        let (status, body) =
+            put_settings_resp(&state, r#"{"dockerfile_path": "relative/Dockerfile"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("absolute"),
+            "the error must name the absolute-path requirement: {body}"
+        );
+        // Store untouched.
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_nonexistent_dockerfile_path() {
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(
+            &state,
+            r#"{"dockerfile_path": "/this/path/does/not/exist/431/Dockerfile"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("regular file"),
+            "the error must name the regular-file requirement: {body}"
+        );
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_a_directory_as_dockerfile_path() {
+        // The `exists()` vs `is_file()` trap: `Path::exists()` is TRUE for a directory,
+        // so a validator written with `exists()` would accept this and defer the failure
+        // to the middle of a run.
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let (status, body) = put_settings_resp(
+            &state,
+            &format!(
+                r#"{{"dockerfile_path": "{}"}}"#,
+                tmp.path().to_str().unwrap()
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("regular file"),
+            "a directory must be rejected as not-a-regular-file: {body}"
+        );
+        let view = get_settings_json(&state).await;
+        assert!(view["dockerfile_path"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_settings_surfaces_the_dockerfile_field_and_image_tag_shape() {
+        // Shape only: `effective`/`default`/`tag` depend on the real `$HOME` (this state
+        // has no `sandbox_home_override`) and on whether that machine has ever seeded a
+        // Dockerfile, so the exact values belong to the stored-wins test above. What is
+        // invariant is that the keys are ALWAYS present and never 500 the page.
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+
+        let f = &view["dockerfile_path"];
+        assert!(
+            f["stored"].is_null(),
+            "dockerfile_path.stored must be null on a fresh row: {f}"
+        );
+        for key in ["effective", "source", "env", "default"] {
+            assert!(f.get(key).is_some(), "dockerfile_path.{key} missing: {f}");
+        }
+        assert!(f["source"].is_string());
+
+        let img = &view["sandbox_image"];
+        assert!(img.get("tag").is_some(), "sandbox_image.tag missing: {img}");
+        assert!(
+            img.get("reason").is_some(),
+            "sandbox_image.reason missing: {img}"
+        );
+        // Exactly one of the two is populated — a tag, or the reason there is none.
+        assert!(
+            img["tag"].is_null() != img["reason"].is_null(),
+            "exactly one of tag/reason must be set: {img}"
+        );
+        if let Some(tag) = img["tag"].as_str() {
+            assert!(tag.starts_with("pdo-sandbox:h-"), "unexpected tag: {tag}");
+        }
+    }
+
+    // --- #410: default_sandbox settings knob + sandbox_docker probe ---
+
+    #[tokio::test]
+    async fn put_settings_persists_default_sandbox() {
+        // Stored always wins over env/default, so the effective/source assertions are
+        // race-free (mirror of image_source, #411).
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["default_sandbox"]["stored"], "minimal");
+        assert_eq!(view["default_sandbox"]["source"], "stored");
+        assert_eq!(view["default_sandbox"]["effective"], "minimal");
+        assert_eq!(view["default_sandbox"]["default"], "off");
+
+        // Re-GET confirms persistence.
+        let reget = get_settings_json(&state).await;
+        assert_eq!(reget["default_sandbox"]["stored"], "minimal");
+        assert_eq!(reget["default_sandbox"]["effective"], "minimal");
+    }
+
+    #[tokio::test]
+    async fn put_settings_clears_default_sandbox_on_empty_string() {
+        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null
+        // so the resolver falls back to the built-in default `off` (#410).
+        let state = test_state().await;
+        put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
+        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": ""}"#).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "empty string must be accepted, not 400"
+        );
+        assert!(
+            view["default_sandbox"]["stored"].is_null(),
+            "empty string clears the stored default sandbox: {}",
+            view["default_sandbox"]
+        );
+        assert_eq!(view["default_sandbox"]["source"], "default");
+        assert_eq!(view["default_sandbox"]["effective"], "off");
+    }
+
+    #[tokio::test]
+    async fn put_settings_rejects_invalid_default_sandbox() {
+        // A non-variant token is rejected 400 before anything is persisted (#410).
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"default_sandbox": "vm"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].is_string(), "400 must carry an error: {body}");
+        let view = get_settings_json(&state).await;
+        assert!(view["default_sandbox"]["stored"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_settings_surfaces_sandbox_docker_probe() {
+        // The advisory probe is folded into GET /settings (#410). `test_state` has no
+        // docker_cmd_override, so the real `docker` (absent in CI) → available:false
+        // with a reason. The shape must always be present regardless of the verdict.
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+        let sd = &view["sandbox_docker"];
+        assert!(sd.get("available").is_some(), "available missing: {sd}");
+        assert!(sd["available"].is_boolean(), "available must be bool: {sd}");
+        assert!(
+            sd.get("reason").is_some(),
+            "reason key must be present: {sd}"
+        );
+        assert!(
+            sd["checked_at"].is_string(),
+            "checked_at must be a string: {sd}"
+        );
     }
 }

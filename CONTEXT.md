@@ -124,12 +124,12 @@ loops:
   - `collection` à un membre = fan-out d'**un** nœud par item (le foreach le plus courant : « un fixer par issue »).
   - `bounded` à un membre = un nœud qui **se relance** (self-edge) jusqu'à `max_iter`.
 - **Entrée** = le membre ayant une in-edge depuis un non-membre (membre unique : ce nœud). **Re-entry** = une edge d'un membre vers cette entrée (membre unique : sa self-edge).
-- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ N items` (collection), **en lecture seule sur le canvas** — ni id ni éditeur inline (règle slim card #149). Le `max_iter` et l'id se consultent/s'éditent dans l'**inspecteur de région** (clic sur le header).
+- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ laps/total items` (collection, le total venant de `collection_states[id].total_items` — pas de `max(iter)` sur les membres, qui ne dit que le dernier lap *atteint* et rendait un fan-out figé à 1/2 indiscernable d'une région à 1 item terminée, #453), **en lecture seule sur le canvas** — ni id ni éditeur inline (règle slim card #149). Le `max_iter` et l'id se consultent/s'éditent dans l'**inspecteur de région** (clic sur le header).
 
 ### Deux drivers
 
 - **`bounded`** — driver = compteur `max_iter`. **Naît par auto-détection d'un cycle** (self-edge incluse) : id généré + `max_iter` par défaut, pour qu'un cycle ne soit jamais accidentellement non-borné. L'auto-détection vit **à la frontière du modèle, pas dans le geste** (#396, addendum ADR-0011) : `parse_pipeline` matérialise les régions manquantes, donc tout lecteur — éditeur, snapshot de run, jumeau de bibliothèque — voit la même boucle, qu'elle ait été dessinée, écrite à la main ou importée. Dérivée, jamais écrite : ouvrir un pipeline ne salit pas l'onglet et ne réécrit pas le YAML ; l'id étant une fonction pure des membres triés, deux lectures s'accordent et le compteur de lap garde son identité. Le miroir canvas (`addEdge`) ne couvre plus que l'edge à peine dessinée. **Exception** : un cycle traversant un nœud legacy `type: loop` n'est pas matérialisé (il porte déjà sa borne et son propre chemin d'itération) — le parse émet un diagnostic « lancer `pdo migrate` » à la place.
-- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (clic droit sur le(s) membre(s) → « Fan out over \"<field>\" », un item de menu par champ frontmatter `type: list` entrant) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer. Câblé live depuis #269 / ADR-0026 — **v1 mono-membre** : un body multi-nœuds (itération composite) est différé derrière un nouvel ADR.
+- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (clic droit sur le(s) membre(s) → « Fan out over \"<field>\" », un item de menu par champ frontmatter `type: list` entrant) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer. Câblé live depuis #269 / ADR-0026 — **v1 mono-membre** : un body multi-nœuds (itération composite) est différé derrière un nouvel ADR. **Les laps sont réellement concurrents** : c'est la seule exception à « un nœud a au plus une itération vive » que le garde de transition (#212) fait respecter partout ailleurs. L'exemption est portée par la projection (`collection_states[id].members` + `total_items`, écrits par `collection_started`) et bornée trois fois : région **ouverte** (`!done`), nœud **gouverné** par la région, `iter ∈ 1..=total_items`. Hors de ces bornes — et pour `restart_node`, la veille de vivacité et boot recovery, qui partagent le même chokepoint — le refus de #212 tient. _Éviter_ : sérialiser le fan-out pour « respecter » #212 (20 items = 20× plus long, et ADR-0026 dit « en parallèle »), ou élargir le garde à tous les nœuds (#453 : sans l'exemption, les laps ≥ 2 étaient refusés 1 ms après le lap 1, la barrière ne firait jamais et le Run restait `running` sans session vive).
 
 ### Compteur d'itération
 
@@ -545,6 +545,18 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **`effective_repo` (résolu) ≠ `target_repo` (brut).** Le champ brut `target_repo` (nullable) reste la valeur saisie par l'utilisateur — il pilote le badge repo de la ligne Trigger, le panneau détail, le pré-remplissage Run-now. Le champ résolu `effective_repo` (toujours concret, exposé par les *endpoints de liste* uniquement) ne sert qu'à la clé de regroupement. **On ne réécrit jamais `target_repo` côté serveur** : sinon badge/détail/pré-remplissage afficheraient un repo jamais saisi en mono-repo (régression). Le regroupement vit **côté client** (UI réversible) ; le serveur se contente de résoudre la clé. Même posture pour le **filtrage** de la liste Runs (#336) : trois filtres client-side (repo cible résolu, nom de pipeline snapshotté, trigger — dont « Manual » pour `triggered_by` absent), combinés en ET, options dérivées des runs eux-mêmes (un pipeline renommé/supprimé ou un trigger supprimé reste filtrable), sans paramètre de requête ajouté à `GET /runs`.
 - **Repos récents (`GET /repos/recent`).** Projection *à la lecture* des `target_repo` portés par les événements `RunStarted` : jusqu'à 5 chemins distincts, plus récent d'abord. Comparaison **verbatim** (cohérent avec la règle jamais-canonicaliser ci-dessus : `/a/repo` et `/a/repo/` comptent comme deux entrées). Les Runs lancés sans `target_repo` explicite ne contribuent pas aux récents.
 
+### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
+
+L'**explorateur de fichiers** est la brique unique de sélection de chemin à la souris : une route de listing à **un niveau** (`GET /fs/browse?path=&files=&hidden=`) et **un** composant (`FsExplorerModal`). Deux consommateurs aujourd'hui — le **sélecteur de repo** du New-Run modal (`mode="dir"`) et le **sélecteur de Dockerfile** des Settings (`mode="file" showHidden`) — zéro duplication. Né repo-spécifique (#131, `/repos/browse` cloué dans `RepoCombobox`), généralisé et **renommé franchement, sans alias**, en #431.
+
+- **Défauts = comportement historique au bit près.** Sans paramètre : répertoires seuls, dot-entrées filtrées. `files=true` ajoute les **fichiers réguliers**, `hidden=true` les dot-entrées. Vocabulaire filaire **strict** : seuls les littéraux minuscules `true`/`false` (un `?files=1` est un `400 text/plain`, jamais un `false` silencieux).
+- **Ce qui n'est jamais offert** (dans aucun mode) : liens symboliques **cassés** et fichiers **spéciaux** (fifo, socket, device) — tout consommateur d'un chemin choisi le résout, donc l'entrée serait impickable par construction, et un fifo offert à `ensure_image` donnerait une lecture qui bloque indéfiniment. Un symlink vers un répertoire est **suivi** (`is_dir: true` **et** `is_symlink: true`).
+- **Cap de 1000 par genre, répertoires prioritaires** sur le budget. Un budget unique laisserait les fichiers **affamer** les répertoires (50 000 fichiers + 2 sous-dossiers ⇒ plus rien à traverser) : c'est une panne du picker, pas un détail cosmétique.
+- **Mode fichier = select-then-confirm**, jamais pick-and-close : un seul chemin vers `onPick`, et un misclick ne peut pas écrire silencieusement dans un réglage persisté.
+- **Exposition, dite exactement** : le daemon bind `0.0.0.0` et cette surface n'a **aucune authentification** (#260 est **closed**, pas différée — la portée LAN est assumée par le propriétaire). Les drapeaux élargissent l'énumération des noms de répertoires aux **noms de fichiers** ; les **contenus** ne sont jamais renvoyés (l'endpoint n'émet que des noms, un chemin et trois booléens). La bonne frontière est l'authentification de toute la surface HTTP — autre chantier.
+
+_Éviter_ : « explorateur de repo » / « repo browser » (il ne l'est plus), « `/repos/browse` » (retiré, sans alias — la route répond désormais la SPA), « lister récursivement » (un niveau à la fois, jamais de récursion).
+
 ---
 
 ## Trigger
@@ -723,12 +735,12 @@ POST   /runs/<id>/commands                 — émet une commande (body: { kind,
 GET    /repos/validate?path=               — valide un repo cible (chemin absolu + is_dir + `git rev-parse`)
 GET    /repos/branches?path=               — liste les branches locales du repo donné
 GET    /repos/recent                       — jusqu'à 5 `target_repo` distincts, projetés des événements `run_started`, plus récent d'abord
-GET    /repos/browse?path=                 — listing filesystem à un niveau (explorateur du New-Run modal, #131 ; durcissement d'exposition fs différé à #260)
+GET    /fs/browse?path=&files=&hidden=     — listing filesystem à un niveau (explorateur générique : sélecteur de repo du New-Run modal + sélecteur de Dockerfile des Settings, #131/#431 ; surface non authentifiée — #260 est closed, pas différée —, les drapeaux élargissent l'énumération des noms de répertoires aux noms de fichiers, jamais aux contenus)
 ```
 
 ### Conséquence pour la prompt augmentation
 
-Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmentation*) inclut, en plus des chemins d'inputs/outputs, **l'URL de base du daemon** (`http://localhost:<port>`) pour les nœuds qui en ont besoin (typiquement le manager, mais aussi un nœud "Shipper" qui voudrait poster un commentaire sur l'issue source via les endpoints, etc.).
+Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmentation*) inclut, en plus des chemins d'inputs/outputs, **l'URL de base du daemon** pour les nœuds qui en ont besoin (typiquement le manager, mais aussi un nœud "Shipper" qui voudrait poster un commentaire sur l'issue source via les endpoints, etc.). Cette URL **n'est pas une constante** : elle dépend du côté où l'agent s'exécute (`http://localhost:<port>` sur l'hôte, la gateway du conteneur en sandbox) et passe donc par le **résolveur d'URL du daemon** — cf. section *Sandbox*.
 
 ---
 
@@ -812,6 +824,479 @@ Un Node marqué `interactive: true` spawn une session tmux normale, et **n'auto-
 La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur le nœud. Click → `POST /runs/<id>/commands { kind: "mark_node_done", node_id, iter }`. Pas de slash-command in-session (un slash-command suppose qu'on est attaché ; le bouton UI reste toujours accessible).
 
 À ce moment-là, les artefacts présents sur disque dans `<artifacts>/<node-id>/iter-<N>/` sont considérés comme finaux. Le préambule du nœud le dit explicitement à l'agent et au user : *"écris tes outputs aux chemins X, Y, Z ; quand tu cliques 'Mark complete' dans l'UI, ces fichiers seront pris tels quels"*.
+
+---
+
+## Sandbox (exécution isolée d'un Run)
+
+> Section seedée par #404, complétée par les slices suivantes du PRD #403. Couvert **ici** :
+> staging fs (#404) + **fourniture de l'image** (#405, *Image (fourniture)*) + **exécution /
+> conteneur** (#406, *Exécution (conteneur)*) + **câblage run-advance** (#407 : prep eager fail-fast,
+> wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
+> d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260) + **observabilité** (#408 : `merge_back`
+> câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale) +
+> **mode `full` de bout en bout** (#409 : vérifie `prepare`(allowlist `full`) → conteneur →
+> `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `minimal` que par le seed de
+> `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
+> l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`,
+> job release GHCR) + **exposition run-level + sources de config** (#410 : sélecteur tri-état du
+> NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
+> `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`) +
+> **vocabulaire + plancher de garanties** (#426 : tri-état renommé `off` | `minimal` | `full` sans
+> alias, plancher tenu par `prepare` dans les **deux** modes — `remote-settings.json` consenti +
+> `skipDangerousModePermissionPrompt` dans le `settings.json` stagé ; **ADR-0031 §1** + amendement
+> **ADR-0030 §1**).
+
+> **Décidé au grilling 2026-07-24 (ADR-0031), pas encore en vigueur** — livré par les slices
+> **profils** du PRD : les valeurs non-`off` deviennent des noms de **profil de staging** (liste
+> nommée, éditable, sélectionnable par Run et par Trigger), et une **entrée de profil** peut désigner
+> une exception `$HOME` hors `.claude`. Les deux termes concernés portent le même marqueur. Le
+> renommage du tri-état et le plancher de **garanties**, décidés au même grilling, sont **en vigueur**
+> depuis #426.
+
+**Sandbox** :
+Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
+dans l'état du Run). Tri-état `off` | `minimal` | `full` (renommé en #426, ex-`pure`/`copy`, **sans
+alias**) : `off` = comportement historique (sessions sur l'hôte, défaut) ; **tout autre nom** est un
+**profil de staging** (#432) — `minimal` / `full` en sont les deux défauts virtuels — et toutes les
+tails du Run s'exécutent alors dans un conteneur dédié. Le champ n'est donc plus un tri-état fermé
+mais `off | <nom de profil>` : `SandboxMode::parse` est **purement syntaxique** (l'existence d'un
+profil est une question de **base**, tranchée au bord), et un nom inconnu échoue fort partout.
+C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
+reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
+hôte, trou réseau/auth) → **ADR-0030 / #407**. La **source** du mode suit la précédence **choix
+explicite du Run → défaut par-Trigger → `default_sandbox` d'instance** (résolveur pur
+`effective_sandbox`, #410) ; `off` reste le plancher.
+_Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confondre avec l'attribut
+`sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport ; « `copy` » /
+« `pure` » (vocabulaire mort depuis #426, aucun alias).
+
+**Staging dir (répertoire de staging)** :
+Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
+`cleanup_run`. Héberge le *staged Claude home*, un `.claude.json` sibling et un `home/` portant les
+**exceptions `$HOME`** déclarées par le profil (#432). Le vrai `~/.claude`
+n'est **jamais** monté — et l'invariant s'étend au reste de `$HOME` : ce sont toujours des copies
+qui sont montées. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
+fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
+
+**Staged Claude home (`claude-home/`)** :
+Sous-répertoire `~/.pdo/sandbox/<run-id>/claude-home/` qui tient lieu de `.claude` aux sessions du
+Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le **profil de staging**
+(voir `prepare`).
+Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté séparément vers
+`$HOME/.claude.json`. _Éviter_ : « fake home », « home miroir ».
+
+**Profil de staging** :
+Liste **nommée** de ce qu'un Run sandboxé stage dans son home. Le champ sandbox d'un Run, d'un
+Trigger ou de l'instance vaut `off` **ou un nom de profil** — jamais une liste : la précédence
+existante (`effective_sandbox`) et les `<select>` de l'UI restent inchangés. `minimal` et `full`
+sont des **défauts virtuels** (aucune ligne en base) jusqu'à édition. Ce qui est stocké est un
+**diff** d'intention (`disabled` / `extras`), jamais un instantané — sinon une install ne verrait
+plus les évolutions futures du défaut. Le nom **et** la liste résolue sont gelés dans `RunStarted` :
+`prepare` lit l'état du Run, jamais le réglage vivant. Un nom inconnu **échoue fort** (400 à la
+création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
+Table `sandbox_profiles` (`name` en clé, `disabled`/`extras` en JSON, `updated_at`) ; **pas de rename
+en v1** — rename = delete + create, car le nom est aussi la valeur stockée par les trois consommateurs
+(Trigger, défaut d'instance, payload `RunStarted`). Réalisé en **#432**.
+_Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template ».
+
+**Plancher de staging** :
+Les **garanties** que `prepare` tient dans les **deux** modes (`minimal` et `full`) — et demain quel
+que soit le **profil** : credentials valides (`.credentials.json`), managed settings de l'org
+**consentis** (copie de `~/.claude/remote-settings.json` quand elle existe), bypass permissions
+accepté (`skipDangerousModePermissionPrompt: true` **mergé** dans le `settings.json` copié en `full`,
+**synthétisé** en `minimal`), confiance pré-accordée à la racine du Run (dans le `.claude.json`
+stagé, #409), `projects/` **vide**. Chaque garantie est satisfaite soit par une **copie** de l'hôte,
+soit par une **synthèse de repli** — c'est ce qui rend le décochage d'une entrée de profil sûr sans
+l'interdire (ADR-0031 §1). Formulé en fichiers verrouillés, le plancher se contredirait dès
+`settings.json` (copié quand l'entrée est cochée, synthétisé sinon). Réalisé en **#426** ; le
+décochage effectif est arrivé avec les profils (**#432**), et trois garanties — credentials,
+managed settings de l'org, `projects/` vide — ne sont **pas** des entrées du tout : elles sont
+affichées en lecture seule et **refusées même en extra**.
+_Éviter_ : « fichiers obligatoires », « liste verrouillée ».
+
+**Entrée de profil / exception `$HOME`** :
+Une entrée est un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`).
+Refusés à l'écriture (400) : absolu, `..`, `\`, NUL, glob, sortie de `$HOME`, `.claude` nu, `.pdo`,
+et les trois chemins que le plancher possède **en entier** (`.credentials.json`,
+`remote-settings.json`, `projects/` sous `.claude`). Une entrée **hors
+`.claude`** est copiée dans `<staging>/home/<chemin>` puis montée rw à `$HOME/<chemin>` — jamais un
+bind direct du fichier hôte (un agent ferait `git config --global` et réécrirait le `~/.gitconfig`
+de l'utilisateur). Une entrée **sous `.claude/`** ne reçoit **pas** de mount propre : elle est déjà
+servie par le mount `.claude` — ce n'est pas un cas spécial mais la **conséquence** du
+classificateur unique `landing()`, partagé par la vue *copie* (`prepare`) et la vue *mount*
+(`extra_mounts`), qui ne peuvent donc pas diverger. **Règle M1** : on ne monte que ce qui a été
+réellement stagé — un `-v` dont la source manque fait créer par Docker un répertoire `root:root`,
+ce qui à terme rend le staging indélébile par le daemon. _Éviter_ : « fichier monté » (c'est une
+copie qui est montée), « exclusion » pour parler d'un décochage.
+
+**`prepare(entries, run_id)`** :
+Seede le *staged Claude home* depuis la **liste d'entrées résolue et gelée** du profil (#432 — le
+paramètre `mode` a disparu avec le tri-état), en tenant le **plancher de staging** dans tous les cas.
+Le défaut `full` porte **9 entrées** : `.claude.json`, `.claude/*.md`, `.claude/settings.json`,
+`.claude/settings.local.json`, `.claude/agents`, `.claude/commands`, `.claude/output-styles`,
+`.claude/plugins`, `.claude/skills` — et **exclut `projects/`** et tout état hôte volumineux
+(`history.jsonl`, `session-env/`, …). Les symlinks
+qui **sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
+dangleraient dans le conteneur) ; les liens intra-arbre (`node_modules/.bin`) restent des liens. Walk
+**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. Une entrée absente
+de l'hôte est **loggée et sautée** (défaut comme extra) : l'échec dur ferait dépendre la politique de
+qui a tapé le chemin, et sur une instance à Triggers horaires désinstaller `gh` tuerait chaque tir.
+**Liste vide** (`minimal`) : n'apporte **rien** en propre — `minimal` *est* le plancher. Le
+**plancher**, profil-agnostique, tient
+ensuite les cinq garanties : `.credentials.json` copié ; `remote-settings.json` copié de `~/.claude/`
+quand il existe (absent → no-op loggé, jamais une erreur) ; `skipDangerousModePermissionPrompt: true`
+dans le `settings.json` stagé (**mergé** non destructivement dans la copie hôte quand l'entrée est
+cochée, **synthétisé** sinon — sans quoi la session bute sur le dialogue de bypass permissions) ;
+confiance de la racine du Run mergée dans le `.claude.json` stagé (#409 D5 — sinon un Run autonome se
+bloquerait sur le dialogue « trust this folder ? ») ; `projects/` créé **vide** (puits de transcripts
+runtime). Le plancher est le **writer unique** de `remote-settings.json` et de la clé de bypass : ni
+l'un ni l'autre n'est une entrée du défaut. Bits exécutables préservés. **Volume/PII (#409)** :
+`full` pèse **~1 Go/run** (dominé par `plugins/*/node_modules`, requis par les serveurs MCP
+*in-container* — délibérément non strippés) et expose en plus le profil PII
+(`oauthAccount`/`userID`/`emailAddress`) + settings + `.md` globaux que `minimal` retient (choix
+conscient, aligné sur le trou d'auth d'ADR-0030). Depuis #432 c'est **décochable entrée par entrée** :
+retirer `.claude/plugins` fait tomber le staging d'un ordre de grandeur. Dette disque : le staging
+n'est purgé qu'au `cleanup_run` (surveiller vs la récurrence disque connue).
+_Éviter_ : « init », « seed » seul.
+
+**`merge_back(run_id)`** :
+À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de
+`projects/` du staging vers `~/.claude/projects/`, **récursivement** (transcripts de sessions **et**
+de sous-agents `<uuid>/subagents/*.jsonl`), sous le **même dirname encodé** (cwd identique côté
+conteneur, garanti par les identity mounts, ADR-0030). **Idempotent** : copie ssi le fichier hôte est
+absent ou plus court (transcripts append-only) ; ne réécrit jamais un fichier hôte. Aucune autre
+écriture vers l'hôte. **Jeté délibérément (v1)** : settings, statsig, todos, `history.jsonl`,
+shell-snapshots — tout sauf les transcripts (#403 US-29). **Câblé dans le run-advance (#408)** : à la
+transition terminale (chokepoint `append_event`, tâche détachée) **et** à `cleanup_run` (avant
+`teardown`, synchrone), via le seam `transcripts_root` qui rend coût/stale sandbox-conscients. Double
+merge = état identique (idempotence). _Éviter_ : « sync », « flush », « commit ».
+
+**`transcripts_root(run_id)` (seam d'observabilité)** :
+La racine `projects/` que le coût (`run_cost`) et la stale-detection (`stale_detector`) lisent pour un
+Run. `off` → `~/.claude/projects/`. Sandboxé **vivant** → le staging
+(`~/.pdo/sandbox/<run-id>/claude-home/projects/`, transcripts en direct via l'identity mount) ;
+**après `cleanup_run`** → `~/.claude/projects/` (où `merge_back` a flushé). Dispatch keyé sur
+l'**existence du staging dir**, pas le statut terminal du Run (reste correct même si le merge terminal
+best-effort a échoué). L'encodage du cwd reste la source unique de vérité (`encode_working_dir`,
+#373) — le seam ne fait que substituer la base. _Éviter_ : « home », « projects dir » seul.
+
+**`teardown(run_id)`** :
+Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
+`cleanup_run`, niveau Run) et « destroy » (réservé à la destruction du conteneur, #406).
+
+### Image (fourniture)
+
+Périmètre **provisionnement** (fabrication + nommage de l'image), landé par #405 (`sandbox_image`).
+L'**exécution** de l'image (instanciation en conteneur, mounts, réseau) → #406/#407, ADR-0030.
+
+**Image sandbox (`pdo-sandbox:h-<hash>`)** :
+L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son tag est le **hash du
+contenu du Dockerfile** (`h-<hash>`), pas une version : deux Dockerfiles identiques → même tag, une
+édition → tag différent. Identité **adressée par contenu** — c'est elle qui rend une image tirée
+d'un registry et une image buildée localement **interchangeables sous le même nom** (#411).
+_Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le
+conteneur, #406).
+
+**Dockerfile embarqué / seedé / résolu** :
+Trois choses distinctes depuis #431. Le Dockerfile est **embarqué dans le binaire** (contenu minimal :
+Ubuntu, git, ripgrep, Claude Code auto-update off, sudo NOPASSWD ; ni tmux ni `pdo`, fournis par
+l'hôte). Au premier usage il est **seedé** sur disque à `~/.pdo/sandbox/Dockerfile` — inconditionnellement,
+et **jamais ailleurs** — puis **jamais écrasé** : c'est la copie de référence éditable et la
+matérialisation du tier `default`. Le **résolu** est celui que `ensure_image` hashe et builde
+réellement : le seedé par défaut, ou celui que `dockerfile_path` désigne. _Éviter_ : confondre les
+trois ; « image de base ».
+
+**`ensure_image()`** :
+Garantit que `pdo-sandbox:h-<hash>` existe **localement** et retourne **toujours** le ref local
+(invariant `sandbox_container`) : seed du Dockerfile par défaut → contrôle que le Dockerfile
+**résolu** est un fichier régulier (sinon **erreur dure** nommant chemin + tier, jamais de repli) →
+présente → réutilise (**fast-path**, zéro réseau) ; absente, `image_source=registry` (défaut) **et**
+Dockerfile résolu **à l'emplacement seedé par défaut** → `docker pull` le ref GHCR puis **retag** sous
+le ref local, avec **fallback build** si le pull échoue (offline / 404 / registry down) ;
+`image_source=dockerfile` **ou** Dockerfile résolu ailleurs → `docker build` direct, **jamais** de pull
+(un hash custom ne peut pas exister en amont) ; échec de build → erreur explicite (consommée par le
+fail-fast du Run). Le prédicat de skip-pull porte sur le **chemin**, pas sur les octets (ADR-0030 §5 —
+un prédicat-octets classerait « custom » toute machine ayant mis PDO à jour). _Éviter_ : « ensure =
+build-**seul** » (c'est build-**si-absent**, et pull-**d'abord** en registry au chemin par défaut),
+« warm-up ».
+
+**`image_source` (par-daemon)** :
+Le réglage qui pilote d'où `ensure_image` tire l'image : `registry` (défaut, pull GHCR-puis-retag +
+fallback build) | `dockerfile` (build local direct). **Par-daemon**, jamais par-Run (à la différence
+du **mode** sandbox porté par `RunStarted`) : colonne additive `instance_config`, précédence
+`stored → env (PDO_SANDBOX_IMAGE_SOURCE) → default(registry)` (ADR-0015), éditable dans la Settings
+UI. _Éviter_ : « mode registry » (le mode = off/minimal/full), « image_source par run ».
+
+**`dockerfile_path` (par-daemon)** :
+Le réglage qui pilote **quel** Dockerfile `ensure_image` hashe et builde — typiquement un Dockerfile
+versionné dans le repo, donc partagé par l'équipe. **Par-daemon**, jamais par-Run : colonne additive
+nullable `instance_config`, sentinelle `Some("")` = clear, précédence
+`stored → env (PDO_SANDBOX_DOCKERFILE) → défaut seedé` (ADR-0015), résolveur **pur**
+(`resolve_dockerfile`) partagé par la prep **et** `GET /settings` (0 drift, leçon #373). Trois
+propriétés qui se retiennent ensemble : (a) le tag reste le hash du contenu du fichier **pointé**, donc
+l'édition rebuilde ; (b) le contexte de build reste `<sandbox_root>/.build-ctx`, **vide** — un
+Dockerfile pointé doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemin qui n'est pas un fichier
+régulier **échoue fort au prep** (`RunFailed` nommant chemin + tier), plus un `400` à `PUT /settings`
+comme gate précoce — le tier **env** contourne ce `400` par construction (échappatoire assumée pour un
+volume amovible), les deux tiers restent gatés au prep. La Settings UI affiche le **chemin résolu** et
+le **tag** qui en découle. _Éviter_ : « Dockerfile du run » (c'est par-daemon), « override d'image »
+(un ref d'image tout fait est hors périmètre), croire qu'un `COPY` fonctionne.
+
+**`registry_image_ref` / `ghcr.io/loulen/pdo-sandbox`** :
+Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` — **même hash** que le ref
+local, d'où l'interchangeabilité. Owner **lowercasé** (`Loulen`→`loulen` : GHCR rejette l'uppercase).
+Poussé par un job release additif (multi-arch, tags `h-<hash>` + `latest`). _Éviter_ : « latest »
+(le daemon ne tire que `h-<hash>` ; `latest` est informatif), « tag de version ».
+
+**`pull_image` / `tag_image`** :
+Les deux effets docker du chemin registry : `pull_image` = `docker pull <registry_ref>` (`Ok(true)`
+si tiré, `Ok(false)` si non-zéro → fallback build ; le stderr de progression n'est **pas** un
+signal d'échec, seul l'exit code compte) ; `tag_image` = `docker tag <registry_ref> <local_ref>`
+(le retag qui garde `sandbox_container` inchangé). _Éviter_ : confondre `pull` (réseau) et
+`ensure`/`build` (local).
+
+### Exécution (conteneur)
+
+Périmètre **exécution** de l'image (instanciation, mounts, cycle de vie du conteneur), landé par
+#406 (`sandbox_container`). Le **câblage** run-advance et l'ADR-0030 qui fixe le modèle → #407.
+
+**Conteneur sandbox (`pdo-sbx-<run-id>`)** :
+Le conteneur **unique et long-vécu** d'un Run sandboxé, nommé de façon déterministe d'après le
+run-id, dormant (`sleep infinity`, PID 1 = `tini` via `--init`). Toutes les tails du Run y entrent
+par `docker exec` ; il naît au premier nœud, meurt au `cleanup_run`. Un nom par-Run rend kill et
+destruction **ciblés** (jamais un balayage global). _Éviter_ : « la sandbox » (= la feature/le
+mode), « VM », « image du conteneur » (l'image est le template, #405).
+
+**Identity mounts** :
+Les bind-mounts qui **répliquent l'identité de l'hôte** pour que le chemin de travail soit identique
+des deux côtés : repo cible monté rw à son **chemin absolu hôte** (couvre tous les worktrees de
+nœuds, sous `.pdo/runs/`), *staged Claude home* → `$HOME/.claude`, `.claude.json` sibling →
+`$HOME/.claude.json`, binaire `pdo` hôte monté ro dans le PATH, **uid/gid hôte** adoptés par le
+process (`--user`). C'est ce qui garantit le **même dirname encodé** que `merge_back`. _Éviter_ :
+« volumes » seul, « partage de fichiers ».
+
+**Préfixe `docker exec` (`exec_prefix`)** :
+La séquence d'arguments préposée à la tail d'un nœud pour la faire tourner **dans** le conteneur
+(`docker exec -it -e PDO_SBX_SESSION=… --user <uid>:<gid> -w <cwd> pdo-sbx-<run-id> …`) au lieu de
+l'hôte. En mode `off` le préfixe est **vide** (exécution hôte). Pur : construction d'argv, sans
+effet de bord. Ne re-passe jamais `PDO_DAEMON_URL` (posé au create vers `host.docker.internal`).
+_Éviter_ : « wrapper », « shim ».
+
+**Résolveur d'URL du daemon (`daemon_url(port, sandboxed)`)** :
+La fonction **pure et unique** qui rend l'URL du daemon **telle qu'elle est joignable depuis le côté
+où l'agent s'exécute** : `http://localhost:<port>` côté hôte, `http://host.docker.internal:<port>`
+depuis l'intérieur du conteneur. Vit dans `sandbox_container` parce que c'est le module qui possède
+le `--add-host` créant cette gateway : le hostname n'a donc **qu'une** occurrence. Ses deux
+consommateurs sont le `-e PDO_DAEMON_URL` du `docker create` **et** le **texte** du préambule
+manager — c'est ce qui interdit la dérive #447 (l'env résolu, la prose codée en dur sur `localhost`,
+un manager sandboxé qui déclare le daemon mort). Son booléen nomme le **côté d'exécution**, pas le
+mode du Run : les exports d'env côté hôte du wrapper passent `false` même pour un Run sandboxé,
+puisqu'ils ne traversent pas le `docker exec`. _Éviter_ : « URL du daemon » tout court (ambigu entre
+l'env et le texte), « unifier les occurrences de localhost » (deux d'entre elles sont légitimes).
+
+**Marqueur de session (`PDO_SBX_SESSION`)** :
+La **variable d'environnement** (`PDO_SBX_SESSION=<nom-de-session>`) posée sur **chaque** `docker
+exec`, **héritée par `claude` et toute sa descendance**. C'est la clé du **kill ciblé** : un scan
+`/proc/*/environ` la retrouve sur l'arbre de process de la session. Ce n'est **pas** un label Docker
+(réservé, non utilisé en v1). _Éviter_ : « tag » (réservé à l'image, #405), « label ».
+
+**`ensure_running(run_id)`** :
+Provisionneur **idempotent** du conteneur (miroir de `ensure_image`) : sonde `docker container
+inspect` → absent → `docker create` + `start` ; présent arrêté → `start` ; déjà up → no-op. La sonde
+**ne confond jamais** une erreur transitoire (daemon Docker down, permission) avec une absence.
+_Éviter_ : « launch », « boot », « run » seul.
+
+**Kill ciblé** :
+Arrêt du **seul** arbre de process porteur d'un **marqueur de session** donné, **dans** le conteneur
+partagé (`docker exec` séparé qui scanne `/proc`, `TERM` puis `KILL`) — les sessions sœurs du même
+Run **survivent**. Nécessaire car le client `docker exec` tué côté tmux ne tue pas le process
+conteneur (reparenté sur PID 1). Best-effort. Distinct de `remove` (destruction du conteneur
+entier). _Éviter_ : « stop all », « docker kill » (large).
+
+**`remove` / destruction du conteneur** :
+Suppression du conteneur (`docker rm -f pdo-sbx-<run-id>`) à `cleanup_run` ; sans effet s'il est déjà
+absent (idempotent). C'est **le** verbe « destroy / destruction » réservé par `teardown`. _Éviter_ :
+« teardown » (= purge du staging dir, #404), « cleanup » (= niveau Run).
+
+### Exposition run-level + sources de config (#410)
+
+Périmètre **utilisateur** : d'où vient le mode d'un Run, comment on le choisit/le voit. L'exécution
+elle-même est inchangée (#406/#407). Landé par #410.
+
+**`effective_sandbox` (résolveur de précédence)** :
+Fonction **pure** (`event_log`) `(explicit: Option<SandboxMode>, trigger: Option<SandboxMode>,
+instance_default: SandboxMode) → SandboxMode` : le **premier `Some` gagne**, `instance_default` est le
+plancher. Appelée **une fois** au chokepoint `create_run_inner` (où JSON, multipart et fire de Trigger
+convergent), juste avant le gel du mode dans `RunStarted` (immuable, ADR-0030 pt 8). _Éviter_ :
+« merge », « override », « fusion des modes ».
+
+**`default_sandbox` (défaut d'instance)** :
+Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`minimal`/`full`,
+`""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
+→ default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
+/settings` (0 drift #373, miroir exact d'`image_source`). Éditable dans la Settings UI (`<select>`).
+**Atteignable depuis le dialogue de lancement** (#452) : le sélecteur du NewRunModal mène, dans les
+**deux** modes, sur « Use instance default » — la sentinelle `""` qui **omet** la clé `sandbox` de la
+requête. C'est la seule façon de déférer, `Some(Off)` étant final ; en mode run l'option **nomme** le
+défaut résolu au lieu de le **recopier** dans le champ (un prefill async best-effort ratait sa fenêtre
+sur un fetch lent, en échec, ou en cache d'une ouverture précédente, et atterrissait sur un `off`
+explicite que l'utilisateur n'avait pas choisi).
+_Éviter_ : confondre avec `image_source` (provisionnement d'image, orthogonal) ; « mode d'instance » ;
+dire que le dialogue de lancement « choisit toujours » un mode (c'était le défaut #452).
+
+**Défaut par-Trigger (`Trigger.sandbox`)** :
+Mode par défaut d'un **Trigger** : colonne **nullable** `sandbox` sur `triggers`. `None` = **déférer**
+à `default_sandbox`. Édité dans le NewRunModal en mode Trigger, **clearable** via
+`deserialize_double_option` (présent-`null` = repasse à l'héritage ; précédent `max_concurrent` #239 —
+**pas** les frères `guard_command`/`target_repo` en `serde(default)` qui ne savent pas clear).
+_Éviter_ : « sandbox du trigger » comme si le trigger s'exécutait (les guards restent hôte, ADR-0030).
+
+**Sonde Docker (`sandbox_docker`)** :
+Check de disponibilité host (`docker version`, exit 0 = disponible ; binaire absent →
+`DOCKER_NOT_FOUND_MSG` ; daemon injoignable → message dédié). **TTL-cachée** (~10 s) par-daemon,
+surfacée sur `GET /settings` comme `sandbox_docker {available, reason, checked_at}` (pas un
+`settings_field` : aucun tier stored/env/default) à côté du knob `default_sandbox`, pour un **seul**
+fetch du modal. Affordance **advisory** : grise les options de profil du sélecteur et **refuse le
+Launch** quand le mode effectif en est un (#452 — elle ne **clampe plus** sur `off` : écrire un verdict
+métier dans le champ le rendait indistinguable d'un choix utilisateur) ; le fail-fast du run-advance
+(ADR-0030 pt 4) reste le gate **autoritaire**. Passe par le seam `docker_cmd_override`.
+_Éviter_ : « Docker health », « sandbox available » (ambigu avec le mode), confondre avec
+`ensure_image`/`probe_state` (provisionnement/liveness par-Run).
+
+**Préparation du sandbox (`sandbox_prep`)** :
+État **additif** projeté sur le Run (`pending`|`ready`) qui rend visible la fenêtre de prep eager
+(ADR-0030 pt 4/10) : `SandboxPrepStarted` (avant `ensure_ready`) → `pending`, `SandboxPrepReady`
+(avant le 1er spawn) → `ready`. Émis au chokepoint `append_event`, **jamais** pour un Run `off`.
+N'altère **pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié).
+L'UI du Run affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge**
+`sandbox : minimal|full` persistant. Depuis #445 la paire n'est plus **seulement informationnelle** :
+elle porte la **précondition de spawn** ci-dessous, donc `SandboxPrepReady` est aussi émis par
+`resume_run` et la boot recovery quand elles ré-arment le conteneur d'un Run resté `pending`
+(amendement ADR-0030 §3 ; `open_run_shell` reste non émetteur — Run terminal). _Éviter_ : « statut
+preparing » (écarté, pas un état de la machine à statut) ; l'inférence client (écartée : faux positifs
+advance-détaché/#159) ; « événement purement informationnel » (plus vrai depuis #445).
+
+**Précondition de spawn du sandbox** (`RunState::sandbox_spawn_block`) :
+Règle « **un Run sandboxé dont la prep n'est pas `ready` n'est pas schedulable** », portée par
+`spawn_node` lui-même (après le garde de transition, avant l'admission et tout sous-worktree) et
+répétée en `409` par `force_spawn_node`, qui ne passe pas par le spawn. Décision **pure** sur la
+projection : `off` jamais bloqué, `ready` jamais bloqué, `pending` **et** `absent` bloqués. Le refus
+n'écrit **rien** — ni `NodeStarted` ni `NodeWaiting` — parce qu'un nœud sans état reste dans
+`compute_ready_to_spawn` : c'est ce qui permet le **rejeu** par l'`advance_run` qui suit
+`SandboxPrepReady`. Issue de spawn dédiée `SpawnOutcome::Deferred`, distincte de `Refused` (rien à
+reprendre) et de `Throttled` (réservation posée). Sans elle, un avancement déclenché par le watcher de
+pipeline ou par `retry_waiting_nodes` pendant la prep lançait un `docker exec` sur un conteneur
+inexistant → exit 1 en ~30 ms → `session_died` 25 s plus tard (#445, profil `full` inutilisable).
+_Éviter_ : « garde du watcher » (le défaut était l'absence de précondition au spawn, corriger le site
+d'appel laisse le suivant la réintroduire) ; confondre avec l'**admission** (cap de sessions
+concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeStarted`).
+
+### Relations
+- Une **Sandbox** `minimal`/`full` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
+  **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
+- `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
+  supprime le staging dir.
+- Une **Sandbox** `minimal`/`full` s'exécute dans un **conteneur sandbox** (`pdo-sbx-<run-id>`)
+  instancié depuis l'**image sandbox** `pdo-sandbox:h-<hash>` (garantie par `ensure_image`, #405) via
+  `ensure_running` (#406) ; ses **identity mounts** rendent le chemin de travail identique
+  hôte/conteneur (d'où le même dirname encodé pour `merge_back`), et toutes les tails y entrent par le
+  **préfixe `docker exec`** portant un **marqueur de session**. Kill ciblé + `remove` au `cleanup_run`.
+- **Câblé (#407, ADR-0030)** : `prepare`/`ensure_image`/`ensure_running`/`exec_prefix` dans le
+  run-advance — prep eager fail-fast au create (Docker indispo → `RunFailed`, zéro spawn hôte),
+  wrapping des tails au chokepoint `build_tmux_script` (`off` byte-identique), kill ciblé dans
+  `reap_node_session`/`kill_node`/`restart_node`, `remove`+`teardown` au `cleanup_run`,
+  `ensure_running` à `boot_recovery` (Run live) et `open_run_shell` (ressuscite-ou-échoue).
+- **Câblé (#408, ADR-0030)** : `merge_back` dans le run-advance — transition terminale (chokepoint
+  `append_event`, détaché) **et** `cleanup_run` (avant `teardown`, synchrone) ; observabilité coût
+  (`run_cost`) + stale (`stale_detector`) via le seam `transcripts_root` (staging si Run sandboxé
+  vivant, `~/.claude/projects/` sinon) ; garde `ensure_ready`-ou-échec ajouté à `resume_run` (re-arme
+  le conteneur après reboot hôte).
+- **Vérifié e2e (#409)** : le mode `full` tourne le **même câblage mode-agnostique** que #407 (aucun
+  net-new run-advance) ; il ne diffère de `minimal` que par le seed de `prepare` — deref des symlinks
+  **échappants** (les skills liés à `~/.agents` ne danglent plus), walk **best-effort**, et confiance
+  `repo_root` mergée dans le `.claude.json` copié (D5). Aucune écriture de config ne revient vers
+  l'hôte (`merge_back` reste jsonl-only). Couvert par unit + 4 tests layer-3 (`sandbox_tracer`) + le
+  Feature Path agentique L5 (Docker réel).
+- **Fourniture hybride de l'image (#411)** : `ensure_image` devient hybride — fast-path local, puis
+  en `registry` (défaut) `pull_image` GHCR + `tag_image` sous le ref local, **fallback build** si le
+  pull rate ; en `dockerfile`, build direct. Valeur de retour **toujours le ref local** → aucun
+  changement dans `sandbox_container`. Réglage **par-daemon** `image_source` (`instance_config`,
+  résolveur `stored → env → default(registry)` partagé par `ensure_image` **et** `GET /settings`,
+  0 drift #373), éditable dans la Settings UI (`<select>`). `context_from_state` devient **async**
+  (lit `instance_config` frais au bord) ; `ensure_ready` reste sync. La release publie l'image sur
+  GHCR (job additif, multi-arch, tags `h-<hash>` + `latest`) avec parité hash bash/Rust. Pull anonyme
+  sur image publique → trou d'auth #260 inchangé. Couvert par unit (`sandbox_image`/`instance_config`
+  /settings) + 2 tests layer-3 (`sandbox_tracer` : pull vs build selon `image_source`) + FP-411 (L5,
+  Docker réel).
+- **Câblé (#410, ADR-0030 pt 8+10)** : **exposition run-level + sources de config**. Précédence
+  **réalisée** — résolveur pur `effective_sandbox(explicit, trigger, instance_default)` (run → trigger
+  → `default_sandbox`, plancher `off`) au chokepoint `create_run_inner` ; param filaire
+  `Option<SandboxMode>` (absent ≠ `off` explicite) ; `default_sandbox` colonne `instance_config`
+  (résolveur `default_sandbox_with`, `stored → env → default(off)`) ; défaut par-Trigger colonne
+  nullable `sandbox` (clearable `deserialize_double_option`, précédent #239). **Sonde Docker** advisory
+  (`GET /settings.sandbox_docker`, TTL-cachée) → grise `minimal`/`full` du sélecteur. **Visibilité prep**
+  via événements additifs `SandboxPrepStarted`/`Ready` → `RunState.sandbox_prep` (badge + bannière).
+  Testé layer-1 (résolveur pur) + unit (settings/probe) + FE (vitest) + FP-410 (L5, Docker réel).
+- **Réalisé (#426, ADR-0031 §1 + amendement ADR-0030 §1)** : **vocabulaire + plancher de garanties**.
+  Le tri-état est renommé `off` | `minimal` | `full`, **sans alias** de compatibilité (aucune valeur
+  persistée dans l'instance prod ni dev — les colonnes `default_sandbox`/`triggers.sandbox` n'y
+  existent même pas ; un alias n'aurait servi que des instances de validation jetables) ; un token
+  inconnu garde `parse() → None` et est désormais **loggé** aux trois décodeurs (projection
+  `RunStarted`, `default_sandbox_with`, tir de Trigger) — la dégradation va vers **moins**
+  d'isolation, elle ne doit pas être silencieuse. `prepare` tient le **plancher** dans les deux modes,
+  en deux phases (profil puis `enforce_staging_floor` mode-agnostique) : `minimal` est un bras de
+  `match` **vide**. Restent à livrer par les slices **profils** : le profil de staging lui-même (liste
+  nommée/éditable/sélectionnable, diff `disabled`/`extras`, défauts virtuels, gel dans `RunStarted`,
+  échec fort sur nom inconnu — ADR-0031 §2/§5/§6/§7), les **exceptions `$HOME`** (§3/§4, amendement
+  ADR-0030 §2/§3).
+- **Réalisé (#431, amendement ADR-0030 §5)** : **explorateur de fichiers générique + Dockerfile
+  réglable**. `GET /repos/browse` devient `GET /fs/browse` (renommage franc, sans alias : rien de cette
+  route n'était repo-spécifique) et gagne deux drapeaux optionnels `files` / `hidden` dont les défauts
+  reproduisent le listing d'avant **au bit près** (répertoires seuls, dot-entrées filtrées), plus un
+  `is_dir` par entrée ; le cap de 1000 devient **par genre, répertoires prioritaires** (un budget unique
+  laissait 50 000 fichiers affamer les 2 répertoires à traverser — panne fonctionnelle du picker, pas un
+  détail). Côté FE, l'explorateur sort de `RepoCombobox` dans un `FsExplorerModal` réutilisable
+  (`mode: "dir" | "file"`, `showHidden`, testids préfixés) — `RepoCombobox` en est le premier
+  consommateur, **inchangé au pixel** (ses 12 tests et l'e2e `repo-explorer-pick` passent sans édition
+  d'assertion), le `SettingsModal` le second. Réglage **par-daemon** `dockerfile_path` (voir le lexique
+  ci-dessus) ; la Settings UI expose le **chemin résolu** et le **tag** `pdo-sandbox:h-<hash>` qui en
+  découle, pour que « éditer le Dockerfile déclenche un rebuild » cesse d'être un savoir tribal.
+  `/fs` étant un **nouveau préfixe top-level**, il entre dans la whitelist du proxy vite (même piège que
+  `/nodes` #345 et `/stats` #377). Couvert par unit (query/classification/merge, résolveur pur,
+  `ensure_image`, `instance_config`, settings HTTP) + layer-3 (`fs_browse` : anti-SPA sur le
+  content-type, forme additive, les 2 drapeaux, liens cassés et spéciaux invisibles ; `sandbox_tracer` :
+  build depuis le chemin custom **sans pull**, et chemin disparu → `RunFailed` nommant chemin + tier)
+  + FE (vitest) + FP-431 (L5, Docker réel).
+- **Réalisé (#445, amendement ADR-0030 « précondition du spawn »)** : la garantie du point 4 (« conteneur
+  prêt avant le premier spawn ») était rejouée par le **seul** parcours de création ; le watcher de
+  pipeline et `retry_waiting_nodes` atteignaient le spawn pendant la prep → `docker exec` sur un
+  conteneur inexistant → `session_died` (profil `full` mort 7 fois sur 7 en reproduction, et
+  **systématiquement dès qu'un onglet du Run était ouvert**, la lecture de `pipeline.yaml` réveillant le
+  watcher). La règle devient une **précondition portée par `spawn_node`** (voir le lexique ci-dessus),
+  répétée en `409` par `force_spawn_node` ; le refus n'écrit rien, donc le spawn est **rejoué** par
+  l'`advance_run` qui suit `SandboxPrepReady` — d'où l'extension des émetteurs de cet event
+  (`resume_run`, boot recovery) sans laquelle un Run ayant échoué *pendant* sa prep serait bloqué à vie.
+  `run_stall_reason` gagne une **grâce sandbox** de 15 min (une prep de 2 Go dure 83-87 s, davantage sur
+  un build froid : la fenêtre #279 de 120 s tuait précisément les Runs lents que la précondition sauve),
+  et une prep dont le Run est devenu terminal est **abandonnée** (ni event, ni spawn, `docker rm -f` du
+  conteneur ; le staging reste pour `merge_back`/`cleanup_run`). Couvert layer-1 (décision pure, table
+  complète) + unit (spawn différé sans event, `off` jamais bloqué, rejeu de bout en bout sur
+  `advance_run`, `409` du force-spawn, les deux bornes de la grâce sandbox) + FP-445 (L5, Docker réel,
+  recette `full-heavy`).
+- **Non traité, à ficher** : le réveil parasite du watcher. La première **lecture** de
+  `<run>/pipeline.yaml` produit un `pipeline_modified` mensonger (masque inotify `OPEN`, debouncer sans
+  filtre d'`EventKind`, `content_actually_changed` sans baseline pour un Run neuf —`seed_run_mtimes` ne
+  tourne qu'au boot ; `copy_pipeline_to_run` est en outre le seul écrivain de l'arbre qui n'appelle
+  jamais `mark_self_write`). Indépendant de #445 : la précondition tient quel que soit qui avance le Run.
+- **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
+  Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
+  (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).
+
+### Ambiguïté signalée
+« sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;
+(2) l'attribut `sandbox=""` de l'iframe du port `html` (#333, ADR-0028). Le contexte tranche ;
+ne jamais fusionner.
 
 ---
 

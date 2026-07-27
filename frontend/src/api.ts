@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileReferents } from "./types";
 
 const BASE = "";
 
@@ -148,6 +148,72 @@ export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
   return request<InstanceSettings>("PUT", "/settings", { body: patch });
+}
+
+// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
+//
+// A separate REST resource, NOT part of the grouped `PUT /settings`: a profile is a ROW,
+// not a `{effective, source, stored, env, default}` knob. That is exactly why the editor's
+// footer says "Done" rather than "Save" — nothing is batched behind it.
+//
+// The routes sit under `/settings/…` purely for ROUTING: the vite proxy key is a prefix,
+// so `'/settings'` already covers every sub-path (no proxy edit, none of the "dev GET
+// answers 200 with the SPA" traps that `/nodes`, `/stats` and `/fs` each paid).
+
+/** Every staging profile, each fully resolved (`+ home`, the host `$HOME`). */
+export function fetchSandboxProfiles(): Promise<{
+  profiles: SandboxProfile[];
+  home: string | null;
+}> {
+  return request("GET", "/settings/sandbox-profiles");
+}
+
+/** One resolved profile; throws `ApiError` with status 404 when the name is unknown. */
+export function fetchSandboxProfile(name: string): Promise<SandboxProfile> {
+  return request<SandboxProfile>(
+    "GET",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+  );
+}
+
+/**
+ * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2).
+ * Upsert, because the caller cannot know whether `full` already has a row, and editing it
+ * IS what materialises one. Returns the recomputed view so the editor needs no refetch.
+ */
+export function saveSandboxProfile(
+  name: string,
+  diff: { disabled: string[]; extras: string[] },
+): Promise<SandboxProfile> {
+  return request<SandboxProfile>(
+    "PUT",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+    { body: diff },
+  );
+}
+
+/**
+ * Delete the materialised row. Unconditional (ADR-0031 §7 — a *soft* guard-rail, no
+ * referential integrity in the DB): deleting an edited `full`/`minimal` reverts it to its
+ * virtual default, deleting a user profile makes its referents' next Run fail loud.
+ * Neither repoints anything, which is what {@link fetchSandboxProfileReferents} is for.
+ */
+export function deleteSandboxProfile(name: string): Promise<void> {
+  return request<void>(
+    "DELETE",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
+    { responseMode: "void" },
+  );
+}
+
+/** Who still points at a profile — server-side, because `RunListEntry` carries no `sandbox`. */
+export function fetchSandboxProfileReferents(
+  name: string,
+): Promise<SandboxProfileReferents> {
+  return request<SandboxProfileReferents>(
+    "GET",
+    `/settings/sandbox-profiles/${encodeURIComponent(name)}/referents`,
+  );
 }
 
 /**
@@ -344,6 +410,9 @@ export interface CreateRunRequest {
   target_repo?: string;
   source_branch?: string;
   name?: string;
+  /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
+   *  server defers to the trigger/instance default at the create chokepoint. */
+  sandbox?: string;
   images?: File[];
 }
 
@@ -363,6 +432,10 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.target_repo) form.append("target_repo", req.target_repo);
     if (req.source_branch) form.append("source_branch", req.source_branch);
     if (req.name) form.append("name", req.name);
+    // #410: thread the explicit sandbox mode through the multipart path too, so a
+    // sandboxed Run created WITH attached images keeps its mode (the daemon's
+    // multipart parser reads this field).
+    if (req.sandbox) form.append("sandbox", req.sandbox);
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
@@ -388,6 +461,9 @@ export interface CreateTriggerRequest {
   overlap_policy?: string;
   /** Bounded-`allow` ceiling (#239): max simultaneous live Runs; omit/undefined = unbounded. */
   max_concurrent?: number | null;
+  /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/omit to
+   *  inherit the instance default. */
+  sandbox?: string | null;
 }
 
 export function fetchTriggers(): Promise<Trigger[]> {
@@ -421,6 +497,9 @@ export interface UpdateTriggerRequest {
   variables?: Record<string, unknown>;
   /** Bounded-`allow` ceiling (#239): number sets, null clears to unbounded, undefined leaves unchanged. */
   max_concurrent?: number | null;
+  /** Per-Trigger sandbox (#410/#432): a value sets it, `null` clears back to
+   *  inheriting the instance default, `undefined` leaves it unchanged. */
+  sandbox?: string | null;
 }
 
 export function updateTrigger(
@@ -552,13 +631,20 @@ export function fetchRecentRepos(): Promise<string[]> {
   return request<string[]>("GET", "/repos/recent");
 }
 
-// --- Filesystem explorer (#131) ---
+// --- Filesystem explorer (#131, generalised in #431) ---
 
 export interface BrowseEntry {
   name: string;
   path: string;
+  /** `.git`-presence hint (never a `git rev-parse`); meaningless for a file. */
   is_git_repo: boolean;
   is_symlink: boolean;
+  /**
+   * #431: `true` for a directory (symlinks FOLLOWED), `false` for a regular file.
+   * Always emitted, including under the dirs-only default where it is invariably
+   * `true`, so an entry's shape never depends on the request.
+   */
+  is_dir: boolean;
 }
 
 export interface BrowseResponse {
@@ -567,22 +653,42 @@ export interface BrowseResponse {
   /** Parent directory, or null only at the filesystem root. */
   parent: string | null;
   entries: BrowseEntry[];
-  /** True iff the post-filter directory count exceeded the listing cap. */
+  /** True iff the post-filter entry count exceeded the listing cap. */
   truncated: boolean;
   /** Non-null when the dir was navigable but unlistable (e.g. permission denied). */
   error: string | null;
 }
 
 /**
- * List the directories inside `path` (or the daemon's default root when omitted).
+ * Optional widening of the listing (#431). Both flags are **off** by default, which
+ * is the pre-rename behaviour bit for bit: directories only, dot-entries filtered.
+ * A flag only travels on the wire when `true`, so the default call's URL is exactly
+ * `/fs/browse`, with no query string at all.
+ */
+export interface BrowseOptions {
+  files?: boolean;
+  hidden?: boolean;
+}
+
+/**
+ * List `path` (or the daemon's default chain `$HOME → repo_root → /` when omitted).
  * 200 always carries the {@link BrowseResponse} shape — including the in-body
  * `error` for navigable-but-unlistable dirs — so callers branch on `data.error`.
  * Only genuine caller/system bugs (relative path → 400, collapsed default → 500)
  * throw here.
+ *
+ * `path` stays the FIRST positional parameter, and in default mode callers must pass
+ * it as the SOLE argument: `RepoCombobox.test.tsx` pins `browseFs(undefined)` /
+ * `browseFs("/abs/repo/path")` and vitest compares arity strictly (a trailing
+ * `undefined` is a recorded second argument and breaks `toHaveBeenCalledWith`).
  */
-export function browseRepos(path?: string): Promise<BrowseResponse> {
-  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  return request<BrowseResponse>("GET", `/repos/browse${qs}`, { label: "GET /repos/browse" });
+export function browseFs(path?: string, opts: BrowseOptions = {}): Promise<BrowseResponse> {
+  return request<BrowseResponse>("GET", "/fs/browse", {
+    // `request` drops undefined-valued keys, so `|| undefined` keeps `files=false`
+    // off the wire instead of sending a redundant explicit default.
+    query: { path, files: opts.files || undefined, hidden: opts.hidden || undefined },
+    label: "GET /fs/browse",
+  });
 }
 
 export function killNode(

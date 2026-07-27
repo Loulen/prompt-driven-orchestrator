@@ -36,8 +36,10 @@ Features validated while crossing the editing screens (grafted from retired per-
 ## Journey
 
 1. Open the app → the **Library** lists the available pipelines.
-2. **Duplicate** a library-only pipeline → an unlinked copy appears, name suffixed `(copy)`, opened on
-   the canvas. (Duplicate is offered only on library-only rows, never on starred working rows.)
+2. **Duplicate** a library-only pipeline → an unlinked copy appears **in the Library list**, name
+   suffixed `(copy)`, as a clickable row correctly badged `library` scope. The copy is **not** opened
+   on the canvas — that is deliberate (#371); **open it explicitly** to continue the journey.
+   (Duplicate is offered only on library-only rows, never on starred working rows.)
 3. **Add a node** from the edit toolbar → a new slim card appears (type icon + name + code/doc marker,
    no id text, no `interactive` badge).
 4. **Draw an edge**: drag from a node's green **output dot** and drop on another node's **card body**

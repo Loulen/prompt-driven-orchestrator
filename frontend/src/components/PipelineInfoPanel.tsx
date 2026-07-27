@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Info, Terminal, X, FileText, Code } from "lucide-react";
+import { Info, Terminal, X, FileText, Code, Box, Loader } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
@@ -196,6 +196,19 @@ function InfoTab({
               {run ? `run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}` : `template · ${pipeline?.version ?? "v1"}`}
             </div>
           </div>
+          {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An
+              `off`/host Run renders nothing — the field is absent on those. */}
+          {run?.sandbox && run.sandbox !== "off" && (
+            <span
+              className="flex shrink-0 items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+              style={{ fontSize: "9.5px" }}
+              data-testid="sandbox-badge"
+              title={`This run is isolated in a Docker sandbox (${run.sandbox})`}
+            >
+              <Box size={10} className="shrink-0" />
+              sandbox: {run.sandbox}
+            </span>
+          )}
         </div>
 
         {variables.length > 0 && (
@@ -215,6 +228,24 @@ function InfoTab({
           </div>
         )}
       </div>
+
+      {/* Sandbox preparation banner (#410, amber): the image is being pulled/built
+          at first use. Only while `sandbox_prep === "pending"` — it clears to
+          `ready` once the container is about to run, so the Run never looks stuck. */}
+      {run?.sandbox_prep === "pending" && (
+        <div
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          data-testid="sandbox-prep-banner"
+        >
+          <Loader size={14} className="shrink-0 animate-spin text-st-await" />
+          <span
+            className="text-st-await"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            Preparing the sandbox — pulling/building the image…
+          </span>
+        </div>
+      )}
 
       {run && (
         <div

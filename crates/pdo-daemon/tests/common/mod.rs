@@ -69,6 +69,97 @@ impl TestDaemon {
                 panic_on_stale_sweep: false,
                 panic_on_spawn: false,
                 service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: None,
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon whose sandbox wiring shells out to a **fake `docker`** (#407).
+    ///
+    /// `docker_cmd` is the command every sandbox docker call runs instead of the
+    /// real binary (e.g. a script that logs its argv and canned-responds to
+    /// `inspect`/`create`/`start`/`exec`/`rm`). The tmux tail stays the harmless
+    /// `exec true` so a sandboxed node's *host-side* wrapper collapses instantly —
+    /// no real claude, no lingering session. Per-daemon config, no `std::env`
+    /// race (#181). No docker teardown in `Drop`: the fake creates no real
+    /// container.
+    pub async fn spawn_with_docker_override<F>(setup: F, docker_cmd: String) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override: Some("exec true".to_string()),
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: Some(docker_cmd),
+                // #407: stage the sandbox home UNDER the tempdir so the test never
+                // touches the real `$HOME` (`~/.pdo/sandbox`, `~/.claude`).
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon with a **fake `docker`** AND an explicit tmux tail override
+    /// (#408). Like [`TestDaemon::spawn_with_docker_override`] but the caller
+    /// chooses the tail: pass `Some("exec sleep 600")` so a sandboxed node's
+    /// session stays **alive** long enough to exercise the live-run observability
+    /// paths (cost + stale-detection reading the staged home). The default
+    /// docker-override harness pins the tail to `exec true`, which collapses the
+    /// session instantly — too short to prove "stale reads the staging".
+    ///
+    /// `sandbox_home_override` is the tempdir, so the staging
+    /// (`<tempdir>/.pdo/sandbox/<run>/…`) and the host `~/.claude`
+    /// (`<tempdir>/.claude/…`) both live under the test's own dir — hermetic, no
+    /// real `$HOME` touched.
+    pub async fn spawn_with_docker_and_tmux_override<F>(
+        setup: F,
+        docker_cmd: String,
+        tmux_cmd_override: Option<String>,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override,
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: Some(docker_cmd),
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
             },
         )
         .await?;
@@ -103,6 +194,8 @@ impl TestDaemon {
                 panic_on_stale_sweep: false,
                 panic_on_spawn: false,
                 service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: None,
             },
         )
         .await?;

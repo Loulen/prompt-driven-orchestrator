@@ -22,7 +22,45 @@
  * The two per-port emitters are DELIBERATELY divergent — do not unify them, see
  * the comment on `portToYamlObject`.
  */
-import type { PipelineDef, NodeDef, PortDef, PortSide } from "../types";
+import type {
+  PipelineDef,
+  NodeDef,
+  PortDef,
+  PortSide,
+  FrontmatterFieldDecl,
+} from "../types";
+
+/**
+ * Drops the null-valued keys of every frontmatter declaration (#457).
+ *
+ * The daemon's `FrontmatterFieldDecl.allowed` is an `Option<Vec<String>>` with no
+ * `skip_serializing_if`, so `GET /pipelines/...` ships `allowed: null` on every
+ * non-enum field. Copying the declaration verbatim carried that null into the
+ * YAML, so the FIRST save after a page load rewrote `{type: bool}` as
+ * `{allowed: null, type: bool}` — stable afterwards, since the reloaded pipeline
+ * then already held the null. A parasitic diff on a git-versioned pipeline, and
+ * twin drift for the Library (which stores YAML byte-for-byte).
+ *
+ * Absent and null must produce the same bytes, so this normalises toward absent:
+ * on the reader side serde maps both to `None`. `[]` is NOT null and survives —
+ * an enum with an empty allow-list is a statement, not a default.
+ *
+ * Every one of the three frontmatter emit sites goes through here. Add a fourth
+ * and it must too.
+ */
+function frontmatterToYamlObject(
+  frontmatter: Record<string, FrontmatterFieldDecl>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [field, decl] of Object.entries(frontmatter)) {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(decl)) {
+      if (value !== null && value !== undefined) cleaned[key] = value;
+    }
+    out[field] = cleaned;
+  }
+  return out;
+}
 
 // Canonical plain-object form of a pipeline — the exact structure that gets
 // YAML-serialized on save. Also used for semantic comparison against library
@@ -75,7 +113,7 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
         if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
-        if (port.frontmatter) p.frontmatter = port.frontmatter;
+        if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
         return p;
       });
     if (n.outputs.length > 0)
@@ -85,7 +123,7 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
         if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
-        if (port.frontmatter) p.frontmatter = port.frontmatter;
+        if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
         if (port.when) p.when = port.when;
         return p;
       });
@@ -173,7 +211,7 @@ function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, 
   if (port.repeated) p.repeated = true;
   if (port.side && port.side !== defaultSide) p.side = port.side;
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
-  if (port.frontmatter) p.frontmatter = port.frontmatter;
+  if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
   return p;
 }

@@ -1613,6 +1613,40 @@ mod tests {
         assert!(preamble.contains("Content-Type: application/json"));
     }
 
+    // #447: the preamble takes the URL as a *parameter* — these tests pin the
+    // composition with the shared resolver, i.e. what the daemon actually hands it
+    // on each path. Asserting the ABSENCE of the wrong host is the load-bearing
+    // half: the bug was not a missing URL, it was a plausible wrong one that the
+    // manager obeyed and then reported the daemon dead.
+
+    #[test]
+    fn manager_preamble_sandboxed_carries_the_container_side_url_only() {
+        let url = crate::sandbox_container::daemon_url(6193, true);
+        let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
+        assert!(
+            preamble.contains("Daemon base URL: `http://host.docker.internal:6193`"),
+            "a sandboxed manager must be told the gateway URL: {preamble}"
+        );
+        assert!(
+            !preamble.contains("localhost:6193"),
+            "no `curl` line may keep the host-only URL — inside the container it \
+             resolves to the container itself and every command silently fails"
+        );
+        // The very command the bug swallowed: the first-action rename.
+        assert!(preamble.contains("http://host.docker.internal:6193/runs/run-1/commands"));
+    }
+
+    #[test]
+    fn manager_preamble_host_path_is_unchanged() {
+        let url = crate::sandbox_container::daemon_url(6193, false);
+        let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
+        assert!(preamble.contains("Daemon base URL: `http://localhost:6193`"));
+        assert!(
+            !preamble.contains("host.docker.internal"),
+            "non-regression: an `off` Run's manager must never see the gateway host"
+        );
+    }
+
     #[test]
     fn manager_prompt_combines_preamble_and_role() {
         let prompt = build_manager_prompt(

@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, merge, artifact, run-stats]
+covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, merge, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep]
 ---
 
 # HP-02 — Launch a run to completion
@@ -33,6 +33,11 @@ Features validated while crossing the run screens (grafted from retired per-issu
   (manager excluded), Lines changed / LOC — and an **estimated cost** (labelled "est.", #100 / #272).
 - **Runs / Triggers grouped by repo** when ≥ 2 distinct repos are present; flat otherwise (#258).
 - **Daemon version** displayed live in the footer (#139).
+- **Sandbox, as an A/B pair** (PRD #403, ADR-0030, ADR-0031): the same one-node pipeline is launched
+  twice — once in staging profile **`full`**, once **`off`** — and the two Runs must reach the same
+  business outcome by two visibly different routes. The `off` twin is the **control**: without it, a
+  green sandboxed Run proves nothing (a Run that silently fell back to the host path also looks
+  green). See the journey's §10-12 and the dedicated checks below.
 
 ## Preconditions
 
@@ -59,6 +64,21 @@ Features validated while crossing the run screens (grafted from retired per-issu
 8. Open the Run **Info panel** → the **Stats** block shows Duration, Node sessions started, Lines
    changed / LOC, and an **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
 9. Find the run in the **Runs list** (grouped by repo when ≥ 2 repos exist).
+10. **Sandboxed twin.** Seed (or reuse) a **one-node pipeline** whose node asks for a single line of
+    output and then completes. Open **New Run** on it → the sandbox field sits on **Use instance
+    default**, and offers `off`, `minimal`, `full` and any named **staging profile**; pick **`full`**
+    → **Launch**.
+11. **Stay on the Run** and watch the **preparation** phase: the Run announces that its sandbox is
+    being prepared and **no node starts while it lasts** (tens of seconds on a real `~/.claude`).
+    When preparation clears, the node starts, its terminal preview shows a live `claude` session
+    that is **not** sitting on an interactive dialog, and the Run reaches **Completed** with its
+    artifact readable from the host UI.
+12. **Control twin.** Relaunch the same pipeline with sandbox **`off`**: no preparation phase, the
+    node starts straight away, the Run reaches **Completed**. Compare the two Runs — same business
+    outcome, visibly different route.
+13. Open **Settings** → the sandbox section shows the **resolved Dockerfile** path with its tier and
+    the **image tag** derived from it, and the **staging profile** editor lists the floor entry by
+    entry.
 
 ## Checks
 
@@ -73,6 +93,28 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - Stats: Duration ticks on a live run, freezes on a terminal one; an **estimated cost** ("Est. cost",
   framed as an estimate) is shown, "—" when uncomputable.
 
+#### Sandbox A/B (steps 10-13)
+
+- The sandbox field lists `off`, `minimal`, `full` **and** any named staging profile; `full` and
+  `minimal` are selectable with no prior configuration (they are virtual defaults).
+- The field **leads with "Use instance default"** and that is where a freshly opened dialog sits.
+  Set `default_sandbox` to a profile in **Settings**, **reopen** New Run *without reloading the page*
+  (the reopen is the part that used to fail), launch **without touching the field**, and read the
+  **`POST /runs` body**: it must carry **no** `sandbox` key. A `"sandbox":"off"` there is the #452
+  regression — `off` is final for the daemon, so it makes `default_sandbox` unreachable, and nothing
+  in the UI shows it. Only the request body does.
+- While the `full` Run prepares, **no node is running**. A node running while preparation is still
+  announced is a **blocking finding** — that inversion is the #445 regression.
+- The sandboxed node's terminal preview shows a live `claude` session **with no interactive dialog**:
+  no managed-settings approval, no bypass-permissions warning. That silence is the entire point of
+  the staging floor (#426) and it is only observable here.
+- **Both** Runs reach **Completed**, End `result` **received**, and the output artifact opens from
+  the host UI in both cases (for the sandboxed one, that is the merge-back).
+- The `off` twin shows **no** preparation phase.
+- Settings: the resolved Dockerfile path carries its tier, the image tag derives from it
+  (`pdo-sandbox:h-<hash>`), the profile editor lists the floor entry by entry, warns on
+  credential-bearing entries, and lists a profile's referents before confirming its deletion.
+
 ### Backing store
 
 - A tmux session named for the run/node/iter is alive while the node runs and shows `claude` (not a
@@ -80,10 +122,26 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - The Run's projected state and stats agree with daemon ground truth (run endpoint: `sessions_spawned`,
   `started_at`/`completed_at`, `loc`) and with git (`diff --numstat`, `.pdo/` excluded).
 
+Sandbox A/B, read-only probes:
+
+- While the sandboxed node runs, a **container named for the Run** exists, and that node's session
+  really executes **inside** it (its session tail enters the container; from inside, the node is
+  demonstrably not on the host).
+- The daemon URL handed to the sandboxed session points at the **host gateway**, not `localhost` —
+  the `off` twin's points at `localhost` (#447). The sandboxed manager can therefore actually reach
+  the daemon it is told to command.
+- The staged home of the `full` Run carries the **floor**: credentials, the org managed-settings
+  baseline when the host has one, and a settings file bearing the bypass-permissions key.
+- The `off` twin creates **no** container and **no** staging directory.
+
 ## Cleanup (best-effort)
 
 - Archive the Run (`cleanup_run`): it reaps sessions and the worktree. Delete any pipeline the agent
   seeded.
+- Archive **both** sandbox twins, and **assert** the cleanup rather than merely performing it: no
+  container named for either Run survives, and the `full` Run's staging directory is gone. Its ~1 GB
+  is reclaimed **only** here — a missed purge is the known disk-fill recurrence, and a silent leak
+  is a finding.
 
 ## Notes
 
@@ -96,3 +154,22 @@ Features validated while crossing the run screens (grafted from retired per-issu
   playbook) before expecting chat output.
 - A node with no output yet returns **409 `missing_outputs`** on "Mark complete" — that guard is
   expected, not a bug.
+
+### Sandbox A/B — why it is built this way
+
+- **`full`, not `minimal`, and that is deliberate.** The ordering guarantee (no node before the
+  sandbox is ready) can only regress when preparation is slow enough for the pipeline watcher to win
+  the race. `minimal` prepares in under a second and wins by default, so it would make the defect
+  invisible; `full` copies ~1 GB and takes tens of seconds, which is what exercises the guard. The
+  cost is paid on purpose.
+- **Stay on the Run during preparation.** This is load-bearing, not incidental: *reading* the Run's
+  pipeline file is what wakes the watcher (an inotify `OPEN`, not a write), and that wake is the
+  trigger that exposed #445. A drive-by that launches the Run and looks away is structurally blind to
+  that class of defect — exactly how it survived a full slice validation.
+- **Tens of seconds of preparation is not a stall.** Sandboxed Runs get a 15-minute grace in the
+  stall detector. Only a Run still preparing past that grace is a finding.
+- On a machine that does not yet have the sandbox image, the first sandboxed Run **builds** it
+  (minutes). Expected once per image change, not a finding.
+- **Do not assert a writable `$HOME` inside the container, nor a host uid ≠ 1000.** Both are known,
+  filed gaps (#443, #414). Asserting them here would report a documented backlog item as a
+  regression on every execution.

@@ -90,6 +90,34 @@ pub fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
     }
 }
 
+/// Is `(node_id, iter)` a **parallel item lap** of a collection region whose
+/// barrier is still open (#453)?
+///
+/// The single, narrow exemption to "a node has at most one live iteration".
+/// ADR-0011 / ADR-0026 specify a `kind: collection` region as a *parallel*
+/// fan-out of the same node — `Spawn { entry, iter: 1..=total }` in one burst —
+/// while the guard (#212) exists to stop exactly that shape everywhere else.
+/// The two invariants met head-on at the spawn seam: laps ≥ 2 were rejected
+/// deterministically 1 ms after lap 1 started, the barrier never fired, and the
+/// Run wedged `running` with no live session and nothing to re-drive it.
+///
+/// Scoped as tightly as the semantics allow, so #212's chokepoint keeps holding
+/// for `restart_node`, the liveness sweep and boot recovery:
+/// - the region must exist in the projection and still be **open** (`!done`) —
+///   once the barrier fires the node is a plain node again;
+/// - `node_id` must be one the region **governs** (its entry or a member);
+/// - `iter` must be a real lap index, `1..=total_items` — an out-of-range
+///   iteration is not an item and stays refused.
+///
+/// Says nothing about *completed* laps: re-running a finished lap is refused by
+/// the caller as it always was.
+fn is_open_collection_lap(state: &RunState, node_id: &str, iter: i64) -> bool {
+    state
+        .collection_states
+        .values()
+        .any(|cs| !cs.done && iter >= 1 && iter <= cs.total_items && cs.governs(node_id))
+}
+
 /// Scheduler-side dedup for proposed `Spawn { node, iter }` actions on
 /// re-evaluation paths (resume_run, extend_cycle, region routes, loop/foreach
 /// body completion). A proposal is superfluous when the node already has a
@@ -100,9 +128,14 @@ pub fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
 /// Returns the human-readable reason when the proposal should be skipped.
 pub fn spawn_superfluous(state: &RunState, node_id: &str, iter: i64) -> Option<String> {
     if let Some(live_iter) = live_iteration(state, node_id) {
-        return Some(format!(
-            "node {node_id} iter {live_iter} is live: scheduler will not spawn iter {iter}"
-        ));
+        // #453: a sibling item lap of an open collection region is concurrent
+        // work by design, never a redundant proposal. Only a proposal for the
+        // live lap ITSELF is superfluous here.
+        if !(live_iter != iter && is_open_collection_lap(state, node_id, iter)) {
+            return Some(format!(
+                "node {node_id} iter {live_iter} is live: scheduler will not spawn iter {iter}"
+            ));
+        }
     }
     if iteration_status(state, node_id, iter) == Some(NodeStatus::Completed) {
         return Some(format!(
@@ -155,7 +188,9 @@ fn validate_start(state: &RunState, event: &Event) -> Verdict {
     }
 
     if let Some(live_iter) = live_iteration(state, node_id) {
-        if live_iter != iter {
+        // #453: item laps of an open collection region run in parallel — a live
+        // sibling lap is the intended shape, not a concurrency violation.
+        if live_iter != iter && !is_open_collection_lap(state, node_id, iter) {
             return Verdict::reject(format!(
                 "node {node_id} iter {live_iter} is still live: refusing concurrent iter {iter}"
             ));
@@ -659,6 +694,98 @@ mod tests {
             ev(EventKind::NodeWaiting, Some("w"), Some(1)),
         ]);
         assert!(spawn_superfluous(&state, "w", 1).is_some());
+    }
+
+    // --- collection item laps (#453) ---
+
+    /// `collection_started` for a single-member region over `total` items.
+    fn collection_started(total: i64) -> Event {
+        let mut e = ev(EventKind::CollectionStarted, None, None);
+        e.payload = Some(serde_json::json!({
+            "region_id": "fan",
+            "entry": "worker",
+            "members": ["worker"],
+            "total_items": total,
+        }));
+        e
+    }
+
+    #[test]
+    fn sibling_item_laps_of_an_open_collection_region_may_run_concurrently() {
+        // ADR-0011 / ADR-0026: `Spawn { entry, iter: 1..=total }` in one burst.
+        // The #212 refusal is what wedged the fan-out at lap 1 (#453).
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            collection_started(3),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ]);
+        for iter in [2, 3] {
+            assert_eq!(
+                validate_transition(
+                    Some(&state),
+                    &ev(EventKind::NodeStarted, Some("worker"), Some(iter))
+                ),
+                Verdict::Allow,
+                "lap {iter} of a 3-item region must start alongside lap 1"
+            );
+        }
+    }
+
+    #[test]
+    fn a_completed_item_lap_is_never_re_run() {
+        // The exemption covers concurrency, not resurrection: #195/#198 still hold
+        // inside a region.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            collection_started(2),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+            ev(EventKind::NodeStarted, Some("worker"), Some(2)),
+        ]);
+        assert_reject(
+            validate_transition(
+                Some(&state),
+                &ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ),
+            "already completed",
+        );
+    }
+
+    #[test]
+    fn a_node_outside_the_region_keeps_the_concurrency_refusal() {
+        // The narrowness proof #212's other callers (restart_node, the liveness
+        // sweep, boot recovery) depend on: an open region in the run exempts ITS
+        // members and nobody else.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            collection_started(3),
+            ev(EventKind::NodeStarted, Some("outsider"), Some(1)),
+        ]);
+        assert_reject(
+            validate_transition(
+                Some(&state),
+                &ev(EventKind::NodeStarted, Some("outsider"), Some(2)),
+            ),
+            "still live",
+        );
+    }
+
+    #[test]
+    fn spawn_proposal_for_a_sibling_item_lap_is_not_superfluous() {
+        // The re-evaluation paths (`resume_run`, `extend_cycle`, region routes)
+        // must be able to propose a lap the fan-out has not started yet, even
+        // while a sibling lap holds a session.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            collection_started(2),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ]);
+        assert!(spawn_superfluous(&state, "worker", 2).is_none());
+        // Re-proposing the LIVE lap itself is still superfluous — never double a
+        // running session.
+        assert!(spawn_superfluous(&state, "worker", 1).is_some());
+        // And an out-of-range iteration is not a lap.
+        assert!(spawn_superfluous(&state, "worker", 3).is_some());
     }
 
     // --- non-lifecycle kinds and missing state ---

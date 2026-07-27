@@ -14,6 +14,9 @@ import { endRegion } from "../api";
  * the *sole* place `max_iter` is edited and where the region id is shown. The
  * canvas header carries neither an inline control nor the id, per the slim-card
  * rule (#149): the inline header editor #150 originally added was removed.
+ *
+ * Each region is backed by TWO such nodes, distinguished by {@link layer} —
+ * see `buildLoopRegionNodes` for why one cannot do both jobs (#455).
  */
 export interface LoopRegionNodeData {
   regionId: string;
@@ -33,6 +36,18 @@ export interface LoopRegionNodeData {
   runId: string | null;
   width: number;
   height: number;
+  /**
+   * Which half of the region this node draws (#455).
+   *
+   * `"box"` — the dashed, translucent rectangle, pinned BEHIND the member cards.
+   * `"chrome"` — the same rectangle, transparent, ABOVE the cards, carrying the
+   * clickable header and the exhausted badge.
+   *
+   * They cannot be one node: a positioned wrapper with a numeric `z-index` is a
+   * stacking context, so chrome nested in the `zIndex: 0` box could never paint
+   * above a card, and a card overlapping the header band swallowed its clicks.
+   */
+  layer: "box" | "chrome";
   [key: string]: unknown;
 }
 
@@ -48,22 +63,38 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
 
+  // The grouping layer: border + faint fill, nothing interactive. Sits behind
+  // the member cards and lets every click through (#167).
+  if (data.layer === "box") {
+    return (
+      <div
+        data-testid="loop-region"
+        data-region-id={data.regionId}
+        className="loop-region pointer-events-none relative"
+        style={{
+          width: data.width,
+          height: data.height,
+          borderRadius: 12,
+          border: `1px dashed ${accent}`,
+          // Faint translucent fill so the box reads as a grouping layer behind
+          // the member cards without obscuring them.
+          background: data.exhausted
+            ? "var(--color-st-blocked-bg)"
+            : "var(--color-acc-bg)",
+        }}
+      />
+    );
+  }
+
+  // The chrome layer: same rectangle, no border and no fill (it covers the
+  // cards, so anything painted here would hide them), `pointer-events: none`
+  // throughout except on the two chips below.
   return (
     <div
-      data-testid="loop-region"
+      data-testid="loop-region-chrome"
       data-region-id={data.regionId}
-      className="loop-region pointer-events-none relative"
-      style={{
-        width: data.width,
-        height: data.height,
-        borderRadius: 12,
-        border: `1px dashed ${accent}`,
-        // Faint translucent fill so the box reads as a grouping layer behind
-        // the member cards without obscuring them.
-        background: data.exhausted
-          ? "var(--color-st-blocked-bg)"
-          : "var(--color-acc-bg)",
-      }}
+      className="pointer-events-none relative"
+      style={{ width: data.width, height: data.height }}
     >
       <div
         data-testid="loop-region-header"

@@ -1,14 +1,20 @@
 //! Estimated USD cost of a Run (#272), derived on read from the per-message
 //! token `usage` recorded in each session's Claude Code transcript
-//! (`~/.claude/projects/<encoded-cwd>/*.jsonl`) × a hardcoded public price table.
+//! (`<projects_root>/<encoded-cwd>/*.jsonl`) × a hardcoded public price table.
+//!
+//! The `projects_root` is injected by the caller (the #408 observability seam,
+//! [`crate::sandbox_run::transcripts_root`]): `~/.claude/projects/` for an
+//! `off`/archived run, the staged home while a sandboxed run is live. This
+//! module never reads `$HOME` — one root in, path-math + `std::fs` out.
 //!
 //! This is an **estimate, not an invoice**: it uses public list prices (no
 //! enterprise discount), and any model absent from the table contributes $0 and
 //! flips the `partial` flag (lower-bound signalling). It mirrors `LocStat`'s
 //! "derived on read, never persisted" contract (see [`crate::event_log::CostStat`]),
 //! and happens to be *more* durable than LOC: archival deletes the run branch
-//! (so LOC → "—") but leaves `~/.claude/projects/` intact, so an archived run
-//! still shows its cost.
+//! (so LOC → "—") but leaves `~/.claude/projects/` intact (merge_back flushed a
+//! sandboxed run's transcripts there at cleanup), so an archived run still shows
+//! its cost.
 //!
 //! ## Correctness notes (each verified against real transcripts, ADR-0022)
 //! - **Dedup is mandatory.** Claude Code replays assistant messages on
@@ -234,18 +240,20 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
 /// merge-resolver, and their subagents). `None` when no such dir exists (UI
 /// "—"); `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
 ///
-/// `repo_root` must be the run's **effective** repo root (honours `target_repo`)
-/// — pass the value the caller already resolved via `effective_repo_root`.
-pub fn compute_run_cost(repo_root: &Path, run_id: &str) -> Option<CostStat> {
-    let home = std::env::var("HOME").ok()?;
+/// `projects_root` is the Claude Code `projects/` root to read (the #408
+/// observability seam — `~/.claude/projects/` for an `off`/archived run, the
+/// staged home for a live sandboxed run). `repo_root` must be the run's
+/// **effective** repo root (honours `target_repo`) — pass the value the caller
+/// already resolved via `effective_repo_root`; it builds the run-id dir prefix,
+/// NOT the read root.
+pub fn compute_run_cost(projects_root: &Path, repo_root: &Path, run_id: &str) -> Option<CostStat> {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     // Trailing '-' anchors the run_id: a run whose id is a lexical prefix of
     // another can't leak its sessions in (after run_id comes `-nodes`/`-worktree`).
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
-    let projects = Path::new(&home).join(".claude").join("projects");
     let mut lines = Vec::new();
     let mut found = false;
-    for entry in std::fs::read_dir(&projects).ok()?.flatten() {
+    for entry in std::fs::read_dir(projects_root).ok()?.flatten() {
         if !entry.file_name().to_string_lossy().starts_with(&prefix) {
             continue;
         }
@@ -318,14 +326,10 @@ fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
 /// `0` when no transcript dir/file exists yet (so a later write bumps the key and
 /// invalidates the memo). A pure `stat` walk: no file contents are read, so it is
 /// far cheaper than the aggregate it guards.
-pub fn max_transcript_mtime_millis(repo_root: &Path, run_id: &str) -> i64 {
-    let Ok(home) = std::env::var("HOME") else {
-        return 0;
-    };
+pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_id: &str) -> i64 {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
-    let projects = Path::new(&home).join(".claude").join("projects");
-    let Ok(entries) = std::fs::read_dir(&projects) else {
+    let Ok(entries) = std::fs::read_dir(projects_root) else {
         return 0;
     };
     let mut max_ms: i64 = 0;
@@ -343,10 +347,16 @@ pub fn max_transcript_mtime_millis(repo_root: &Path, run_id: &str) -> i64 {
 /// the `/stats/cost` aggregate (period-bounded fan-out); `get_run`'s single-run
 /// path is deliberately left calling [`compute_run_cost`] directly so ADR-0022's
 /// per-read contract is unchanged.
-pub fn compute_run_cost_cached(repo_root: &Path, run_id: &str) -> Option<CostStat> {
+pub fn compute_run_cost_cached(
+    projects_root: &Path,
+    repo_root: &Path,
+    run_id: &str,
+) -> Option<CostStat> {
+    // Load-bearing: the SAME `projects_root` feeds the key (mtime) AND the value
+    // (aggregate). A mismatched root would desync the memo silently (#408 P1).
     let key = (
         run_id.to_string(),
-        max_transcript_mtime_millis(repo_root, run_id),
+        max_transcript_mtime_millis(projects_root, repo_root, run_id),
     );
     {
         let guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
@@ -354,7 +364,7 @@ pub fn compute_run_cost_cached(repo_root: &Path, run_id: &str) -> Option<CostSta
             return hit.clone();
         }
     }
-    let value = compute_run_cost(repo_root, run_id);
+    let value = compute_run_cost(projects_root, repo_root, run_id);
     let mut guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() >= COST_MEMO_CAP {
         guard.clear();
@@ -568,47 +578,16 @@ mod tests {
     }
 
     // --- compute_run_cost (filesystem) ---
-
-    /// RAII guard swapping HOME for a temp dir while holding the crate-wide HOME
-    /// lock (mirrors `stale_detector::TempHome` / lib.rs `FakeHome`).
-    struct TempHome {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        tmp: tempfile::TempDir,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl TempHome {
-        fn new() -> Self {
-            let lock = crate::library_store::HOME_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let tmp = tempfile::tempdir().unwrap();
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", tmp.path());
-            Self {
-                _lock: lock,
-                tmp,
-                prev,
-            }
-        }
-
-        fn path(&self) -> &Path {
-            self.tmp.path()
-        }
-    }
-
-    impl Drop for TempHome {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
+    //
+    // Since #408 the `projects/` root is a parameter (the observability seam), so
+    // these tests plant transcripts under a tempdir root and pass it directly —
+    // no HOME swap, no crate-wide HOME lock, fully hermetic. A `projects` root
+    // stands in for either `~/.claude/projects/` or a sandboxed run's staged home.
 
     #[test]
     fn compute_run_cost_aggregates_and_dedups_across_sessions() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         let run_id = "20260706-abc-node";
         // A session cwd under the run dir (the worktree, where the manager runs).
@@ -618,11 +597,7 @@ mod tests {
             .join("runs")
             .join(run_id)
             .join("worktree");
-        let proj = home
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join(cc_project_dirname(&worktree));
+        let proj = projects.join(cc_project_dirname(&worktree));
         std::fs::create_dir_all(&proj).unwrap();
 
         let l1 = assistant("msg_1", "req_1", "claude-opus-4-8", 1000, 500);
@@ -630,7 +605,7 @@ mod tests {
         // l1 replayed (same msg_1, req_1) → deduped.
         std::fs::write(proj.join("s.jsonl"), format!("{l1}\n{l1}\n{l2}\n")).unwrap();
 
-        let cost = compute_run_cost(repo.path(), run_id).unwrap();
+        let cost = compute_run_cost(&projects, repo.path(), run_id).unwrap();
         // (1000*5 + 500*25)/1e6 + (2000*5 + 1000*25)/1e6 = 0.0175 + 0.035 = 0.0525
         assert!((cost.usd - 0.0525).abs() < 1e-9, "usd = {}", cost.usd);
         assert!(!cost.partial);
@@ -638,7 +613,8 @@ mod tests {
 
     #[test]
     fn compute_run_cost_recurses_into_subagents() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         let run_id = "20260706-sub";
         let node = repo
@@ -649,11 +625,7 @@ mod tests {
             .join("nodes")
             .join("N")
             .join("iter-1");
-        let proj = home
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join(cc_project_dirname(&node));
+        let proj = projects.join(cc_project_dirname(&node));
         let subagents = proj.join("uuid-1").join("subagents");
         std::fs::create_dir_all(&subagents).unwrap();
         std::fs::write(
@@ -673,28 +645,32 @@ mod tests {
         )
         .unwrap();
 
-        let cost = compute_run_cost(repo.path(), run_id).unwrap();
+        let cost = compute_run_cost(&projects, repo.path(), run_id).unwrap();
         // 1M input × $5/MTok, twice (main + subagent) = $10.
         assert!((cost.usd - 10.0).abs() < 1e-9, "usd = {}", cost.usd);
     }
 
     #[test]
     fn compute_run_cost_none_when_no_transcript_dir() {
-        let _home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
         let repo = tempfile::tempdir().unwrap();
-        assert!(compute_run_cost(repo.path(), "no-such-run").is_none());
+        assert!(compute_run_cost(&projects, repo.path(), "no-such-run").is_none());
     }
 
     // --- compute_run_cost_cached / memo (#377) ---
 
-    /// Write a single-line transcript for `run_id`'s worktree and return the
-    /// `.jsonl` path so the test can manipulate its mtime.
-    fn seed_transcript(home: &Path, repo: &Path, run_id: &str, line: &str) -> std::path::PathBuf {
+    /// Write a single-line transcript for `run_id`'s worktree under `projects` and
+    /// return the `.jsonl` path so the test can manipulate its mtime.
+    fn seed_transcript(
+        projects: &Path,
+        repo: &Path,
+        run_id: &str,
+        line: &str,
+    ) -> std::path::PathBuf {
         let worktree = repo.join(".pdo").join("runs").join(run_id).join("worktree");
-        let proj = home
-            .join(".claude")
-            .join("projects")
-            .join(cc_project_dirname(&worktree));
+        let proj = projects.join(cc_project_dirname(&worktree));
         std::fs::create_dir_all(&proj).unwrap();
         let file = proj.join("s.jsonl");
         std::fs::write(&file, format!("{line}\n")).unwrap();
@@ -703,28 +679,30 @@ mod tests {
 
     #[test]
     fn cached_matches_uncached() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         let run_id = "memo-eq";
         seed_transcript(
-            home.path(),
+            &projects,
             repo.path(),
             run_id,
             &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
         );
-        let direct = compute_run_cost(repo.path(), run_id);
-        let cached = compute_run_cost_cached(repo.path(), run_id);
+        let direct = compute_run_cost(&projects, repo.path(), run_id);
+        let cached = compute_run_cost_cached(&projects, repo.path(), run_id);
         assert_eq!(direct, cached);
         assert!((cached.unwrap().usd - 5.0).abs() < 1e-9);
     }
 
     #[test]
     fn cached_re_serves_from_memo_when_mtime_is_unchanged() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         let run_id = "memo-hit";
         let file = seed_transcript(
-            home.path(),
+            &projects,
             repo.path(),
             run_id,
             &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
@@ -733,7 +711,7 @@ mod tests {
             filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
 
         // First call: memoize $5 under (run_id, mtime).
-        let first = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        let first = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
         assert!((first.usd - 5.0).abs() < 1e-9);
 
         // Rewrite with a DIFFERENT cost ($10) but force the mtime back — the key
@@ -747,28 +725,29 @@ mod tests {
         )
         .unwrap();
         filetime::set_file_mtime(&file, orig).unwrap();
-        let hit = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        let hit = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
         assert!((hit.usd - 5.0).abs() < 1e-9, "memo hit should re-serve $5");
         // But the uncached path sees the new content ($10) — proving the file
         // really changed and the hit above was the cache, not a recompute.
-        let direct = compute_run_cost(repo.path(), run_id).unwrap();
+        let direct = compute_run_cost(&projects, repo.path(), run_id).unwrap();
         assert!((direct.usd - 10.0).abs() < 1e-9);
     }
 
     #[test]
     fn cached_recomputes_when_mtime_bumps() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         let run_id = "memo-bump";
         let file = seed_transcript(
-            home.path(),
+            &projects,
             repo.path(),
             run_id,
             &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
         );
         let orig =
             filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
-        let first = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        let first = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
         assert!((first.usd - 5.0).abs() < 1e-9);
 
         // New content AND a bumped mtime → new key → recompute picks up $10.
@@ -782,7 +761,7 @@ mod tests {
         .unwrap();
         let bumped = filetime::FileTime::from_unix_time(orig.unix_seconds() + 10, 0);
         filetime::set_file_mtime(&file, bumped).unwrap();
-        let recomputed = compute_run_cost_cached(repo.path(), run_id).unwrap();
+        let recomputed = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
         assert!(
             (recomputed.usd - 10.0).abs() < 1e-9,
             "a bumped mtime must invalidate the memo"
@@ -790,27 +769,73 @@ mod tests {
     }
 
     #[test]
+    fn cached_honors_the_injected_projects_root() {
+        // #408 P1: `compute_run_cost_cached` feeds the SAME `projects_root` to
+        // both the mtime key AND the aggregate value — so the cached path honors
+        // whichever root the seam picked (staging while live, host after cleanup).
+        // Mirrors production, where the two roots for a run never share an mtime:
+        // `merge_back` copies with `std::fs::copy` (no mtime preservation), so the
+        // host file lands with a newer mtime than the staging original. We back-
+        // date the host file to guarantee the two keys differ.
+        let home = tempfile::tempdir().unwrap();
+        let host = home.path().join(".claude").join("projects");
+        let staging = home.path().join("staging").join("projects");
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "memo-root";
+
+        // Host root: $5 (back-dated). Staging root: $10 (fresh). Same run_id.
+        let host_file = seed_transcript(
+            &host,
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        filetime::set_file_mtime(
+            &host_file,
+            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .unwrap();
+        seed_transcript(
+            &staging,
+            repo.path(),
+            run_id,
+            &assistant("m2", "r2", "claude-opus-4-8", 2_000_000, 0),
+        );
+
+        let host_cost = compute_run_cost_cached(&host, repo.path(), run_id).unwrap();
+        let staging_cost = compute_run_cost_cached(&staging, repo.path(), run_id).unwrap();
+        assert!((host_cost.usd - 5.0).abs() < 1e-9, "host root → $5");
+        assert!(
+            (staging_cost.usd - 10.0).abs() < 1e-9,
+            "staging root → $10 (its own key/value, not the host's memo)"
+        );
+    }
+
+    #[test]
     fn max_transcript_mtime_is_zero_without_a_transcript_and_positive_with_one() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
         let repo = tempfile::tempdir().unwrap();
         assert_eq!(
-            max_transcript_mtime_millis(repo.path(), "no-such-run"),
+            max_transcript_mtime_millis(&projects, repo.path(), "no-such-run"),
             0,
             "no transcript dir → 0 (so a later write bumps the key)"
         );
         let run_id = "mtime-run";
         seed_transcript(
-            home.path(),
+            &projects,
             repo.path(),
             run_id,
             &assistant("m1", "r1", "claude-opus-4-8", 1000, 0),
         );
-        assert!(max_transcript_mtime_millis(repo.path(), run_id) > 0);
+        assert!(max_transcript_mtime_millis(&projects, repo.path(), run_id) > 0);
     }
 
     #[test]
     fn compute_run_cost_prefix_does_not_leak_across_runs() {
-        let home = TempHome::new();
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
         let repo = tempfile::tempdir().unwrap();
         // Two runs where one id is a lexical prefix of the other.
         let other = repo
@@ -819,11 +844,7 @@ mod tests {
             .join("runs")
             .join("run-1x") // "run-1" is a prefix of "run-1x"
             .join("worktree");
-        let proj = home
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join(cc_project_dirname(&other));
+        let proj = projects.join(cc_project_dirname(&other));
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(
             proj.join("s.jsonl"),
@@ -832,6 +853,6 @@ mod tests {
         .unwrap();
 
         // Querying "run-1" must NOT pick up "run-1x"'s transcript.
-        assert!(compute_run_cost(repo.path(), "run-1").is_none());
+        assert!(compute_run_cost(&projects, repo.path(), "run-1").is_none());
     }
 }

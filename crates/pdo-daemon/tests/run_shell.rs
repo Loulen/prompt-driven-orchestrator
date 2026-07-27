@@ -195,6 +195,31 @@ async fn run_status(daemon: &TestDaemon, run_id: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// Polls until `path` holds `needle`, returning whatever it last read.
+///
+/// `path.exists()` is NOT a usable readiness signal for `echo X > file`: the
+/// redirect creates and truncates the file *before* the shell writes a byte into
+/// it. A poll that stops at `exists()` therefore reads an EMPTY file whenever the
+/// machine is loaded enough to interleave there — which is how
+/// `shell_survives_eof_and_exit` failed CI on 2026-07-27, panicking with
+/// `marker bytes: ` and nothing after the colon. Wait for the CONTENT, which is
+/// what these assertions are about in the first place.
+///
+/// Returns on timeout rather than panicking, so the caller's assertion still
+/// produces its own (more specific) message.
+async fn wait_for_marker(path: &std::path::Path, needle: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        last = std::fs::read_to_string(path).unwrap_or_default();
+        if last.contains(needle) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    last
+}
+
 async fn post_shell(daemon: &TestDaemon, run_id: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}/sessions/{run_id}/shell", daemon.url()))
@@ -341,22 +366,15 @@ async fn shell_runs_real_bash_in_pipeline_worktree() {
     let marker = worktree.join("fp316-marker.txt");
     let env_marker = worktree.join("env-marker.txt");
 
-    // Poll for the side effect (interactive bash + send-keys is async).
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if marker.exists() && env_marker.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-    let got = std::fs::read_to_string(&marker).unwrap_or_else(|_| {
-        panic!(
-            "marker must exist at {} — proves cwd = worktree and real bash",
-            marker.display()
-        )
-    });
-    assert!(got.contains("PDO_OK"), "marker bytes: {got}");
-    let env_got = std::fs::read_to_string(&env_marker).unwrap_or_default();
+    // Poll for the side effect (interactive bash + send-keys is async), on the
+    // CONTENT rather than on the file existing — see `wait_for_marker`.
+    let got = wait_for_marker(&marker, "PDO_OK").await;
+    assert!(
+        got.contains("PDO_OK"),
+        "marker at {} must hold PDO_OK — proves cwd = worktree and real bash; got {got:?}",
+        marker.display()
+    );
+    let env_got = wait_for_marker(&env_marker, "1").await;
     assert_eq!(
         env_got.trim(),
         "1",
@@ -407,6 +425,7 @@ async fn reaper_kills_shell_of_absent_run() {
         daemon.repo_root(),
         bogus_run,
         daemon.addr.port(),
+        None,
     )
     .unwrap();
     assert!(pdo_daemon::tmux_session_manager::session_exists(
@@ -451,6 +470,7 @@ async fn reaper_kills_shell_of_archived_run() {
         daemon.repo_root(),
         &run_id,
         daemon.addr.port(),
+        None,
     )
     .unwrap();
     assert!(pdo_daemon::tmux_session_manager::session_exists(
@@ -720,18 +740,10 @@ async fn shell_survives_eof_and_exit() {
         "echo RESPAWN_OK > respawn-marker.txt",
     );
     let marker = worktree_path(&daemon, &run_id).join("respawn-marker.txt");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if marker.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-    let got = std::fs::read_to_string(&marker).unwrap_or_else(|_| {
-        panic!(
-            "respawned shell must be usable — marker missing at {}",
-            marker.display()
-        )
-    });
-    assert!(got.contains("RESPAWN_OK"), "marker bytes: {got}");
+    let got = wait_for_marker(&marker, "RESPAWN_OK").await;
+    assert!(
+        got.contains("RESPAWN_OK"),
+        "respawned shell must be usable — marker at {} never held RESPAWN_OK; got {got:?}",
+        marker.display()
+    );
 }

@@ -379,6 +379,15 @@ pub async fn stats_cost(
         }
     };
 
+    // #408: resolve the sandbox home roots once for the whole fold. HOME absent →
+    // degrade to the host `~/.claude` root (never fail the aggregate).
+    let (home_root, sandbox_root) =
+        crate::sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+            let sandbox = home.join(".pdo").join("sandbox");
+            (home, sandbox)
+        });
+
     let mut cost_rows: Vec<CostRow> = Vec::with_capacity(rows.len());
     for (run_id, bucket, payload) in rows {
         let payload: serde_json::Value = payload
@@ -403,7 +412,26 @@ pub async fn stats_cost(
             .unwrap_or_else(|| state.repo_root.clone());
         let project = repo_root.to_string_lossy().into_owned();
 
-        let cost = crate::run_cost::compute_run_cost_cached(&repo_root, &run_id);
+        // #408: read the transcripts from the sandboxed Run's staged home while it
+        // is live (else `~/.claude/projects/`). Read `sandbox` straight off the
+        // `run_started` payload (like `target_repo`/`pipeline_id`) — no full
+        // RunState projection, so the SQL stays cheap (no fan-out regression).
+        //
+        // #432: this stops being a *decoder*. It used to `from_value::<SandboxMode>`,
+        // which silently swallowed any token the closed enum did not know; all this
+        // fold ever needed is the off-ness, and asking the profile store whether the
+        // name resolves would be an N+1 inside a per-row loop of a SQL fan-out.
+        let sandboxed = payload
+            .get("sandbox")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| {
+                let t = s.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
+            });
+        let projects_root =
+            crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+
+        let cost = crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id);
         cost_rows.push(CostRow {
             bucket,
             pipeline,

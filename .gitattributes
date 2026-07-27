@@ -1,0 +1,3 @@
+# Le Dockerfile sandbox est content-hashé (#405) : figer les fins de ligne pour que le
+# tag pdo-sandbox:h-<hash> soit identique quel que soit l'OS de checkout/build (release/GHCR #411).
+crates/pdo-daemon/assets/sandbox/Dockerfile text eol=lf

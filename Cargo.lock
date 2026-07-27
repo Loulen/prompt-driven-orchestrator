@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "0.1.101"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1878,6 +1878,7 @@ dependencies = [
  "filetime",
  "futures-util",
  "insta",
+ "libc",
  "mime_guess",
  "notify",
  "notify-debouncer-mini",

@@ -131,6 +131,66 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
             continue;
         }
 
+        // #407 D10: a live sandboxed Run needs its container back after a daemon
+        // restart — reconcile it here (before the orphan scan). Synchronous effect
+        // via spawn_blocking (ensure_ready may build/probe docker). No-op for `off`.
+        //
+        // #432 (ADR-0031 §7): the two `Err` arms are SPLIT, because they fail for
+        // categorically different reasons. This is the only one of `ensure_ready`'s four
+        // callers that used to swallow both — the other three `RunFailed` or 500.
+        if !run_state.sandbox.is_off() {
+            match crate::sandbox_run::context_from_state(state, &run_state).await {
+                Ok(ctx) => {
+                    match tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
+                        .await
+                    {
+                        // #445: record the container as ready, or the spawn precondition
+                        // would refuse every node of a Run whose prep task died with the
+                        // previous daemon (its projection is frozen at `pending`, and
+                        // nothing else would ever lift it). Only on the success arm: the
+                        // two `warn!` arms below leave the projection `pending` on
+                        // purpose, so the run is deferred rather than spawned into a
+                        // container that is not there. Gated on the Run actually being
+                        // blocked so the common case — every live sandboxed Run, already
+                        // `ready` — does not append one no-op event per Run per boot.
+                        Ok(Ok(())) => {
+                            if run_state.sandbox_spawn_block().is_some() {
+                                crate::mark_sandbox_prep_ready(state, run_id).await;
+                            }
+                        }
+                        // KEPT as a `warn!`, deliberately. `ensure_ready` touches the
+                        // Docker socket, and `service_unit.rs` emits
+                        // `After=network-online.target` WITHOUT `After=docker.service` —
+                        // so a daemon restarted by systemd at boot can reach this before
+                        // `dockerd` accepts connections. Making this arm fatal would
+                        // mass-`RunFailed` every live sandboxed Run on a boot-ordering
+                        // race. (Real fix — add `After=docker.service`, then make this
+                        // fatal — is a follow-up, not this slice.)
+                        Ok(Err(e)) => warn!(
+                            "Boot recovery: failed to ensure sandbox container for run {run_id}: {e:#}"
+                        ),
+                        Err(je) => warn!(
+                            "Boot recovery: sandbox ensure_ready panicked for run {run_id}: {je}"
+                        ),
+                    }
+                }
+                // FATAL since #432: this is where an unresolvable FROZEN staging
+                // selection surfaces, and it never touches the Docker socket — so it
+                // cannot fail transiently. Deterministic: the retry at the next boot
+                // would fail identically, for ever. A Run left `Running` with a home
+                // nobody can stage is strictly worse than a Run that says so.
+                Err(e) => {
+                    crate::fail_run_sandbox_prep(
+                        state,
+                        run_id,
+                        &format!("sandbox prep failed at boot recovery: {e:#}"),
+                    )
+                    .await;
+                    continue;
+                }
+            }
+        }
+
         // (1) Orphaned live nodes: Running/AwaitingUser with no tmux session.
         let orphaned: Vec<(String, i64)> = run_state
             .nodes

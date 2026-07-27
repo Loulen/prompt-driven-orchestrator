@@ -2,25 +2,42 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import RepoCombobox from "./RepoCombobox";
 import type { BrowseResponse } from "../api";
-import { browseRepos } from "../api";
+import { browseFs } from "../api";
 
+// #431 renamed `browseRepos` → `browseFs` (the function can now return files and
+// targets `/fs/browse`). Rewiring the mock factory + the fixture's new required
+// `is_dir` field is the ONLY change here: every ASSERTION below is frozen, because
+// this file is the non-regression net for the `FsExplorerModal` extraction.
 vi.mock("../api", () => ({
-  browseRepos: vi.fn(),
+  browseFs: vi.fn(),
 }));
 
-const mockedBrowse = vi.mocked(browseRepos);
+const mockedBrowse = vi.mocked(browseFs);
 
 const ROOT_RESPONSE: BrowseResponse = {
   path: "/home/user/projects",
   parent: "/home/user",
   entries: [
-    { name: "alpha", path: "/home/user/projects/alpha", is_git_repo: true, is_symlink: false },
-    { name: "beta", path: "/home/user/projects/beta", is_git_repo: false, is_symlink: false },
+    {
+      name: "alpha",
+      path: "/home/user/projects/alpha",
+      is_git_repo: true,
+      is_symlink: false,
+      is_dir: true,
+    },
+    {
+      name: "beta",
+      path: "/home/user/projects/beta",
+      is_git_repo: false,
+      is_symlink: false,
+      is_dir: true,
+    },
     {
       name: "zeta-link",
       path: "/home/user/projects/zeta-link",
       is_git_repo: false,
       is_symlink: true,
+      is_dir: true,
     },
   ],
   truncated: false,

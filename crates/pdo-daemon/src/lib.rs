@@ -6070,10 +6070,18 @@ async fn create_run_inner(
     // `fire_one_trigger`'s `Err((_, body))` arm already turns this 400's message into a
     // `FireRecord { outcome: "error", reason }` that the history renders red — which is
     // why the wording below is the deliverable, not an afterthought.
+    // #468: the profile's env is frozen at the SAME resolve, for the same reason and with
+    // the same consequence — editing it afterwards cannot rewrite what this Run's container
+    // was created with. One `resolve` feeds both keys; two reads could straddle a
+    // concurrent PUT and freeze a list from one revision with an env from another.
+    let mut sandbox_env: std::collections::BTreeMap<String, String> = Default::default();
     let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
         None => None,
         Some(name) => match sandbox_profile::resolve(&state.db, name).await {
-            Ok(Some(resolved)) => Some(resolved.resolved.entries),
+            Ok(Some(resolved)) => {
+                sandbox_env = resolved.env;
+                Some(resolved.resolved.entries)
+            }
             Ok(None) => {
                 let error = if explicit_tier {
                     if req.triggered_by.is_some() {
@@ -6147,6 +6155,17 @@ async fn create_run_inner(
         run_payload["sandbox_entries"] = serde_json::json!(sandbox_entries
             .as_ref()
             .expect("a non-off sandbox always resolves an entry list at this chokepoint"));
+        // #468: `sandbox_env` is a third sibling key — but written ONLY when non-empty, and
+        // that asymmetry with `sandbox_entries` is deliberate. `sandbox_entries` has to be
+        // unconditional because an empty entry list is a legitimate resolution (`minimal`),
+        // so absence had to mean "pre-#432 daemon" and nothing else. For the env there is
+        // nothing to distinguish: a pre-#468 daemon could pose no profile env at all, so an
+        // absent key and an empty map describe the same container. Writing `{}` on every
+        // sandboxed Run would change the payload shape for every existing profile in
+        // exchange for no new information. See `RunState::sandbox_env`.
+        if !sandbox_env.is_empty() {
+            run_payload["sandbox_env"] = serde_json::json!(sandbox_env);
+        }
     }
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
@@ -7122,6 +7141,19 @@ fn sandbox_profile_view(
         "inactive_disabled": profile.resolved.inactive_disabled,
         "floor": floor,
         "sensitive_prefixes": sandbox_profile::SENSITIVE_PREFIXES,
+        // #468: the env posed at `docker create`, VALUES INCLUDED. This is not a secret
+        // store and the UI says so in as many words: the values already sit in clear in
+        // SQLite, in the Run's frozen `run_started` payload and in `docker inspect
+        // --format '{{.Config.Env}}'`. Masking them here would be theatre — and worse,
+        // it would let someone believe PDO is protecting them. The one place they must
+        // NOT appear is the daemon log (`sandbox_profile::env_names`), because the systemd
+        // journal outlives the Run and the profile.
+        "env": profile.env,
+        // The keys PDO poses itself and therefore refuses (`HOME`, `PDO_DAEMON_URL`,
+        // `PDO_RUN_ID`). Server-owned, like every other derived label here (#373): the
+        // editor greys them out instead of hard-coding a parallel list that would drift
+        // the day a fourth run-constant appears.
+        "reserved_env_keys": sandbox_container::RUN_CONSTANT_ENV_KEYS,
         "updated_at": profile.updated_at,
     })
 }
@@ -7186,14 +7218,19 @@ async fn get_sandbox_profile(
 }
 
 /// The body of `PUT /settings/sandbox-profiles/{name}` — the **diff**, never a snapshot
-/// (ADR-0031 §2). Both fields default to empty so a bare `{}` means "materialise this
-/// profile exactly as the current default".
+/// (ADR-0031 §2). Every field defaults to empty so a bare `{}` means "materialise this
+/// profile exactly as the current default, with no environment".
 #[derive(Deserialize)]
 struct UpsertSandboxProfileRequest {
     #[serde(default)]
     disabled: Vec<String>,
     #[serde(default)]
     extras: Vec<String>,
+    /// Environment variables posed at `docker create` (#468, ADR-0031 §8). A FULL
+    /// replacement like the two lists above — an absent key clears the env rather than
+    /// leaving it alone, which is what makes "remove a variable" expressible at all.
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
 }
 
 /// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
@@ -7211,7 +7248,15 @@ struct UpsertSandboxProfileRequest {
 /// - each `disabled` name by **membership in the built-in default**, which is also what
 ///   makes the default's `.claude/*.md` glob unauthorable by hand;
 /// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would freeze
-///   into `RunStarted` a winner the user never picked.
+///   into `RunStarted` a winner the user never picked;
+/// - each `env` key and value (#468) — the grammar, and the three run-constant keys PDO
+///   poses itself, which are a **400 naming the key**, never a silent skip. The precedent
+///   and the reason are the `PDO_DAEMON_URL` guard in `sandbox_container`'s `docker exec`
+///   loop ("a re-passed `-e` would clobber the gateway"); the asymmetry is that a skip is
+///   tolerable inside a code path nobody reads, and indefensible in a form the user just
+///   filled in. Silently dropping `HOME` would leave an editor that shows it set and a
+///   container where it is not — and a `HOME` that DID land would break the `.claude` and
+///   `.claude.json` mounts at once.
 async fn put_sandbox_profile(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -7286,7 +7331,30 @@ async fn put_sandbox_profile(
         ));
     }
 
-    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras).await {
+    // Env (#468): key grammar + the three reserved run-constants + value legibility. The
+    // normalised key is what gets stored, so `  FOO  ` and `FOO` cannot become two rows
+    // that render identically. A collision after trimming is a 400 for the same reason the
+    // `extras ∩ disabled` clash is: resolving it silently would freeze a winner the user
+    // never picked.
+    let mut env: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (raw_key, raw_value) in &req.env {
+        let key = match sandbox_profile::validate_env_key(raw_key) {
+            Ok(k) => k,
+            Err(msg) => return bad(msg),
+        };
+        let value = match sandbox_profile::validate_env_value(&key, raw_value) {
+            Ok(v) => v,
+            Err(msg) => return bad(msg),
+        };
+        if env.insert(key.clone(), value).is_some() {
+            return bad(format!(
+                "`{key}` is set twice (once as `{raw_key}`) — an environment variable can \
+                 only carry one value, and picking one for you would drop the other in silence"
+            ));
+        }
+    }
+
+    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras, &env).await {
         Ok(_) => match sandbox_profile::resolve(&state.db, &name).await {
             Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
             Ok(None) | Err(_) => (

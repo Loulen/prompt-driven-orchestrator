@@ -158,6 +158,12 @@ function profileFixture(
       { id: "empty-projects", label: "An empty projects/ transcript sink", path: ".claude/projects" },
     ],
     sensitive_prefixes: [".ssh", ".aws", ".gnupg"],
+    // #468: no env by default — the negative control of the "not a vault" copy and of the
+    // "None" affordance both need a profile that declares none.
+    env: {},
+    // Server-owned, so the fixture mirrors the daemon's constant rather than the editor
+    // hard-coding it.
+    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
     updated_at: null,
     ...overrides,
   };
@@ -864,6 +870,9 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [".claude/plugins"],
       extras: [],
+      // #468: every PUT is a FULL replacement, so a toggle must carry the env verbatim —
+      // otherwise unchecking an entry would silently wipe the profile's environment.
+      env: {},
     });
   });
 
@@ -892,6 +901,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [],
       extras: ["sbx.Dockerfile"],
+      env: {},
     });
   });
 
@@ -970,6 +980,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       expect(saveSandboxProfileMock).toHaveBeenCalledWith("full-no-mcp", {
         disabled: [],
         extras: [],
+        env: {},
       }),
     );
   });
@@ -1009,6 +1020,91 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       ),
     );
     expect(screen.queryByTestId("staging-profiles-error")).not.toBeInTheDocument();
+  });
+
+  // --- #468: per-profile environment ---------------------------------------
+
+  it("sets an environment variable through a full-replacement PUT", async () => {
+    await openPanel();
+    // A profile with no env says so explicitly — an empty area would read as a loading
+    // failure, the same reason `minimal`'s entry list has its own copy.
+    expect(await screen.findByTestId("staging-profile-no-env")).toHaveTextContent(/None/);
+
+    fireEvent.change(screen.getByTestId("staging-env-new-key"), {
+      target: { value: "PUPPETEER_EXECUTABLE_PATH" },
+    });
+    fireEvent.change(screen.getByTestId("staging-env-new-value"), {
+      target: { value: "/usr/bin/chromium" },
+    });
+    fireEvent.click(screen.getByTestId("staging-env-add"));
+
+    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
+      disabled: [],
+      extras: [],
+      env: { PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium" },
+    });
+  });
+
+  it("removes a variable by PUTting the map without it", async () => {
+    fetchSandboxProfilesMock.mockResolvedValue({
+      profiles: [
+        profileFixture("full", {
+          materialised: true,
+          env: { FOO: "bar", BAZ: "qux" },
+        }),
+      ],
+      home: "/home/user",
+    });
+    await openPanel();
+    // The value is rendered in CLEAR, on purpose (see the "not a vault" copy): masking it
+    // would suggest PDO is protecting something it is not.
+    expect(await screen.findByTestId("staging-env-FOO")).toHaveTextContent("bar");
+    fireEvent.click(screen.getByTestId("staging-env-remove-FOO"));
+
+    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
+      disabled: [],
+      extras: [],
+      env: { BAZ: "qux" },
+    });
+  });
+
+  /**
+   * A run-constant key is refused INLINE, before a doomed PUT — and from the daemon's own
+   * `reserved_env_keys`, not a hard-coded triple that would drift the day a fourth
+   * run-constant appears (#373). The daemon's 400 remains the authority; this is the UX gate.
+   */
+  it("refuses a PDO-owned variable inline instead of firing a doomed PUT", async () => {
+    await openPanel();
+    fireEvent.change(await screen.findByTestId("staging-env-new-key"), {
+      target: { value: "HOME" },
+    });
+    fireEvent.change(screen.getByTestId("staging-env-new-value"), {
+      target: { value: "/tmp/evil" },
+    });
+    fireEvent.click(screen.getByTestId("staging-env-add"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("staging-profiles-error")).toHaveTextContent(
+        /set by PDO for every sandboxed Run/i,
+      ),
+    );
+    expect(saveSandboxProfileMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Load-bearing copy, not a disclaimer. Without it someone puts a client API key in here
+   * believing PDO holds it as a secret — the issue's own words. The three places the value
+   * really lands must be named.
+   */
+  it("says in as many words that the env is not a secret store", async () => {
+    await openPanel();
+    const warning = await screen.findByTestId("staging-profile-env-not-a-vault");
+    expect(warning).toHaveTextContent(/not a secret store/i);
+    expect(warning).toHaveTextContent(/database/i);
+    expect(warning).toHaveTextContent(/event log/i);
+    expect(warning).toHaveTextContent(/docker inspect/i);
   });
 
   it("marks a sensitive extra without refusing it (ADR-0031 §3)", async () => {

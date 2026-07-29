@@ -21,6 +21,17 @@
 //!     default enriched by a later version stays visible (AC8);
 //!  8. unchecking `.claude/settings.json` still starts (the floor re-synthesises it, AC9);
 //!  9. deleting a referenced profile can list its referents first (AC10).
+//!
+//! ## #468 — per-profile environment
+//!
+//! Four more, at the bottom of the file:
+//!  10. a profile's `env` lands as `-e KEY=value` at `docker create`, and a profile
+//!      **without** env poses nothing extra (the negative control is mandatory: asserting
+//!      only the positive half would pass against a fake that echoed its own argv);
+//!  11. a PUT naming `HOME` / `PDO_DAEMON_URL` / `PDO_RUN_ID` is a **400 naming the key**;
+//!  12. editing the env of a **multi-node** Run in flight changes nothing for its NEXT
+//!      node — a single-node Run would prove nothing, since the container is created once;
+//!  13. an unreadable frozen `sandbox_env` is a hard `RunFailed`, never a silent "no env".
 
 mod common;
 
@@ -93,16 +104,78 @@ fn git_init_with_commit(repo: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `start → notify → notify2 → end` (#468). A SECOND node is what makes "editing the env
+/// mid-Run does not change the next node" a real assertion: with one node the container is
+/// created once and nothing could have changed anyway.
+const PIPELINE_TWO_NODES_YAML: &str = r#"name: sbx-two
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: notify
+    name: notify
+    type: script
+    outputs:
+      - name: out
+  - id: notify2
+    name: notify2
+    type: script
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: notify, port: in }
+  - source: { node: notify, port: out }
+    target: { node: notify2, port: in }
+  - source: { node: notify2, port: out }
+    target: { node: end, port: result }
+"#;
+
+const PIPELINE_NAME: &str = "sbx-cycle";
+const TWO_NODE_PIPELINE_NAME: &str = "sbx-two";
+const NODE_ID_2: &str = "notify2";
+
+/// Write one pipeline yaml + a trivial prompt per script node.
+fn write_pipeline(repo: &Path, name: &str, yaml: &str, nodes: &[&str]) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml)?;
+    let prompts_dir = pipelines_dir.join(format!("{name}.prompts"));
+    std::fs::create_dir_all(&prompts_dir)?;
+    for node in nodes {
+        std::fs::write(
+            prompts_dir.join(format!("{node}.md")),
+            "#!/usr/bin/env bash\ntrue\n",
+        )?;
+    }
+    Ok(())
+}
+
 fn seed() -> impl FnOnce(&Path) -> anyhow::Result<()> {
     move |repo: &Path| {
-        let pipelines_dir = repo.join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&pipelines_dir)?;
-        std::fs::write(pipelines_dir.join("sbx-cycle.yaml"), PIPELINE_YAML)?;
-        let prompts_dir = pipelines_dir.join("sbx-cycle.prompts");
-        std::fs::create_dir_all(&prompts_dir)?;
-        std::fs::write(
-            prompts_dir.join(format!("{NODE_ID}.md")),
-            "#!/usr/bin/env bash\ntrue\n",
+        write_pipeline(repo, PIPELINE_NAME, PIPELINE_YAML, &[NODE_ID])?;
+        git_init_with_commit(repo)?;
+        Ok(())
+    }
+}
+
+/// Both pipelines, so a test can pick the two-node one without a second harness (#468).
+fn seed_with_two_node_pipeline() -> impl FnOnce(&Path) -> anyhow::Result<()> {
+    move |repo: &Path| {
+        write_pipeline(repo, PIPELINE_NAME, PIPELINE_YAML, &[NODE_ID])?;
+        write_pipeline(
+            repo,
+            TWO_NODE_PIPELINE_NAME,
+            PIPELINE_TWO_NODES_YAML,
+            &[NODE_ID, NODE_ID_2],
         )?;
         git_init_with_commit(repo)?;
         Ok(())
@@ -136,19 +209,39 @@ fn log_text(log: &Path) -> String {
     std::fs::read_to_string(log).unwrap_or_default()
 }
 
-/// Every `-v` mount spec (the arg following each `-v`) in the fake-docker argv log.
-fn mount_specs(log: &Path) -> Vec<String> {
+/// Every arg that follows `flag` in the fake-docker argv log.
+fn args_after(log: &Path, flag: &str) -> Vec<String> {
     let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
     let mut specs = Vec::new();
     let mut iter = lines.iter();
     while let Some(line) = iter.next() {
-        if line == "-v" {
+        if line == flag {
             if let Some(spec) = iter.next() {
                 specs.push(spec.clone());
             }
         }
     }
     specs
+}
+
+/// Every `-v` mount spec in the fake-docker argv log.
+fn mount_specs(log: &Path) -> Vec<String> {
+    args_after(log, "-v")
+}
+
+/// Every `-e KEY=VALUE` in the fake-docker argv log (#468) — the layer-3 stand-in for
+/// `docker inspect --format '{{.Config.Env}}'`, which needs a real daemon.
+///
+/// Covers `create` AND every `exec`: that is deliberate, because "the profile env must not
+/// leak into the per-node `docker exec`" is as much a property as "it must reach the
+/// create". Tests that care about one or the other filter on the key.
+fn env_specs(log: &Path) -> Vec<String> {
+    args_after(log, "-e")
+}
+
+/// How many `docker create` invocations the fake logged.
+fn create_count(log: &Path) -> usize {
+    log_text(log).lines().filter(|l| *l == "create").count()
 }
 
 /// A realistic host `$HOME`: a `~/.claude` with the allowlist content, plus the two
@@ -286,7 +379,15 @@ async fn sandbox_prep_failure(daemon: &TestDaemon, run_id: &str) -> Option<Strin
 }
 
 async fn post_run(daemon: &TestDaemon, sandbox: Option<&str>) -> reqwest::Response {
-    let mut body = serde_json::json!({ "pipeline": "sbx-cycle", "input": "hello" });
+    post_run_of(daemon, PIPELINE_NAME, sandbox).await
+}
+
+async fn post_run_of(
+    daemon: &TestDaemon,
+    pipeline: &str,
+    sandbox: Option<&str>,
+) -> reqwest::Response {
+    let mut body = serde_json::json!({ "pipeline": pipeline, "input": "hello" });
     if let Some(mode) = sandbox {
         body["sandbox"] = serde_json::json!(mode);
     }
@@ -299,7 +400,11 @@ async fn post_run(daemon: &TestDaemon, sandbox: Option<&str>) -> reqwest::Respon
 }
 
 async fn start_run(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
-    let resp = post_run(daemon, sandbox).await;
+    start_run_of(daemon, PIPELINE_NAME, sandbox).await
+}
+
+async fn start_run_of(daemon: &TestDaemon, pipeline: &str, sandbox: Option<&str>) -> String {
+    let resp = post_run_of(daemon, pipeline, sandbox).await;
     assert_eq!(resp.status(), 201, "POST /runs should create the run");
     resp.json::<serde_json::Value>().await.unwrap()["run_id"]
         .as_str()
@@ -314,9 +419,29 @@ async fn put_profile(
     disabled: &[&str],
     extras: &[&str],
 ) -> reqwest::Response {
+    put_profile_full(daemon, name, disabled, extras, &[]).await
+}
+
+/// Like [`put_profile`] but with an `env` map too (#468). The body is a FULL replacement,
+/// so an empty slice here really does mean "no environment".
+async fn put_profile_full(
+    daemon: &TestDaemon,
+    name: &str,
+    disabled: &[&str],
+    extras: &[&str],
+    env: &[(&str, &str)],
+) -> reqwest::Response {
+    let env_obj: serde_json::Map<String, serde_json::Value> = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+        .collect();
     reqwest::Client::new()
         .put(format!("{}/settings/sandbox-profiles/{name}", daemon.url()))
-        .json(&serde_json::json!({ "disabled": disabled, "extras": extras }))
+        .json(&serde_json::json!({
+            "disabled": disabled,
+            "extras": extras,
+            "env": env_obj,
+        }))
         .send()
         .await
         .unwrap()
@@ -377,21 +502,29 @@ async fn fire_history(daemon: &TestDaemon, trigger_id: &str) -> Vec<serde_json::
 }
 
 fn write_node_output(daemon: &TestDaemon, run_id: &str, content: &str) {
+    write_node_output_for(daemon, run_id, NODE_ID, content);
+}
+
+fn write_node_output_for(daemon: &TestDaemon, run_id: &str, node_id: &str, content: &str) {
     let out = daemon
         .repo_root()
         .join(".pdo/runs")
         .join(run_id)
         .join("worktree/.pdo/artifacts")
-        .join(NODE_ID)
+        .join(node_id)
         .join("iter-1/out/output.md");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
     std::fs::write(&out, content).unwrap();
 }
 
 async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
+    simulate_node_done_for(daemon, run_id, NODE_ID).await;
+}
+
+async fn simulate_node_done_for(daemon: &TestDaemon, run_id: &str, node_id: &str) {
     let resp = reqwest::Client::new()
         .post(format!(
-            "{}/runs/{run_id}/nodes/{NODE_ID}/done",
+            "{}/runs/{run_id}/nodes/{node_id}/done",
             daemon.url()
         ))
         .json(&serde_json::json!({}))
@@ -403,6 +536,25 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
         "simulated pdo complete should succeed: {}",
         resp.status()
     );
+}
+
+async fn wait_node_status_for(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node_id: &str,
+    expected: &str,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = serde_json::Value::Null;
+    while Instant::now() < deadline {
+        let run = get_run(daemon, run_id).await;
+        if run["nodes"][node_id]["status"] == expected {
+            return run;
+        }
+        last = run;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    last
 }
 
 // -- AC1: a profile with plugins unchecked, on a Trigger -----------------------
@@ -1363,4 +1515,349 @@ async fn profile_name_grammar_is_enforced_at_the_edge() {
     // defaults, dropping is for extras, and conflating them makes the diff ambiguous.
     let resp = put_profile(&daemon, "full-no-mcp", &[".gitconfig"], &[]).await;
     assert_eq!(resp.status(), 400);
+}
+
+// =============================================================================
+// #468 — per-profile environment (ADR-0031 §8)
+// =============================================================================
+
+/// The four `-e` PDO poses itself, so a test can assert "and nothing else".
+const RUN_CONSTANT_ENV_PREFIXES: &[&str] = &[
+    "HOME=",
+    "PDO_DAEMON_URL=",
+    "PDO_RUN_ID=",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=",
+];
+
+/// AC1, **both halves**. A profile with `env: {FOO: bar}` poses `-e FOO=bar` at
+/// `docker create`; a Run on a profile **without** env does not. The negative control is
+/// not optional: asserting only the positive half would pass just as well against a fake
+/// docker that echoed whatever it was handed, or against a daemon that posed every
+/// profile's env to every Run.
+///
+/// Layer 3a reads the fake's argv log rather than `docker inspect --format
+/// '{{.Config.Env}}'` — same bytes, no real daemon needed. The real `docker inspect` is
+/// the manual check recorded on the issue.
+#[tokio::test]
+async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    assert_eq!(
+        put_profile_full(&daemon, "with-env", &[], &[], &[("FOO", "bar")])
+            .await
+            .status(),
+        200
+    );
+    // The profile with no env at all — the negative control, created in the same daemon so
+    // nothing but the profile differs between the two Runs.
+    assert_eq!(
+        put_profile_full(&daemon, "no-env", &[], &[], &[])
+            .await
+            .status(),
+        200
+    );
+
+    // (a) POSITIVE.
+    let with = start_run_of(&daemon, PIPELINE_NAME, Some("with-env")).await;
+    assert!(
+        wait_until(|| env_specs(&log).iter().any(|e| e == "FOO=bar")).await,
+        "the profile env must be posed at create; env={:?}",
+        env_specs(&log)
+    );
+    // Frozen on the Run too — that is what makes an edit non-retroactive.
+    let run = get_run(&daemon, &with).await;
+    assert_eq!(
+        run["sandbox_env"]["FOO"], "bar",
+        "the Run must freeze the env: {run}"
+    );
+
+    // (b) NEGATIVE CONTROL: a second Run, other profile, same daemon and same fake.
+    std::fs::write(
+        std::path::Path::new(&log),
+        "", // truncate so the second Run's argv is unambiguous
+    )
+    .unwrap();
+    let without = start_run_of(&daemon, PIPELINE_NAME, Some("no-env")).await;
+    assert!(
+        wait_until(|| log_text(&log).contains("create")).await,
+        "the second Run must reach `docker create`; log:\n{}",
+        log_text(&log)
+    );
+    let env = env_specs(&log);
+    assert!(
+        !env.iter().any(|e| e.starts_with("FOO=")),
+        "a Run on a profile WITHOUT env must not carry another profile's env; env={env:?}"
+    );
+    // AC5 restated at layer 3: the only `-e` are the ones PDO owns.
+    for spec in &env {
+        assert!(
+            RUN_CONSTANT_ENV_PREFIXES
+                .iter()
+                .any(|p| spec.starts_with(p))
+                || spec.starts_with("PDO_SBX_SESSION=")
+                || spec.starts_with("PDO_ARTIFACTS_DIR=")
+                || spec.starts_with("PDO_INPUT_")
+                || spec.starts_with("PDO_OUTPUT_")
+                || spec.starts_with("PDO_VAR_")
+                || spec == "PDO_NODE_ID"
+                || spec == "PDO_NODE_ITER",
+            "unexpected `-e {spec}` for a profile with no env; env={env:?}"
+        );
+    }
+    // And its frozen payload carries no env key at all (the back-compat shape).
+    let run = get_run(&daemon, &without).await;
+    assert!(
+        run.get("sandbox_env").is_none(),
+        "an empty env must not grow the payload: {run}"
+    );
+}
+
+/// AC2. The three run-constant keys are a **400 naming the key**, never a silent skip.
+/// A silent skip would leave an editor that shows `HOME` set and a container where it is
+/// not; a `HOME` that DID land would break the `.claude` and `.claude.json` mounts at once,
+/// since both are computed from it.
+#[tokio::test]
+async fn a_run_constant_env_key_is_a_400_that_names_it() {
+    ensure_pdo_on_path();
+    let (_fake, docker, _log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    for key in ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"] {
+        let resp = put_profile_full(&daemon, "probe", &[], &[], &[(key, "x")]).await;
+        assert_eq!(resp.status(), 400, "`{key}` must be refused");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let msg = body["error"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains(key),
+            "the 400 must NAME the offending key, got: {body}"
+        );
+    }
+    // The malformed and the illegible are refused too — same 400, same naming.
+    for (key, value) in [
+        ("9LEADING_DIGIT", "x"),
+        ("WITH-DASH", "x"),
+        ("WITH SPACE", "x"),
+        ("MULTI", "line1\nline2"),
+        ("NUL", "a\0b"),
+    ] {
+        let resp = put_profile_full(&daemon, "probe", &[], &[], &[(key, value)]).await;
+        assert_eq!(resp.status(), 400, "`{key}`={value:?} must be refused");
+    }
+    // Nothing was written: a refused PUT must not half-materialise the profile.
+    assert_eq!(
+        get_profile(&daemon, "probe").await.status(),
+        404,
+        "a rejected PUT must not create the row"
+    );
+
+    // …and a legal one goes through, so the refusals above are not a blanket "env is broken".
+    let resp = put_profile_full(
+        &daemon,
+        "probe",
+        &[],
+        &[],
+        &[("PUPPETEER_EXECUTABLE_PATH", "/usr/bin/chromium")],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let view: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        view["env"]["PUPPETEER_EXECUTABLE_PATH"],
+        "/usr/bin/chromium"
+    );
+    // The reserved list is served, so the editor greys them out instead of hard-coding them.
+    let reserved: Vec<&str> = view["reserved_env_keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        reserved,
+        vec!["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
+        "{view}"
+    );
+}
+
+/// AC3, on a **multi-node** Run — the point the issue insists on. Editing the env of a
+/// profile while a Run is alive must change nothing for that Run's NEXT node. A single-node
+/// Run proves nothing.
+///
+/// The env survives for the next node through **three** independent mechanisms, and this
+/// test walks all three, because each closes a hole the others do not:
+///
+/// 1. **One container per Run.** The second node enters by `docker exec`, not by a second
+///    `create` — so it inherits the environment of the container the first node created.
+///    (The env is posed at `create` precisely because it is a Run constant; the `exec` path
+///    has its own per-node list, `PDO_NODE_ID` / `PDO_ARTIFACTS_DIR` / …, which the profile
+///    env must NOT contaminate.)
+/// 2. **The frozen payload.** `sandbox_env` on the Run is immutable, so any *later*
+///    `ensure_ready` — boot recovery after a daemon restart, `resume_run`, `open_run_shell`
+///    — re-derives the same env. Forced here with a boot-recovery tick, since this harness's
+///    fake reports the container absent on every probe and therefore re-creates it: the one
+///    way to make the re-derivation observable at all.
+/// 3. **Docker itself.** `docker start` never re-evaluates a pre-existing container's env,
+///    any more than its mounts (ADR-0031 §6).
+#[tokio::test]
+async fn editing_the_env_does_not_change_a_live_multi_node_runs_next_node() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed_with_two_node_pipeline(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    assert_eq!(
+        put_profile_full(&daemon, "evolving", &[], &[], &[("FOO", "before")])
+            .await
+            .status(),
+        200
+    );
+    let run_id = start_run_of(&daemon, TWO_NODE_PIPELINE_NAME, Some("evolving")).await;
+    wait_node_status_for(&daemon, &run_id, NODE_ID, "running").await;
+    assert!(
+        wait_until(|| env_specs(&log).iter().any(|e| e == "FOO=before")).await,
+        "the first node's container must carry the frozen env; env={:?}",
+        env_specs(&log)
+    );
+    let creates_after_first_node = create_count(&log);
+    assert_eq!(
+        creates_after_first_node,
+        1,
+        "one container per Run; log:\n{}",
+        log_text(&log)
+    );
+
+    // Now edit the env (change one variable, add another) while the Run is alive.
+    assert_eq!(
+        put_profile_full(
+            &daemon,
+            "evolving",
+            &[],
+            &[],
+            &[("FOO", "after"), ("ADDED", "yes")],
+        )
+        .await
+        .status(),
+        200
+    );
+
+    // (1) Advance to the SECOND node. It enters the SAME container by `docker exec` — no
+    // second `create`, hence no opportunity to pose a different env at all.
+    write_node_output_for(&daemon, &run_id, NODE_ID, "one\n");
+    simulate_node_done_for(&daemon, &run_id, NODE_ID).await;
+    wait_node_status_for(&daemon, &run_id, NODE_ID_2, "running").await;
+    assert_eq!(
+        create_count(&log),
+        creates_after_first_node,
+        "the next node must reuse the Run's container, not create a second one; log:\n{}",
+        log_text(&log)
+    );
+
+    // (2) Force the re-derivation path a daemon restart would take. With the container
+    // reported absent, this re-creates it — from the FROZEN env, not the edited profile.
+    daemon.run_boot_recovery_tick().await;
+    assert!(
+        wait_until(|| create_count(&log) > creates_after_first_node).await,
+        "boot recovery must re-enter the sandbox prep; log:\n{}",
+        log_text(&log)
+    );
+
+    // The frozen payload is untouched…
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(run["sandbox_env"]["FOO"], "before", "{run}");
+    assert!(
+        run["sandbox_env"].get("ADDED").is_none(),
+        "an env added AFTER the Run started must not appear on it: {run}"
+    );
+    // …and NOTHING the daemon posed, at any point, carries the edited values.
+    let env = env_specs(&log);
+    assert!(
+        env.iter().any(|e| e == "FOO=before"),
+        "the frozen value must still be the one posed; env={env:?}"
+    );
+    assert!(
+        !env.iter().any(|e| e == "FOO=after"),
+        "the edited value must never reach this Run; env={env:?}"
+    );
+    assert!(
+        !env.iter().any(|e| e.starts_with("ADDED=")),
+        "a variable added mid-Run must never reach it; env={env:?}"
+    );
+    assert_eq!(
+        sandbox_prep_failure(&daemon, &run_id).await,
+        None,
+        "the re-derivation must replay the frozen env, not fail"
+    );
+
+    // A Run started AFTER the edit does get the new env — the freeze is per-Run, not a
+    // one-off snapshot of the profile.
+    let fresh = start_run_of(&daemon, PIPELINE_NAME, Some("evolving")).await;
+    let fresh_run = get_run(&daemon, &fresh).await;
+    assert_eq!(fresh_run["sandbox_env"]["FOO"], "after", "{fresh_run}");
+    assert_eq!(fresh_run["sandbox_env"]["ADDED"], "yes", "{fresh_run}");
+}
+
+/// The hard-error arm, twin of `an_unreadable_frozen_list_fails_the_run_at_boot_recovery`:
+/// an unreadable `sandbox_env` is a `RunFailed` naming the raw value, never a silent "no
+/// env" — which would start the container without the variables its MCP servers need and
+/// look like a plugin bug.
+#[tokio::test]
+async fn an_unreadable_frozen_env_fails_the_run_at_boot_recovery() {
+    ensure_pdo_on_path();
+    let (_fake, docker, _log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    assert_eq!(
+        put_profile_full(&daemon, "corrupt", &[], &[], &[("FOO", "bar")])
+            .await
+            .status(),
+        200
+    );
+    let run_id = start_run(&daemon, Some("corrupt")).await;
+    wait_node_status(&daemon, &run_id, "running").await;
+
+    // Corrupt the frozen env the way a hand-edited DB or a future encoder bug would.
+    let db_path = daemon.repo_root().join(".pdo").join("pdo.db");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db_path.display()))
+        .await
+        .unwrap();
+    let updated = sqlx::query(
+        "UPDATE events SET payload = json_set(payload, '$.sandbox_env', 42) \
+         WHERE run_id = ? AND kind = 'run_started'",
+    )
+    .bind(&run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.rows_affected(), 1);
+    pool.close().await;
+
+    daemon.run_boot_recovery_tick().await;
+
+    let reason = sandbox_prep_failure(&daemon, &run_id)
+        .await
+        .unwrap_or_default();
+    assert!(
+        !reason.is_empty(),
+        "an unreadable frozen env must fail the Run loud, not degrade to `no env`"
+    );
+    let run = wait_run_status(&daemon, &run_id, "failed").await;
+    assert_eq!(run["status"], "failed", "{run}");
+    // #431 trap: the reason lives on /events, not on /runs/<id>.
+    assert!(
+        reason.contains("42") && reason.contains("unreadable"),
+        "the reason must carry the offending raw value: {reason}"
+    );
 }

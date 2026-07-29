@@ -177,13 +177,18 @@ export function fetchSandboxProfile(name: string): Promise<SandboxProfile> {
 }
 
 /**
- * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2).
+ * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2) —
+ * plus its `env` map (#468, ADR-0031 §8), which is not a diff at all.
  * Upsert, because the caller cannot know whether `full` already has a row, and editing it
  * IS what materialises one. Returns the recomputed view so the editor needs no refetch.
+ *
+ * Every field is a FULL replacement, `env` included: omitting a variable is how you remove
+ * it. So every caller passes the profile's current `env` alongside whatever it is changing —
+ * which is why the editor threads it through one `write` helper rather than per-control.
  */
 export function saveSandboxProfile(
   name: string,
-  diff: { disabled: string[]; extras: string[] },
+  diff: { disabled: string[]; extras: string[]; env: Record<string, string> },
 ): Promise<SandboxProfile> {
   return request<SandboxProfile>(
     "PUT",

@@ -25,6 +25,7 @@
 //!   `append_event` chokepoint) and again at `cleanup_run` (via [`cleanup`],
 //!   before `teardown`). session-death detection stays transcript-independent.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -48,6 +49,11 @@ pub(crate) struct SandboxContext {
     /// the boundary. `None` for `off`. `Some(vec![])` is a legitimate resolution — it
     /// is `minimal`.
     pub(crate) entries: Option<Vec<String>>,
+    /// The profile's env as **frozen at creation** (#468, ADR-0031 §8), resolved at the
+    /// boundary by [`frozen_env`]. Empty for `off` and for every profile that declares
+    /// none — an empty map and an absent payload key mean the same container, which is why
+    /// this is a plain `BTreeMap` and not the `Option` that `entries` needs.
+    pub(crate) env: BTreeMap<String, String>,
     /// Effective repo root — bind-mounted rw at its host path. One mount covers
     /// the repo + every node sub-worktree under `.pdo/runs/` + `.pdo/prompts`.
     pub(crate) repo_root: PathBuf,
@@ -131,6 +137,34 @@ async fn frozen_entries(
     Ok(resolved.resolved.entries)
 }
 
+/// Resolve the env a sandboxed Run must pose at `docker create`, from its **frozen**
+/// projection (#468, ADR-0031 §8). Pure — no DB, unlike [`frozen_entries`].
+///
+/// | payload | behaviour | why |
+/// |---|---|---|
+/// | `sandbox_env` present and readable | **verbatim** | the freeze. A profile edited (or deleted) since is not an error — surviving that is the point |
+/// | absent | **empty** | a pre-#468 daemon could pose no profile env at all, so absence and emptiness describe the same container. Reading the live profile here would *add* variables to a Run in flight — the exact retroactivity §6 forbids |
+/// | present but unreadable | **hard error** | undecidable; posing "no env" instead would start the container without the variables its MCP servers need and look like a plugin bug |
+///
+/// The `frozen_entries` twin has a fourth row — re-resolving a *virtual default* whose list
+/// is absent — and this one deliberately has not. There, the alternative was `RunFailed` on
+/// a perfectly resolvable Run; here, "no env" is not a guess, it is what the Run actually
+/// ran with.
+///
+/// The error message names the raw value, like `frozen_entries` does: this arm can only fire
+/// on a payload that is not a map of strings, i.e. one that cannot be carrying the user's
+/// values in the first place.
+fn frozen_env(run_state: &RunState) -> Result<BTreeMap<String, String>> {
+    if let Some(raw) = &run_state.sandbox_env_raw_error {
+        anyhow::bail!(
+            "run {} froze an unreadable sandbox env ({raw}); refusing to start a container \
+             with a different environment than the Run's nodes already saw",
+            run_state.run_id
+        );
+    }
+    Ok(run_state.sandbox_env.clone().unwrap_or_default())
+}
+
 /// Resolve a [`SandboxContext`] from the daemon state + a projected Run. The one
 /// edge function that reads `AppState` / the environment; the core is pure values.
 ///
@@ -173,6 +207,13 @@ pub(crate) async fn context_from_state(
         None => None,
         Some(name) => Some(frozen_entries(&state.db, run_state, name).await?),
     };
+    // #468: the frozen env, on the same boundary and with the same "loud on unreadable"
+    // rule. `off` never reaches it — an empty map is what `ensure_ready` would ignore anyway.
+    let env = if entries.is_some() {
+        frozen_env(run_state)?
+    } else {
+        BTreeMap::new()
+    };
     Ok(SandboxContext {
         docker_bin: docker_bin(state),
         run_id: run_state.run_id.clone(),
@@ -180,6 +221,7 @@ pub(crate) async fn context_from_state(
         // off-ness and takes a `bool`.
         mode: run_state.sandbox.clone(),
         entries,
+        env,
         repo_root,
         run_worktree,
         daemon_port: state.port,
@@ -317,6 +359,21 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
             entries.len(),
             entries.join(", ")
         );
+        // #468: the env gets the SAME once-per-staging visibility and a DIFFERENT rule —
+        // the **names**, never the values. The line above lists staging entries in clear
+        // because a `$HOME`-relative path is not a secret; an env value routinely is (a
+        // client endpoint, a proxy credential, an API token someone put here despite the
+        // UI saying this is not a secret store). The systemd journal outlives the Run, so
+        // a leak there is an incident that cannot be undone by deleting the profile.
+        // `env_names` is a named function precisely so that rule has a unit test.
+        if !ctx.env.is_empty() {
+            info!(
+                "sandbox: run {} carries {} profile env var(s) (names only: {})",
+                ctx.run_id,
+                ctx.env.len(),
+                crate::sandbox_profile::env_names(&ctx.env)
+            );
+        }
         // `Some(repo_root)` unconditionally: the `off` arm of the old match was DEAD —
         // the `let Some(entries) = … else { return }` above has already excluded it.
         sandbox_staging::prepare(
@@ -363,6 +420,10 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         gid: ctx.gid,
         daemon_port: ctx.daemon_port,
         extra_mounts: &extra,
+        // #468: the FROZEN env. `ensure_running` only consults the spec on its `Absent`
+        // arm — `docker start` never re-evaluates a pre-existing container's env, any more
+        // than its mounts. That is exactly the freeze of ADR-0031 §6/§8, guaranteed twice.
+        env: &ctx.env,
     };
     sandbox_container::ensure_running(&ctx.docker_bin, &ctx.run_id, &spec)
         .context("failed to ensure the sandbox container is running")?;
@@ -449,11 +510,39 @@ mod tests {
         (bin.to_str().unwrap().to_string(), log)
     }
 
+    /// Like [`write_fake_docker`] but `container inspect` reports **absent**, so
+    /// `ensure_running` reaches `docker create` — which is the only place the env `-e` are
+    /// observable (#468). The default fake answers `true` (up) and would skip the create.
+    fn write_fake_docker_absent_container(dir: &Path) -> (String, PathBuf) {
+        let bin = dir.join("fake-docker-absent");
+        let log = dir.join("argv-absent.log");
+        let script = format!(
+            "#!/usr/bin/env bash\n\
+             printf '%s\\n' \"$@\" >> {log}\n\
+             case \"$1\" in\n\
+             image) exit 0 ;;\n\
+             container) printf 'Error: No such container' >&2; exit 1 ;;\n\
+             *) exit 0 ;;\n\
+             esac\n",
+            log = q(&log.display().to_string()),
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (bin.to_str().unwrap().to_string(), log)
+    }
+
     fn log_lines(log: &Path) -> Vec<String> {
         std::fs::read_to_string(log)
             .unwrap_or_default()
             .lines()
             .map(str::to_string)
+            .collect()
+    }
+
+    fn env_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
 
@@ -523,6 +612,17 @@ mod tests {
         mode: SandboxMode,
         entries: Option<Vec<String>>,
     ) -> SandboxContext {
+        test_ctx_with(tmp, docker_bin, mode, entries, BTreeMap::new())
+    }
+
+    /// Like [`test_ctx_with_entries`] but with an explicit frozen env too (#468).
+    fn test_ctx_with(
+        tmp: &Path,
+        docker_bin: String,
+        mode: SandboxMode,
+        entries: Option<Vec<String>>,
+        env: BTreeMap<String, String>,
+    ) -> SandboxContext {
         let home = tmp.join("home");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
@@ -532,6 +632,7 @@ mod tests {
             run_id: "r1".to_string(),
             mode,
             entries,
+            env,
             repo_root: tmp.join("repo"),
             run_worktree: tmp.join("repo/.pdo/runs/r1/worktree"),
             daemon_port: 6172,
@@ -706,6 +807,94 @@ mod tests {
             logged,
             "targeted kill must exec with the session marker; log: {:?}",
             log_lines(&log)
+        );
+    }
+
+    // --- #468: the frozen profile env ------------------------------------------
+
+    fn run_state_with_env(env: Option<BTreeMap<String, String>>) -> RunState {
+        let mut rs = RunState::new("r1".to_string(), "p".to_string());
+        rs.sandbox = full();
+        rs.sandbox_entries = Some(Vec::new());
+        rs.sandbox_env = env;
+        rs
+    }
+
+    /// Row 1 of the decision table: a frozen env is used **verbatim**, whatever the store
+    /// now says. That is what makes an edit non-retroactive.
+    #[test]
+    fn frozen_env_is_used_verbatim() {
+        let rs = run_state_with_env(Some(env_map(&[("FOO", "bar")])));
+        assert_eq!(frozen_env(&rs).unwrap(), env_map(&[("FOO", "bar")]));
+    }
+
+    /// Row 2, and the asymmetry with [`frozen_entries`]: an ABSENT env is not a legacy arm
+    /// to re-resolve, it is "no env". Re-resolving would add variables to a Run in flight.
+    #[test]
+    fn an_absent_frozen_env_is_empty_not_re_resolved() {
+        assert!(frozen_env(&run_state_with_env(None)).unwrap().is_empty());
+        // An explicitly frozen empty map is the same answer — by construction.
+        assert!(frozen_env(&run_state_with_env(Some(BTreeMap::new())))
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Row 3: unreadable is a HARD error naming the raw value, never a silent "no env" —
+    /// which would start the container without the variables its MCP servers need and look
+    /// like a plugin bug.
+    #[test]
+    fn an_unreadable_frozen_env_fails_loud() {
+        let mut rs = run_state_with_env(None);
+        rs.sandbox_env_raw_error = Some("42".to_string());
+        let err = frozen_env(&rs).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("42"),
+            "the reason must name the raw value: {msg}"
+        );
+        assert!(msg.contains("unreadable"), "{msg}");
+    }
+
+    /// AC1 of #468, both halves. A profile WITH env poses `-e FOO=bar` at `docker create`;
+    /// a profile WITHOUT env does not pose it — the negative control is mandatory, because
+    /// asserting only the positive side would pass just as well against a fake that echoed
+    /// every argument it was given.
+    #[test]
+    fn ensure_ready_poses_the_frozen_env_at_create_and_only_then() {
+        // (a) with env → the `-e FOO=bar` reaches `docker create`.
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, log) = write_fake_docker_absent_container(tmp.path());
+        let ctx = test_ctx_with(
+            tmp.path(),
+            docker,
+            minimal(),
+            Some(Vec::new()),
+            env_map(&[("FOO", "bar")]),
+        );
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+        let lines = log_lines(&log);
+        assert!(lines.contains(&"create".to_string()), "absent → create");
+        assert!(
+            lines.contains(&"FOO=bar".to_string()),
+            "the frozen env must be posed at create; log: {lines:?}"
+        );
+
+        // (b) NEGATIVE CONTROL: same harness, no env → no `FOO=` anywhere.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (docker2, log2) = write_fake_docker_absent_container(tmp2.path());
+        let ctx2 = test_ctx_with(
+            tmp2.path(),
+            docker2,
+            minimal(),
+            Some(Vec::new()),
+            BTreeMap::new(),
+        );
+        retry_etxtbsy(|| ensure_ready(&ctx2)).unwrap();
+        let lines2 = log_lines(&log2);
+        assert!(lines2.contains(&"create".to_string()), "absent → create");
+        assert!(
+            !lines2.iter().any(|l| l.starts_with("FOO=")),
+            "a profile without env must pose nothing; log: {lines2:?}"
         );
     }
 

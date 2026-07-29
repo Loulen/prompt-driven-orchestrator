@@ -609,6 +609,33 @@ pub struct RunState {
     /// launched saw, which is exactly what the freeze protects against.
     #[serde(skip)]
     pub sandbox_entries_raw_error: Option<String>,
+    /// The staging profile's **env, frozen at creation** (#468, ADR-0031 §8). Written to
+    /// `RunStarted` as the sibling key `sandbox_env` — but, unlike `sandbox_entries`, only
+    /// when it is **non-empty**, and that asymmetry is deliberate:
+    ///
+    /// - `sandbox_entries` had to be written unconditionally so that "a `sandbox` with no
+    ///   entries" could only mean "pre-#432 daemon", which is what makes its replay table
+    ///   decidable. An empty entry list is a legitimate resolution (`minimal`), so absence
+    ///   and emptiness had to be distinguishable.
+    /// - For the env there is nothing to distinguish. A pre-#468 daemon could not pose any
+    ///   profile env at all, so an absent key and an empty map describe the **same
+    ///   container**. Writing `{}` on every sandboxed Run would change the payload shape for
+    ///   every existing profile in exchange for no new information.
+    ///
+    /// The `Option` is therefore about the *wire*, not the decision: `None` keeps historical
+    /// run JSON byte-identical. Both `None` and `Some(empty)` mean "no profile env".
+    ///
+    /// The values are on the wire, like they are in SQLite and in `docker inspect`: the
+    /// sandbox is not a security boundary and this is not a secret store (ADR-0031 §8). What
+    /// is forbidden is the daemon **log** — see `sandbox_profile::env_names`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_env: Option<std::collections::BTreeMap<String, String>>,
+    /// The raw `sandbox_env` payload value when the key was **present but unreadable**
+    /// (#468). Same role, and same `skip`, as [`RunState::sandbox_entries_raw_error`]: the
+    /// sandbox prep fails LOUD with the offending value rather than silently posing a
+    /// different environment than the nodes that already launched saw.
+    #[serde(skip)]
+    pub sandbox_env_raw_error: Option<String>,
     /// One-time image-prep visibility for a sandboxed Run (#410). Additive: `None`
     /// for `off`/historical runs; `pending` while the image is pulled/built at first
     /// use; `ready` once the container is about to run. `status` is never touched —
@@ -673,6 +700,8 @@ impl RunState {
             sandbox: SandboxMode::Off,
             sandbox_entries: None,
             sandbox_entries_raw_error: None,
+            sandbox_env: None,
+            sandbox_env_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
             triggered_by: None,
@@ -1028,6 +1057,34 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                                 "run_started carries an unreadable `sandbox_entries` value \
                                  ({raw}); the sandbox prep will fail this Run loud rather \
                                  than re-resolve a different list."
+                            );
+                        }
+                    },
+                }
+                // #468 (ADR-0031 §8): the sibling FROZEN env. Absent means "no profile
+                // env" — indistinguishable from an empty map by construction, so unlike
+                // `sandbox_entries` there is no legacy arm to re-resolve. A present-but-
+                // unreadable value is kept verbatim so the prep can name it.
+                //
+                // The `warn!` names the KEY and the shape, never the values: a client token
+                // in the systemd journal is an incident, and the journal outlives the Run.
+                // `raw` here is the whole malformed value, which is why the arm below is the
+                // one exception — it fires only on a payload that is NOT a string map, i.e.
+                // one that cannot be carrying the user's values in the first place.
+                match payload.get("sandbox_env") {
+                    None => {}
+                    Some(raw) => match serde_json::from_value::<
+                        std::collections::BTreeMap<String, String>,
+                    >(raw.clone())
+                    {
+                        Ok(env) => state.sandbox_env = Some(env),
+                        Err(_) => {
+                            state.sandbox_env_raw_error = Some(raw.to_string());
+                            warn!(
+                                "run_started carries an unreadable `sandbox_env` value \
+                                 (not a map of strings); the sandbox prep will fail this Run \
+                                 loud rather than pose a different environment than the \
+                                 nodes that already launched saw."
                             );
                         }
                     },
@@ -2118,6 +2175,91 @@ mod tests {
         assert!(value.get("sandbox_entries_raw_error").is_none());
         // …and an absent list is skipped entirely (back-compat of the `off` shape).
         assert!(value.get("sandbox_entries").is_none());
+    }
+
+    // -- #468: the FROZEN profile env -----------------------------------------
+
+    #[test]
+    fn a_frozen_env_projects_verbatim() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "chrome",
+                "sandbox_entries": [".claude/skills"],
+                "sandbox_env": { "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium", "FOO": "bar" },
+            }),
+        )];
+        let state = project(&events).unwrap();
+        let env = state.sandbox_env.expect("the frozen env must project");
+        assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(
+            env.get("PUPPETEER_EXECUTABLE_PATH").map(String::as_str),
+            Some("/usr/bin/chromium")
+        );
+        assert_eq!(state.sandbox_env_raw_error, None);
+    }
+
+    /// The asymmetry with `sandbox_entries`, pinned: an absent `sandbox_env` is NOT a
+    /// legacy arm to re-resolve. A pre-#468 daemon could pose no profile env at all, so
+    /// absence and emptiness describe the same container — and the prep must treat both as
+    /// "no env" rather than reading the live profile, which would violate the freeze by
+    /// ADDING variables to a Run in flight.
+    #[test]
+    fn an_absent_frozen_env_projects_none_and_means_empty() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "full",
+                "sandbox_entries": [".claude/skills"],
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox_env, None);
+        assert_eq!(state.sandbox_env_raw_error, None);
+    }
+
+    /// A present-but-unreadable env keeps its RAW value so the prep can fail loud. The
+    /// alternative — degrading to "no env" — would silently start the container without the
+    /// `PUPPETEER_EXECUTABLE_PATH` its MCP servers need, and look like a plugin bug.
+    #[test]
+    fn an_unreadable_frozen_env_is_kept_raw_for_the_failure_reason() {
+        for bad in [
+            serde_json::json!(42),
+            serde_json::json!([1, 2]),
+            serde_json::json!({ "FOO": 3 }),
+        ] {
+            let events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "p",
+                    "sandbox": "full",
+                    "sandbox_entries": [],
+                    "sandbox_env": bad,
+                }),
+            )];
+            let state = project(&events).unwrap();
+            assert_eq!(state.sandbox_env, None, "{bad} must not project a map");
+            assert!(
+                state.sandbox_env_raw_error.is_some(),
+                "{bad} must be kept raw for the failure reason"
+            );
+        }
+    }
+
+    /// The raw-error twin is internal, and an absent env is skipped on the wire — a
+    /// historical Run's JSON is byte-identical to before #468.
+    #[test]
+    fn the_env_raw_error_is_never_serialised() {
+        let mut state = RunState::new("r1".into(), "p".into());
+        state.sandbox_env_raw_error = Some("42".into());
+        let value = serde_json::to_value(&state).unwrap();
+        assert!(value.get("sandbox_env_raw_error").is_none());
+        assert!(value.get("sandbox_env").is_none());
     }
 
     // -- Slice E (#410): sandbox-prep projection ------------------------------

@@ -39,6 +39,12 @@
 //!   `/etc/passwd`+`/etc/group` (générer les lignes au `prepare`-time, bind-monter — pattern PDO)
 //!   est **différée à une issue de suivi** (cf. `assets/sandbox/Dockerfile:33`). NE PAS éditer le
 //!   Dockerfile ici : il est content-hashé (#405), toute édition périme l'image buildée.
+//! - **L'env par profil de staging est posé au CREATE (#468).** Ce sont des constantes de Run,
+//!   pas des variables de nœud : le chemin `docker exec` a sa propre liste par-nœud
+//!   ([`exec_prefix_with_env`]) et n'est pas concerné. Ce module possède
+//!   [`RUN_CONSTANT_ENV_KEYS`] — la liste des clés qu'un profil ne peut pas redéfinir — parce
+//!   qu'il possède les `-e` qui les posent ; `sandbox_profile` la CONSOMME pour rejeter le PUT
+//!   (même discipline anti-dérive que [`daemon_url`], cf. #447).
 //! - **`PDO_DAEMON_URL` réécrit au CREATE, jamais re-passé à l'exec.** Côté hôte `wrap_with_env`
 //!   exporte `localhost:<port>` ; dans le conteneur `localhost` = le conteneur. Le create pose
 //!   donc `-e PDO_DAEMON_URL=http://host.docker.internal:<port>` (couplé à `--add-host`), et
@@ -52,6 +58,7 @@
 
 #![allow(dead_code)] // Tracer bullet : consommé/câblé par #407, non câblé dans cette slice.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,6 +69,33 @@ use crate::sandbox_image::DOCKER_NOT_FOUND_MSG;
 /// Env var portée par CHAQUE `docker exec`, héritée par `claude` et toute sa descendance ;
 /// clé du kill ciblé (scan `/proc/*/environ`). N'est PAS un label Docker.
 pub(crate) const SESSION_MARKER_ENV: &str = "PDO_SBX_SESSION";
+
+/// Knob Claude Code posé au create, **délibérément absent** de
+/// [`RUN_CONSTANT_ENV_KEYS`] : un profil qui veut ré-autoriser le trafic non essentiel a
+/// une raison légitime de le faire, et la fusion de [`create_args`] remplace alors la
+/// valeur **en place** (un seul `-e`, à la même position) au lieu d'en ajouter un second.
+const CLAUDE_TRAFFIC_ENV: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+
+/// Les trois vars run-constantes qu'un profil de staging ne peut **pas** redéfinir (#468).
+///
+/// Possédées ici parce que c'est [`create_args`] qui les pose : le littéral n'existe donc
+/// qu'à un seul endroit, et `sandbox_profile::validate_env_key` s'y adosse pour rendre un
+/// **400 nommant la clé** au PUT (jamais un skip silencieux). Le filtre de [`create_args`]
+/// est la ceinture-bretelles du même invariant, pas le garde-fou principal — exactement le
+/// rôle que joue déjà le saut de `PDO_DAEMON_URL` dans [`exec_prefix_with_env`].
+///
+/// Pourquoi ces trois-là, et pas les quatre `-e` du create :
+/// - `HOME` : les mounts `.claude` / `.claude.json` sont calculés depuis lui. Un `HOME`
+///   écrasé casserait les deux d'un coup — le conteneur chercherait sa config là où rien
+///   n'est monté, et l'agent démarrerait sans credentials ni CLAUDE.md.
+/// - `PDO_DAEMON_URL` : posé vers la gateway `host.docker.internal` ; une autre valeur
+///   coupe le plan de contrôle (`pdo complete` depuis le conteneur).
+/// - `PDO_RUN_ID` : identité du Run, lue par la CLI `pdo` montée dans le conteneur.
+///
+/// La relation « toute clé réservée est bien posée par le create » est prouvée par un test
+/// dans ce module. Elle est **unidirectionnelle** : [`CLAUDE_TRAFFIC_ENV`] est posé sans
+/// être réservé, et c'est voulu.
+pub(crate) const RUN_CONSTANT_ENV_KEYS: &[&str] = &["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"];
 
 // -- résolveur d'URL du daemon (#447) ----------------------------------------
 
@@ -137,6 +171,21 @@ pub(crate) struct ContainerSpec<'a> {
     /// **réévalue jamais** les mounts. Cohérent avec le gel d'ADR-0031 §6 — un profil
     /// édité en cours de Run ne remonte rien — mais jusqu'ici non dit.
     pub extra_mounts: &'a [crate::sandbox_staging::StagedMount],
+    /// Env du profil de staging (#468, ADR-0031 §8) — la liste GELÉE à la création du Run,
+    /// résolue au bord par `sandbox_run::frozen_env`. Queue **variable** comme
+    /// [`ContainerSpec::extra_mounts`] : vide ⇒ argv byte-identique à #432 (propriété que
+    /// le golden test pin explicitement).
+    ///
+    /// `BTreeMap` et non un slice de paires : une clé ne peut porter qu'UNE valeur (un
+    /// `-e K=v1 -e K=v2` serait résolu différemment selon la couche qui lit `environ`), et
+    /// l'ordre des clés est déterministe sans que le caller ait à trier — même raison que
+    /// le tri de `sandbox_staging::extra_mounts`, qui rend le golden lisible.
+    ///
+    /// Mêmes remarques de gel que les mounts : `docker start` ne réévalue pas l'env d'un
+    /// conteneur pré-existant, donc éditer l'env d'un profil pendant un Run vivant ne
+    /// change rien pour ses nœuds suivants — c'est l'AC3 de #468, et c'est garanti deux
+    /// fois (par le gel du payload ET par Docker).
+    pub env: &'a BTreeMap<String, String>,
 }
 
 // -- builders purs (golden-testés) -------------------------------------------
@@ -147,16 +196,65 @@ pub(crate) fn container_name(run_id: &str) -> String {
     format!("pdo-sbx-{run_id}")
 }
 
+/// Env posé au `docker create`, **fusionné** : les 4 vars run-constantes d'abord, puis
+/// l'env du profil de staging (#468). Exactement UN couple par clé.
+///
+/// La fusion n'est pas de la coquetterie. Deux `-e` pour la même clé produisent deux
+/// entrées dans `Config.Env`, et « laquelle gagne » dépend de la couche qui lit
+/// l'environnement (`execve` conserve le tableau tel quel, `getenv` rend la première
+/// occurrence, un shell la dernière). Un invariant d'isolation ne peut pas dépendre de ça :
+/// on ne produit donc jamais de doublon.
+///
+/// Mesuré au passage sur Docker 29.2.1 : **l'ordre de `Config.Env` n'est pas celui de
+/// l'argv** (un `-e FOO=bar` posé en 5e position ressort en 1re). Raison de plus pour ne
+/// jamais raisonner en « le dernier gagne » — l'ordre n'est pas à nous.
+///
+/// Deux règles, et elles sont différentes exprès :
+/// - une clé de [`RUN_CONSTANT_ENV_KEYS`] est **ignorée** (ceinture-bretelles : le PUT
+///   l'a déjà refusée avec un 400 nommant la clé) ;
+/// - [`CLAUDE_TRAFFIC_ENV`] est **remplacé en place** — même position dans l'argv, donc le
+///   golden d'un profil qui le surcharge reste lisible.
+///
+/// Les clés inconnues sont ajoutées après le bloc fixe, dans l'ordre des clés du `BTreeMap`.
+fn create_env(run_id: &str, spec: &ContainerSpec) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = vec![
+        ("HOME".to_string(), spec.host_home.display().to_string()),
+        (
+            // #447 : la MÊME résolution que celle du texte des préambules. L'env et la
+            // prose ne peuvent plus diverger.
+            "PDO_DAEMON_URL".to_string(),
+            daemon_url(spec.daemon_port, true),
+        ),
+        ("PDO_RUN_ID".to_string(), run_id.to_string()),
+        (CLAUDE_TRAFFIC_ENV.to_string(), "1".to_string()),
+    ];
+    for (key, value) in spec.env {
+        if RUN_CONSTANT_ENV_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        match env.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = value.clone(),
+            None => env.push((key.clone(), value.clone())),
+        }
+    }
+    env
+}
+
 /// Argv `docker create` (après le binaire `docker`). Ordre canonique FIGÉ par le golden test :
-/// `--init`, `--name`, `--user` numérique, `--add-host`, `-w`, les 4 `-e`, les 4 `-v` **fixes**,
-/// puis la **queue variable** des mounts d'exception `$HOME` (#432), l'image, et le trailing
+/// `--init`, `--name`, `--user` numérique, `--add-host`, `-w`, les `-e` fusionnés
+/// ([`create_env`] : 4 fixes + la queue du profil, #468), les 4 `-v` **fixes**, puis la
+/// **queue variable** des mounts d'exception `$HOME` (#432), l'image, et le trailing
 /// `sleep infinity` (le conteneur dort ; les tails entrent par `docker exec`).
 ///
-/// La queue est **entre** les `-v` fixes et l'image — position forcée par Docker : après
-/// l'image, tout argument devient la commande. Elle est triée par chemin relatif
+/// La queue de mounts est **entre** les `-v` fixes et l'image — position forcée par Docker :
+/// après l'image, tout argument devient la commande. Elle est triée par chemin relatif
 /// ([`crate::sandbox_staging::extra_mounts`]) : un ordre déterministe rend le golden
 /// lisible, et le tri est ce qui garde le collapse des imbriqués linéaire. Docker lui-même
 /// s'en moque (il applique les mounts par profondeur de destination, pas par ordre d'argv).
+///
+/// **Deux queues variables, deux goldens vides.** Un profil sans env ET sans entrée
+/// d'exception `$HOME` rend un argv byte-identique à #406 : c'est ce qui garantit qu'aucune
+/// des deux slices n'a touché les Runs qui ne les utilisent pas.
 pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
     let mut args = vec![
         "create".to_string(),
@@ -175,17 +273,13 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         // -w au create (cosmétique, satisfait l'AC ; load-bearing = par-exec).
         "-w".to_string(),
         spec.run_worktree.display().to_string(),
-        // Vars RUN-CONSTANTES, posées une fois au create.
-        "-e".to_string(),
-        format!("HOME={}", spec.host_home.display()),
-        "-e".to_string(),
-        // #447 : la MÊME résolution que celle du texte des préambules. L'env et la
-        // prose ne peuvent plus diverger.
-        format!("PDO_DAEMON_URL={}", daemon_url(spec.daemon_port, true)),
-        "-e".to_string(),
-        format!("PDO_RUN_ID={run_id}"),
-        "-e".to_string(),
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1".to_string(),
+    ];
+    // Vars RUN-CONSTANTES + queue d'env du profil, posées une fois au create.
+    for (key, value) in create_env(run_id, spec) {
+        args.push("-e".to_string());
+        args.push(format!("{key}={value}"));
+    }
+    args.extend([
         // Identity mounts. UN mount repo couvre repo + worktrees + prompts au MÊME chemin absolu
         // (invariant load-bearing D3 : le dirname encodé de merge_back doit matcher).
         "-v".to_string(),
@@ -204,7 +298,7 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         ),
         "-v".to_string(),
         format!("{}:/usr/local/bin/pdo:ro", spec.pdo_bin.display()),
-    ];
+    ]);
     // Queue variable (#432) : un `-v <source>:<target>:rw` par entrée d'exception
     // `$HOME` réellement stagée. Vide ⇒ l'argv reste byte-identique à #406.
     for mount in spec.extra_mounts {
@@ -681,6 +775,8 @@ mod tests {
         /// Queue variable (#432). Vide par défaut — c'est ce qui garde l'argv
         /// byte-identique à #406 pour un profil sans entrée d'exception `$HOME`.
         extras: Vec<crate::sandbox_staging::StagedMount>,
+        /// Queue variable (#468). Vide par défaut, pour la même raison.
+        env: BTreeMap<String, String>,
     }
 
     impl Fixtures {
@@ -694,6 +790,7 @@ mod tests {
                 host_home: PathBuf::from("/home/u"),
                 image: "pdo-sandbox:h-abc123".to_string(),
                 extras: Vec::new(),
+                env: BTreeMap::new(),
             }
         }
 
@@ -704,6 +801,14 @@ mod tests {
                     source: PathBuf::from(format!("/sb/r1/home/{rel}")),
                     target: PathBuf::from(format!("/home/u/{rel}")),
                 })
+                .collect();
+            self
+        }
+
+        fn with_env(mut self, pairs: &[(&str, &str)]) -> Self {
+            self.env = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
             self
         }
@@ -721,6 +826,7 @@ mod tests {
                 gid: 1000,
                 daemon_port: 6172,
                 extra_mounts: &self.extras,
+                env: &self.env,
             }
         }
     }
@@ -803,15 +909,20 @@ mod tests {
         );
     }
 
-    // -- 1. create_args golden (AC#1, éclaté en trois en #432) ----------------
+    // -- 1. create_args golden (AC#1, éclaté en trois en #432, en cinq en #468) ------
     //
     // « Accommoder la queue variable, pas la figer » : le préfixe FIXE est gravé UNE
-    // fois, la queue est prouvée séparément, et un troisième test pin la propriété
+    // fois, chaque queue est prouvée séparément, et un test pin la propriété
     // structurelle (les extras ne peuvent QUE grossir la queue). Le filtre de dédup se
     // teste là où il vit — `sandbox_staging::extra_mounts` — pas à travers `create_args`.
+    //
+    // #468 coupe le préfixe en DEUX morceaux (`…_head` = flags + les 4 `-e` fixes,
+    // `…_mounts` = les 4 `-v` fixes) parce qu'une deuxième queue variable s'insère entre
+    // les deux. Un profil sans env recolle les deux et retrouve l'argv de #432, ce que
+    // `create_argv_fixed` (conservé, reconstitué) exprime en une ligne.
 
-    /// L'argv jusqu'aux 4 `-v` fixes inclus. FIGÉ ICI, et nulle part ailleurs.
-    fn create_argv_fixed() -> Vec<String> {
+    /// L'argv jusqu'aux 4 `-e` run-constants inclus. FIGÉ ICI, et nulle part ailleurs.
+    fn create_argv_head() -> Vec<String> {
         strings(&[
             "create",
             "--init",
@@ -831,6 +942,12 @@ mod tests {
             "PDO_RUN_ID=r1",
             "-e",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        ])
+    }
+
+    /// Les 4 `-v` fixes (identity mounts).
+    fn create_argv_mounts() -> Vec<String> {
+        strings(&[
             "-v",
             "/repo:/repo:rw",
             "-v",
@@ -840,6 +957,13 @@ mod tests {
             "-v",
             "/host/bin/pdo:/usr/local/bin/pdo:ro",
         ])
+    }
+
+    /// Le préfixe fixe d'un profil **sans env** : head + mounts, sans rien entre les deux.
+    fn create_argv_fixed() -> Vec<String> {
+        let mut v = create_argv_head();
+        v.extend(create_argv_mounts());
+        v
     }
 
     /// L'image + la commande dormante.
@@ -897,6 +1021,129 @@ mod tests {
             .unwrap();
         assert_eq!(&one[image_at..], &create_argv_suffix()[..]);
         assert_eq!(one[image_at - 2], "-v");
+    }
+
+    // -- 1b. create_args × env du profil (#468) -------------------------------
+
+    /// AC#5 de #468, dit deux fois : pas d'env ⇒ l'argv de #432, au byte.
+    /// `create_args_golden_no_extras` le prouve déjà pour la queue de mounts ; celui-ci
+    /// nomme la propriété côté env, pour qu'un futur « et si on posait toujours un `-e`
+    /// vide ? » tombe sur un test qui dit non.
+    #[test]
+    fn create_args_without_env_is_byte_identical() {
+        let fx = Fixtures::sample().with_env(&[]);
+        let mut expected = create_argv_fixed();
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// AC#1 : `env: {FOO: bar}` ⇒ un `-e FOO=bar` au create. La queue s'insère entre les
+    /// 4 `-e` fixes et les `-v`, et les clés sortent triées (ordre du `BTreeMap`).
+    #[test]
+    fn create_args_golden_with_env() {
+        let fx = Fixtures::sample().with_env(&[
+            ("PUPPETEER_EXECUTABLE_PATH", "/usr/bin/chromium"),
+            ("FOO", "bar"),
+        ]);
+        let mut expected = create_argv_head();
+        expected.extend(strings(&[
+            "-e",
+            "FOO=bar",
+            "-e",
+            "PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium",
+        ]));
+        expected.extend(create_argv_mounts());
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// Les deux queues variables sont INDÉPENDANTES et gardent chacune sa place : env
+    /// avant les `-v` fixes, mounts après. Une inversion casserait le golden de #432 sans
+    /// que rien d'autre ne le signale.
+    #[test]
+    fn env_and_mount_tails_keep_their_own_slots() {
+        let fx = Fixtures::sample()
+            .with_env(&[("FOO", "bar")])
+            .with_extras(&[".gitconfig"]);
+        let mut expected = create_argv_head();
+        expected.extend(strings(&["-e", "FOO=bar"]));
+        expected.extend(create_argv_mounts());
+        expected.extend(strings(&[
+            "-v",
+            "/sb/r1/home/.gitconfig:/home/u/.gitconfig:rw",
+        ]));
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// Ceinture-bretelles : même si une clé réservée arrivait jusqu'ici (payload gelé
+    /// bricolé à la main, régression du validateur du PUT), le create ne la re-pose PAS.
+    /// Un `HOME` écrasé casserait les deux mounts `.claude` / `.claude.json` d'un coup.
+    #[test]
+    fn create_args_never_lets_a_profile_clobber_a_run_constant() {
+        let fx = Fixtures::sample().with_env(&[
+            ("HOME", "/tmp/evil"),
+            ("PDO_DAEMON_URL", "http://localhost:1"),
+            ("PDO_RUN_ID", "not-r1"),
+            ("SAFE", "kept"),
+        ]);
+        let args = create_args("r1", &fx.spec());
+        // Le bloc fixe est intact, et la seule clé non réservée a survécu.
+        let mut expected = create_argv_head();
+        expected.extend(strings(&["-e", "SAFE=kept"]));
+        expected.extend(create_argv_mounts());
+        expected.extend(create_argv_suffix());
+        assert_eq!(args, expected);
+        // Aucune clé run-constante n'apparaît deux fois : « laquelle gagne » ne doit
+        // jamais dépendre de la couche qui lit `environ`.
+        for key in RUN_CONSTANT_ENV_KEYS {
+            let posed = args
+                .iter()
+                .filter(|a| a.starts_with(&format!("{key}=")))
+                .count();
+            assert_eq!(
+                posed, 1,
+                "`{key}` doit être posé exactement une fois: {args:?}"
+            );
+        }
+    }
+
+    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` n'est PAS réservé : un profil peut le
+    /// surcharger, et la valeur est remplacée **en place** (un seul `-e`, position
+    /// inchangée) — pas un second `-e` dont l'effet dépendrait du lecteur d'`environ`.
+    #[test]
+    fn a_profile_may_override_the_claude_traffic_knob_in_place() {
+        let fx = Fixtures::sample().with_env(&[(CLAUDE_TRAFFIC_ENV, "0")]);
+        let args = create_args("r1", &fx.spec());
+        let mut expected = create_argv_head();
+        // Même longueur que le head par défaut : la valeur a été remplacée sur place.
+        let slot = expected.len() - 1;
+        expected[slot] = format!("{CLAUDE_TRAFFIC_ENV}=0");
+        expected.extend(create_argv_mounts());
+        expected.extend(create_argv_suffix());
+        assert_eq!(args, expected);
+        assert!(
+            !RUN_CONSTANT_ENV_KEYS.contains(&CLAUDE_TRAFFIC_ENV),
+            "le knob Claude Code est surchargeable par construction"
+        );
+    }
+
+    /// L'anti-dérive de #468, jumelle de `create_env_daemon_url_comes_from_the_shared_resolver` :
+    /// toute clé que `sandbox_profile` refuse est bien une clé que le create POSE. Si
+    /// quelqu'un retire un `-e` du create sans retirer la clé de la liste, le PUT
+    /// continuerait à refuser une clé que plus rien ne protège.
+    ///
+    /// Unidirectionnel exprès : [`CLAUDE_TRAFFIC_ENV`] est posé sans être réservé.
+    #[test]
+    fn every_reserved_key_is_actually_posed_by_the_create() {
+        let fx = Fixtures::sample();
+        let args = create_args("r1", &fx.spec());
+        for key in RUN_CONSTANT_ENV_KEYS {
+            assert!(
+                args.iter().any(|a| a.starts_with(&format!("{key}="))),
+                "`{key}` est réservé au PUT mais le create ne le pose pas: {args:?}"
+            );
+        }
     }
 
     // -- 2. exec_prefix golden (AC#1) ----------------------------------------

@@ -153,6 +153,23 @@ export interface SandboxProfile {
   inactive_disabled: string[];
   floor: SandboxFloorGuarantee[];
   sensitive_prefixes: string[];
+  /**
+   * Environment variables posed at `docker create` for every Run on this profile (#468,
+   * ADR-0031 §8). **Not a diff** — unlike `disabled`/`extras` there is no built-in default
+   * to fold against, so this map IS the effective env.
+   *
+   * Values are served in clear, on purpose: they already sit in clear in SQLite, in the
+   * Run's frozen `run_started` payload and in `docker inspect`. The sandbox is not a
+   * security boundary and the editor says so — masking them here would suggest PDO is
+   * protecting something it is not.
+   */
+  env: Record<string, string>;
+  /**
+   * The keys PDO poses itself and therefore refuses with a 400 naming the key (`HOME`,
+   * `PDO_DAEMON_URL`, `PDO_RUN_ID`). Server-owned so the editor never hard-codes a parallel
+   * list that would drift the day a fourth run-constant appears (#373).
+   */
+  reserved_env_keys: string[];
   updated_at: string | null;
 }
 

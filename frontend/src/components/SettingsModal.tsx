@@ -884,6 +884,11 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
   const [newName, setNewName] = useState("");
   const [pickerMode, setPickerMode] = useState<"file" | "dir" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<SandboxProfileReferents | null>(null);
+  // The pending env row. Two fields and no per-row edit mode: an existing variable is
+  // changed by removing it and adding it again, which keeps every PUT a full replacement
+  // (the daemon's contract) instead of a patch the client would have to compose.
+  const [envKey, setEnvKey] = useState("");
+  const [envValue, setEnvValue] = useState("");
 
   const load = useCallback(async (keep?: string | null) => {
     try {
@@ -910,9 +915,18 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
 
   const current = profiles?.find((p) => p.name === selected) ?? null;
 
-  /** Write a profile's diff, then refresh both this panel and the parent's settings. */
+  /**
+   * Write a profile's diff, then refresh both this panel and the parent's settings.
+   *
+   * Every `PUT` is a FULL replacement — `env` included — so each caller passes the fields it
+   * is not changing verbatim. Threading that through one helper is what keeps "toggle an
+   * entry" from quietly clearing the env.
+   */
   const write = useCallback(
-    async (name: string, diff: { disabled: string[]; extras: string[] }) => {
+    async (
+      name: string,
+      diff: { disabled: string[]; extras: string[]; env: Record<string, string> },
+    ) => {
       if (busy) return;
       setBusy(true);
       setError(null);
@@ -940,7 +954,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     const disabled = entry.enabled
       ? [...current.disabled, entry.path]
       : current.disabled.filter((d) => d !== entry.path);
-    void write(current.name, { disabled, extras: current.extras });
+    void write(current.name, { disabled, extras: current.extras, env: current.env });
   };
 
   const removeExtra = (path: string) => {
@@ -948,6 +962,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     void write(current.name, {
       disabled: current.disabled,
       extras: current.extras.filter((e) => e !== path),
+      env: current.env,
     });
   };
 
@@ -964,7 +979,46 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     void write(current.name, {
       disabled: current.disabled,
       extras: [...current.extras, rel],
+      env: current.env,
     });
+  };
+
+  /**
+   * Add (or replace) one environment variable (#468).
+   *
+   * The two refusals handled inline are the ones the user can see before a round-trip: a
+   * blank name, and a name PDO poses itself. `reserved_env_keys` comes from the daemon —
+   * hard-coding the three here would drift the day a fourth run-constant appears. Every
+   * other rule (the `[A-Za-z_][A-Za-z0-9_]*` grammar, multi-line values) is left to the
+   * daemon's 400, which this panel already surfaces verbatim: duplicating a grammar in two
+   * languages is exactly the drift #373 cost us.
+   */
+  const addEnv = () => {
+    if (!current) return;
+    const key = envKey.trim();
+    if (!key) return;
+    if (current.reserved_env_keys.includes(key)) {
+      setError(
+        `\`${key}\` is set by PDO for every sandboxed Run and cannot be overridden — the container's home, its daemon URL and its Run id all depend on it.`,
+      );
+      return;
+    }
+    setEnvKey("");
+    setEnvValue("");
+    void write(current.name, {
+      disabled: current.disabled,
+      extras: current.extras,
+      env: { ...current.env, [key]: envValue },
+    });
+  };
+
+  const removeEnv = (key: string) => {
+    if (!current) return;
+    // A full replacement, so "remove" is literally "PUT the map without that key".
+    const env = Object.fromEntries(
+      Object.entries(current.env).filter(([k]) => k !== key),
+    );
+    void write(current.name, { disabled: current.disabled, extras: current.extras, env });
   };
 
   const create = async () => {
@@ -975,7 +1029,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     try {
       // A blank diff: "materialise this profile exactly as the current default", which is
       // the starting point for unchecking something.
-      await saveSandboxProfile(name, { disabled: [], extras: [] });
+      await saveSandboxProfile(name, { disabled: [], extras: [], env: {} });
       setNewName("");
       setCreating(false);
       await load(name);
@@ -1288,6 +1342,113 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
                   are copied, not shared — but the container can read them.
                 </div>
               )}
+            </div>
+
+            {/* Environment (#468, ADR-0031 §8): posed as `-e KEY=value` at `docker create`,
+                which is often the ONLY handle on a plugin-provided MCP server whose
+                `.mcp.json` PDO does not control. */}
+            <div className="flex flex-col gap-1.5" data-testid="staging-profile-env">
+              <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+                Environment
+              </span>
+              {Object.entries(current.env).length === 0 ? (
+                <span
+                  className="text-fg-4"
+                  style={{ fontSize: "10.5px" }}
+                  data-testid="staging-profile-no-env"
+                >
+                  None — the container gets only the variables PDO sets itself.
+                </span>
+              ) : (
+                Object.entries(current.env).map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="flex items-center gap-2"
+                    data-testid={`staging-env-${key}`}
+                  >
+                    <span className="shrink-0 font-mono text-fg" style={{ fontSize: "11.5px" }}>
+                      {key}
+                    </span>
+                    <span className="text-fg-4" style={{ fontSize: "11.5px" }}>
+                      =
+                    </span>
+                    {/* Shown in clear, deliberately: the value is already in clear in the
+                        database, in the Run's event file and in `docker inspect`. Masking it
+                        would suggest PDO is protecting it. */}
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-fg-2"
+                      style={{ fontSize: "11.5px" }}
+                      title={value}
+                    >
+                      {value === "" ? <em className="text-fg-4">(empty)</em> : value}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeEnv(key)}
+                      disabled={busy}
+                      aria-label={`Remove ${key}`}
+                      data-testid={`staging-env-remove-${key}`}
+                      className="shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg-2 disabled:opacity-40"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))
+              )}
+              <div className="flex items-center gap-2 pt-0.5">
+                <input
+                  value={envKey}
+                  onChange={(e) => setEnvKey(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addEnv();
+                  }}
+                  placeholder="PUPPETEER_EXECUTABLE_PATH"
+                  aria-label="Environment variable name"
+                  data-testid="staging-env-new-key"
+                  className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                  style={{ fontSize: "11px" }}
+                />
+                <input
+                  value={envValue}
+                  onChange={(e) => setEnvValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addEnv();
+                  }}
+                  placeholder="/usr/bin/chromium"
+                  aria-label="Environment variable value"
+                  data-testid="staging-env-new-value"
+                  className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                  style={{ fontSize: "11px" }}
+                />
+                <button
+                  type="button"
+                  onClick={addEnv}
+                  disabled={busy || envKey.trim().length === 0}
+                  data-testid="staging-env-add"
+                  className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+                  style={{ fontSize: "11px" }}
+                >
+                  Set
+                </button>
+              </div>
+              <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                Posed at container creation, for every session of the Run. Often the only way
+                to configure an MCP server whose <span className="font-mono">.mcp.json</span>{" "}
+                comes from a plugin. <span className="font-mono">{current.reserved_env_keys.join(", ")}</span>{" "}
+                are set by PDO and refused here.
+              </div>
+              {/* Load-bearing copy, not a disclaimer: without it someone puts an API key
+                  here believing it is a secret store. */}
+              <div
+                className="text-st-await"
+                style={{ fontSize: "10.5px" }}
+                data-testid="staging-profile-env-not-a-vault"
+              >
+                <strong>This is not a secret store.</strong> Values are stored in clear in the
+                PDO database, copied into the Run's frozen event log, and readable with{" "}
+                <span className="font-mono">docker inspect</span>. They are kept out of the
+                daemon log (names only), and nothing else protects them.
+              </div>
             </div>
 
             {/* Signalled no-ops (ADR-0031 §2). Not errors: the default may LOSE an entry

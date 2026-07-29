@@ -10,7 +10,7 @@
 //! defaults, validation, resolution, the [`landing`] classifier), the sqlx CRUD below.
 //! Nothing here reads `$HOME`, shells out, or touches Docker.
 //!
-//! ## The three load-bearing ideas
+//! ## The four load-bearing ideas
 //!
 //! 1. **A profile is a *diff*, never a snapshot** (ADR-0031 §2). The row stores the
 //!    user's intention — `disabled` / `extras` — so the day a PDO release adds an entry
@@ -26,7 +26,16 @@
 //!    "an entry under `.claude/` produces no extra `-v`" dedup of ADR-0031 §4 is not a
 //!    special case: it is a *consequence*.
 //!
-//! 3. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
+//! 3. **The env is a MAP, not a diff** (#468, ADR-0031 §8). Every other field here is an
+//!    intention folded over a built-in default, because the default evolves with the
+//!    release. `env` has no built-in default and never will — PDO poses the run-constant
+//!    variables itself, at `docker create`, and the three it owns are *refused* as profile
+//!    keys ([`crate::sandbox_container::RUN_CONSTANT_ENV_KEYS`]). So there is nothing to
+//!    diff against: the stored map IS the effective map, and [`ResolvedProfile::env`] is a
+//!    copy rather than a resolution. A `disabled`-style negative list would be answering a
+//!    question nobody asked.
+//!
+//! 4. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
 //!    guarantees [`crate::sandbox_staging`] holds in every profile are satisfied either
 //!    by an entry or by a fallback synthesis. Two of them need *keys* in a file the
 //!    profile may also carry (class **(b)** below) — unchecking those is safe. Three
@@ -39,6 +48,8 @@
 //! (`triggers.sandbox`, `instance_config.default_sandbox`, the frozen `RunStarted`
 //! payload). Renaming is therefore *delete + create*. A future rename must be a
 //! **repointing transaction** across those three stores — never an `UPDATE` of this key.
+
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -447,6 +458,99 @@ fn collapse_nested(sorted: Vec<String>) -> Vec<String> {
     out
 }
 
+// -- pure: environment variables (#468, ADR-0031 §8) -------------------------
+
+/// Longest accepted env key. Not a POSIX limit (there is none) — a guard against a paste
+/// accident turning a whole `.env` file into one key.
+pub(crate) const MAX_ENV_KEY_LEN: usize = 128;
+
+/// Validate and normalise one env **key**.
+///
+/// Grammar `^[A-Za-z_][A-Za-z0-9_]*$` — the portable-shell subset. Not because `-e K=V`
+/// goes through a shell (it does not: it is argv), but because a key outside that subset is
+/// unreachable from inside the container by any normal means (`$FOO` in a script, `os.environ`
+/// lookups in generated code) — accepting it would store something that silently does nothing.
+///
+/// The **reserved** keys come from [`crate::sandbox_container::RUN_CONSTANT_ENV_KEYS`], not
+/// from a second literal here: that module poses them at `docker create`, so it owns the
+/// list (the #447 lesson — one fact, one owner). Rejecting them is a **400 that names the
+/// key**, never a silent skip: the precedent is the `PDO_DAEMON_URL` guard in the `docker
+/// exec` `extra_env` loop, whose comment says why ("a re-passed `-e` would clobber the
+/// gateway"). A silent skip would leave the user staring at an editor that shows `HOME` set
+/// and a container where it is not.
+pub(crate) fn validate_env_key(raw: &str) -> Result<String, String> {
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err("an environment variable name cannot be blank".to_string());
+    }
+    if key.len() > MAX_ENV_KEY_LEN {
+        return Err(format!(
+            "environment variable name `{key}` is longer than {MAX_ENV_KEY_LEN} characters"
+        ));
+    }
+    let mut chars = key.chars();
+    let first = chars.next().expect("non-empty checked above");
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return Err(format!(
+            "`{key}`: an environment variable name must start with a letter or `_`"
+        ));
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(format!(
+            "`{key}`: an environment variable name may only contain letters, digits and `_`"
+        ));
+    }
+    if let Some(reserved) = crate::sandbox_container::RUN_CONSTANT_ENV_KEYS
+        .iter()
+        .find(|r| **r == key)
+    {
+        return Err(format!(
+            "`{reserved}` is set by PDO for every sandboxed Run and cannot be overridden — \
+             the container's home, its daemon URL and its Run id all depend on it"
+        ));
+    }
+    Ok(key.to_string())
+}
+
+/// Validate one env **value**. Returns it **verbatim**, deliberately un-trimmed.
+///
+/// Two refusals, both about legibility rather than injection (`-e K=V` is argv, never
+/// parsed by a shell):
+/// - a **NUL byte** cannot survive `execve`'s environment block at all;
+/// - a **newline** would make `docker inspect --format '{{.Config.Env}}'` — the one place
+///   an operator can check what the container actually got — unreadable, and would hide a
+///   paste accident (a whole `.env` file dropped into one field) behind something that
+///   looks like it worked.
+///
+/// No trim: whitespace can be meaningful in a value (a separator, an indent in a PEM-ish
+/// blob), and silently changing what the user typed is worse than carrying their typo. The
+/// key is trimmed because a key with spaces is unusable, not merely surprising.
+pub(crate) fn validate_env_value(key: &str, raw: &str) -> Result<String, String> {
+    if raw.contains('\0') {
+        return Err(format!(
+            "`{key}`: an environment value cannot contain a NUL byte"
+        ));
+    }
+    if raw.contains('\n') || raw.contains('\r') {
+        return Err(format!(
+            "`{key}`: an environment value cannot span multiple lines — it would make \
+             `docker inspect` unreadable and hide a paste accident"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+/// The **names** of a profile's env, comma-joined — the ONLY rendering of an env map that
+/// may reach a log (#468).
+///
+/// It exists as a named function rather than an inline `format!` precisely so the rule is
+/// testable: `ensure_ready` already logs the staging entry list in clear, and copying that
+/// shape for the env would put a client's API token in the systemd journal, which outlives
+/// the Run. A unit test asserts no value survives this call.
+pub(crate) fn env_names(env: &BTreeMap<String, String>) -> String {
+    env.keys().cloned().collect::<Vec<_>>().join(", ")
+}
+
 // -- store: the persisted diff ------------------------------------------------
 
 /// A materialised profile row: the user's **intention**, never the effective list.
@@ -455,6 +559,11 @@ pub(crate) struct ProfileDiff {
     pub name: String,
     pub disabled: Vec<String>,
     pub extras: Vec<String>,
+    /// Environment variables posed at `docker create` (#468, ADR-0031 §8). Unlike the two
+    /// fields above this is NOT a diff — see idea 3 in the module header. `BTreeMap` so a
+    /// key can carry exactly one value and the argv order is deterministic without the
+    /// caller sorting.
+    pub env: BTreeMap<String, String>,
     pub updated_at: String,
 }
 
@@ -469,14 +578,22 @@ pub(crate) struct ResolvedProfile {
     pub disabled: Vec<String>,
     pub extras: Vec<String>,
     pub resolved: ResolvedEntries,
+    /// The profile's env (#468). Empty for a virtual default with no row — there is no
+    /// built-in env to fall back to, by design (module header, idea 3).
+    pub env: BTreeMap<String, String>,
     pub updated_at: Option<String>,
 }
 
-/// Create the `sandbox_profiles` table if absent. A brand-new table, so
-/// `CREATE TABLE IF NOT EXISTS` **is** the whole migration — there is nothing to
-/// `ALTER`. Future columns go through the idempotent PRAGMA-guarded
+/// Create the `sandbox_profiles` table if absent, then apply the additive column
+/// migrations.
+///
+/// The table was brand-new in #432, so `CREATE TABLE IF NOT EXISTS` was the whole
+/// migration then. **#468 is the first `ALTER`**, and it uses the idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` idiom (precedent: `max_concurrent`, #239 in
-/// [`crate::trigger_store`]), **never** a migration runner.
+/// [`crate::trigger_store`]), **never** a migration runner. The `CREATE` above carries the
+/// column too, so a fresh database takes the short path and an existing one — where the
+/// `CREATE` is a no-op — takes the `ALTER`. Both end on the same schema; that redundancy is
+/// the point of the idiom, not an oversight.
 ///
 /// **No seed row**: `minimal` and `full` are virtual (ADR-0031 §2).
 ///
@@ -489,25 +606,46 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             name       TEXT PRIMARY KEY COLLATE NOCASE,
             disabled   JSON NOT NULL DEFAULT '[]',
             extras     JSON NOT NULL DEFAULT '[]',
+            env        JSON NOT NULL DEFAULT '{}',
             updated_at TEXT NOT NULL
         )",
     )
     .execute(db)
     .await?;
+
+    // Additive migration (#468): per-profile environment variables. A pre-#468
+    // `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS` — a no-op there — so
+    // the column must be added out-of-band or every `SELECT … env` below would fail. The
+    // PRAGMA guard keeps it idempotent (a bare `ALTER … ADD COLUMN` errors "duplicate
+    // column name" on an already-migrated DB) and is preferred over swallowing the error
+    // blindly, which would hide a genuine failure. `DEFAULT '{}'` so existing rows read
+    // back as "no env", which is exactly what they had.
+    let has_env =
+        sqlx::query("SELECT 1 FROM pragma_table_info('sandbox_profiles') WHERE name = 'env'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_env {
+        sqlx::query("ALTER TABLE sandbox_profiles ADD COLUMN env JSON NOT NULL DEFAULT '{}'")
+            .execute(db)
+            .await?;
+    }
     Ok(())
 }
 
-/// Two columns rather than one `diff` blob: they validate differently, they play
-/// opposite roles at resolution (subtract vs add), and a corrupt one degrades to
-/// `Vec::new()` on its own. Precedent: `variables JSON` in
-/// [`crate::trigger_store`].
+/// Three columns rather than one `diff` blob: they validate differently, two of them play
+/// opposite roles at resolution (subtract vs add) while the third is not a diff at all
+/// (#468), and a corrupt one degrades to its empty value on its own. Precedent:
+/// `variables JSON` in [`crate::trigger_store`].
 fn row_to_diff(row: &sqlx::sqlite::SqliteRow) -> ProfileDiff {
     let disabled: String = row.get("disabled");
     let extras: String = row.get("extras");
+    let env: String = row.get("env");
     ProfileDiff {
         name: row.get("name"),
         disabled: serde_json::from_str(&disabled).unwrap_or_default(),
         extras: serde_json::from_str(&extras).unwrap_or_default(),
+        env: serde_json::from_str(&env).unwrap_or_default(),
         updated_at: row.get("updated_at"),
     }
 }
@@ -518,7 +656,7 @@ pub(crate) async fn get_diff(
     name: &str,
 ) -> Result<Option<ProfileDiff>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT name, disabled, extras, updated_at FROM sandbox_profiles WHERE name = ?",
+        "SELECT name, disabled, extras, env, updated_at FROM sandbox_profiles WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(db)
@@ -529,7 +667,7 @@ pub(crate) async fn get_diff(
 /// Every materialised diff, by name.
 pub(crate) async fn list_diffs(db: &SqlitePool) -> Result<Vec<ProfileDiff>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT name, disabled, extras, updated_at FROM sandbox_profiles ORDER BY name",
+        "SELECT name, disabled, extras, env, updated_at FROM sandbox_profiles ORDER BY name",
     )
     .fetch_all(db)
     .await?;
@@ -543,21 +681,25 @@ pub(crate) async fn upsert(
     name: &str,
     disabled: &[String],
     extras: &[String],
+    env: &BTreeMap<String, String>,
 ) -> Result<ProfileDiff, sqlx::Error> {
     let now = crate::event_log::now_iso();
     let disabled_json = serde_json::to_string(disabled).unwrap_or_else(|_| "[]".to_string());
     let extras_json = serde_json::to_string(extras).unwrap_or_else(|_| "[]".to_string());
+    let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
-        "INSERT INTO sandbox_profiles (name, disabled, extras, updated_at)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO sandbox_profiles (name, disabled, extras, env, updated_at)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
             disabled = excluded.disabled,
             extras = excluded.extras,
+            env = excluded.env,
             updated_at = excluded.updated_at",
     )
     .bind(name)
     .bind(&disabled_json)
     .bind(&extras_json)
+    .bind(&env_json)
     .bind(&now)
     .execute(db)
     .await?;
@@ -600,6 +742,7 @@ pub(crate) async fn resolve(
             disabled: Vec::new(),
             extras: Vec::new(),
             resolved: resolve_entry_list(&base, &[], &[]),
+            env: BTreeMap::new(),
             updated_at: None,
         }));
     };
@@ -613,6 +756,7 @@ pub(crate) async fn resolve(
         disabled: diff.disabled,
         extras: diff.extras,
         resolved,
+        env: diff.env,
         updated_at: Some(diff.updated_at),
     }))
 }
@@ -879,6 +1023,98 @@ mod tests {
     fn the_default_glob_is_not_user_authorable() {
         assert!(base_entries(FULL_PROFILE).contains(&".claude/*.md"));
         assert!(validate_entry(".claude/*.md").is_err());
+    }
+
+    // -- validate_env_key / validate_env_value (#468) ------------------------
+
+    #[test]
+    fn env_keys_accept_the_portable_shell_subset() {
+        for ok in [
+            "FOO",
+            "_FOO",
+            "PUPPETEER_EXECUTABLE_PATH",
+            "http_proxy",
+            "X9",
+            "_",
+        ] {
+            assert_eq!(validate_env_key(ok).unwrap(), ok, "{ok} should be valid");
+        }
+        assert_eq!(validate_env_key("  FOO  ").unwrap(), "FOO");
+    }
+
+    #[test]
+    fn env_keys_reject_the_malformed() {
+        for bad in [
+            "", "   ", "9FOO", "FOO-BAR", "FOO BAR", "FOO=BAR", "FOÔ", "a.b",
+        ] {
+            assert!(validate_env_key(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(validate_env_key(&"A".repeat(MAX_ENV_KEY_LEN + 1)).is_err());
+        assert!(validate_env_key(&"A".repeat(MAX_ENV_KEY_LEN)).is_ok());
+    }
+
+    /// AC2 of #468. The refusal is a *named* one: the message must carry the offending key,
+    /// because the whole point of preferring a 400 to a silent skip is that the user learns
+    /// WHICH variable PDO owns. A message that merely says "reserved" would send them back
+    /// to the source.
+    #[test]
+    fn env_keys_reject_the_run_constants_by_name() {
+        for reserved in crate::sandbox_container::RUN_CONSTANT_ENV_KEYS {
+            let err = validate_env_key(reserved)
+                .expect_err("a run-constant key must be refused, never skipped");
+            assert!(
+                err.contains(reserved),
+                "the 400 must name the offending key, got: {err}"
+            );
+        }
+        // Whitespace and the trim must not sneak one past the check.
+        assert!(validate_env_key("  HOME  ").is_err());
+        // Case matters: env vars are case-sensitive, so `home` is a different (allowed) var.
+        assert!(validate_env_key("home").is_ok());
+    }
+
+    #[test]
+    fn env_values_reject_nul_and_newlines_and_keep_everything_else_verbatim() {
+        // Verbatim, including surrounding whitespace: silently trimming would change a
+        // value the user may have meant, and a value is not a path.
+        assert_eq!(validate_env_value("K", "  spaced  ").unwrap(), "  spaced  ");
+        assert_eq!(validate_env_value("K", "").unwrap(), "");
+        assert_eq!(
+            validate_env_value("K", "a=b:c/d spaces & $dollars").unwrap(),
+            "a=b:c/d spaces & $dollars"
+        );
+        for bad in ["a\0b", "a\nb", "a\r\nb", "trailing\n"] {
+            assert!(
+                validate_env_value("K", bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        // The refusal names the key, like every other one here.
+        assert!(validate_env_value("TOKEN", "a\nb")
+            .unwrap_err()
+            .contains("TOKEN"));
+    }
+
+    /// AC4 of #468: what may reach a log is the NAMES. This is the whole guarantee, so it
+    /// is pinned on the function that produces the log text rather than on a log capture.
+    #[test]
+    fn env_names_never_leaks_a_value() {
+        let env: BTreeMap<String, String> = [
+            ("TOKEN", "sk-ant-super-secret"),
+            ("PUPPETEER_EXECUTABLE_PATH", "/usr/bin/chromium"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let rendered = env_names(&env);
+        assert_eq!(rendered, "PUPPETEER_EXECUTABLE_PATH, TOKEN");
+        for value in env.values() {
+            assert!(
+                !rendered.contains(value),
+                "a value leaked into the log rendering: {rendered}"
+            );
+        }
+        assert_eq!(env_names(&BTreeMap::new()), "");
     }
 
     /// Exactly two class-(b) entries — the floor re-synthesises those two files, so

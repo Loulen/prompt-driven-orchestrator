@@ -33,12 +33,17 @@
 //! - **`--user` toujours NUMÉRIQUE `uid:gid`.** `--user 1000` seul ferait résoudre le gid
 //!   primaire via `/etc/passwd` (absent pour un uid arbitraire) → gid 0, bug silencieux de
 //!   propriété. `-e HOME=` suffit aux écritures `~/.claude` de Claude Code.
-//! - **GAP DOCUMENTÉ (uid hôte ≠ 1000).** L'image `ubuntu:24.04` livre `ubuntu`=uid/gid 1000,
-//!   donc le cas laptop courant résout ENTIÈREMENT (passwd présent). Pour un uid hôte ≠ 1000 :
-//!   `sudo` casse (getpwuid avant NOPASSWD) et `claude` peut casser (`os.userInfo()`). L'injection
-//!   `/etc/passwd`+`/etc/group` (générer les lignes au `prepare`-time, bind-monter — pattern PDO)
-//!   est **différée à une issue de suivi** (cf. `assets/sandbox/Dockerfile:33`). NE PAS éditer le
-//!   Dockerfile ici : il est content-hashé (#405), toute édition périme l'image buildée.
+//! - **L'identité de l'uid hôte est posée sur le conteneur, pas dans l'image (#414).** L'image
+//!   `ubuntu:24.04` ne connaît que l'uid 1000 (`ubuntu`) ; pour tout autre uid hôte, `sudo`
+//!   appelle `getpwuid()` avant NOPASSWD et abandonne (« you do not exist in the passwd
+//!   database »), et `whoami` échoue. [`ensure_running`] lance donc, juste après le `start`, un
+//!   `docker exec --user 0:0` qui **ajoute** les lignes manquantes aux `/etc/passwd` et
+//!   `/etc/group` RÉELS de l'image, derrière une garde `getent` ([`identity_script`]).
+//!   **Pas un bind-mount** (le mécanisme initialement prescrit) : mesuré, un `/etc/passwd`
+//!   bind-monté casse `useradd`/`apt` en `:ro` **comme** en `:rw` (`rename()` par-dessus un
+//!   mount de fichier), et exigerait de dupliquer la baseline d'une image que l'utilisateur peut
+//!   éditer. NE PAS éditer le Dockerfile : il est content-hashé (#405), toute édition périme
+//!   l'image buildée — et son commentaire ligne 33 décrit désormais le comportement livré.
 //! - **L'env par profil de staging est posé au CREATE (#468).** Ce sont des constantes de Run,
 //!   pas des variables de nœud : le chemin `docker exec` a sa propre liste par-nœud
 //!   ([`exec_prefix_with_env`]) et n'est pas concerné. Ce module possède
@@ -63,6 +68,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
 use crate::sandbox_image::DOCKER_NOT_FOUND_MSG;
 
@@ -75,6 +81,14 @@ pub(crate) const SESSION_MARKER_ENV: &str = "PDO_SBX_SESSION";
 /// une raison légitime de le faire, et la fusion de [`create_args`] remplace alors la
 /// valeur **en place** (un seul `-e`, à la même position) au lieu d'en ajouter un second.
 const CLAUDE_TRAFFIC_ENV: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+
+/// Nom d'utilisateur **et** de groupe synthétisés dans le conteneur pour l'uid/gid hôte
+/// ([`ensure_identity`]). Constante, jamais `$USER` : aucun chemin load-bearing ne lit ce
+/// nom (le `claude` de l'image est un binaire **Bun**, qui lit `$HOME`/`$USER` et ignore la
+/// base passwd ; `git` échoue sur le domaine `(none)`, pas sur le nom), donc lire
+/// l'environnement ajouterait le premier résolveur de nom d'utilisateur du dépôt pour un
+/// gain nul. `ubuntu:24.04` ne livre aucun `pdo` — pas de collision de nom.
+const IDENTITY_NAME: &str = "pdo";
 
 /// Les trois vars run-constantes qu'un profil de staging ne peut **pas** redéfinir (#468).
 ///
@@ -316,6 +330,72 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
     args
 }
 
+/// Script `sh -c` qui donne une **identité nommée** à l'uid/gid hôte dans le conteneur, en
+/// **ajoutant** au `/etc/passwd` et `/etc/group` réels de l'image — jamais en les remplaçant.
+///
+/// Le défaut qu'il ferme : un conteneur tourne en `--user <uid>:<gid>` numérique, et l'image
+/// `ubuntu:24.04` ne connaît que l'uid 1000 (`ubuntu`). Pour tout autre uid, `sudo` appelle
+/// `getpwuid()` avant d'appliquer NOPASSWD et abandonne sur « you do not exist in the passwd
+/// database » — l'agent perd `apt install`, la raison même pour laquelle l'image embarque `sudo`.
+///
+/// Trois détails sont load-bearing, chacun mesuré :
+/// - **`append`, pas `replace`** — `sudo` résout `root` PAR NOM avant tout le reste ; un passwd
+///   réduit à notre ligne rend `sudo: unknown user root`. Un `/etc/group` amputé fait en plus
+///   perdre à apt son bac à sable `_apt`.
+/// - **champ mot de passe `*`, pas `x`** — avec `x`, la phase *account* de `pam_unix` va chercher
+///   `/etc/shadow`, n'y trouve rien, et `sudo` rend « account validation failure ». `*` court-
+///   circuite la recherche. C'est ce qui évite un TROISIÈME fichier à injecter.
+/// - **garde `getent`** — c'est la conditionnalité, et elle est exacte : elle interroge l'image
+///   réelle au lieu de supposer laquelle c'est. En uid 1000 elle résout (`ubuntu`) et rien n'est
+///   écrit (fichiers byte-identiques) ; le chemin laptop courant est donc inchangé sans qu'aucun
+///   `if uid != 1000` n'existe en Rust — pas de branche morte, un seul chemin testé. Elle rend
+///   aussi le script **idempotent**, ce qu'exige un appel sur les trois branches d'
+///   [`ensure_running`] et à chaque `ensure_ready` du Run.
+///
+/// Home = le `$HOME` hôte, celui du `-e HOME=` du create : `getent`, `~` et l'environnement
+/// doivent désigner le même répertoire (et c'est de là que Node lirait `userInfo().homedir` si
+/// Claude Code repassait un jour sur une distribution Node).
+pub(crate) fn identity_script(uid: u32, gid: u32, host_home: &Path) -> String {
+    let passwd_line = format!(
+        "{IDENTITY_NAME}:*:{uid}:{gid}:PDO sandbox:{}:/bin/bash",
+        host_home.display()
+    );
+    let group_line = format!("{IDENTITY_NAME}:x:{gid}:");
+    format!(
+        "getent passwd {uid} >/dev/null 2>&1 || printf '%s\\n' {p} >> /etc/passwd; \
+         getent group {gid} >/dev/null 2>&1 || printf '%s\\n' {g} >> /etc/group",
+        p = sh_single_quote(&passwd_line),
+        g = sh_single_quote(&group_line),
+    )
+}
+
+/// Argv `docker exec` de l'injection d'identité (après le binaire `docker`). Ordre canonique
+/// FIGÉ par le golden test.
+///
+/// **`--user 0:0`** : écrire dans `/etc/passwd` demande root, et le `--user` d'un `exec` écrase
+/// celui du `create`. Le sandbox n'est pas une frontière de sécurité (ADR-0030) — le daemon
+/// possède déjà le conteneur, il ne s'accorde rien de neuf.
+///
+/// **Aucun `-e`, aucun `-i`/`-t`, aucun `-w`** : ce n'est pas une session de nœud. En
+/// particulier pas de [`SESSION_MARKER_ENV`], sinon le kill ciblé de la première session tuerait
+/// aussi cet exec (même raison que pour [`kill_session_in_container`]).
+pub(crate) fn identity_exec_args(
+    run_id: &str,
+    uid: u32,
+    gid: u32,
+    host_home: &Path,
+) -> Vec<String> {
+    vec![
+        "exec".to_string(),
+        "--user".to_string(),
+        "0:0".to_string(),
+        container_name(run_id),
+        "sh".to_string(),
+        "-c".to_string(),
+        identity_script(uid, gid, host_home),
+    ]
+}
+
 /// Préfixe `docker exec` d'une session de nœud (après le binaire `docker` ; #407 y ajoute la
 /// tail `claude`). Ordre canonique FIGÉ par le golden test.
 ///
@@ -459,13 +539,17 @@ fn probe_state(docker_bin: &str, name: &str) -> Result<ContainerState> {
 pub(crate) fn ensure_running(docker_bin: &str, run_id: &str, spec: &ContainerSpec) -> Result<()> {
     let name = container_name(run_id);
     match probe_state(docker_bin, &name)? {
-        ContainerState::Running => Ok(()),
-        ContainerState::Stopped => start_container(docker_bin, &name),
+        ContainerState::Running => {}
+        ContainerState::Stopped => start_container(docker_bin, &name)?,
         ContainerState::Absent => {
             create_container(docker_bin, run_id, spec)?;
-            start_container(docker_bin, &name)
+            start_container(docker_bin, &name)?;
         }
     }
+    // #414 : l'identité se pose sur le conteneur DÉMARRÉ, pas dans l'argv du create — voir
+    // `identity_script`. Sur les trois branches : un conteneur d'un daemon antérieur rattrape.
+    ensure_identity(docker_bin, run_id, spec.uid, spec.gid, spec.host_home);
+    Ok(())
 }
 
 /// `docker` + [`create_args`]. `create` et `start` sont DEUX primitives (pas `run -d`) : la
@@ -518,6 +602,42 @@ fn start_container(docker_bin: &str, name: &str) -> Result<()> {
             "failed to start the sandbox container `{name}` — `docker start` exited with {}: {stderr}",
             output.status
         )
+    }
+}
+
+/// Pose l'identité de l'uid/gid hôte dans le conteneur ([`identity_script`]). Appelée par
+/// [`ensure_running`] sur les **trois** branches, après le `start`.
+///
+/// **Best-effort, par choix** : la grande majorité des Runs n'invoquent jamais `sudo`. Faire
+/// échouer un Run parce qu'une commodité n'a pas pu être posée serait pire que le défaut
+/// corrigé — donc `warn!` et on continue, jamais de `?` vers l'appelant (miroir de
+/// `sandbox_run::kill_session_best_effort`). C'est l'exact opposé de la politique du plancher de
+/// staging, et pour une raison nette : le plancher désarme des dialogues qui **bloquent** un
+/// agent non surveillé, ici l'agent voit juste une commande échouer.
+///
+/// Sur les trois branches et pas seulement `Absent` : un conteneur créé par un daemon antérieur
+/// et toujours vivant doit rattraper son identité. La garde `getent` rend les appels répétés
+/// gratuits.
+fn ensure_identity(docker_bin: &str, run_id: &str, uid: u32, gid: u32, host_home: &Path) {
+    let name = container_name(run_id);
+    let args = identity_exec_args(run_id, uid, gid, host_home);
+    match Command::new(docker_bin).args(&args).output() {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if is_absent_stderr(&stderr) {
+                return; // le conteneur a disparu entre le start et ici — rien à identifier.
+            }
+            warn!(
+                "sandbox: could not give uid {uid} a passwd entry in `{name}` \
+                 (`docker exec` exited with {}: {stderr}) — `sudo` will refuse to start inside \
+                 the container",
+                output.status
+            );
+        }
+        Err(e) => {
+            warn!("sandbox: could not run `docker exec` to identify uid {uid} in `{name}`: {e:#}");
+        }
     }
 }
 
@@ -1244,7 +1364,156 @@ mod tests {
         );
     }
 
+    // -- 2c. identité du conteneur (#414) ------------------------------------
+    //
+    // Le script est le seul endroit du dépôt où vivent les subtilités mesurées pendant le
+    // grilling (`*` vs `x`, `>>` vs `>`, la garde). Chacune a son test NOMMÉ, pour qu'une
+    // simplification bien intentionnée tombe sur un refus qui porte sa raison.
+
+    /// Le golden : la chaîne EXACTE pour un uid hôte ≠ 1000. C'est ce texte que l'humain de
+    /// la HP recopie pour reproduire à la main (§3.5 du plan #414).
+    #[test]
+    fn identity_script_golden() {
+        assert_eq!(
+            identity_script(1234, 1234, Path::new("/home/u")),
+            "getent passwd 1234 >/dev/null 2>&1 || printf '%s\\n' \
+             'pdo:*:1234:1234:PDO sandbox:/home/u:/bin/bash' >> /etc/passwd; \
+             getent group 1234 >/dev/null 2>&1 || printf '%s\\n' 'pdo:x:1234:' >> /etc/group"
+        );
+    }
+
+    /// D4 — le champ mot de passe de la ligne passwd est `*`, JAMAIS `x`. Avec `x`, la phase
+    /// *account* de `pam_unix` cherche la ligne dans `/etc/shadow`, ne la trouve pas, et `sudo`
+    /// rend « account validation failure, is your account locked? » : il faudrait alors injecter
+    /// un TROISIÈME fichier. La ligne `group`, elle, porte bien `x` (c'est son champ mot de passe
+    /// de groupe, sans rapport avec shadow) — d'où la tentation d'« harmoniser », que ce test
+    /// refuse en nommant la raison.
+    #[test]
+    fn identity_script_password_field_is_star_not_x() {
+        let script = identity_script(1234, 5678, Path::new("/home/u"));
+        assert!(
+            script.contains("'pdo:*:1234:5678:"),
+            "la ligne passwd doit porter `*` comme champ mot de passe: {script}"
+        );
+        assert!(
+            !script.contains("'pdo:x:1234:"),
+            "un `x` en passwd renverrait PAM vers /etc/shadow (account validation failure): {script}"
+        );
+        // Contrepartie : la ligne de groupe garde son `x`, c'est sa forme canonique.
+        assert!(script.contains("'pdo:x:5678:'"), "ligne group: {script}");
+    }
+
+    /// D5 — on AJOUTE, on ne tronque jamais. Un `/etc/passwd` réduit à notre ligne rend
+    /// `sudo: unknown user root` (sudo résout `root` PAR NOM avant tout le reste), et un
+    /// `/etc/group` amputé fait perdre à apt son bac à sable `_apt`. Les seuls `>` tolérés
+    /// sont les deux `>>` et les redirections `>/dev/null` de la garde.
+    #[test]
+    fn identity_script_appends_and_never_truncates() {
+        let script = identity_script(1234, 1234, Path::new("/home/u"));
+        assert_eq!(
+            script.matches(">>").count(),
+            2,
+            "exactement deux appends (passwd + group): {script}"
+        );
+        let stripped = script
+            .replace(">> /etc/passwd", "")
+            .replace(">> /etc/group", "");
+        // Les redirections de la GARDE sont légitimes : elles muselent `getent`, elles
+        // n'écrivent aucun fichier.
+        let stripped = stripped.replace(">/dev/null 2>&1", "");
+        assert!(
+            !stripped.contains('>'),
+            "aucune redirection tronquante ne doit exister: {script}"
+        );
+        for verb in ["tee", "sed -i", "truncate", "cat >"] {
+            assert!(
+                !script.contains(verb),
+                "`{verb}` réécrirait le fichier au lieu de l'étendre: {script}"
+            );
+        }
+    }
+
+    /// Un `$HOME` hôte hostile (apostrophe + espace) reste UN seul argument `sh` correctement
+    /// quoté. Prouvé en faisant round-tripper le littéral par un vrai `sh`, pas en relisant le
+    /// quoting à l'œil.
+    #[test]
+    fn identity_script_quotes_a_hostile_home() {
+        let home = Path::new("/home/o'brien x");
+        let script = identity_script(1234, 1234, home);
+        let line = "pdo:*:1234:1234:PDO sandbox:/home/o'brien x:/bin/bash";
+        let quoted = sh_single_quote(line);
+        assert!(
+            script.contains(&quoted),
+            "la ligne passwd doit être single-quotée en entier: {script}"
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s' {quoted}"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            line,
+            "le quoting doit round-tripper par un vrai `sh`"
+        );
+    }
+
+    /// Golden argv de l'injection : root (`--user 0:0`, écrire `/etc/passwd` l'exige) et
+    /// **aucun** marqueur de session — sinon le kill ciblé de la première session emporterait
+    /// aussi cet exec (même raison que pour le kill exec lui-même).
+    #[test]
+    fn identity_exec_runs_as_root_without_a_session_marker() {
+        let args = identity_exec_args("r1", 1234, 1234, Path::new("/home/u"));
+        let mut expected = strings(&["exec", "--user", "0:0", "pdo-sbx-r1", "sh", "-c"]);
+        expected.push(identity_script(1234, 1234, Path::new("/home/u")));
+        assert_eq!(args, expected);
+        assert!(
+            !args.iter().any(|a| a.contains(SESSION_MARKER_ENV)),
+            "pas de marqueur de session sur l'exec d'identité: {args:?}"
+        );
+        // Ce n'est pas une session de nœud : ni tty, ni forwarding d'env, ni cwd.
+        for flag in ["-i", "-t", "-e", "-w"] {
+            assert!(
+                !args.iter().any(|a| a == flag),
+                "`{flag}` n'a rien à faire sur l'exec d'identité: {args:?}"
+            );
+        }
+    }
+
+    /// D1 — l'identité n'est PAS un mount : l'argv du `create` ne porte ni `/etc/passwd` ni
+    /// `/etc/group`. Les goldens de `create_args` le prouvent déjà par égalité ; celui-ci
+    /// **nomme** la propriété, parce que le mécanisme prescrit par l'issue était précisément
+    /// un bind-mount et qu'il casse `useradd`/`apt` (en `:ro` comme en `:rw`).
+    #[test]
+    fn create_args_is_untouched_by_identity_injection() {
+        let fx = Fixtures::sample();
+        let args = create_args("r1", &fx.spec());
+        for forbidden in ["/etc/passwd", "/etc/group", "/etc/shadow"] {
+            assert!(
+                !args.iter().any(|a| a.contains(forbidden)),
+                "`{forbidden}` ne doit jamais être monté: {args:?}"
+            );
+        }
+        // Le `--user` du create reste NUMÉRIQUE même une fois passwd peuplé : `--user <nom>`
+        // ferait résoudre le gid primaire via passwd → gid 0 (le bug que #406 ferme).
+        let user_at = args.iter().position(|a| a == "--user").unwrap();
+        assert_eq!(args[user_at + 1], "1000:1000");
+    }
+
     // -- 3-8. ensure_running / probe (AC#2) ----------------------------------
+
+    /// Position de l'`exec` d'identité (#414) dans l'`argv.log` du fake docker : la ligne
+    /// `0:0` en est le témoin UNIQUE (aucune autre invocation ne porte ce `--user`).
+    fn identity_exec_at(lines: &[String]) -> Option<usize> {
+        let user_at = lines.iter().position(|l| l == "0:0")?;
+        Some(user_at - 2) // `exec`, `--user`, `0:0`
+    }
+
+    /// L'argv complet de l'`exec` d'identité tel que le fake docker l'a vu.
+    fn identity_exec_argv(lines: &[String]) -> Vec<String> {
+        let at = identity_exec_at(lines).expect("l'exec d'identité doit avoir tourné");
+        lines[at..(at + 7).min(lines.len())].to_vec()
+    }
 
     #[test]
     fn running_reuses() {
@@ -1267,6 +1536,13 @@ mod tests {
             !lines.contains(&"start".to_string()),
             "running → pas de start"
         );
+        // #414 : un conteneur déjà up d'un daemon ANTÉRIEUR rattrape son identité — c'est
+        // pour ça que l'injection vit après le `match`, pas dans le bras `Absent`.
+        assert_eq!(
+            identity_exec_argv(&lines),
+            identity_exec_args("r1", 1000, 1000, Path::new("/home/u")),
+            "running → l'identité est tout de même posée"
+        );
     }
 
     #[test]
@@ -1286,6 +1562,12 @@ mod tests {
         assert!(
             !lines.contains(&"create".to_string()),
             "stopped → pas de create"
+        );
+        // #414 : l'identité se pose sur un conteneur DÉMARRÉ — donc après le `start`.
+        let start_pos = lines.iter().position(|l| l == "start").unwrap();
+        assert!(
+            identity_exec_at(&lines).unwrap() > start_pos,
+            "l'exec d'identité doit suivre le start: {lines:?}"
         );
     }
 
@@ -1317,6 +1599,81 @@ mod tests {
         assert!(
             lines.contains(&"sleep".to_string()) && lines.contains(&"infinity".to_string()),
             "create doit poser `sleep infinity`"
+        );
+        // #414 : create → start → identité, dans cet ordre. L'inverser exec-erait dans un
+        // conteneur pas encore démarré.
+        assert!(
+            identity_exec_at(&lines).unwrap() > start_pos,
+            "l'exec d'identité doit suivre le start: {lines:?}"
+        );
+    }
+
+    /// #414 — l'identité est posée sur les **trois** branches de la machine à états, jamais
+    /// sur la seule `Absent`. Un conteneur créé par un daemon antérieur à #414 et toujours
+    /// vivant (branche `Running`) doit rattraper : c'est exactement le cas qu'une injection
+    /// posée au `create` aurait laissé sans identité pour toute la durée du Run.
+    #[test]
+    fn identity_is_ensured_on_all_three_branches() {
+        let branches = [
+            ("running", FakeSpec::default()),
+            (
+                "stopped",
+                FakeSpec {
+                    inspect_stdout: "false".to_string(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "absent",
+                FakeSpec {
+                    inspect_exit: 1,
+                    inspect_stdout: String::new(),
+                    inspect_stderr: "Error: No such container: pdo-sbx-r1".to_string(),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (label, spec) in branches {
+            let tmp = tempfile::tempdir().unwrap();
+            let (docker, log) = write_fake_docker(tmp.path(), &spec);
+            let fx = Fixtures::sample();
+
+            retry_etxtbsy(|| ensure_running(&docker, "r1", &fx.spec())).unwrap();
+
+            let lines = log_lines(&log);
+            assert_eq!(
+                identity_exec_argv(&lines),
+                identity_exec_args("r1", 1000, 1000, Path::new("/home/u")),
+                "branche `{label}` : l'identité doit être posée"
+            );
+        }
+    }
+
+    /// D8 — best-effort : un `docker exec` d'identité en échec `warn!` et laisse le Run
+    /// continuer. La majorité des Runs n'invoquent jamais `sudo` ; faire échouer un Run parce
+    /// qu'une commodité n'a pas pu être posée serait pire que le défaut corrigé.
+    #[test]
+    fn ensure_identity_never_fails_the_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = FakeSpec {
+            inspect_exit: 1,
+            inspect_stdout: String::new(),
+            inspect_stderr: "Error: No such container: pdo-sbx-r1".to_string(),
+            exec_exit: 1,
+            exec_stderr: "boom".to_string(),
+            ..Default::default()
+        };
+        let (docker, log) = write_fake_docker(tmp.path(), &spec);
+        let fx = Fixtures::sample();
+
+        // Le conteneur est bien créé et démarré ; seule l'identité a échoué.
+        retry_etxtbsy(|| ensure_running(&docker, "r1", &fx.spec())).unwrap();
+
+        let lines = log_lines(&log);
+        assert!(lines.contains(&"create".to_string()));
+        assert!(
+            identity_exec_at(&lines).is_some(),
+            "l'exec a bien été tenté"
         );
     }
 

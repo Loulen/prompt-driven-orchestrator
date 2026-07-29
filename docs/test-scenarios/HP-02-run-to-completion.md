@@ -173,6 +173,7 @@ Sandbox A/B, read-only probes:
   stall detector. Only a Run still preparing past that grace is a finding.
 - On a machine that does not yet have the sandbox image, the first sandboxed Run **builds** it
   (minutes). Expected once per image change, not a finding.
-- **Do not assert a writable `$HOME` inside the container, nor a host uid ≠ 1000.** Both are known,
-  filed gaps (#443, #414). Asserting them here would report a documented backlog item as a
-  regression on every execution.
+- **Do not assert a writable `$HOME` inside the container.** That is a known, filed gap (#443).
+  Asserting it here would report a documented backlog item as a regression on every execution. The
+  host-uid half of this note is **gone**: since #414 a named identity is injected into the container,
+  so `whoami` and `sudo -n true` DO work under any host uid — a failure there is a finding.

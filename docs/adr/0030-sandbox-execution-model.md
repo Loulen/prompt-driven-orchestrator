@@ -16,6 +16,23 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    le chemin de travail est identique des deux côtés → le dirname encodé des transcripts matche
    (pré-requis du merge-back, câblé en #408).
 
+   **Amendement #414 — l'identité de l'uid hôte se pose sur le conteneur démarré, pas dans la liste
+   des mounts.** La liste des mounts **ne bouge pas** (elle reste celle ci-dessus + la queue
+   d'exception `$HOME` d'ADR-0031 §4), et l'argv du `docker create` reste **byte-identique** : le
+   `--user` numérique donne au process l'uid/gid hôte, mais l'image ne connaît de *nom* que pour
+   l'uid 1000. `ensure_running` lance donc, juste après le `start` et **sur ses trois branches**, un
+   `docker exec --user 0:0` qui **ajoute** les deux lignes manquantes aux `/etc/passwd` et
+   `/etc/group` réels de l'image, derrière une garde `getent` — no-op exact en uid 1000 (fichiers
+   byte-identiques), best-effort partout (`warn!`, jamais un Run cassé). Voir « Injection
+   d'identité » dans le lexique, et les alternatives écartées ci-dessous pour pourquoi ce n'est
+   **pas** un bind-mount.
+
+   Le **Dockerfile n'est pas modifié** — pas même un commentaire : il est hashé octet par octet
+   (`sha256`, sans normalisation) pour dériver le tag `pdo-sandbox:h-<hash>`, donc toute édition
+   périmerait l'image buildée et publiée. Son commentaire de la règle sudoers (« pour tout autre uid
+   hôte, le RUNTIME doit injecter une entrée passwd — hors périmètre de l'image ») **devient vrai**
+   avec cette livraison ; seul son pointeur `(#406)` est daté, et se lit désormais `(#414)`.
+
 2. **Staging par Run.** `~/.pdo/sandbox/<run-id>/` (jamais le vrai `~/.claude`), seedé par `prepare`
    selon le mode, purgé par `teardown` au `cleanup_run`. En `pure`, la confiance (`hasTrustDialogAccepted`)
    est pré-accordée à la **racine du repo** — l'ancêtre commun du worktree de pipeline ET de tous les
@@ -206,6 +223,25 @@ l'hôte qu'un Run hôte.
   conteneurs que PDO croit finis.
 - **Envelopper `wrap_with_env` entier dans le `docker exec`** (au lieu d'`-e` explicites) : rejeté —
   ré-exporterait `PDO_DAEMON_URL=localhost` dans le conteneur et casserait la gateway.
+- **Bind-monter un `/etc/passwd` + `/etc/group` générés au `prepare`-time** (le mécanisme que #414
+  prescrivait) : rejeté **sur mesure**. Un `/etc/passwd` bind-monté casse `sudo apt-get install` de
+  tout paquet créant un utilisateur système — `groupadd: cannot open /etc/group`, dpkg laissé en
+  `iU` — en `:ro` **comme** en `:rw` : `useradd` fait un `rename()` par-dessus le point de montage,
+  ce qui échoue toujours. C'est une **régression sur le chemin uid 1000 actuel**. S'y ajoutent deux
+  coûts de conception : construire le fichier exige de connaître la **baseline de l'image**, or le
+  Dockerfile est éditable par l'utilisateur et un profil peut pointer une image de registry
+  arbitraire (il faudrait donc lire la baseline via Docker, ce que `sandbox_staging` s'interdit par
+  contrat) ; et un mount dont la source manque rend le staging de ~1 Go **indélébile** par le
+  daemon. L'`exec` gardé ne paie aucun des trois.
+- **`nss_wrapper`** (`LD_PRELOAD` + un passwd de substitution) : rejeté — la lib doit être *dans*
+  l'image, donc le problème devient circulaire (c'est justement le Dockerfile qu'on ne touche pas),
+  et un `LD_PRELOAD` est sans effet sur un binaire statique.
+- **`--user <nom>` au lieu du numérique**, une fois passwd peuplé : rejeté — cela rouvrirait le bug
+  que le `--user` numérique existe pour fermer. `--user <nom>` (ou `--user <uid>` seul) fait
+  résoudre le **gid primaire** via `/etc/passwd` ; pour un uid que l'image ne connaît pas, Docker
+  retombe sur **gid 0** — bug silencieux de propriété de fichiers. Écrit séparément parce qu'un
+  nettoyage bien intentionné (« maintenant que passwd est peuplé, autant nommer l'utilisateur »)
+  est exactement la forme que prendrait la régression.
 
 ## Limites acceptées
 
@@ -213,6 +249,10 @@ l'hôte qu'un Run hôte.
   faute d'entrée `/etc/passwd` ; ubuntu:24.04 livre `ubuntu`=1000 → le cas laptop courant résout.
   Injection `/etc/passwd`+`/etc/group` différée à une issue de suivi (ne PAS éditer le Dockerfile,
   content-hashé).
+  *(levé par #414 — voir l'amendement du point 1 ; la prémisse `os.userInfo()` était fausse, le
+  `claude` de l'image est un binaire Bun, qui lit `$HOME`/`$USER` et ignore la base passwd :
+  `claude --version` et `claude -p` se comportent à l'identique en uid 1234 et 1000. Seuls `sudo`
+  et `whoami` cassaient réellement.)*
 - **run-shell in-container** peut être *moins* fidèle pour l'inspection statique (les mounts identité
   donnent déjà la parité fichiers) et perd les outils `sudo`-installés éphémères. On garde le
   wrapping pour l'uniformité + zéro divergence hôte silencieuse (`ensure_running`-or-fail).

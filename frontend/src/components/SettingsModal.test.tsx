@@ -70,6 +70,14 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     ],
     // Host `$HOME` (#432): what turns an explorer pick into a `$HOME`-relative entry.
     home: "/home/user",
+    // Turn-end auto-completion (#469): off by default, nothing stored/env.
+    autocomplete_turn_end: {
+      effective: false,
+      source: "default",
+      stored: null,
+      env: null,
+      default: false,
+    },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -490,6 +498,142 @@ describe("SettingsModal", () => {
 // #431 — the Dockerfile row: the setting, the picker, and the resolved path + tag it
 // exposes (the point of the slice: "editing the Dockerfile rebuilds the image" stops
 // being tribal knowledge).
+describe("SettingsModal — turn-end auto-completion (#469)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    browseFsMock.mockReset();
+    browseFsMock.mockResolvedValue(BROWSE_HOME);
+    resetProfileMocks();
+  });
+
+  it("is unchecked on a fresh instance (ADR-0012: opt-in)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const box = (await screen.findByTestId(
+      "setting-autocomplete-turn-end",
+    )) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+  });
+
+  it("is labelled on the end of turn, never on a duration", async () => {
+    // The framing is load-bearing: "no activity for N seconds" is precisely what
+    // #469 removed, because a `docker build` is indistinguishable from a dead
+    // agent that way. A future edit that reintroduces a threshold in the copy
+    // should have to delete this assertion on purpose.
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const box = await screen.findByTestId("setting-autocomplete-turn-end");
+    const row = box.closest("div") as HTMLElement;
+    expect(row).toHaveTextContent(/finished its turn/i);
+    expect(row).not.toHaveTextContent(/second|minute|idle|stale/i);
+  });
+
+  it("seeds from the effective value when the env tier turned it on", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        autocomplete_turn_end: {
+          effective: true,
+          source: "env",
+          stored: null,
+          env: true,
+          default: false,
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const box = (await screen.findByTestId(
+      "setting-autocomplete-turn-end",
+    )) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(screen.getByTestId("setting-source-autocomplete-turn-end")).toHaveTextContent(
+      "PDO_AUTOCOMPLETE_TURN_END=on",
+    );
+  });
+
+  it("saves the ticked box and nothing else", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        autocomplete_turn_end: {
+          effective: true,
+          source: "stored",
+          stored: true,
+          env: null,
+          default: false,
+        },
+      }),
+    );
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: true });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("sends `false` when unticked — never a clear sentinel", async () => {
+    // Unticking must PERSIST a stored off, or it could not override
+    // `PDO_AUTOCOMPLETE_TURN_END=1`. `false` is a value here, not "unset".
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        autocomplete_turn_end: {
+          effective: true,
+          source: "env",
+          stored: null,
+          env: true,
+          default: false,
+        },
+      }),
+    );
+    updateSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: false });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("does not send the flag when left unchanged", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+    await screen.findByTestId("setting-autocomplete-turn-end");
+    fireEvent.click(screen.getByTestId("settings-save"));
+    // Nothing changed at all → close without a round-trip.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("discloses a stored OFF distinctly from the built-in default", async () => {
+    // "stored (off)" and "default (off)" are the same effective value but not the
+    // same state: only the first overrides the env tier.
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        autocomplete_turn_end: {
+          effective: false,
+          source: "stored",
+          stored: false,
+          env: true,
+          default: false,
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-source-autocomplete-turn-end");
+    expect(note).toHaveTextContent(/stored value \(off\)/i);
+    expect(note).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
+    expect(note).toHaveTextContent(/overridden/i);
+  });
+});
+
 describe("SettingsModal — sandbox Dockerfile (#431)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();

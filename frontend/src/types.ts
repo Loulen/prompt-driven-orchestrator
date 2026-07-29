@@ -92,6 +92,19 @@ export interface EnumSettingFieldWithReason extends StringSettingField {
   reason: string | null;
 }
 
+/**
+ * Boolean sibling of {@link SettingField} for a checkbox knob (#469
+ * `autocomplete_turn_end`). Every tier is a bool-or-null, and unlike
+ * {@link StringSettingField} the `default` tier is a real value (`false`).
+ */
+export interface BoolSettingField {
+  effective: boolean;
+  source: SettingSource;
+  stored: boolean | null;
+  env: boolean | null;
+  default: boolean;
+}
+
 /** One staging profile, as `GET /settings` lists it (#432): the NAME only. */
 export interface SandboxProfileRef {
   name: string;
@@ -237,6 +250,14 @@ export interface InstanceSettings {
    * exposed `$HOME` before this. `null` when `HOME` is unset.
    */
   home: string | null;
+  /**
+   * Turn-end auto-completion (#469): may the runtime complete a node whose agent has
+   * visibly finished its turn — end of turn constated in the transcript, no tool call
+   * pending — and whose outputs validate? Off by default (ADR-0012: a terminal action
+   * the runtime initiates is earned). Never keyed on a duration: that is exactly what
+   * #469 removed.
+   */
+  autocomplete_turn_end: BoolSettingField;
   updated_at: string;
 }
 
@@ -263,6 +284,10 @@ export interface UpdateSettingsRequest {
    *  (the daemon 400s otherwise), or `""` to clear back to env → the seeded default.
    *  Same `""`-sentinel discipline as the knobs above. */
   dockerfile_path?: string;
+  /** Turn-end auto-completion (#469). A plain bool: `false` PERSISTS as a stored `0`
+   *  (there is no `""` clear sentinel), so unticking the box overrides a
+   *  `PDO_AUTOCOMPLETE_TURN_END=1` instead of falling back to it. */
+  autocomplete_turn_end?: boolean;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

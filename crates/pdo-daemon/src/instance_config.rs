@@ -66,6 +66,18 @@ pub struct InstanceConfig {
     /// pass-through of an absolute path (ADR-0001): `PUT /settings` gates it as an
     /// existing regular file, and the prep fails loud if it vanishes.
     pub dockerfile_path: Option<String>,
+    /// Stored turn-end auto-completion flag as `0`/`1`, or `None` when unset (#469).
+    /// `None` falls through to the env seam
+    /// ([`crate::stale_detector::AUTOCOMPLETE_TURN_END_ENV`]) then the built-in
+    /// default (`false`). The resolver
+    /// ([`crate::stale_detector::autocomplete_turn_end_with`]) owns the precedence.
+    ///
+    /// `Option<i64>` and not `Option<bool>`: every other column on this table is a
+    /// nullable scalar and `NULL` is what makes the `stored → env → default`
+    /// fall-through work. A `bool` column would have to choose between `NOT NULL
+    /// DEFAULT 0` (the stored tier then always wins, shadowing the env) and being
+    /// nullable anyway.
+    pub autocomplete_turn_end: Option<i64>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -96,6 +108,15 @@ pub struct UpdateInstanceConfig {
     /// Set the sandbox Dockerfile path (#431). `Some("")` clears it back to unset
     /// (same `""`-sentinel as the columns above); `None` leaves it untouched.
     pub dockerfile_path: Option<String>,
+    /// Set turn-end auto-completion (#469): `Some(true)` stores `1`, `Some(false)`
+    /// stores `0`, `None` leaves it untouched.
+    ///
+    /// A `bool` on the wire (the UI has a checkbox, not a number) but a set-only
+    /// knob like the numeric ones: there is no path back to *unset*, so a user who
+    /// wants the env tier to decide again clears the column out of band. Storing
+    /// `0` rather than `NULL` for "off" is deliberate — unticking the box must
+    /// override a `PDO_AUTOCOMPLETE_TURN_END=1`, which a `NULL` would not.
+    pub autocomplete_turn_end: Option<bool>,
 }
 
 impl UpdateInstanceConfig {
@@ -107,6 +128,7 @@ impl UpdateInstanceConfig {
             && self.image_source.is_none()
             && self.default_sandbox.is_none()
             && self.dockerfile_path.is_none()
+            && self.autocomplete_turn_end.is_none()
     }
 }
 
@@ -128,6 +150,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             image_source       TEXT,
             default_sandbox    TEXT,
             dockerfile_path    TEXT,
+            autocomplete_turn_end INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -223,6 +246,22 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#469 databases: the `autocomplete_turn_end` column is
+    // absent on tables created before turn-end auto-completion. Same guarded `ADD COLUMN`
+    // idiom as the columns above — safe on every boot, and NULLABLE so an existing
+    // install keeps the feature OFF (ADR-0012) with the env tier still able to speak.
+    let has_autocomplete_turn_end = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'autocomplete_turn_end'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_autocomplete_turn_end {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN autocomplete_turn_end INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -235,6 +274,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         image_source: row.get("image_source"),
         default_sandbox: row.get("default_sandbox"),
         dockerfile_path: row.get("dockerfile_path"),
+        autocomplete_turn_end: row.get("autocomplete_turn_end"),
         updated_at: row.get("updated_at"),
     }
 }
@@ -283,6 +323,9 @@ pub async fn update(
     if edit.dockerfile_path.is_some() {
         sets.push("dockerfile_path = ?");
     }
+    if edit.autocomplete_turn_end.is_some() {
+        sets.push("autocomplete_turn_end = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -323,6 +366,11 @@ pub async fn update(
         // The resolver then falls back env→seeded default; a stored "" would win
         // precedence and be treated as unset only by the empty-string filter.
         query = query.bind(if v.is_empty() { None } else { Some(v) });
+    }
+    if let Some(v) = edit.autocomplete_turn_end {
+        // 0/1, never NULL: "off" must be a stored decision that beats the env
+        // tier, not a fall-through (#469).
+        query = query.bind(if v { 1_i64 } else { 0_i64 });
     }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;
@@ -389,6 +437,7 @@ mod tests {
         assert_eq!(cfg.image_source, None);
         assert_eq!(cfg.default_sandbox, None);
         assert_eq!(cfg.dockerfile_path, None);
+        assert_eq!(cfg.autocomplete_turn_end, None);
         assert!(!cfg.updated_at.is_empty(), "seed must stamp updated_at");
     }
 
@@ -841,6 +890,121 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.image_source.as_deref(), Some("dockerfile"));
+    }
+
+    #[tokio::test]
+    async fn update_stores_autocomplete_turn_end_as_zero_or_one() {
+        // #469: a bool on the wire, 0/1 in the column. Both directions PERSIST —
+        // "off" must be a stored decision, not a fall-through, or unticking the
+        // box could not override `PDO_AUTOCOMPLETE_TURN_END=1`.
+        let db = test_db().await;
+
+        let on = update(
+            &db,
+            UpdateInstanceConfig {
+                autocomplete_turn_end: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(on.autocomplete_turn_end, Some(1));
+        assert_eq!(get(&db).await.unwrap().autocomplete_turn_end, Some(1));
+
+        let off = update(
+            &db,
+            UpdateInstanceConfig {
+                autocomplete_turn_end: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            off.autocomplete_turn_end,
+            Some(0),
+            "unticking must persist a stored 0, never NULL"
+        );
+        // Sibling knobs stay untouched.
+        assert_eq!(off.session_cap, None);
+    }
+
+    #[tokio::test]
+    async fn autocomplete_turn_end_only_edit_is_not_a_noop() {
+        // Guard-rail for the `is_empty()` addition: an edit touching ONLY this
+        // knob must still write. Without the clause it would fall into the no-op
+        // branch and the checkbox would silently never persist.
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                autocomplete_turn_end: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.autocomplete_turn_end, Some(1));
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_autocomplete_turn_end_schema() {
+        // Installs created before #469 lack the column. Simulate that schema, then
+        // prove `init` adds it idempotently, the existing knob survives, and the
+        // feature defaults to OFF on an upgraded install (ADR-0012).
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap        INTEGER,
+                reaper_ttl_secs    INTEGER,
+                guard_timeout_secs INTEGER,
+                updated_at         TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 19, ?)")
+            .bind(crate::event_log::now_iso())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(
+            cfg.session_cap,
+            Some(19),
+            "existing knob must survive the ALTER"
+        );
+        assert_eq!(
+            cfg.autocomplete_turn_end, None,
+            "an upgraded install must default to unset, i.e. OFF"
+        );
+        assert!(
+            !crate::stale_detector::autocomplete_turn_end_with(cfg.autocomplete_turn_end)
+                || crate::stale_detector::env_autocomplete_turn_end() == Some(true),
+            "resolved OFF unless the env tier says otherwise"
+        );
+
+        // And the migrated column is writable.
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                autocomplete_turn_end: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.autocomplete_turn_end, Some(1));
     }
 
     #[tokio::test]

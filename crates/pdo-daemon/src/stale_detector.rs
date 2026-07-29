@@ -1,3 +1,30 @@
+//! Liveness sweep policy for the nodes of a live Run.
+//!
+//! **Session death is the only verdict of death (#469, ADR-0032).** For an agent
+//! node the death of the agent *is* the death of the tmux session by
+//! construction: `tmux_session_manager::wrap_with_env` emits
+//! `exec bash -c '<exports> && <tail>'` and `build_agent_tail` emits
+//! `exec claude …`, so the `claude` process **is** the pane leader of the
+//! session's only window. It exits → the pane dies → the session dies →
+//! `session_alive == false`. Same in a sandbox: the pane carries the
+//! `docker exec` client, which returns as soon as claude exits inside the
+//! container. `remain-on-exit` is never armed.
+//!
+//! That fact is why there is no idle threshold here any more. A transcript-mtime
+//! proxy adds nothing to death detection — what it catches *beyond*
+//! [`Detection::SessionDied`] is exclusively the agent that is **alive but
+//! silent**, i.e. "wedged" or "not progressing", and a `docker build` or a
+//! `cargo test --workspace` is indistinguishable from either. Measured on a real
+//! 679-record transcript of a healthy node: five silent gaps of 155 s, 185 s,
+//! 214 s, 270 s and 291 s. The old 120 s threshold was not mis-calibrated, it was
+//! structurally incapable, and one false positive cost a whole Run.
+//!
+//! What the sweep still does, beyond death:
+//! - **usage-limit menu** (#290): observability only, the node stays `Running`;
+//! - **turn-end auto-completion** (#469 §2): opt-in, and keyed on a *constated
+//!   end of turn* ([`parse_turn_state`]) — never on a duration.
+
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -5,13 +32,77 @@ use crate::event_log::{self, EventKind, NodeStatus};
 use crate::outputs_validator;
 use crate::pipeline;
 
-pub const STALE_THRESHOLD: Duration = Duration::from_secs(120);
-
-/// How often the background sweep wakes up. Independent of [`STALE_THRESHOLD`]
-/// (the idle age that *counts* as stale): the sweep must tick often enough to
-/// notice a threshold crossing promptly. Surfaced by `GET /stale/health` (#251)
-/// and mirrors `trigger_scheduler::TICK_INTERVAL_SECS`.
+/// How often the background sweep wakes up. Surfaced by `GET /stale/health`
+/// (#251) and mirrors `trigger_scheduler::TICK_INTERVAL_SECS`.
+///
+/// Since #469 this is the sweep's *only* time constant on the liveness path:
+/// there is no idle age that "counts as stale" for it to be compared against.
 pub const STALE_TICK_INTERVAL_SECS: u64 = 30;
+
+/// How many trailing bytes of a node's Claude Code transcript the turn-end probe
+/// reads (#469 §2). Never the whole file: a long node's `.jsonl` runs to
+/// megabytes and the sweep visits every live node every
+/// [`STALE_TICK_INTERVAL_SECS`].
+///
+/// A window that clips mid-record is a *designed-for* case, not a bug:
+/// [`parse_turn_state`] skips every unparseable line and answers
+/// [`TurnState::Unknown`] when nothing substantial survives — and `Unknown`
+/// behaves as "at work", so a clipped read can only ever be conservative.
+pub const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
+
+/// Anti-bounce window before a constated end of turn may be acted on (#469 §2).
+///
+/// The transcript mtime survives the removal of the idle threshold in **this one
+/// role and no other**: it is not an oracle for "is the agent alive", it only
+/// keeps the sweep from racing a write still in flight (a final `assistant`
+/// record whose successor is being appended as we read). A clock-skewed *future*
+/// mtime counts as not-quiet — conservative by construction.
+pub const TURN_END_QUIET_PERIOD: Duration = Duration::from_secs(60);
+
+/// Env seam for the turn-end auto-completion setting (#469 §4, ADR-0015).
+/// Middle tier of `stored → env → default(false)`; the resolver is
+/// [`autocomplete_turn_end_with`].
+pub const AUTOCOMPLETE_TURN_END_ENV: &str = "PDO_AUTOCOMPLETE_TURN_END";
+
+/// Built-in default for turn-end auto-completion: **off**.
+///
+/// Load-bearing (ADR-0012, autonomy is earned): a terminal action the runtime
+/// initiates on its own must be opted into. With it off, the sweep performs
+/// exactly one `session_exists` per live node and reads no transcript at all —
+/// strictly cheaper than the pre-#469 path, which paid a `read_dir` plus an
+/// outputs validation per node per tick.
+pub const AUTOCOMPLETE_TURN_END_DEFAULT: bool = false;
+
+/// Parse a stored/env boolean flag. `None` for anything unrecognised, so a typo
+/// falls through to the next precedence tier instead of silently meaning `false`.
+pub fn parse_bool_setting(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// The `env` tier of the turn-end auto-completion setting (#469 §4).
+pub fn env_autocomplete_turn_end() -> Option<bool> {
+    std::env::var(AUTOCOMPLETE_TURN_END_ENV)
+        .ok()
+        .as_deref()
+        .and_then(parse_bool_setting)
+}
+
+/// Resolve turn-end auto-completion: `stored → env → default(false)` (#469 §4,
+/// ADR-0015).
+///
+/// `stored` is the raw `instance_config.autocomplete_turn_end` column: `Some(0)`
+/// is a stored **off** and wins over the env, exactly like a stored `0` would for
+/// any other knob; only SQL `NULL` (`None`) falls through.
+pub fn autocomplete_turn_end_with(stored: Option<i64>) -> bool {
+    match stored {
+        Some(v) => v != 0,
+        None => env_autocomplete_turn_end().unwrap_or(AUTOCOMPLETE_TURN_END_DEFAULT),
+    }
+}
 
 /// On-screen anchors for Claude Code's usage-limit interactive menu (#290).
 ///
@@ -65,51 +156,161 @@ pub fn detect_usage_limit(pane: &str) -> bool {
     USAGE_LIMIT_ANCHORS.iter().any(|a| norm.contains(a))
 }
 
+/// What the sweep concluded about one live node.
+///
+/// There is deliberately **no `Stale` variant** (#469, ADR-0032): a verdict that
+/// meant "alive but idle past N seconds" produced false positives that were
+/// terminal *and* irrecoverable — the node latched out of the probe set, its
+/// later `node_done` was refused by the completion guard, and
+/// `reconcile_run_level_stall` failed the whole Run within the same sweep. The
+/// `NodeStale` **event** and `NodeStatus::Stale` survive for historical Runs (the
+/// log is append-only), but nothing in the daemon emits them any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detection {
+    /// The node's tmux session is gone. The **only** verdict of death.
     SessionDied,
-    AutoComplete,
-    Stale,
+    /// The agent is alive and has visibly finished its turn with valid outputs,
+    /// and turn-end auto-completion is enabled (#469 §2). Produced by
+    /// [`assess_node`], never by [`decide`]: it needs two probes past liveness.
+    TurnEnded,
+    /// Nothing to do. Includes every "alive but not progressing" shape —
+    /// mid-tool-call, wedged on an interactive prompt, API retries exhausted.
     Ok,
 }
 
-/// Inputs gathered by the caller (side-effectful layer) and passed into
-/// the pure decision function.
-pub struct NodeProbe {
-    pub session_alive: bool,
-    pub jsonl_mtime: Option<SystemTime>,
-    pub now: SystemTime,
-    pub artifacts_valid: Option<bool>,
-}
-
-/// Whether a node's transcript is idle past [`STALE_THRESHOLD`] as of `now`.
+/// Pure liveness decision: session alive or not (#469 §1).
 ///
-/// The **single source** of the threshold comparison (#373): both [`decide`]
-/// (the staleness authority) and [`assess_node`] (which consults it only to
-/// gate the costly outputs validation) go through here, so the gate is never
-/// re-implemented. A future `mtime` (clock skew) counts as not-idle.
-fn idle_past_threshold(mtime: SystemTime, now: SystemTime) -> bool {
-    now.duration_since(mtime).unwrap_or(Duration::ZERO) >= STALE_THRESHOLD
+/// This *is* the whole of it now. `session_alive == false` is the single
+/// authority on death (see the module docs for why the double `exec` makes the
+/// agent's exit and the session's death the same event); everything else the
+/// sweep does hangs off [`Detection::Ok`] in [`assess_node`].
+pub fn decide(session_alive: bool) -> Detection {
+    if session_alive {
+        Detection::Ok
+    } else {
+        Detection::SessionDied
+    }
 }
 
-/// Pure decision logic: given the probe results, determine the detection.
-pub fn decide(probe: &NodeProbe) -> Detection {
-    if !probe.session_alive {
-        return Detection::SessionDied;
+/// Where an agent's transcript says it is, right now (#469 §2).
+///
+/// Exactly one variant is actionable ([`Self::TurnEnded`]); the other three all
+/// mean "leave it alone", for three different reasons worth keeping distinct in
+/// logs and tests.
+///
+/// A *substantial* record is one carrying a `message` object whose `role` is
+/// `assistant` or `user`. That definition is load-bearing: a naive "look at the
+/// last line" reads one of Claude Code's trailing metadata records
+/// (`last-prompt`, `ai-title`, `mode`, `permission-mode` — none of which even
+/// carry a `timestamp`) and concludes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnState {
+    /// A `tool_use` block has no matching `tool_result`: the agent is *inside* a
+    /// tool call and alive, however long the silence has lasted. This is the
+    /// state a `docker build` or a `cargo test --workspace` sits in, and the one
+    /// the old mtime threshold could not tell from death.
+    InToolCall,
+    /// The last substantial record is a `user` message (a prompt, or a
+    /// `tool_result`): the assistant still owes a reply. **This is the
+    /// API-retries-exhausted shape (#251)** — it must never be completed.
+    AwaitingAssistant,
+    /// The last substantial record is an `assistant` message and no `tool_use` is
+    /// pending: the turn is over. The only actionable state.
+    TurnEnded,
+    /// No transcript, nothing parseable, or a single record overrunning the read
+    /// window (a large `tool_result`). Behaves as "at work": with the signal
+    /// absent nothing is touched. Fail-safe by construction.
+    Unknown,
+}
+
+/// Role of a substantial transcript record. Private: only the last one matters
+/// to [`parse_turn_state`], and only to distinguish two of its four answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordRole {
+    Assistant,
+    User,
+}
+
+/// Classify the tail of a Claude Code `.jsonl` transcript into a [`TurnState`]
+/// (#469 §2). Pure — the caller does the read ([`read_transcript_tail`]).
+///
+/// One forward pass over the lines:
+/// 1. every `tool_use` block seen in an `assistant` message opens an id;
+/// 2. every `tool_result` block seen in a `user` message closes its
+///    `tool_use_id`;
+/// 3. an id still open at the end ⇒ [`TurnState::InToolCall`], **checked first**
+///    — the record that opened it is itself an `assistant` message, so testing
+///    the last role first would misread a pending tool call as a finished turn;
+/// 4. otherwise the last substantial role decides.
+///
+/// Unparseable lines are skipped, which is what makes a byte-clipped tail safe:
+/// the leading partial record is simply not there. A `tool_result` whose
+/// `tool_use` fell outside the window closes nothing (harmless); a `tool_use`
+/// whose `tool_result` fell outside stays open (conservative).
+///
+/// The JSONL layout is not a documented contract — same caution as the #290 pane
+/// anchors — though `tool_use` / `tool_result` blocks and their `id`s are its
+/// most stable part, far ahead of a menu's wording.
+pub fn parse_turn_state(tail: &str) -> TurnState {
+    let mut open_tool_uses: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut last_role: Option<RecordRole> = None;
+
+    for line in tail.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // A clipped leading record (or any future record shape we don't know) is
+        // skipped, never guessed at.
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(message) = record.get("message") else {
+            continue;
+        };
+        let role = match message.get("role").and_then(|r| r.as_str()) {
+            Some("assistant") => RecordRole::Assistant,
+            Some("user") => RecordRole::User,
+            _ => continue,
+        };
+        last_role = Some(role);
+
+        // `content` is an array of blocks in the modern format and a bare string
+        // in the older one; only the array can carry tool blocks.
+        if let Some(blocks) = message.get("content").and_then(|c| c.as_array()) {
+            for block in blocks {
+                match block.get("type").and_then(|t| t.as_str()) {
+                    Some("tool_use") => {
+                        if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
+                            open_tool_uses.insert(id.to_string());
+                        }
+                    }
+                    Some("tool_result") => {
+                        if let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str()) {
+                            open_tool_uses.remove(id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
-    let Some(mtime) = probe.jsonl_mtime else {
-        return Detection::Ok;
-    };
-
-    if !idle_past_threshold(mtime, probe.now) {
-        return Detection::Ok;
+    if !open_tool_uses.is_empty() {
+        return TurnState::InToolCall;
     }
-
-    match probe.artifacts_valid {
-        Some(true) => Detection::AutoComplete,
-        _ => Detection::Stale,
+    match last_role {
+        Some(RecordRole::Assistant) => TurnState::TurnEnded,
+        Some(RecordRole::User) => TurnState::AwaitingAssistant,
+        None => TurnState::Unknown,
     }
+}
+
+/// Whether the transcript has been quiet long enough for a constated end of turn
+/// to be acted on (#469 §2 anti-bounce). See [`TURN_END_QUIET_PERIOD`] for why
+/// the mtime survives *only* in this role.
+fn quiet_long_enough(mtime: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(mtime).unwrap_or(Duration::ZERO) >= TURN_END_QUIET_PERIOD
 }
 
 /// Encode a working directory path exactly as Claude Code names its
@@ -174,7 +375,60 @@ fn newest_jsonl_in(dir: &Path) -> Option<PathBuf> {
     newest.map(|(p, _)| p)
 }
 
+/// The trailing slice of a node's transcript plus the mtime of that same file
+/// (#469 §2).
+///
+/// One probe returning both, deliberately: the anti-bounce
+/// ([`TURN_END_QUIET_PERIOD`]) must be evaluated against the *file we just
+/// tailed*. A second `jsonl_mtime()` probe could resolve a different newest
+/// `.jsonl` between the two calls and let a stale quiet-check greenlight a fresh
+/// tail. It is also what makes "setting off ⇒ zero transcript I/O" provable: one
+/// method, never called.
+#[derive(Debug, Clone)]
+pub struct TranscriptTail {
+    /// Last [`TRANSCRIPT_TAIL_BYTES`] bytes, lossily decoded. May begin
+    /// mid-record — [`parse_turn_state`] is built for that.
+    pub text: String,
+    /// mtime of the tailed file. The anti-bounce clock, **not** an activity
+    /// oracle: Claude Code writes untimestamped metadata records that bump it
+    /// without any agent activity behind them.
+    pub mtime: SystemTime,
+}
+
+/// Read the last [`TRANSCRIPT_TAIL_BYTES`] of `path` together with its mtime.
+///
+/// `None` on any I/O failure (absent file, unreadable) — which
+/// [`assess_node`] treats as "no signal", i.e. leave the node alone. Seeks rather
+/// than reading the file whole, so a multi-megabyte transcript costs one
+/// bounded read per live node per sweep.
+pub fn read_transcript_tail(path: &Path) -> Option<TranscriptTail> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    let mtime = meta.modified().ok()?;
+    let len = meta.len();
+    let start = len.saturating_sub(TRANSCRIPT_TAIL_BYTES);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).ok()?;
+    }
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    file.take(TRANSCRIPT_TAIL_BYTES)
+        .read_to_end(&mut buf)
+        .ok()?;
+    Some(TranscriptTail {
+        // Lossy: the seek can land mid-codepoint, and a replacement char only
+        // ever breaks the JSON of the leading partial record, which is skipped.
+        text: String::from_utf8_lossy(&buf).into_owned(),
+        mtime,
+    })
+}
+
 /// Validate outputs for a node using the pipeline definition.
+///
+/// Since #469 this is consulted **only** behind a constated
+/// [`TurnState::TurnEnded`] — never behind a duration. It is the second of the
+/// two independent guards on auto-completion: it is what stops an agent that
+/// ended its turn to *ask a question* from being completed, since its outputs
+/// are still incomplete.
 pub fn validate_outputs(
     pipeline_path: &Path,
     node_id: &str,
@@ -193,7 +447,16 @@ pub fn validate_outputs(
     outputs_validator::validate(&pipeline_def, node_id, iter, artifacts_dir).is_ok()
 }
 
-/// Build events for a detection result. Returns empty vec for Detection::Ok.
+/// Build events for a detection result.
+///
+/// Only [`Detection::SessionDied`] has an event of its own here.
+/// [`Detection::TurnEnded`] deliberately produces **none** (#469 §3): appending a
+/// `NodeAutoCompleted` straight into the log was the defect of the old design —
+/// on a `code-mutating` / `merge` node it would record a `Completed` whose commit
+/// stayed on the `pdo/sub-…` branch, with the downstream receiving nothing. Its
+/// terminal event is appended by the *shared node-completion body*, past the
+/// forgotten-run refusal, the completion guard and
+/// `commit_and_merge_sub_worktree_inner`.
 pub fn detection_events(
     detection: &Detection,
     run_id: &str,
@@ -201,10 +464,9 @@ pub fn detection_events(
     iter: i64,
 ) -> Vec<event_log::Event> {
     // The session-died cause names the dead tmux session (#213 AC1) so the
-    // failure is self-explanatory in the UI/log; the other causes are
-    // node-relative and need no session name.
+    // failure is self-explanatory in the UI/log.
     let (kind, reason) = match detection {
-        Detection::Ok => return vec![],
+        Detection::Ok | Detection::TurnEnded => return vec![],
         Detection::SessionDied => {
             let session = crate::tmux_session_manager::node_session_name(run_id, node_id, iter);
             (
@@ -212,11 +474,6 @@ pub fn detection_events(
                 format!("session_died: tmux session {session} no longer exists"),
             )
         }
-        Detection::AutoComplete => (
-            EventKind::NodeAutoCompleted,
-            "auto_completed_idle_valid".to_string(),
-        ),
-        Detection::Stale => (EventKind::NodeStale, "idle_outputs_incomplete".to_string()),
     };
 
     vec![event_log::Event {
@@ -238,43 +495,30 @@ pub fn detection_events(
 /// Every method is a side-effect-free *read*: the reap/spawn side effects stay
 /// in the sweep, keyed off [`Assessment::detection`].
 pub trait NodeProbes {
-    /// Is the node's tmux session still alive?
+    /// Is the node's tmux session still alive? The one probe on the default path
+    /// — see [`decide`].
     fn session_alive(&self) -> bool;
 
-    /// mtime of the newest Claude Code transcript for this node's working dir,
-    /// or `None` when no transcript dir/file resolves.
-    fn jsonl_mtime(&self) -> Option<SystemTime>;
+    /// Trailing slice + mtime of the newest Claude Code transcript for this
+    /// node's working dir, or `None` when nothing resolves (#469 §2).
+    ///
+    /// Called **only** when turn-end auto-completion is enabled. With the setting
+    /// off this is never invoked, which is the whole of "unchecked ⇒ no transcript
+    /// read" and is asserted directly through this seam.
+    fn transcript_tail(&self) -> Option<TranscriptTail>;
 
-    /// Do the node's declared outputs validate against the pipeline? Consulted
-    /// by [`assess_node`] **only** once the idle threshold is crossed, so the
-    /// (relatively costly) validation never runs on a fresh node.
-    fn validate_outputs(&self) -> bool;
+    /// Do the node's declared outputs validate against the pipeline? The second
+    /// of the two independent auto-completion guards, consulted **only** behind a
+    /// constated [`TurnState::TurnEnded`] — so a healthy node never pays for it.
+    fn outputs_valid(&self) -> bool;
 
     /// Best-effort capture of the node's tmux pane, for the usage-limit menu
-    /// probe (#290). Only called on the `Ok` path (an alive, non-stale node).
+    /// probe (#290). Only called on the `Ok` path (an alive node).
     fn capture_pane(&self) -> Option<String>;
 
     /// Best-effort session-death forensics (#234). Gathered lazily — only when
     /// the session is found dead — so no tmux/proc I/O runs on a healthy node.
     fn session_death_diagnostics(&self) -> SessionDeathDiagnostics;
-}
-
-/// Whether the mtime-based auto-complete path is allowed to *act* (reap the
-/// idle session and advance the pipeline) or only to be *observed* (#373).
-///
-/// Auto-complete is irreversible and can fire falsely on a node mid a
-/// legitimate >[`STALE_THRESHOLD`] tool call whose outputs already validate, so
-/// re-arming the terminal action is trust-gated (ADR-0012). Unit A ships
-/// [`Observe`](Self::Observe): [`assess_node`] emits the non-terminal
-/// [`event_log::EventKind::NodeAutoCompleteObserved`] marker (node stays
-/// Running) instead of the terminal `NodeAutoCompleted`. Flipping the sweep to
-/// [`Act`](Self::Act) is the Unit B change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutoCompletePolicy {
-    /// Emit an observe-only marker; never reap/advance. (#373 Unit A.)
-    Observe,
-    /// Emit the terminal `NodeAutoCompleted`; the sweep reaps + advances.
-    Act,
 }
 
 /// Outcome of [`assess_node`]: the raw detection plus the events to append and
@@ -287,18 +531,18 @@ pub enum AutoCompletePolicy {
 /// individually rather than compare a whole `Assessment`.
 #[derive(Debug, Clone)]
 pub struct Assessment {
-    /// Raw detection from [`decide`] (before the [`AutoCompletePolicy`] is
-    /// applied to the auto-complete event shape). The sweep drives its
-    /// reap/spawn side effects off this.
+    /// The verdict the sweep drives its side effects off: `SessionDied` reaps,
+    /// `TurnEnded` runs the shared node-completion body (#469 §3), `Ok` does
+    /// nothing.
     pub detection: Detection,
     /// Events to append. A `SessionDied` failure already carries its
-    /// diagnostics; an `Observe`-policy auto-complete carries a non-terminal
-    /// `NodeAutoCompleteObserved`; a usage-limit menu carries a (deduped)
-    /// `NodeBlockedOnLimit`. Empty for a nominal `Ok` node.
+    /// diagnostics; a usage-limit menu carries a (deduped) `NodeBlockedOnLimit`.
+    /// Empty for a nominal `Ok` node — and for `TurnEnded`, whose terminal event
+    /// belongs to the shared completion body, not to the sweep.
     pub events: Vec<event_log::Event>,
-    /// True when the node is alive & non-stale but its pane shows Claude Code's
-    /// usage-limit menu — feeds the per-sweep `blocked_on_limit` gauge (#290).
-    /// Set on every sweep the menu is visible, independent of event dedup.
+    /// True when the node is alive but its pane shows Claude Code's usage-limit
+    /// menu — feeds the per-sweep `blocked_on_limit` gauge (#290). Set on every
+    /// sweep the menu is visible, independent of event dedup.
     pub blocked_on_limit: bool,
     /// The session-death forensics gathered on the `SessionDied` path (`None`
     /// otherwise), surfaced so the sweep can log the structured fields (#234)
@@ -307,10 +551,10 @@ pub struct Assessment {
 }
 
 /// True when an event of `kind` for `(node_id, iter)` already exists in
-/// `prior_events` — the rising-edge de-dup key for the informational markers
-/// (`NodeBlockedOnLimit`, `NodeAutoCompleteObserved`). Pure over the event log
-/// snapshot the sweep already loaded, so a held condition emits one event, not
-/// one per ~30 s sweep tick, and the dedup survives a daemon restart.
+/// `prior_events` — the rising-edge de-dup key for the informational
+/// `NodeBlockedOnLimit` marker. Pure over the event log snapshot the sweep
+/// already loaded, so a held condition emits one event, not one per ~30 s sweep
+/// tick, and the dedup survives a daemon restart.
 fn episode_has_event(
     prior_events: &[event_log::Event],
     kind: &EventKind,
@@ -340,26 +584,43 @@ fn informational_event(
     }
 }
 
-/// The stale-detection policy for a single running node, with all I/O injected
-/// via `probes` (#373). This is the one place the whole pipeline lives:
+/// The liveness-sweep policy for a single running node, with all I/O injected
+/// via `probes`. This is the one place the whole pipeline lives:
 ///
 /// ```text
-/// probes → STALE_THRESHOLD gate → decide → detection_events
-///        → attach_diagnostics (SessionDied) → usage-limit-dedup (Ok)
+/// session_alive → decide
+///   ├─ SessionDied → detection_events → attach_diagnostics
+///   └─ Ok          → usage-limit dedup (#290)
+///                  → [setting on] transcript_tail → quiet? → parse_turn_state
+///                                 → outputs_valid? → TurnEnded (#469 §2)
 /// ```
 ///
 /// so [`crate::lib`]'s sweep is reduced to a loop that builds a [`NodeProbes`]
-/// adapter, calls this, appends [`Assessment::events`], and runs the reap/spawn
-/// side effects keyed off [`Assessment::detection`].
+/// adapter, calls this, appends [`Assessment::events`], and runs the
+/// reap / complete side effects keyed off [`Assessment::detection`].
 ///
-/// The `STALE_THRESHOLD` gate has a **single source**: [`decide`].
-/// `assess_node` consults [`NodeProbes::validate_outputs`] only once the idle
-/// age has (potentially) crossed the threshold, so a fresh node never pays for
-/// outputs validation — but the gating *decision* itself is not duplicated
-/// here, it is [`decide`]'s.
+/// `autocomplete_turn_end` is the resolved instance setting
+/// ([`autocomplete_turn_end_with`]), read once per sweep by the caller. When it
+/// is `false` this function **short-circuits at the head of the `Ok` path**:
+/// neither [`NodeProbes::transcript_tail`] nor [`NodeProbes::outputs_valid`] is
+/// invoked, so the default path costs one `session_exists` plus the #290 pane
+/// capture and nothing else.
+///
+/// The two guards on `TurnEnded` are independent and both mandatory:
+/// [`TurnState::TurnEnded`] (the agent visibly finished) **and** valid outputs
+/// (it finished *the work*, not just its turn — an agent that stopped to ask a
+/// question fails the second). The anti-bounce
+/// ([`TURN_END_QUIET_PERIOD`]) sits in front of both so a write in flight is
+/// never raced.
+///
+/// Note on #290: a node wedged on the usage-limit menu cannot be auto-completed
+/// here even though it is silent — the limit is hit while *requesting* the next
+/// assistant message, so its last substantial record is a `user`/`tool_result`
+/// and [`parse_turn_state`] answers [`TurnState::AwaitingAssistant`]. "Blocked"
+/// is never "finished", by construction rather than by a third guard.
 ///
 /// `prior_events` is the run's event-log snapshot, used purely for the
-/// rising-edge de-dup of the informational markers (see [`episode_has_event`]).
+/// rising-edge de-dup of `NodeBlockedOnLimit` (see [`episode_has_event`]).
 pub fn assess_node(
     probes: &impl NodeProbes,
     prior_events: &[event_log::Event],
@@ -367,105 +628,63 @@ pub fn assess_node(
     node_id: &str,
     iter: i64,
     now: SystemTime,
-    auto_complete_policy: AutoCompletePolicy,
+    autocomplete_turn_end: bool,
 ) -> Assessment {
-    let session_alive = probes.session_alive();
-    let jsonl_mtime = probes.jsonl_mtime();
+    let detection = decide(probes.session_alive());
 
-    // Validate outputs only once the transcript is idle past the threshold,
-    // via the SAME [`idle_past_threshold`] gate `decide` uses — this avoids the
-    // validation I/O on a fresh node without re-implementing the gate. `decide`
-    // remains the sole authority on the Ok/Stale/AutoComplete partition.
-    let threshold_crossed = jsonl_mtime.is_some_and(|mt| idle_past_threshold(mt, now));
-    let artifacts_valid = threshold_crossed.then(|| probes.validate_outputs());
-
-    let probe = NodeProbe {
-        session_alive,
-        jsonl_mtime,
-        now,
-        artifacts_valid,
-    };
-    let detection = decide(&probe);
-
-    match detection {
-        Detection::Ok => {
-            // Alive & non-stale, but maybe wedged on Claude Code's usage-limit
-            // menu (#290): observability only — the node keeps running. The
-            // gauge counts every sweep the menu is visible; the event is emitted
-            // once per (node, iter) episode.
-            let blocked_on_limit = probes
-                .capture_pane()
-                .is_some_and(|pane| detect_usage_limit(&pane));
-            let events = if blocked_on_limit
-                && !episode_has_event(prior_events, &EventKind::NodeBlockedOnLimit, node_id, iter)
-            {
-                vec![informational_event(
-                    EventKind::NodeBlockedOnLimit,
-                    run_id,
-                    node_id,
-                    iter,
-                    serde_json::json!({ "signal": "usage_limit_menu" }),
-                )]
-            } else {
-                vec![]
-            };
-            Assessment {
-                detection,
-                events,
-                blocked_on_limit,
-                session_death_diagnostics: None,
-            }
-        }
-        Detection::SessionDied => {
-            let mut events = detection_events(&detection, run_id, node_id, iter);
-            let diag = probes.session_death_diagnostics();
-            attach_diagnostics(&mut events, &diag);
-            Assessment {
-                detection,
-                events,
-                blocked_on_limit: false,
-                session_death_diagnostics: Some(diag),
-            }
-        }
-        Detection::AutoComplete => {
-            // #373 Unit A: re-arming the terminal auto-complete (reap + advance)
-            // is trust-gated. Under `Observe`, emit a deduped non-terminal marker
-            // so the node stays Running and the "would auto-complete" moment is
-            // durably visible; under `Act`, emit the real terminal event.
-            let events = match auto_complete_policy {
-                AutoCompletePolicy::Act => detection_events(&detection, run_id, node_id, iter),
-                AutoCompletePolicy::Observe => {
-                    if episode_has_event(
-                        prior_events,
-                        &EventKind::NodeAutoCompleteObserved,
-                        node_id,
-                        iter,
-                    ) {
-                        vec![]
-                    } else {
-                        vec![informational_event(
-                            EventKind::NodeAutoCompleteObserved,
-                            run_id,
-                            node_id,
-                            iter,
-                            serde_json::json!({ "reason": "idle_valid_outputs_observe_only" }),
-                        )]
-                    }
-                }
-            };
-            Assessment {
-                detection,
-                events,
-                blocked_on_limit: false,
-                session_death_diagnostics: None,
-            }
-        }
-        Detection::Stale => Assessment {
-            events: detection_events(&detection, run_id, node_id, iter),
+    if detection == Detection::SessionDied {
+        let mut events = detection_events(&detection, run_id, node_id, iter);
+        let diag = probes.session_death_diagnostics();
+        attach_diagnostics(&mut events, &diag);
+        return Assessment {
             detection,
+            events,
             blocked_on_limit: false,
-            session_death_diagnostics: None,
+            session_death_diagnostics: Some(diag),
+        };
+    }
+
+    // Alive, but maybe wedged on Claude Code's usage-limit menu (#290):
+    // observability only — the node keeps running. The gauge counts every sweep
+    // the menu is visible; the event is emitted once per (node, iter) episode.
+    let blocked_on_limit = probes
+        .capture_pane()
+        .is_some_and(|pane| detect_usage_limit(&pane));
+    let events = if blocked_on_limit
+        && !episode_has_event(prior_events, &EventKind::NodeBlockedOnLimit, node_id, iter)
+    {
+        vec![informational_event(
+            EventKind::NodeBlockedOnLimit,
+            run_id,
+            node_id,
+            iter,
+            serde_json::json!({ "signal": "usage_limit_menu" }),
+        )]
+    } else {
+        vec![]
+    };
+
+    // #469 §2: turn-end auto-completion. Opt-in, and the ONLY path here that can
+    // end a live node's iteration. `claude --dangerously-skip-permissions
+    // "<prompt>"` does not exit at the end of a turn — it stays in the REPL — so
+    // an agent that finished without calling `pdo complete` is alive and
+    // motionless, and this is its positive signature.
+    let turn_ended = autocomplete_turn_end
+        && probes.transcript_tail().is_some_and(|tail| {
+            quiet_long_enough(tail.mtime, now)
+                && parse_turn_state(&tail.text) == TurnState::TurnEnded
+        })
+        && probes.outputs_valid();
+
+    Assessment {
+        detection: if turn_ended {
+            Detection::TurnEnded
+        } else {
+            detection
         },
+        events,
+        blocked_on_limit,
+        session_death_diagnostics: None,
     }
 }
 
@@ -669,136 +888,259 @@ mod tests {
         }
     }
 
-    // --- decide (pure logic) ---
+    // --- decide (pure logic) — liveness, and nothing else (#469 §1) ---
 
     #[test]
     fn dead_session_returns_session_died() {
-        let probe = NodeProbe {
-            session_alive: false,
-            jsonl_mtime: None,
-            now: SystemTime::now(),
-            artifacts_valid: None,
-        };
-        assert_eq!(decide(&probe), Detection::SessionDied);
+        assert_eq!(decide(false), Detection::SessionDied);
     }
 
     #[test]
-    fn dead_session_regardless_of_mtime() {
+    fn live_session_returns_ok() {
+        assert_eq!(decide(true), Detection::Ok);
+    }
+
+    #[test]
+    fn decide_never_produces_turn_ended() {
+        // `TurnEnded` needs two probes past liveness, so it is `assess_node`'s to
+        // produce — never the pure liveness verdict's. Guards against someone
+        // "simplifying" the two into one and reintroducing a duration.
+        for alive in [true, false] {
+            assert_ne!(decide(alive), Detection::TurnEnded);
+        }
+    }
+
+    // --- parse_turn_state (#469 §2). The fixtures are cut from the REAL
+    // transcript of the node this issue was opened about (`XBG5Cxkn`, 679
+    // records); free text is clipped, every field the parser reads is verbatim.
+
+    /// The real tail: … assistant `tool_use` → user `tool_result` → assistant
+    /// `text` → two `system` records → four untimestamped metadata records.
+    const FIXTURE_TURN_ENDED: &str = include_str!("../tests/fixtures/turn_state/turn_ended.jsonl");
+    /// The same transcript cut on the `docker build -q` whose `tool_result`
+    /// landed **214 s** later — one of five over-threshold gaps in this healthy
+    /// node, and the measured cause of the false `node_stale`.
+    const FIXTURE_IN_TOOL_CALL: &str =
+        include_str!("../tests/fixtures/turn_state/in_tool_call.jsonl");
+    /// Cut on a `user`/`tool_result`: the assistant still owes a reply.
+    const FIXTURE_AWAITING_ASSISTANT: &str =
+        include_str!("../tests/fixtures/turn_state/awaiting_assistant.jsonl");
+    /// Only Claude Code's untimestamped metadata records (`last-prompt`,
+    /// `ai-title`, `mode`, `permission-mode`).
+    const FIXTURE_METADATA_ONLY: &str =
+        include_str!("../tests/fixtures/turn_state/metadata_only.jsonl");
+
+    #[test]
+    fn real_transcript_tail_is_turn_ended() {
+        // AC4. The node this issue is about HAD finished: its last substantial
+        // record is an assistant `text` message and no tool call is pending.
+        assert_eq!(parse_turn_state(FIXTURE_TURN_ENDED), TurnState::TurnEnded);
+    }
+
+    #[test]
+    fn pending_docker_build_is_in_tool_call() {
+        // AC5, the fixture that forbids "two writers on one worktree": mid a
+        // 214 s `docker build` the agent is *inside* a tool call, so neither a
+        // duration nor already-valid outputs may complete it.
+        assert_eq!(
+            parse_turn_state(FIXTURE_IN_TOOL_CALL),
+            TurnState::InToolCall
+        );
+    }
+
+    #[test]
+    fn trailing_tool_result_is_awaiting_assistant() {
+        // AC6 — the API-retries-exhausted shape (#251).
+        assert_eq!(
+            parse_turn_state(FIXTURE_AWAITING_ASSISTANT),
+            TurnState::AwaitingAssistant
+        );
+    }
+
+    #[test]
+    fn metadata_only_tail_is_unknown_not_turn_ended() {
+        // AC7. These records carry no `message`, so a naive "read the last line"
+        // would see `permission-mode` and conclude nothing — hence the
+        // *substantial record* definition. `Unknown` behaves as "at work".
+        assert_eq!(parse_turn_state(FIXTURE_METADATA_ONLY), TurnState::Unknown);
+    }
+
+    #[test]
+    fn empty_tail_is_unknown() {
+        assert_eq!(parse_turn_state(""), TurnState::Unknown);
+        assert_eq!(parse_turn_state("\n\n  \n"), TurnState::Unknown);
+    }
+
+    #[test]
+    fn a_clipped_leading_record_is_skipped_not_guessed() {
+        // The read window can land mid-record. The leading partial line must be
+        // dropped, and the verdict stays that of the records which do survive.
+        assert_eq!(
+            parse_turn_state(&FIXTURE_TURN_ENDED[40..]),
+            TurnState::TurnEnded
+        );
+    }
+
+    #[test]
+    fn a_single_unparseable_record_is_unknown() {
+        // One oversized `tool_result` overrunning the whole window: nothing
+        // substantial survives → `Unknown` → left alone. Fail-safe.
+        assert_eq!(
+            parse_turn_state(r#"{"type":"user","message":{"role":"user","conte"#),
+            TurnState::Unknown
+        );
+    }
+
+    #[test]
+    fn pending_tool_use_beats_a_later_assistant_message() {
+        // Ordering guard: the record that OPENS a tool call is itself an
+        // `assistant` message, so testing the last role before the pending-call
+        // set would read a live tool call as a finished turn.
+        let tail = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 300"}}]}}"#;
+        assert_eq!(parse_turn_state(tail), TurnState::InToolCall);
+    }
+
+    #[test]
+    fn a_matched_tool_call_does_not_hold_the_turn_open() {
+        let tail = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+            "\n"
+        );
+        assert_eq!(parse_turn_state(tail), TurnState::TurnEnded);
+    }
+
+    #[test]
+    fn an_orphan_tool_result_closes_nothing_and_is_harmless() {
+        // Its `tool_use` fell outside the read window. Removing an id that was
+        // never inserted is a no-op, and the last role still decides.
+        let tail = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"gone","content":"ok"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+            "\n"
+        );
+        assert_eq!(parse_turn_state(tail), TurnState::TurnEnded);
+    }
+
+    #[test]
+    fn a_string_content_assistant_message_still_ends_the_turn() {
+        // The older format carries `content` as a bare string: no tool blocks to
+        // read, but the role still counts.
+        let tail = r#"{"type":"assistant","message":{"role":"assistant","content":"all done"}}"#;
+        assert_eq!(parse_turn_state(tail), TurnState::TurnEnded);
+    }
+
+    #[test]
+    fn system_records_are_not_substantial() {
+        // A `system` record has no `message`, so it never decides; a `thinking`
+        // block is an assistant message and legitimately does.
+        let tail = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}"#,
+            "\n",
+            r#"{"type":"system","timestamp":"2026-07-29T09:10:43.884Z","hasOutput":false}"#,
+            "\n"
+        );
+        assert_eq!(parse_turn_state(tail), TurnState::TurnEnded);
+    }
+
+    // --- the turn-end anti-bounce (#469 §2) ---
+
+    #[test]
+    fn quiet_window_boundaries() {
         let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: false,
-            jsonl_mtime: Some(now - Duration::from_secs(300)),
-            now,
-            artifacts_valid: Some(true),
-        };
-        assert_eq!(decide(&probe), Detection::SessionDied);
+        assert!(!quiet_long_enough(now, now), "a write just landed");
+        assert!(!quiet_long_enough(
+            now - (TURN_END_QUIET_PERIOD - Duration::from_secs(1)),
+            now
+        ));
+        assert!(quiet_long_enough(now - TURN_END_QUIET_PERIOD, now));
+        assert!(quiet_long_enough(now - Duration::from_secs(3600), now));
     }
 
     #[test]
-    fn no_jsonl_file_returns_ok() {
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: None,
-            now: SystemTime::now(),
-            artifacts_valid: None,
-        };
-        assert_eq!(decide(&probe), Detection::Ok);
-    }
-
-    #[test]
-    fn fresh_mtime_returns_ok() {
+    fn a_future_mtime_is_never_quiet() {
+        // Clock skew must not greenlight a completion.
         let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(60)),
-            now,
-            artifacts_valid: None,
-        };
-        assert_eq!(decide(&probe), Detection::Ok);
+        assert!(!quiet_long_enough(now + Duration::from_secs(600), now));
+    }
+
+    // --- the setting resolver (#469 §4, ADR-0015 stored → env → default) ---
+
+    /// ADR-0012: a terminal action the runtime initiates is earned, not given, so
+    /// the built-in default must stay OFF. A compile-time guard — flipping the
+    /// constant fails the build rather than a test run.
+    const _: () = assert!(!AUTOCOMPLETE_TURN_END_DEFAULT);
+
+    #[test]
+    fn stored_wins_over_env_in_both_directions() {
+        // A stored 0 is a stored OFF and wins, exactly like a stored 1 wins —
+        // that is what makes the checkbox authoritative over the env var.
+        assert!(autocomplete_turn_end_with(Some(1)));
+        assert!(!autocomplete_turn_end_with(Some(0)));
+        // Any non-zero is truthy: the column is written 0/1, but a hand-edited DB
+        // must not become a third state.
+        assert!(autocomplete_turn_end_with(Some(7)));
     }
 
     #[test]
-    fn threshold_boundary_119s_returns_ok() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(119)),
-            now,
-            artifacts_valid: Some(true),
-        };
-        assert_eq!(decide(&probe), Detection::Ok);
+    fn bool_setting_parses_the_usual_spellings_and_rejects_junk() {
+        for on in ["1", "true", "TRUE", " yes ", "on"] {
+            assert_eq!(parse_bool_setting(on), Some(true), "{on:?}");
+        }
+        for off in ["0", "false", "No", "off"] {
+            assert_eq!(parse_bool_setting(off), Some(false), "{off:?}");
+        }
+        // Junk yields None so it falls through to the next tier instead of
+        // silently meaning `false`.
+        for junk in ["", "maybe", "2x", "oui"] {
+            assert_eq!(parse_bool_setting(junk), None, "{junk:?}");
+        }
+    }
+
+    // --- read_transcript_tail (filesystem) ---
+
+    #[test]
+    fn transcript_tail_reads_the_last_bytes_and_the_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        // Comfortably larger than the window, so the read must seek.
+        let filler = "x".repeat(TRANSCRIPT_TAIL_BYTES as usize);
+        std::fs::write(&path, format!("{filler}TAIL-MARKER\n")).unwrap();
+        let back_dated = SystemTime::now() - Duration::from_secs(300);
+        filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(back_dated)).unwrap();
+
+        let tail = read_transcript_tail(&path).expect("tail must read");
+        assert!(
+            tail.text.ends_with("TAIL-MARKER\n"),
+            "must read the END of the file"
+        );
+        assert!(
+            tail.text.len() as u64 <= TRANSCRIPT_TAIL_BYTES,
+            "must never exceed the window: {} bytes",
+            tail.text.len()
+        );
+        assert!(
+            tail.mtime <= SystemTime::now() - Duration::from_secs(299),
+            "mtime must come from the same stat as the read"
+        );
     }
 
     #[test]
-    fn threshold_boundary_120s_with_valid_artifacts_returns_auto_complete() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(120)),
-            now,
-            artifacts_valid: Some(true),
-        };
-        assert_eq!(decide(&probe), Detection::AutoComplete);
+    fn transcript_tail_reads_a_short_file_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap().text, "{}\n");
     }
 
     #[test]
-    fn threshold_boundary_120s_with_invalid_artifacts_returns_stale() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(120)),
-            now,
-            artifacts_valid: Some(false),
-        };
-        assert_eq!(decide(&probe), Detection::Stale);
-    }
-
-    #[test]
-    fn threshold_boundary_121s_with_valid_artifacts_returns_auto_complete() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(121)),
-            now,
-            artifacts_valid: Some(true),
-        };
-        assert_eq!(decide(&probe), Detection::AutoComplete);
-    }
-
-    #[test]
-    fn threshold_boundary_121s_with_missing_artifacts_returns_stale() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(121)),
-            now,
-            artifacts_valid: None,
-        };
-        assert_eq!(decide(&probe), Detection::Stale);
-    }
-
-    #[test]
-    fn idle_with_valid_artifacts_auto_completes() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(200)),
-            now,
-            artifacts_valid: Some(true),
-        };
-        assert_eq!(decide(&probe), Detection::AutoComplete);
-    }
-
-    #[test]
-    fn idle_with_invalid_artifacts_is_stale() {
-        let now = SystemTime::now();
-        let probe = NodeProbe {
-            session_alive: true,
-            jsonl_mtime: Some(now - Duration::from_secs(200)),
-            now,
-            artifacts_valid: Some(false),
-        };
-        assert_eq!(decide(&probe), Detection::Stale);
+    fn transcript_tail_of_a_missing_file_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_transcript_tail(&tmp.path().join("nope.jsonl")).is_none());
     }
 
     // --- detection_events ---
@@ -806,6 +1148,14 @@ mod tests {
     #[test]
     fn events_ok_is_empty() {
         assert!(detection_events(&Detection::Ok, "r", "n", 1).is_empty());
+    }
+
+    #[test]
+    fn events_turn_ended_is_empty() {
+        // #469 §3: the terminal `NodeAutoCompleted` belongs to the SHARED
+        // node-completion body (which merges the sub-worktree first), never to a
+        // bare append from the sweep.
+        assert!(detection_events(&Detection::TurnEnded, "r", "n", 1).is_empty());
     }
 
     #[test]
@@ -825,18 +1175,24 @@ mod tests {
     }
 
     #[test]
-    fn events_auto_complete() {
-        let events = detection_events(&Detection::AutoComplete, "run1", "node1", 2);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EventKind::NodeAutoCompleted);
-        assert_eq!(events[0].iter, Some(2));
-    }
-
-    #[test]
-    fn events_stale() {
-        let events = detection_events(&Detection::Stale, "run1", "node1", 1);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EventKind::NodeStale);
+    fn no_detection_can_emit_node_stale() {
+        // AC2 (pure half): `NodeStale` has no producer left. The variant itself
+        // stays — the log is append-only and historical Runs carry it — but
+        // nothing in the daemon writes one.
+        for detection in [Detection::Ok, Detection::TurnEnded, Detection::SessionDied] {
+            for event in detection_events(&detection, "r", "n", 1) {
+                assert_ne!(
+                    event.kind,
+                    EventKind::NodeStale,
+                    "no detection may emit NodeStale any more (#469 §1)"
+                );
+                assert_ne!(
+                    event.kind,
+                    EventKind::NodeAutoCompleted,
+                    "auto-completion goes through the shared completion body (#469 §3)"
+                );
+            }
+        }
     }
 
     // --- #234 session-death diagnostics ---
@@ -1123,31 +1479,54 @@ SwapFree:         204800 kB
         ));
     }
 
-    // --- assess_node (#373: whole sweep-policy pipeline with fake I/O) ---
+    // --- assess_node (#469: the whole sweep policy, with fake I/O) ---
 
-    /// A fully controllable [`NodeProbes`] fake. `validate_calls` records how
-    /// many times `validate_outputs` ran so a test can prove the threshold gate
-    /// short-circuits the (costly) validation on a fresh node.
+    /// A fully controllable [`NodeProbes`] fake. The two counters are the point:
+    /// they prove the *short-circuits*, i.e. that a healthy node with the setting
+    /// off pays for no transcript read and no outputs validation at all.
     struct FakeProbes {
         session_alive: bool,
-        jsonl_mtime: Option<SystemTime>,
+        tail: Option<TranscriptTail>,
         outputs_valid: bool,
         pane: Option<String>,
         diagnostics: SessionDeathDiagnostics,
+        tail_calls: std::cell::Cell<usize>,
         validate_calls: std::cell::Cell<usize>,
     }
 
     impl FakeProbes {
-        /// Alive, transcript idle `age` old, outputs `valid`, no pane.
-        fn idle(age: Duration, valid: bool) -> Self {
+        fn alive() -> Self {
             Self {
                 session_alive: true,
-                jsonl_mtime: Some(SystemTime::now() - age),
-                outputs_valid: valid,
+                tail: None,
+                outputs_valid: false,
                 pane: None,
                 diagnostics: SessionDeathDiagnostics::default(),
+                tail_calls: std::cell::Cell::new(0),
                 validate_calls: std::cell::Cell::new(0),
             }
+        }
+
+        /// Alive, transcript = `text` last written `quiet` ago, outputs `valid`.
+        fn with_tail(text: &str, quiet: Duration, valid: bool) -> Self {
+            Self {
+                tail: Some(TranscriptTail {
+                    text: text.to_string(),
+                    mtime: SystemTime::now() - quiet,
+                }),
+                outputs_valid: valid,
+                ..Self::alive()
+            }
+        }
+
+        /// The shape this issue exists for: an agent that finished its turn,
+        /// wrote valid outputs, and never called `pdo complete`.
+        fn finished_turn() -> Self {
+            Self::with_tail(
+                FIXTURE_TURN_ENDED,
+                TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+                true,
+            )
         }
     }
 
@@ -1155,10 +1534,11 @@ SwapFree:         204800 kB
         fn session_alive(&self) -> bool {
             self.session_alive
         }
-        fn jsonl_mtime(&self) -> Option<SystemTime> {
-            self.jsonl_mtime
+        fn transcript_tail(&self) -> Option<TranscriptTail> {
+            self.tail_calls.set(self.tail_calls.get() + 1);
+            self.tail.clone()
         }
-        fn validate_outputs(&self) -> bool {
+        fn outputs_valid(&self) -> bool {
             self.validate_calls.set(self.validate_calls.get() + 1);
             self.outputs_valid
         }
@@ -1170,25 +1550,33 @@ SwapFree:         204800 kB
         }
     }
 
-    fn assess(probes: &FakeProbes, policy: AutoCompletePolicy) -> Assessment {
-        assess_node(probes, &[], "run1", "worker", 1, SystemTime::now(), policy)
+    fn assess(probes: &FakeProbes, autocomplete: bool) -> Assessment {
+        assess_node(
+            probes,
+            &[],
+            "run1",
+            "worker",
+            1,
+            SystemTime::now(),
+            autocomplete,
+        )
     }
+
+    // --- session death: the only verdict of death ---
 
     #[test]
     fn assess_dead_session_fails_with_diagnostics() {
         let probes = FakeProbes {
             session_alive: false,
-            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(300)),
-            outputs_valid: true, // must be ignored: dead session wins
-            pane: None,
+            outputs_valid: true, // must be ignored: a dead session wins
             diagnostics: SessionDeathDiagnostics {
                 tmux_server_alive: Some(false),
                 correlated_deaths: 2,
                 ..Default::default()
             },
-            validate_calls: std::cell::Cell::new(0),
+            ..FakeProbes::finished_turn()
         };
-        let a = assess(&probes, AutoCompletePolicy::Observe);
+        let a = assess(&probes, true);
         assert_eq!(a.detection, Detection::SessionDied);
         assert_eq!(a.events.len(), 1);
         assert_eq!(a.events[0].kind, EventKind::NodeFailed);
@@ -1203,115 +1591,147 @@ SwapFree:         204800 kB
     }
 
     #[test]
-    fn assess_fresh_node_is_ok_and_skips_validation() {
-        // Alive, transcript touched 60 s ago (< threshold): Ok, no events, and —
-        // the single-source gate — outputs validation is never invoked.
-        let probes = FakeProbes::idle(Duration::from_secs(60), true);
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::Ok);
-        assert!(a.events.is_empty());
-        assert_eq!(
-            probes.validate_calls.get(),
-            0,
-            "validate_outputs must NOT run before the threshold is crossed"
-        );
-    }
-
-    #[test]
-    fn assess_no_transcript_is_ok_and_skips_validation() {
+    fn assess_dead_session_probes_no_transcript() {
+        // Death short-circuits everything: no tail read, no outputs validation,
+        // no pane capture.
         let probes = FakeProbes {
-            session_alive: true,
-            jsonl_mtime: None,
-            outputs_valid: true,
-            pane: None,
-            diagnostics: SessionDeathDiagnostics::default(),
-            validate_calls: std::cell::Cell::new(0),
+            session_alive: false,
+            ..FakeProbes::finished_turn()
         };
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::Ok);
-        assert!(a.events.is_empty());
+        assert_eq!(assess(&probes, true).detection, Detection::SessionDied);
+        assert_eq!(probes.tail_calls.get(), 0);
         assert_eq!(probes.validate_calls.get(), 0);
     }
 
+    // --- setting OFF: the default path is one liveness probe (#469 §4, AC8) ---
+
     #[test]
-    fn assess_idle_invalid_outputs_is_stale() {
-        let probes = FakeProbes::idle(Duration::from_secs(200), false);
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::Stale);
-        assert_eq!(a.events.len(), 1);
-        assert_eq!(a.events[0].kind, EventKind::NodeStale);
+    fn assess_with_setting_off_never_reads_the_transcript() {
+        // AC8, at the I/O seam: the node HAS finished its turn with valid
+        // outputs, and with the box unchecked the sweep does not even look.
+        let probes = FakeProbes::finished_turn();
+        let a = assess(&probes, false);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(a.events.is_empty());
+        assert_eq!(
+            probes.tail_calls.get(),
+            0,
+            "transcript_tail must NOT be called when the setting is off"
+        );
         assert_eq!(
             probes.validate_calls.get(),
-            1,
-            "validate_outputs must run once past the threshold"
+            0,
+            "outputs must NOT be validated when the setting is off"
         );
     }
 
     #[test]
-    fn assess_idle_valid_outputs_observe_only_is_non_terminal() {
-        // The core #373 Unit A guard: idle + valid outputs would auto-complete,
-        // but under Observe it must NOT emit the terminal NodeAutoCompleted —
-        // only the non-terminal observed marker.
-        let probes = FakeProbes::idle(Duration::from_secs(200), true);
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::AutoComplete);
-        assert_eq!(a.events.len(), 1);
-        assert_eq!(a.events[0].kind, EventKind::NodeAutoCompleteObserved);
-        assert_ne!(a.events[0].kind, EventKind::NodeAutoCompleted);
+    fn assess_healthy_node_is_silent() {
+        let probes = FakeProbes {
+            pane: Some("● Running: cargo test".to_string()),
+            ..FakeProbes::alive()
+        };
+        let a = assess(&probes, true);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(!a.blocked_on_limit);
+        assert!(a.events.is_empty());
     }
 
-    #[test]
-    fn assess_idle_valid_outputs_act_emits_terminal_auto_completed() {
-        // Unit B shape (behind the policy): the same detection, but Act emits the
-        // real terminal event the sweep would reap/advance on.
-        let probes = FakeProbes::idle(Duration::from_secs(200), true);
-        let a = assess(&probes, AutoCompletePolicy::Act);
-        assert_eq!(a.detection, Detection::AutoComplete);
-        assert_eq!(a.events.len(), 1);
-        assert_eq!(a.events[0].kind, EventKind::NodeAutoCompleted);
-    }
+    // --- setting ON: the two independent guards (#469 §2) ---
 
     #[test]
-    fn assess_observe_marker_is_deduped_per_episode() {
-        // A held idle+valid node must emit the observed marker once, not once
-        // per sweep: a prior marker for this (node, iter) suppresses re-emission.
-        let probes = FakeProbes::idle(Duration::from_secs(200), true);
-        let prior = vec![event_log::Event {
-            id: None,
-            run_id: "run1".to_string(),
-            ts: event_log::now_iso(),
-            kind: EventKind::NodeAutoCompleteObserved,
-            node_id: Some("worker".to_string()),
-            iter: Some(1),
-            payload: None,
-        }];
-        let a = assess_node(
-            &probes,
-            &prior,
-            "run1",
-            "worker",
-            1,
-            SystemTime::now(),
-            AutoCompletePolicy::Observe,
-        );
-        assert_eq!(a.detection, Detection::AutoComplete);
+    fn assess_finished_turn_with_valid_outputs_is_turn_ended() {
+        let probes = FakeProbes::finished_turn();
+        let a = assess(&probes, true);
+        assert_eq!(a.detection, Detection::TurnEnded);
+        // The sweep, not `assess_node`, owns the terminal event (#469 §3).
         assert!(
             a.events.is_empty(),
-            "a second observe marker for the same episode must be suppressed"
+            "TurnEnded must emit no event of its own"
+        );
+        assert_eq!(probes.validate_calls.get(), 1);
+    }
+
+    #[test]
+    fn assess_mid_tool_call_is_never_completed_even_with_valid_outputs() {
+        // The core regression guard, and the reason a duration cannot be the
+        // signal: this transcript has been silent through a 214 s `docker build`
+        // and its outputs already validate. Completing it would put a second
+        // writer on the node's worktree.
+        let probes = FakeProbes::with_tail(FIXTURE_IN_TOOL_CALL, Duration::from_secs(3600), true);
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+        assert_eq!(
+            probes.validate_calls.get(),
+            0,
+            "a pending tool call must short-circuit before the outputs guard"
         );
     }
+
+    #[test]
+    fn assess_awaiting_assistant_is_never_completed() {
+        // #251: API retries exhausted mid-turn. Silent, alive, outputs valid —
+        // and still not finished.
+        let probes =
+            FakeProbes::with_tail(FIXTURE_AWAITING_ASSISTANT, Duration::from_secs(3600), true);
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+    }
+
+    #[test]
+    fn assess_unknown_turn_state_is_never_completed() {
+        // Signal absent ⇒ touch nothing. Fail-safe by construction.
+        let probes = FakeProbes::with_tail(FIXTURE_METADATA_ONLY, Duration::from_secs(3600), true);
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+    }
+
+    #[test]
+    fn assess_finished_turn_with_incomplete_outputs_is_not_completed() {
+        // The second guard on its own: an agent that ends its turn to ask a
+        // question has an ended turn and unfinished work.
+        let probes = FakeProbes::with_tail(
+            FIXTURE_TURN_ENDED,
+            TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+            false,
+        );
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+        assert_eq!(probes.validate_calls.get(), 1, "the outputs guard did run");
+    }
+
+    #[test]
+    fn assess_respects_the_anti_bounce_window() {
+        // A turn that ended one second ago is not acted on: the successor record
+        // may be landing as we read.
+        let probes = FakeProbes::with_tail(FIXTURE_TURN_ENDED, Duration::from_secs(1), true);
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+        assert_eq!(
+            probes.validate_calls.get(),
+            0,
+            "the anti-bounce must short-circuit before the outputs guard"
+        );
+    }
+
+    #[test]
+    fn assess_no_transcript_is_ok() {
+        // A `script` node (ADR-0017) has no `claude`, hence no transcript at all
+        // — it self-signals and must never be touched here.
+        let probes = FakeProbes {
+            tail: None,
+            outputs_valid: true,
+            ..FakeProbes::alive()
+        };
+        assert_eq!(assess(&probes, true).detection, Detection::Ok);
+        assert_eq!(probes.tail_calls.get(), 1);
+        assert_eq!(probes.validate_calls.get(), 0);
+    }
+
+    // --- usage-limit menu (#290), unchanged by #469 ---
 
     #[test]
     fn assess_usage_limit_menu_flags_blocked_and_emits_once() {
         let probes = FakeProbes {
-            session_alive: true,
-            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)), // fresh → Ok
-            outputs_valid: false,
             pane: Some("❯ 1. Stop and wait for limit to reset".to_string()),
-            diagnostics: SessionDeathDiagnostics::default(),
-            validate_calls: std::cell::Cell::new(0),
+            ..FakeProbes::alive()
         };
-        let a = assess(&probes, AutoCompletePolicy::Observe);
+        let a = assess(&probes, true);
         assert_eq!(a.detection, Detection::Ok);
         assert!(
             a.blocked_on_limit,
@@ -1326,12 +1746,8 @@ SwapFree:         204800 kB
         // On a subsequent sweep the menu is still up: the gauge still counts it,
         // but the event is not re-emitted (rising-edge dedup).
         let probes = FakeProbes {
-            session_alive: true,
-            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)),
-            outputs_valid: false,
             pane: Some("Stop and wait for limit to reset".to_string()),
-            diagnostics: SessionDeathDiagnostics::default(),
-            validate_calls: std::cell::Cell::new(0),
+            ..FakeProbes::alive()
         };
         let prior = vec![event_log::Event {
             id: None,
@@ -1349,7 +1765,7 @@ SwapFree:         204800 kB
             "worker",
             1,
             SystemTime::now(),
-            AutoCompletePolicy::Observe,
+            true,
         );
         assert!(
             a.blocked_on_limit,
@@ -1362,35 +1778,17 @@ SwapFree:         204800 kB
     }
 
     #[test]
-    fn assess_ok_node_without_menu_is_silent() {
+    fn a_blocked_node_that_finished_its_turn_still_reports_the_menu() {
+        // Turn-end and the #290 marker are orthogonal: flipping the detection to
+        // `TurnEnded` must not swallow the informational event or the gauge.
         let probes = FakeProbes {
-            session_alive: true,
-            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(30)),
-            outputs_valid: false,
-            pane: Some("● Running: cargo test".to_string()),
-            diagnostics: SessionDeathDiagnostics::default(),
-            validate_calls: std::cell::Cell::new(0),
+            pane: Some("Stop and wait for limit to reset".to_string()),
+            ..FakeProbes::finished_turn()
         };
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::Ok);
-        assert!(!a.blocked_on_limit);
-        assert!(a.events.is_empty());
-    }
-
-    #[test]
-    fn assess_dead_session_takes_precedence_over_idle_mtime() {
-        // A dead session with an idle transcript must resolve SessionDied, never
-        // Stale/AutoComplete — decide checks liveness first, and assess_node must
-        // preserve that ordering.
-        let probes = FakeProbes {
-            session_alive: false,
-            jsonl_mtime: Some(SystemTime::now() - Duration::from_secs(500)),
-            outputs_valid: false,
-            pane: None,
-            diagnostics: SessionDeathDiagnostics::default(),
-            validate_calls: std::cell::Cell::new(0),
-        };
-        let a = assess(&probes, AutoCompletePolicy::Observe);
-        assert_eq!(a.detection, Detection::SessionDied);
+        let a = assess(&probes, true);
+        assert_eq!(a.detection, Detection::TurnEnded);
+        assert!(a.blocked_on_limit);
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].kind, EventKind::NodeBlockedOnLimit);
     }
 }

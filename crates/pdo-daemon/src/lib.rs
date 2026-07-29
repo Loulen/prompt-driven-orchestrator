@@ -26,6 +26,7 @@ mod node_spawn;
 mod outputs_validator;
 mod pipeline;
 pub mod pipeline_migrator;
+mod pipeline_semantics;
 mod pipeline_watcher;
 mod prompt_augmenter;
 mod pty_bridge;

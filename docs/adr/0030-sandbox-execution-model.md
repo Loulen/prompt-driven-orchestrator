@@ -79,6 +79,39 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    build local ; aucune 3e valeur d'`image_source` n'est inventée, la sélection par profil de staging
    arrivant séparément (#467).
 
+   **Amendement #467 — un ref registry explicite sort de l'adressage par contenu, et l'assume.**
+   Un profil de staging peut désormais porter sa propre source d'image (ADR-0031 §9), sous deux
+   formes. La première, `kind: dockerfile`, ne change **rien** ici : c'est `dockerfile_path` choisi
+   par profil, donc un 4e tier de précédence (`profile → stored → env → default`) et pas une
+   nouvelle mécanique — même hash, même nom dérivé du nom de fichier, même prédicat de skip-pull
+   sur l'**emplacement**. La seconde, `kind: registry` avec un ref **libre** (p.ex.
+   `ghcr.io/acme/agent:1.4`), casse en revanche l'identité qui fonde tout ce point, et il faut
+   l'écrire noir sur blanc plutôt que le découvrir en prod :
+
+   - **Pas de repli build.** Le repli existe parce que `<nom>:h-<hash>` est le hash des octets d'un
+     Dockerfile *connu* : tirer ou builder produit alors la même image. Un ref libre n'a pas de
+     Dockerfile, donc pas de hash, donc rien à builder — un « fallback » ne pourrait que builder une
+     image **sans rapport** et la faire passer pour celle demandée. Un `docker pull` en échec est
+     donc une **erreur DURE** qui NOMME le ref (et le profil qui l'a désigné), jamais un build
+     silencieux.
+   - **Pas de retag.** Le ref local **est** le ref demandé, tel quel : il n'y a pas de second nom
+     content-addressé sous lequel le poser. `sandbox_container` reçoit donc, selon la branche, soit
+     `<nom>:h-<hash>` soit le ref du profil — sa seule exigence (« on me donne un ref ») tient.
+   - **Fast-path conservé.** `image inspect` précède toujours le réseau : un ref déjà local (tiré
+     hier, ou buildé à la main sous ce nom) est réutilisé offline. C'est la seule propriété du
+     chemin hash-dérivé qui survit intacte.
+   - **PDO ne vérifie pas que l'image contient `claude`**, ni au write (ce serait un aller-retour
+     réseau dans un handler PUT) ni au prep. C'est la responsabilité de qui fournit le ref ; une
+     image sans `claude` échoue au premier `docker exec`, avec le stderr de docker.
+
+   Conséquence de vocabulaire, et source de confusion à traiter dans l'UI plutôt qu'à subir : le mot
+   `registry` désigne maintenant **deux choses différentes**. Le réglage d'instance
+   `image_source: registry` tire l'image *prébuild de VOTRE Dockerfile* — d'où le fait, non
+   documenté avant #467 et **correct**, que le chemin du Dockerfile reste **obligatoire** dans ce
+   mode : le tag EST le sha256 de ses octets, sans eux l'image est innommable. Le `kind: registry`
+   d'un profil, lui, est un ref arbitraire sans Dockerfile. Les deux écrans le disent désormais
+   explicitement, en se renvoyant l'un à l'autre.
+
 8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
    muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne
    retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrivait que par

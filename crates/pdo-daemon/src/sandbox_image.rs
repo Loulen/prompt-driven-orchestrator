@@ -27,6 +27,16 @@
 //! `pdo-sandbox`, la variante `Dockerfile.chrome-dev` (node + Chrome + chrome-devtools-mcp) donne
 //! `pdo-sandbox-chrome-dev`. Le hash, lui, ne dépend que des octets — nom et tag varient donc
 //! ensemble et indépendamment, et deux variantes ne peuvent pas se recouvrir.
+//!
+//! Depuis #467 la **source** de l'image peut appartenir au profil de staging
+//! ([`ProfileImage`]), et [`ensure_image`] devient un aiguillage sur un [`ImagePlan`] à **deux**
+//! branches qui ne partagent presque rien :
+//! - [`ImagePlan::HashDerived`] — tout ce qui précède : le tag EST le hash des octets d'un
+//!   Dockerfile, donc pull et build sont interchangeables et un pull raté retombe sur un build ;
+//! - [`ImagePlan::ExplicitRef`] — un ref registry libre posé par un profil. Il n'a **pas** de
+//!   Dockerfile, donc pas de hash, donc **aucun repli build** : un pull en échec est une erreur
+//!   DURE, et le ref local est le ref tel quel (jamais de retag en `h-<hash>`). C'est l'amendement
+//!   #467 d'ADR-0030 pt 7.
 
 #![allow(dead_code)] // Tracer bullet : consommé par #406/#407, non câblé dans cette slice.
 
@@ -34,6 +44,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Dockerfile embarqué (source de vérité dans le binaire). Seedé sur disque au 1er usage.
@@ -281,17 +292,31 @@ pub(crate) fn build_image(
     Ok(())
 }
 
-/// `docker pull <registry_ref>` (réseau, image PUBLIQUE, sans auth) : `Ok(true)` si exit 0 (tirée),
-/// `Ok(false)` si exit != 0 (offline / 404 tag absent / registry down → fallback build). `docker`
-/// introuvable (spawn `NotFound`) → `Err` explicite (jamais de fallback silencieux masquant Docker
-/// absent — miroir strict d'[`image_exists`]). Le stderr de PROGRESSION de `docker pull` n'est PAS
-/// un signal d'échec : seul l'exit code compte.
-pub(crate) fn pull_image(docker_bin: &str, registry_ref: &str) -> Result<bool> {
+/// Issue d'un `docker pull`. `ok` est le SEUL verdict (l'exit code) ; `stderr` n'existe que pour
+/// être **rapporté** quand l'échec est une erreur dure (#467 : un ref explicite n'a pas de repli
+/// build, donc la raison du 404/auth/offline est la seule chose actionnable qui reste, US-16).
+/// Ne jamais dériver le verdict du stderr : `docker pull` y écrit sa PROGRESSION en cas de succès.
+#[derive(Debug, Clone)]
+pub(crate) struct PullOutcome {
+    pub(crate) ok: bool,
+    pub(crate) stderr: String,
+}
+
+/// `docker pull <registry_ref>` (réseau, image PUBLIQUE, sans auth) : `ok: true` si exit 0 (tirée),
+/// `ok: false` si exit != 0 (offline / 404 tag absent / registry down → fallback build en
+/// hash-dérivé, erreur dure sur un ref explicite). `docker` introuvable (spawn `NotFound`) → `Err`
+/// explicite (jamais de fallback silencieux masquant Docker absent — miroir strict
+/// d'[`image_exists`]). Le stderr de PROGRESSION de `docker pull` n'est PAS un signal d'échec :
+/// seul l'exit code compte.
+pub(crate) fn pull_image(docker_bin: &str, registry_ref: &str) -> Result<PullOutcome> {
     match Command::new(docker_bin)
         .args(["pull", registry_ref])
         .output()
     {
-        Ok(output) => Ok(output.status.success()),
+        Ok(output) => Ok(PullOutcome {
+            ok: output.status.success(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err(anyhow::Error::new(e)).context(DOCKER_NOT_FOUND_MSG)
         }
@@ -322,19 +347,87 @@ pub(crate) fn tag_image(docker_bin: &str, src: &str, dst: &str) -> Result<()> {
     Ok(())
 }
 
-/// Provisionneur idempotent **hybride** (seul point d'entrée de #406/#407) : garantit que le ref
-/// local `pdo-sandbox:h-<hash>` existe et le retourne TOUJOURS (invariant `sandbox_container`).
+/// Provisionneur idempotent (**seul point d'entrée** de #406/#407) : garantit que l'image du Run
+/// existe localement et retourne le ref que `sandbox_container` doit poser au `docker create`.
+///
+/// Aiguillage à deux branches sur le plan résolu au bord (#467) — voir [`ImagePlan`] :
+/// [`ensure_hash_derived_image`] (le chemin historique, adressé par contenu) ou
+/// [`ensure_explicit_ref`] (un ref registry libre posé par un profil : pull-ou-échec, jamais de
+/// build). C'est ici, et nulle part ailleurs, que la différence se décide.
+///
+/// **Sync délibéré (D3)** : `docker build`/`docker pull` sont bloquants et longs, leur place est
+/// dans le `spawn_blocking` du caller async (#407), pas dans une tâche tokio ; garder ce module
+/// sync laisse aussi les tests en `#[test]` simples.
+pub(crate) fn ensure_image(
+    docker_bin: &str,
+    sandbox_root: &Path,
+    plan: &ImagePlan,
+) -> Result<String> {
+    match plan {
+        ImagePlan::HashDerived { dockerfile, source } => {
+            ensure_hash_derived_image(docker_bin, sandbox_root, dockerfile, *source)
+        }
+        ImagePlan::ExplicitRef { image_ref, profile } => {
+            ensure_explicit_ref(docker_bin, image_ref, profile)
+        }
+    }
+}
+
+/// Garantit qu'un ref registry **explicite** (#467) est présent localement, et le retourne **tel
+/// quel**. Deux invocations docker au plus, dans cet ordre :
+///
+/// 1. `image inspect <ref>` — fast-path zéro réseau : une image déjà locale (tirée hier, ou buildée
+///    à la main par l'utilisateur sous ce nom) est réutilisée offline ;
+/// 2. `docker pull <ref>` — et son échec est une **erreur DURE nommant le ref**.
+///
+/// Le contraste avec [`ensure_hash_derived_image`] est le cœur de l'amendement #467 d'ADR-0030
+/// pt 7, et il n'est pas une préférence de style :
+/// - **pas de repli build.** Le repli existe parce que `pdo-sandbox:h-<hash>` est le hash des
+///   octets d'un Dockerfile *connu* : tirer ou builder produit alors la même image. Un ref libre
+///   n'a pas de Dockerfile, donc pas de hash, donc rien à builder — un « fallback » ne pourrait que
+///   builder une image SANS RAPPORT et la faire passer pour celle demandée ;
+/// - **pas de retag.** Le retag existe pour ramener une image tirée sous le ref local
+///   content-addressé ; ici le ref demandé EST le ref local, il n'y a pas de second nom ;
+/// - **pas de seed de Dockerfile, aucune IO** : cette branche ne touche pas le disque.
+///
+/// PDO ne vérifie pas que l'image contient `claude` : c'est la responsabilité de qui fournit le
+/// ref (ADR-0030 pt 7, amendement #467). Une image sans `claude` échouera au premier `docker exec`,
+/// avec le stderr de docker — pas ici.
+pub(crate) fn ensure_explicit_ref(
+    docker_bin: &str,
+    image_ref: &str,
+    profile: &str,
+) -> Result<String> {
+    if image_exists(docker_bin, image_ref)? {
+        return Ok(image_ref.to_string());
+    }
+    let pull = pull_image(docker_bin, image_ref)?;
+    if !pull.ok {
+        let stderr = pull.stderr.trim();
+        anyhow::bail!(
+            "failed to pull the sandbox image `{image_ref}` named by the staging profile \
+             `{profile}` — `docker pull` failed{}. An explicit registry ref has no Dockerfile, \
+             hence no content hash, hence NO local build to fall back to (ADR-0030 pt 7): fix the \
+             ref, make it reachable, or point the profile at a Dockerfile instead.",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    Ok(image_ref.to_string())
+}
+
+/// Provisionneur **hybride adressé par contenu** : garantit que le ref local
+/// `<nom>:h-<hash>` existe et le retourne TOUJOURS (invariant `sandbox_container`).
 ///
 /// Ordre (D7) : seed → **contrôle `is_file()` du chemin résolu** → lit octets → `local_ref` →
 /// **fast-path `image_exists(local_ref)` (zéro réseau, offline-safe)** → si
 /// [`ImageSource::Registry`] **et** emplacement par défaut : `docker pull` le `registry_ref`, OK →
 /// `docker tag` vers `local_ref` → retour ; pull raté → fallthrough vers le build local → retour ;
 /// build KO → `Err`. [`ImageSource::Dockerfile`] : build direct, **jamais** de pull.
-///
-/// **Sync délibéré (D3)** : `docker build`/`docker pull` sont bloquants et longs, leur place est
-/// dans le `spawn_blocking` du caller async (#407), pas dans une tâche tokio ; garder ce module
-/// sync laisse aussi les tests en `#[test]` simples.
-pub(crate) fn ensure_image(
+pub(crate) fn ensure_hash_derived_image(
     docker_bin: &str,
     sandbox_root: &Path,
     dockerfile: &ResolvedDockerfile,
@@ -352,13 +445,23 @@ pub(crate) fn ensure_image(
     //    le tag EST le hash de ces octets, donc sans eux l'image est innommable.
     let path = dockerfile.path.as_path();
     if !path.is_file() {
+        // La remédiation dépend du tier gagnant : dire « fix `dockerfile_path` » à qui a pointé
+        // ce chemin depuis un PROFIL (#467) l'enverrait éditer le réglage d'instance, qui ne
+        // gagne même pas. Le tier et le chemin, eux, sont nommés dans les deux cas.
+        let fix = match dockerfile.source {
+            DockerfileSource::Profile => "point the staging profile's image at an existing \
+                 Dockerfile, or clear it to fall back to the instance-wide setting"
+                .to_string(),
+            _ => format!(
+                "fix `dockerfile_path` or clear it to fall back to the seeded default at {}",
+                default_dockerfile_path(sandbox_root).display()
+            ),
+        };
         anyhow::bail!(
             "the sandbox Dockerfile resolved from the `{}` tier does not exist or is not a \
-             regular file: {} — fix `dockerfile_path` or clear it to fall back to the \
-             seeded default at {}",
+             regular file: {} — {fix}",
             dockerfile.source.as_str(),
             path.display(),
-            default_dockerfile_path(sandbox_root).display(),
         );
     }
     // 3. Octets bruts sur disque = entrée EXACTE du hash ET du build (jamais normaliser).
@@ -382,7 +485,7 @@ pub(crate) fn ensure_image(
     //    fallthrough vers le build local ci-dessous.
     if matches!(source, ImageSource::Registry) && dockerfile.is_default_location {
         let registry_ref = registry_image_ref(&dockerfile.image_name, &bytes);
-        if pull_image(docker_bin, &registry_ref)? {
+        if pull_image(docker_bin, &registry_ref)?.ok {
             tag_image(docker_bin, &registry_ref, &local_ref)?;
             return Ok(local_ref);
         }
@@ -488,6 +591,9 @@ pub(crate) fn image_source_with(stored: Option<String>) -> ImageSource {
 /// « no such file » a besoin de savoir QUI l'a dit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DockerfileSource {
+    /// Le profil de staging du Run (#467) — le tier le plus fort, et le seul qui soit **par
+    /// Run** plutôt que par daemon : il est gelé dans `RunStarted`, pas relu à chaque prep.
+    Profile,
     Stored,
     Env,
     Default,
@@ -496,10 +602,123 @@ pub(crate) enum DockerfileSource {
 impl DockerfileSource {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            DockerfileSource::Profile => "profile",
             DockerfileSource::Stored => "stored",
             DockerfileSource::Env => "env",
             DockerfileSource::Default => "default",
         }
+    }
+}
+
+// -- #467 : la source d'image appartient (aussi) au profil de staging ---------
+
+/// La source d'image que porte un **profil de staging** (#467), telle qu'elle est stockée
+/// (colonne JSON `sandbox_profiles.image`), gelée (clé `sandbox_image` de `RunStarted`) et servie
+/// (vue de l'éditeur de profil). `None` côté appelant = « ce profil ne pose rien » → les réglages
+/// d'instance décident, comme avant.
+///
+/// Les deux bras sont **interchangeables** dans le formulaire, mais radicalement différents en
+/// aval : voir [`ImagePlan`]. Le tag interne (`kind`) est la forme filaire, et elle est
+/// permanente — un profil sérialisé aujourd'hui doit se relire dans dix versions.
+///
+/// Défini ici et non dans [`crate::sandbox_profile`] : c'est du vocabulaire d'**image**, dont ce
+/// module est le propriétaire (le hash, les refs, `ensure_image`). Le profil le stocke et le
+/// valide, comme il valide des clés d'env dont [`crate::sandbox_container`] possède la liste
+/// réservée (discipline #447 : un fait, un propriétaire).
+/// `pub` and not `pub(crate)`, unlike everything else in this module, for exactly the reason
+/// [`crate::event_log::SandboxMode`] is: it is a field of `RunState`, which some public signature
+/// makes reachable — a `pub(crate)` type there is a `private_interfaces` warning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProfileImage {
+    /// Un Dockerfile choisi PAR PROFIL : exactement le réglage `dockerfile_path` (#431), mais au
+    /// tier [`DockerfileSource::Profile`]. Tout le reste est inchangé — le tag reste le hash de
+    /// ses octets, le nom vient de son nom de fichier (#466), le contexte de build reste vide,
+    /// donc **il doit être auto-porteur** (pas de `COPY`).
+    Dockerfile { path: String },
+    /// Un ref registry **explicite**, tiré tel quel. Casse l'adressage par contenu, et c'est
+    /// assumé : voir [`ensure_explicit_ref`] et l'amendement #467 d'ADR-0030 pt 7.
+    Registry {
+        #[serde(rename = "ref")]
+        image_ref: String,
+    },
+}
+
+impl ProfileImage {
+    /// La forme filaire du bras, pour les messages d'erreur et l'UI.
+    pub(crate) fn kind_str(&self) -> &'static str {
+        match self {
+            ProfileImage::Dockerfile { .. } => "dockerfile",
+            ProfileImage::Registry { .. } => "registry",
+        }
+    }
+}
+
+/// Ce que [`ensure_image`] doit FAIRE pour un Run donné, résolu une fois au bord. Deux branches,
+/// et l'intérêt de l'enum est justement qu'elles ne se mélangent pas : la première est adressée par
+/// contenu (pull et build interchangeables), la seconde ne l'est pas (pull ou rien).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ImagePlan {
+    /// Le chemin historique : un Dockerfile + le réglage `image_source`. Le ref rendu est
+    /// `<nom>:h-<hash>`.
+    HashDerived {
+        dockerfile: ResolvedDockerfile,
+        source: ImageSource,
+    },
+    /// Un ref registry explicite posé par le profil `profile`. Le ref rendu est le ref demandé.
+    /// `profile` n'est là que pour la `reason` : qui lit « failed to pull » doit savoir QUEL profil
+    /// l'a demandé, parce que rien d'autre dans le message ne le dit.
+    ExplicitRef { image_ref: String, profile: String },
+}
+
+impl ImagePlan {
+    /// Le ref que ce plan produira si tout va bien, SANS toucher docker — pour la disclosure et
+    /// les logs. `None` en hash-dérivé : le tag est le hash d'octets qu'il faut lire sur disque,
+    /// et ce module ne fait pas d'IO en douce depuis un accesseur.
+    pub(crate) fn known_ref(&self) -> Option<&str> {
+        match self {
+            ImagePlan::HashDerived { .. } => None,
+            ImagePlan::ExplicitRef { image_ref, .. } => Some(image_ref),
+        }
+    }
+}
+
+/// Le plan d'image d'un Run, précédence **profil (si posé) → `image_source`/`dockerfile_path`
+/// stored → env → défaut** (ADR-0015, complétée par #467).
+///
+/// Pur pour ses deux premiers tiers, mais il lit l'env via les wrappers de bord
+/// [`image_source_with`] / [`dockerfile_with`] : c'est la SOURCE UNIQUE consommée par
+/// `sandbox_run::context_from_state`, donc elle doit voir exactement les mêmes tiers que ce que
+/// `ensure_image` consommera (0 drift, leçon #373).
+///
+/// Deux détails qui se plantent si on les bâcle :
+/// - un profil `registry` **court-circuite** `image_source` ET `dockerfile_path` : il n'y a plus
+///   ni hash ni Dockerfile dans l'histoire ;
+/// - un profil `dockerfile` ne court-circuite **que** `dockerfile_path`. `image_source` reste
+///   consulté, et reste inerte dans le cas normal parce que le prédicat de skip-pull porte sur
+///   l'EMPLACEMENT (un chemin custom ne peut pas avoir de tag publié en amont). Un profil qui
+///   pointe l'emplacement seedé retire donc bien la pull — c'est le même fichier, le même hash,
+///   et #431 a déjà tranché que le prédicat n'est pas du tier-math.
+pub(crate) fn image_plan_with(
+    profile_name: &str,
+    profile_image: Option<&ProfileImage>,
+    stored_source: Option<String>,
+    stored_dockerfile_path: Option<String>,
+    sandbox_root: &Path,
+) -> ImagePlan {
+    match profile_image {
+        Some(ProfileImage::Registry { image_ref }) => ImagePlan::ExplicitRef {
+            image_ref: image_ref.clone(),
+            profile: profile_name.to_string(),
+        },
+        Some(ProfileImage::Dockerfile { path }) => ImagePlan::HashDerived {
+            dockerfile: dockerfile_with(Some(path), stored_dockerfile_path, sandbox_root),
+            source: image_source_with(stored_source),
+        },
+        None => ImagePlan::HashDerived {
+            dockerfile: dockerfile_with(None, stored_dockerfile_path, sandbox_root),
+            source: image_source_with(stored_source),
+        },
     }
 }
 
@@ -537,23 +756,27 @@ pub(crate) fn env_dockerfile_path() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Résolution 3-tiers **PURE** — testable sans toucher `std::env` (AC #431 : « précédence testée
-/// stored / env / défaut »). Une valeur vide est traitée comme unset aux deux tiers (miroir de la
-/// sentinelle `""` et du validateur PUT).
+/// Résolution 4-tiers **PURE** — testable sans toucher `std::env` (AC #431 : « précédence testée
+/// stored / env / défaut », étendue par #467 au tier `profile`). Une valeur vide est traitée comme
+/// unset à TOUS les tiers (miroir de la sentinelle `""` et du validateur PUT).
 ///
 /// Ce découpage pur/bord est une amélioration délibérée sur [`image_source_with`], qui lit l'env
 /// dans lui-même et dont le test ne peut donc couvrir que stored+default.
 pub(crate) fn resolve_dockerfile(
+    profile: Option<&str>,
     stored: Option<&str>,
     env: Option<&str>,
     sandbox_root: &Path,
 ) -> ResolvedDockerfile {
     let default = default_dockerfile_path(sandbox_root);
-    let (path, source) = match stored.filter(|s| !s.is_empty()) {
-        Some(p) => (PathBuf::from(p), DockerfileSource::Stored),
-        None => match env.filter(|s| !s.is_empty()) {
-            Some(p) => (PathBuf::from(p), DockerfileSource::Env),
-            None => (default.clone(), DockerfileSource::Default),
+    let (path, source) = match profile.filter(|s| !s.is_empty()) {
+        Some(p) => (PathBuf::from(p), DockerfileSource::Profile),
+        None => match stored.filter(|s| !s.is_empty()) {
+            Some(p) => (PathBuf::from(p), DockerfileSource::Stored),
+            None => match env.filter(|s| !s.is_empty()) {
+                Some(p) => (PathBuf::from(p), DockerfileSource::Env),
+                None => (default.clone(), DockerfileSource::Default),
+            },
         },
     };
     ResolvedDockerfile {
@@ -565,10 +788,17 @@ pub(crate) fn resolve_dockerfile(
 }
 
 /// Wrapper de bord : lit [`DOCKERFILE_PATH_ENV`] UNE fois puis délègue au résolveur pur.
-/// SOURCE UNIQUE consommée par `sandbox_run::context_from_state` **ET** `build_settings_view`
-/// (0 drift, leçon #373).
-pub(crate) fn dockerfile_with(stored: Option<String>, sandbox_root: &Path) -> ResolvedDockerfile {
+/// SOURCE UNIQUE consommée par [`image_plan_with`] (donc par
+/// `sandbox_run::context_from_state`) **ET** par `build_settings_view` (0 drift, leçon #373).
+/// `build_settings_view` passe `profile: None` : la page de réglages expose les tiers
+/// d'**instance**, le choix par profil vivant dans l'éditeur de profil.
+pub(crate) fn dockerfile_with(
+    profile: Option<&str>,
+    stored: Option<String>,
+    sandbox_root: &Path,
+) -> ResolvedDockerfile {
     resolve_dockerfile(
+        profile,
         stored.as_deref(),
         env_dockerfile_path().as_deref(),
         sandbox_root,
@@ -688,12 +918,12 @@ mod tests {
     /// The pre-#431 `ensure_image` input: the seeded default location, `default` tier.
     /// Every legacy test threads this so its behaviour is pinned unchanged.
     fn seeded(sandbox_root: &Path) -> ResolvedDockerfile {
-        resolve_dockerfile(None, None, sandbox_root)
+        resolve_dockerfile(None, None, None, sandbox_root)
     }
 
     /// A custom Dockerfile at `path`, as a `stored` tier would resolve it.
     fn stored_at(path: &Path, sandbox_root: &Path) -> ResolvedDockerfile {
-        resolve_dockerfile(Some(path.to_str().unwrap()), None, sandbox_root)
+        resolve_dockerfile(None, Some(path.to_str().unwrap()), None, sandbox_root)
     }
 
     /// Under `cargo test --workspace`, exec-ing a **freshly written** binary can
@@ -735,7 +965,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -767,7 +997,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -808,7 +1038,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let err = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -834,7 +1064,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
         let missing = tmp.path().join("no-such-docker");
 
-        let err = ensure_image(
+        let err = ensure_hash_derived_image(
             &docker_str(&missing),
             &sandbox_root,
             &seeded(&sandbox_root),
@@ -873,7 +1103,7 @@ mod tests {
         assert!(!default_dockerfile_path(&sandbox_root).exists());
 
         retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -907,7 +1137,7 @@ mod tests {
         std::fs::write(default_dockerfile_path(&sandbox_root), edited).unwrap();
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -944,7 +1174,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -995,7 +1225,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1038,7 +1268,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1078,7 +1308,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1112,7 +1342,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1155,7 +1385,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let err = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1182,7 +1412,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1223,7 +1453,7 @@ mod tests {
         let sandbox_root = tmp.path().join("sandbox");
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1258,7 +1488,7 @@ mod tests {
 
         // Even in registry mode, Docker-absent is a hard error at the fast-path probe
         // — never a silent host fallback (US-16). Same guarantee as dockerfile mode.
-        let err = ensure_image(
+        let err = ensure_hash_derived_image(
             &docker_str(&missing),
             &sandbox_root,
             &seeded(&sandbox_root),
@@ -1322,7 +1552,7 @@ mod tests {
         );
     }
 
-    // -- #431 : le Dockerfile résolu est un réglage 3-tiers -------------------
+    // -- #431 : le Dockerfile résolu est un réglage 3-tiers (4 depuis #467) ----
 
     #[test]
     fn resolve_dockerfile_precedence_stored_env_default() {
@@ -1330,19 +1560,37 @@ mod tests {
         let default = default_dockerfile_path(root);
 
         // default tier: nothing stored, nothing in env.
-        let r = resolve_dockerfile(None, None, root);
+        let r = resolve_dockerfile(None, None, None, root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
         assert!(r.is_default_location);
 
+        // #467: the PROFILE tier beats both of the instance tiers.
+        let r = resolve_dockerfile(
+            Some("/profile/Dockerfile"),
+            Some("/stored/Dockerfile"),
+            Some("/env/Dockerfile"),
+            root,
+        );
+        assert_eq!(r.path, Path::new("/profile/Dockerfile"));
+        assert_eq!(r.source, DockerfileSource::Profile);
+        // …and an empty profile value is unset at that tier too, like every other one.
+        let r = resolve_dockerfile(Some(""), Some("/stored/Dockerfile"), None, root);
+        assert_eq!(r.source, DockerfileSource::Stored);
+
         // env tier wins over the default.
-        let r = resolve_dockerfile(None, Some("/env/Dockerfile"), root);
+        let r = resolve_dockerfile(None, None, Some("/env/Dockerfile"), root);
         assert_eq!(r.path, Path::new("/env/Dockerfile"));
         assert_eq!(r.source, DockerfileSource::Env);
         assert!(!r.is_default_location);
 
         // stored tier wins over env (ADR-0015).
-        let r = resolve_dockerfile(Some("/stored/Dockerfile"), Some("/env/Dockerfile"), root);
+        let r = resolve_dockerfile(
+            None,
+            Some("/stored/Dockerfile"),
+            Some("/env/Dockerfile"),
+            root,
+        );
         assert_eq!(r.path, Path::new("/stored/Dockerfile"));
         assert_eq!(r.source, DockerfileSource::Stored);
         assert!(!r.is_default_location);
@@ -1355,18 +1603,18 @@ mod tests {
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
 
-        let r = resolve_dockerfile(Some(""), None, root);
+        let r = resolve_dockerfile(None, Some(""), None, root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
 
-        let r = resolve_dockerfile(Some(""), Some("/env/Dockerfile"), root);
+        let r = resolve_dockerfile(None, Some(""), Some("/env/Dockerfile"), root);
         assert_eq!(
             r.source,
             DockerfileSource::Env,
             "empty stored falls through"
         );
 
-        let r = resolve_dockerfile(None, Some(""), root);
+        let r = resolve_dockerfile(None, None, Some(""), root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
     }
@@ -1378,7 +1626,7 @@ mod tests {
         // the pull must still be attempted. `is_default_location` is path-math, not tier-math.
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
-        let r = resolve_dockerfile(Some(default.to_str().unwrap()), None, root);
+        let r = resolve_dockerfile(None, Some(default.to_str().unwrap()), None, root);
         assert_eq!(r.source, DockerfileSource::Stored);
         assert!(
             r.is_default_location,
@@ -1414,7 +1662,7 @@ mod tests {
         std::fs::write(&custom, bytes).unwrap();
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&custom, &sandbox_root),
@@ -1455,7 +1703,7 @@ mod tests {
         std::fs::write(&custom, b"FROM ubuntu:24.04\nRUN echo custom\n").unwrap();
 
         retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&custom, &sandbox_root),
@@ -1498,7 +1746,7 @@ mod tests {
         std::fs::write(default_dockerfile_path(&sandbox_root), edited).unwrap();
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &seeded(&sandbox_root),
@@ -1530,7 +1778,7 @@ mod tests {
         let missing = tmp.path().join("nope").join("Dockerfile");
 
         let err = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&missing, &sandbox_root),
@@ -1574,7 +1822,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
 
         let err = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&dir, &sandbox_root),
@@ -1607,7 +1855,7 @@ mod tests {
         assert!(!default_dockerfile_path(&sandbox_root).exists());
 
         retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&custom, &sandbox_root),
@@ -1689,12 +1937,13 @@ mod tests {
         let root = Path::new("/home/u/.pdo/sandbox");
         // Le tier `default` (Dockerfile seedé) → nom de base.
         assert_eq!(
-            resolve_dockerfile(None, None, root).image_name,
+            resolve_dockerfile(None, None, None, root).image_name,
             BASE_IMAGE_NAME
         );
         // Un `dockerfile_path` pointant la variante → nom de variante, SANS 3e valeur d'enum
         // `image_source` : c'est le chemin de sélection le plus court (#466 périmètre pt 4).
         let r = resolve_dockerfile(
+            None,
             Some("/repo/assets/sandbox/Dockerfile.chrome-dev"),
             None,
             root,
@@ -1721,7 +1970,7 @@ mod tests {
         std::fs::write(&variant, bytes).unwrap();
 
         let tag = retry_etxtbsy(|| {
-            ensure_image(
+            ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
                 &stored_at(&variant, &sandbox_root),
@@ -1815,6 +2064,367 @@ mod tests {
             dockerfile_hash(df.as_bytes()),
             dockerfile_hash(EMBEDDED_DOCKERFILE.as_bytes())
         );
+    }
+
+    // -- #467 : la source d'image appartient au profil de staging -------------
+
+    fn profile_dockerfile(path: &Path) -> ProfileImage {
+        ProfileImage::Dockerfile {
+            path: path.to_str().unwrap().to_string(),
+        }
+    }
+
+    fn explicit(image_ref: &str) -> ImagePlan {
+        ImagePlan::ExplicitRef {
+            image_ref: image_ref.to_string(),
+            profile: "chrome".to_string(),
+        }
+    }
+
+    /// La forme filaire est PERMANENTE : un profil sérialisé aujourd'hui doit se relire dans dix
+    /// versions. Le tag interne `kind`, et le nom de champ `ref` (mot-clé Rust, donc renommé côté
+    /// serde) sont donc pinnés ici plutôt que laissés à la dérive du dérive.
+    #[test]
+    fn profile_image_wire_form_is_pinned() {
+        let df = ProfileImage::Dockerfile {
+            path: "/repo/docker/Dockerfile.chrome-dev".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&df).unwrap(),
+            serde_json::json!({ "kind": "dockerfile", "path": "/repo/docker/Dockerfile.chrome-dev" })
+        );
+        let reg = ProfileImage::Registry {
+            image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&reg).unwrap(),
+            serde_json::json!({ "kind": "registry", "ref": "ghcr.io/acme/agent:1.4" })
+        );
+        // Round-trip both ways, from the wire form a hand-written DB row would hold.
+        assert_eq!(
+            serde_json::from_value::<ProfileImage>(
+                serde_json::json!({ "kind": "registry", "ref": "x:1" })
+            )
+            .unwrap(),
+            ProfileImage::Registry {
+                image_ref: "x:1".to_string()
+            }
+        );
+        assert_eq!(df.kind_str(), "dockerfile");
+        assert_eq!(reg.kind_str(), "registry");
+        // An unknown kind does NOT silently become one of the two.
+        assert!(serde_json::from_value::<ProfileImage>(
+            serde_json::json!({ "kind": "ecr", "ref": "x:1" })
+        )
+        .is_err());
+    }
+
+    /// La précédence de #467, sur les trois cas qui comptent. `image_plan_with` lit l'env, mais
+    /// aucun test ne pose `PDO_SANDBOX_*`, donc les tiers env sont `None` ici.
+    #[test]
+    fn image_plan_puts_the_profile_first() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+
+        // (a) aucun profil ne pose rien → exactement le comportement d'avant #467.
+        let plan = image_plan_with("full", None, None, Some("/stored/Dockerfile".into()), root);
+        assert_eq!(
+            plan,
+            ImagePlan::HashDerived {
+                dockerfile: resolve_dockerfile(None, Some("/stored/Dockerfile"), None, root),
+                source: ImageSource::Registry,
+            }
+        );
+        assert_eq!(
+            plan.known_ref(),
+            None,
+            "le tag hash-dérivé n'est pas connu sans IO"
+        );
+
+        // (b) profil `dockerfile` → il gagne le tier, `image_source` reste consulté.
+        let plan = image_plan_with(
+            "chrome",
+            Some(&ProfileImage::Dockerfile {
+                path: "/repo/Dockerfile.chrome-dev".to_string(),
+            }),
+            Some("dockerfile".to_string()),
+            Some("/stored/Dockerfile".into()),
+            root,
+        );
+        match plan {
+            ImagePlan::HashDerived { dockerfile, source } => {
+                assert_eq!(dockerfile.path, Path::new("/repo/Dockerfile.chrome-dev"));
+                assert_eq!(dockerfile.source, DockerfileSource::Profile);
+                // #466 : le NOM d'image suit le nom de fichier, y compris par ce chemin-là.
+                assert_eq!(dockerfile.image_name, "pdo-sandbox-chrome-dev");
+                assert_eq!(source, ImageSource::Dockerfile);
+            }
+            other => panic!("expected a hash-derived plan, got {other:?}"),
+        }
+
+        // (c) profil `registry` → court-circuite les DEUX réglages d'instance.
+        let plan = image_plan_with(
+            "chrome",
+            Some(&ProfileImage::Registry {
+                image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+            }),
+            Some("dockerfile".to_string()),
+            Some("/stored/Dockerfile".into()),
+            root,
+        );
+        assert_eq!(
+            plan,
+            ImagePlan::ExplicitRef {
+                image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+                profile: "chrome".to_string(),
+            }
+        );
+        assert_eq!(plan.known_ref(), Some("ghcr.io/acme/agent:1.4"));
+    }
+
+    /// Un profil qui pointe l'emplacement SEEDÉ garde la pull : le prédicat de skip-pull porte sur
+    /// l'emplacement, pas sur le tier (#431), et #467 ne change pas cette règle.
+    #[test]
+    fn a_profile_dockerfile_at_the_default_location_still_pulls() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let default = default_dockerfile_path(root);
+        let plan = image_plan_with(
+            "chrome",
+            Some(&profile_dockerfile(&default)),
+            None,
+            None,
+            root,
+        );
+        match plan {
+            ImagePlan::HashDerived { dockerfile, .. } => {
+                assert_eq!(dockerfile.source, DockerfileSource::Profile);
+                assert!(
+                    dockerfile.is_default_location,
+                    "même fichier, même hash : la pull reste légitime"
+                );
+            }
+            other => panic!("expected a hash-derived plan, got {other:?}"),
+        }
+    }
+
+    /// AC3, la moitié positive du contrat : un ref explicite est tiré tel quel, rendu tel quel, et
+    /// **jamais** retagué — il n'y a pas de second nom sous lequel le poser.
+    #[test]
+    fn an_explicit_ref_is_pulled_and_returned_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Absent localement (inspect 1) puis pull OK (0).
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &explicit("ghcr.io/acme/agent:1.4"),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(tag, "ghcr.io/acme/agent:1.4");
+        assert_eq!(
+            invocation(&argv_log, "pull"),
+            Some(vec![
+                "pull".to_string(),
+                "ghcr.io/acme/agent:1.4".to_string()
+            ])
+        );
+        assert!(
+            invocation(&argv_log, "tag").is_none(),
+            "un ref explicite n'a pas de second nom : jamais de retag en h-<hash>"
+        );
+        assert!(
+            build_argv(&argv_log).is_empty(),
+            "aucun build : il n'y a pas de Dockerfile dans cette histoire"
+        );
+        // Zéro IO : ni Dockerfile seedé, ni contexte de build.
+        assert!(
+            !default_dockerfile_path(&sandbox_root).exists(),
+            "cette branche ne touche pas le disque"
+        );
+        assert!(!build_context_dir(&sandbox_root).exists());
+    }
+
+    /// AC3 : un ref inexistant est une erreur DURE qui NOMME le ref, et **aucun `docker build`**
+    /// n'est lancé. Le fake est réglé pour que le build RÉUSSIRAIT s'il était tenté — son absence
+    /// est donc un signal, pas une coïncidence.
+    #[test]
+    fn a_missing_explicit_ref_is_a_hard_error_and_never_builds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(
+            tmp.path(),
+            &FakeSpec {
+                pull_exit: 1,
+                pull_stderr: "Error response from daemon: manifest unknown".to_string(),
+                build_exit: 0,
+                ..Default::default()
+            },
+        );
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let err = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &explicit("ghcr.io/acme/nope:9"),
+            )
+        })
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("ghcr.io/acme/nope:9"),
+            "la reason DOIT nommer le ref (AC3, US-16): {msg}"
+        );
+        assert!(
+            msg.contains("chrome"),
+            "…et le profil qui l'a demandé, sinon rien ne le dit: {msg}"
+        );
+        assert!(
+            msg.contains("manifest unknown"),
+            "le stderr de docker est la seule chose actionnable qui reste: {msg}"
+        );
+        assert!(
+            build_argv(&argv_log).is_empty(),
+            "AUCUN build ne doit être lancé — pas de hash, donc pas de repli; log:\n{}",
+            std::fs::read_to_string(&argv_log).unwrap_or_default()
+        );
+        assert!(
+            !build_context_dir(&sandbox_root).exists(),
+            "et donc aucun contexte de build créé"
+        );
+    }
+
+    /// Fast-path offline : un ref déjà local (tiré hier, ou buildé à la main sous ce nom) ne
+    /// déclenche aucun réseau. Le fake tirerait avec succès — l'absence de `pull` est un signal.
+    #[test]
+    fn a_locally_present_explicit_ref_skips_the_network() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(
+            tmp.path(),
+            &FakeSpec {
+                inspect_exit: 0,
+                ..Default::default()
+            },
+        );
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &explicit("local/img:1"),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(tag, "local/img:1");
+        assert_eq!(
+            invocation(&argv_log, "image"),
+            Some(vec![
+                "image".to_string(),
+                "inspect".to_string(),
+                "local/img:1".to_string()
+            ])
+        );
+        assert!(
+            invocation(&argv_log, "pull").is_none(),
+            "le fast-path précède TOUT réseau"
+        );
+        assert!(build_argv(&argv_log).is_empty());
+    }
+
+    /// Docker absent reste une erreur dure sur cette branche aussi : jamais de repli hôte
+    /// silencieux (US-16), y compris quand il n'y a rien à builder.
+    #[test]
+    fn docker_missing_errors_on_an_explicit_ref_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox_root = tmp.path().join("sandbox");
+        let missing = tmp.path().join("no-such-docker");
+
+        let err = ensure_image(
+            &docker_str(&missing),
+            &sandbox_root,
+            &explicit("ghcr.io/acme/agent:1.4"),
+        )
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Docker") && msg.contains("not found on PATH"),
+            "message docker-absent attendu: {msg}"
+        );
+        assert!(err.chain().count() >= 2);
+    }
+
+    /// Le plan hash-dérivé passé par le MÊME point d'entrée donne exactement ce que
+    /// `ensure_hash_derived_image` donne en direct : l'aiguillage n'ajoute rien (c'est ce qui rend
+    /// les pins historiques de ce fichier encore valables pour la prod).
+    #[test]
+    fn the_dispatcher_is_transparent_for_a_hash_derived_plan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &ImagePlan::HashDerived {
+                    dockerfile: seeded(&sandbox_root),
+                    source: ImageSource::Registry,
+                },
+            )
+        })
+        .unwrap();
+
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
+        assert!(
+            invocation(&argv_log, "tag").is_some(),
+            "pull → retag, comme avant"
+        );
+    }
+
+    /// Un chemin de profil manquant échoue en nommant le tier `profile` — et la remédiation ne
+    /// renvoie PAS vers `dockerfile_path`, qui n'est pas le réglage gagnant.
+    #[test]
+    fn a_missing_profile_dockerfile_names_the_profile_tier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+        let missing = tmp.path().join("nope").join("Dockerfile.variant");
+
+        let err = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &ImagePlan::HashDerived {
+                    dockerfile: resolve_dockerfile(
+                        Some(missing.to_str().unwrap()),
+                        None,
+                        None,
+                        &sandbox_root,
+                    ),
+                    source: ImageSource::Registry,
+                },
+            )
+        })
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("`profile` tier"), "{msg}");
+        assert!(msg.contains(&missing.display().to_string()), "{msg}");
+        assert!(
+            msg.contains("staging profile"),
+            "la remédiation doit pointer le profil, pas `dockerfile_path`: {msg}"
+        );
+        assert!(build_argv(&argv_log).is_empty());
     }
 
     // -- Slice D (#410): Docker availability probe ---------------------------

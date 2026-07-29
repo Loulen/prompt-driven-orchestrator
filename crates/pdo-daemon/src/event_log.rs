@@ -636,6 +636,33 @@ pub struct RunState {
     /// different environment than the nodes that already launched saw.
     #[serde(skip)]
     pub sandbox_env_raw_error: Option<String>,
+    /// The staging profile's **image source, frozen at creation** (#467, ADR-0031 §9). Third
+    /// sibling key of `sandbox_entries` / `sandbox_env`, written by the same `resolve` and — like
+    /// the env, unlike the entries — **only when the profile poses one**.
+    ///
+    /// `None` therefore means "this Run's profile posed no image source", which is
+    /// indistinguishable, by construction, from "a pre-#467 daemon created this Run": in both
+    /// cases the instance-wide `image_source` / `dockerfile_path` decide, read fresh at each prep
+    /// exactly as they were before. That is the one place the freeze is deliberately *not* total,
+    /// and it is not a hole — it is the pre-existing ADR-0015 contract for those two knobs
+    /// ("a `PUT /settings` bites at the next ensure"), which this issue explicitly does not change.
+    ///
+    /// What IS frozen is the profile's choice, and that is what matters: a Run cannot have its
+    /// image swapped under it because someone edited the profile, so two nodes of the same Run can
+    /// never land in two different images (ADR-0031 §6).
+    ///
+    /// Unlike [`SandboxMode`] the value is structured (`{kind, path|ref}`), which is affordable
+    /// here because this key is NEW: there is no historical payload carrying it as a bare string,
+    /// so no reader has to accept `String | Object` for ever — the constraint that disqualified
+    /// nesting `sandbox_entries` under `sandbox`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_image: Option<crate::sandbox_image::ProfileImage>,
+    /// The raw `sandbox_image` payload value when the key was **present but unreadable** (#467).
+    /// Same role, and same `skip`, as its two twins: the sandbox prep fails LOUD with the
+    /// offending value rather than silently starting a container in a *different image* than the
+    /// nodes that already launched ran in.
+    #[serde(skip)]
+    pub sandbox_image_raw_error: Option<String>,
     /// One-time image-prep visibility for a sandboxed Run (#410). Additive: `None`
     /// for `off`/historical runs; `pending` while the image is pulled/built at first
     /// use; `ready` once the container is about to run. `status` is never touched —
@@ -702,6 +729,8 @@ impl RunState {
             sandbox_entries_raw_error: None,
             sandbox_env: None,
             sandbox_env_raw_error: None,
+            sandbox_image: None,
+            sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
             triggered_by: None,
@@ -1088,6 +1117,33 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                             );
                         }
                     },
+                }
+                // #467 (ADR-0031 §9): the third sibling, the FROZEN image source. Same shape as
+                // the env — absent means "the profile posed none", so the instance-wide setting
+                // decides and there is no legacy arm to re-resolve. A present-but-unreadable
+                // value is kept verbatim so the prep can name it: degrading to "no image source"
+                // would silently start the container in a DIFFERENT image than the nodes that
+                // already launched ran in. The `warn!` may carry the raw value — an image ref is
+                // not a secret, unlike an env value, and this arm only fires on a payload that is
+                // not a valid image source in the first place.
+                match payload.get("sandbox_image") {
+                    None => {}
+                    Some(raw) => {
+                        match serde_json::from_value::<crate::sandbox_image::ProfileImage>(
+                            raw.clone(),
+                        ) {
+                            Ok(image) => state.sandbox_image = Some(image),
+                            Err(e) => {
+                                state.sandbox_image_raw_error = Some(raw.to_string());
+                                warn!(
+                                    "run_started carries an unreadable `sandbox_image` value \
+                                     ({raw}): {e}; the sandbox prep will fail this Run loud \
+                                     rather than start it in a different image than the nodes \
+                                     that already launched ran in."
+                                );
+                            }
+                        }
+                    }
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
@@ -2260,6 +2316,101 @@ mod tests {
         let value = serde_json::to_value(&state).unwrap();
         assert!(value.get("sandbox_env_raw_error").is_none());
         assert!(value.get("sandbox_env").is_none());
+    }
+
+    // -- #467: the FROZEN profile image source --------------------------------
+
+    #[test]
+    fn a_frozen_image_source_projects_verbatim() {
+        for (payload, expected) in [
+            (
+                serde_json::json!({ "kind": "registry", "ref": "ghcr.io/acme/agent:1.4" }),
+                crate::sandbox_image::ProfileImage::Registry {
+                    image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "dockerfile", "path": "/repo/Dockerfile.chrome-dev" }),
+                crate::sandbox_image::ProfileImage::Dockerfile {
+                    path: "/repo/Dockerfile.chrome-dev".to_string(),
+                },
+            ),
+        ] {
+            let events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "p",
+                    "sandbox": "chrome",
+                    "sandbox_entries": [".claude/skills"],
+                    "sandbox_image": payload,
+                }),
+            )];
+            let state = project(&events).unwrap();
+            assert_eq!(state.sandbox_image, Some(expected));
+            assert_eq!(state.sandbox_image_raw_error, None);
+        }
+    }
+
+    /// The same asymmetry with `sandbox_entries` as the env has: an absent `sandbox_image` is NOT
+    /// a legacy arm to re-resolve, it means "the profile posed none" — and the instance-wide
+    /// `image_source` / `dockerfile_path` then decide, read fresh, exactly as before #467.
+    #[test]
+    fn an_absent_frozen_image_source_projects_none() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "full",
+                "sandbox_entries": [".claude/skills"],
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.sandbox_image, None);
+        assert_eq!(state.sandbox_image_raw_error, None);
+    }
+
+    /// A present-but-unreadable image source keeps its RAW value so the prep can fail loud.
+    /// Degrading to "the instance setting decides" would silently start the container in a
+    /// DIFFERENT image than the nodes that already launched ran in.
+    #[test]
+    fn an_unreadable_frozen_image_source_is_kept_raw_for_the_failure_reason() {
+        for bad in [
+            serde_json::json!(42),
+            serde_json::json!("ghcr.io/acme/agent:1.4"),
+            serde_json::json!({ "kind": "ecr", "ref": "x:1" }),
+            // The right `kind`, the wrong field — a half-migrated payload must not resolve.
+            serde_json::json!({ "kind": "registry", "path": "/x" }),
+        ] {
+            let events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "p",
+                    "sandbox": "full",
+                    "sandbox_entries": [],
+                    "sandbox_image": bad,
+                }),
+            )];
+            let state = project(&events).unwrap();
+            assert_eq!(state.sandbox_image, None, "{bad} must not project a source");
+            assert!(
+                state.sandbox_image_raw_error.is_some(),
+                "{bad} must be kept raw for the failure reason"
+            );
+        }
+    }
+
+    /// The raw-error twin is internal, and an absent image source is skipped on the wire — a
+    /// historical Run's JSON is byte-identical to before #467.
+    #[test]
+    fn the_image_source_raw_error_is_never_serialised() {
+        let mut state = RunState::new("r1".into(), "p".into());
+        state.sandbox_image_raw_error = Some("42".into());
+        let value = serde_json::to_value(&state).unwrap();
+        assert!(value.get("sandbox_image_raw_error").is_none());
+        assert!(value.get("sandbox_image").is_none());
     }
 
     // -- Slice E (#410): sandbox-prep projection ------------------------------

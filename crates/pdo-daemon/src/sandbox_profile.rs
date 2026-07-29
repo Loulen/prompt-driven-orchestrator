@@ -35,6 +35,14 @@
 //!    copy rather than a resolution. A `disabled`-style negative list would be answering a
 //!    question nobody asked.
 //!
+//! 3b. **The image source is a profile field too** (#467, ADR-0031 §9). Same shape as `env` —
+//!    not a diff, no built-in default to fold against, `None` meaning "this profile poses
+//!    nothing" — but with one extra property: it is the only field whose two shapes
+//!    ([`crate::sandbox_image::ProfileImage`]) are mutually exclusive rather than additive, so
+//!    it is a **tagged enum in one column**, not two nullable columns that could disagree.
+//!    A profile that poses nothing falls back to the instance-wide `image_source` /
+//!    `dockerfile_path`, which is precisely what keeps every pre-#467 profile bit-identical.
+//!
 //! 4. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
 //!    guarantees [`crate::sandbox_staging`] holds in every profile are satisfied either
 //!    by an entry or by a fallback synthesis. Two of them need *keys* in a file the
@@ -540,6 +548,95 @@ pub(crate) fn validate_env_value(key: &str, raw: &str) -> Result<String, String>
     Ok(raw.to_string())
 }
 
+// -- pure: image source (#467, ADR-0031 §9) ----------------------------------
+
+/// Longest accepted registry ref. Not a Docker limit (a ref is bounded by its components, and
+/// 255 per name component at that) — a guard against a paste accident dropping a whole
+/// `docker inspect` output into the field.
+pub(crate) const MAX_IMAGE_REF_LEN: usize = 256;
+
+/// Validate and **normalise** a profile's image source (#467).
+///
+/// Returns the normalised value — both arms are trimmed — so `  ghcr.io/x:1  ` and `ghcr.io/x:1`
+/// cannot become two rows that render identically.
+///
+/// The refusals, and why each one is a 400 rather than something handled downstream:
+///
+/// - **`dockerfile`: the path must be absolute.** Same rule, same reason as the instance-wide
+///   `dockerfile_path` (#431): the daemon's cwd is not the user's, so a relative path resolves
+///   against something nobody chose. Existence is checked by the *handler*, not here — this stays
+///   pure, and the check has to live where `$HOME` and the filesystem are in scope (mirror of
+///   `put_settings`, and equally necessary-but-not-sufficient: the authoritative `is_file()` bail
+///   is `ensure_image`'s, at prep time).
+/// - **`registry`: the ref may not start with `-`.** `docker pull -x` parses as a flag. This is
+///   the one refusal that is about the *shell-less argv* rather than legibility, and it is why the
+///   check cannot be left to Docker: `docker pull` would fail with an unrelated usage error.
+/// - **`registry`: printable ASCII only, no whitespace.** A Docker reference is ASCII by
+///   specification; a value with a space or a newline is a paste accident that would otherwise
+///   fail minutes later, inside a `spawn_blocking`, as an opaque pull error.
+///
+/// PDO deliberately does **not** try to validate that the ref exists, resolves, or contains
+/// `claude`: the first is a network round-trip inside a PUT handler, and the last is the
+/// responsibility of whoever supplies the ref (ADR-0030 pt 7, amended by #467).
+pub(crate) fn validate_profile_image(
+    image: &crate::sandbox_image::ProfileImage,
+) -> Result<crate::sandbox_image::ProfileImage, String> {
+    use crate::sandbox_image::ProfileImage;
+    match image {
+        ProfileImage::Dockerfile { path } => {
+            let path = path.trim();
+            if path.is_empty() {
+                return Err(
+                    "a Dockerfile path cannot be blank — pick a file, or clear the profile's \
+                     image source to fall back to the instance-wide setting"
+                        .to_string(),
+                );
+            }
+            if path.contains('\0') {
+                return Err("a Dockerfile path cannot contain a NUL byte".to_string());
+            }
+            if !path.starts_with('/') {
+                return Err(format!(
+                    "`{path}`: the profile's Dockerfile must be an absolute path"
+                ));
+            }
+            Ok(ProfileImage::Dockerfile {
+                path: path.to_string(),
+            })
+        }
+        ProfileImage::Registry { image_ref } => {
+            let image_ref = image_ref.trim();
+            if image_ref.is_empty() {
+                return Err(
+                    "an image reference cannot be blank — type one, or clear the profile's \
+                     image source to fall back to the instance-wide setting"
+                        .to_string(),
+                );
+            }
+            if image_ref.len() > MAX_IMAGE_REF_LEN {
+                return Err(format!(
+                    "image reference `{image_ref}` is longer than {MAX_IMAGE_REF_LEN} characters"
+                ));
+            }
+            if image_ref.starts_with('-') {
+                return Err(format!(
+                    "`{image_ref}`: an image reference cannot start with `-` — `docker pull` \
+                     would read it as a flag"
+                ));
+            }
+            if !image_ref.chars().all(|c| c.is_ascii_graphic()) {
+                return Err(format!(
+                    "`{image_ref}`: an image reference may only contain printable ASCII, with no \
+                     spaces — a Docker reference is ASCII by specification"
+                ));
+            }
+            Ok(ProfileImage::Registry {
+                image_ref: image_ref.to_string(),
+            })
+        }
+    }
+}
+
 /// The **names** of a profile's env, comma-joined — the ONLY rendering of an env map that
 /// may reach a log (#468).
 ///
@@ -564,6 +661,10 @@ pub(crate) struct ProfileDiff {
     /// key can carry exactly one value and the argv order is deterministic without the
     /// caller sorting.
     pub env: BTreeMap<String, String>,
+    /// Where this profile's container image comes from (#467, ADR-0031 §9). `None` = the
+    /// profile poses nothing and the instance-wide `image_source` / `dockerfile_path` decide,
+    /// which is what every pre-#467 profile keeps doing.
+    pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: String,
 }
 
@@ -581,6 +682,10 @@ pub(crate) struct ResolvedProfile {
     /// The profile's env (#468). Empty for a virtual default with no row — there is no
     /// built-in env to fall back to, by design (module header, idea 3).
     pub env: BTreeMap<String, String>,
+    /// The profile's image source (#467). `None` for a virtual default with no row, and for
+    /// every profile that poses nothing — the two are indistinguishable on purpose: both mean
+    /// "the instance-wide setting decides".
+    pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: Option<String>,
 }
 
@@ -588,12 +693,15 @@ pub(crate) struct ResolvedProfile {
 /// migrations.
 ///
 /// The table was brand-new in #432, so `CREATE TABLE IF NOT EXISTS` was the whole
-/// migration then. **#468 is the first `ALTER`**, and it uses the idempotent PRAGMA-guarded
+/// migration then. **#468 was the first `ALTER`**, and it used the idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` idiom (precedent: `max_concurrent`, #239 in
-/// [`crate::trigger_store`]), **never** a migration runner. The `CREATE` above carries the
-/// column too, so a fresh database takes the short path and an existing one — where the
-/// `CREATE` is a no-op — takes the `ALTER`. Both end on the same schema; that redundancy is
-/// the point of the idiom, not an oversight.
+/// [`crate::trigger_store`]), **never** a migration runner. #467 adds the second, by the
+/// same idiom and for the same reasons — two divergent mechanics for two fields of the same
+/// profile would be the worst possible outcome. The `CREATE` above carries both columns too,
+/// so a fresh database takes the short path and an existing one — where the `CREATE` is a
+/// no-op — takes the `ALTER`s. Both end on the same schema; that redundancy is the point of
+/// the idiom, not an oversight. The idiom being idempotent *per column*, the order in which
+/// the two landed does not matter.
 ///
 /// **No seed row**: `minimal` and `full` are virtual (ADR-0031 §2).
 ///
@@ -607,6 +715,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             disabled   JSON NOT NULL DEFAULT '[]',
             extras     JSON NOT NULL DEFAULT '[]',
             env        JSON NOT NULL DEFAULT '{}',
+            image      JSON,
             updated_at TEXT NOT NULL
         )",
     )
@@ -620,32 +729,65 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     // column name" on an already-migrated DB) and is preferred over swallowing the error
     // blindly, which would hide a genuine failure. `DEFAULT '{}'` so existing rows read
     // back as "no env", which is exactly what they had.
-    let has_env =
-        sqlx::query("SELECT 1 FROM pragma_table_info('sandbox_profiles') WHERE name = 'env'")
-            .fetch_optional(db)
-            .await?
-            .is_some();
-    if !has_env {
-        sqlx::query("ALTER TABLE sandbox_profiles ADD COLUMN env JSON NOT NULL DEFAULT '{}'")
-            .execute(db)
-            .await?;
+    add_column_if_absent(db, "env", "JSON NOT NULL DEFAULT '{}'").await?;
+    // Additive migration (#467): the per-profile image source. NULLABLE and with **no**
+    // default, unlike `env`: "poses nothing" is a first-class state here (the instance-wide
+    // setting decides), so `NULL` is the honest empty value rather than a sentinel `'null'`
+    // string every reader would have to know about. Existing rows read back as `None`, which
+    // is exactly the behaviour they had.
+    add_column_if_absent(db, "image", "JSON").await?;
+    Ok(())
+}
+
+/// The PRAGMA-guarded `ALTER TABLE … ADD COLUMN` idiom, once (#467). Extracted the moment
+/// there were two of them: the guard is the load-bearing half (a bare `ALTER` errors
+/// "duplicate column name" on an already-migrated DB, and swallowing that error blindly would
+/// hide a genuine failure), and it must not be re-typed per column.
+async fn add_column_if_absent(
+    db: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let present = sqlx::query("SELECT 1 FROM pragma_table_info('sandbox_profiles') WHERE name = ?")
+        .bind(column)
+        .fetch_optional(db)
+        .await?
+        .is_some();
+    if !present {
+        // `column`/`decl` are compile-time literals from this module, never user input — the
+        // only reason they are formatted in rather than bound is that SQLite has no bind
+        // parameter for an identifier or a type declaration.
+        sqlx::query(&format!(
+            "ALTER TABLE sandbox_profiles ADD COLUMN {column} {decl}"
+        ))
+        .execute(db)
+        .await?;
     }
     Ok(())
 }
 
-/// Three columns rather than one `diff` blob: they validate differently, two of them play
-/// opposite roles at resolution (subtract vs add) while the third is not a diff at all
-/// (#468), and a corrupt one degrades to its empty value on its own. Precedent:
-/// `variables JSON` in [`crate::trigger_store`].
+/// Four columns rather than one `diff` blob: they validate differently, two of them play
+/// opposite roles at resolution (subtract vs add) while the other two are not diffs at all
+/// (#468, #467), and a corrupt one degrades to its empty value **on its own** — a shared blob
+/// would take the whole profile down with it. Precedent: `variables JSON` in
+/// [`crate::trigger_store`].
 fn row_to_diff(row: &sqlx::sqlite::SqliteRow) -> ProfileDiff {
     let disabled: String = row.get("disabled");
     let extras: String = row.get("extras");
     let env: String = row.get("env");
+    // #467: NULL (poses nothing) and an unreadable value both degrade to `None`, i.e. "the
+    // instance-wide setting decides". That is safe HERE and only here: this is the *live* read
+    // for the editor and for the create-run resolve, where falling back to the instance setting
+    // is a legitimate answer. The Run's FROZEN copy has no such latitude — `sandbox_run::
+    // frozen_image` fails the Run loud, because there "fall back" would mean silently starting a
+    // container in a DIFFERENT image than the nodes that already launched saw.
+    let image: Option<String> = row.get("image");
     ProfileDiff {
         name: row.get("name"),
         disabled: serde_json::from_str(&disabled).unwrap_or_default(),
         extras: serde_json::from_str(&extras).unwrap_or_default(),
         env: serde_json::from_str(&env).unwrap_or_default(),
+        image: image.as_deref().and_then(|s| serde_json::from_str(s).ok()),
         updated_at: row.get("updated_at"),
     }
 }
@@ -656,7 +798,8 @@ pub(crate) async fn get_diff(
     name: &str,
 ) -> Result<Option<ProfileDiff>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT name, disabled, extras, env, updated_at FROM sandbox_profiles WHERE name = ?",
+        "SELECT name, disabled, extras, env, image, updated_at \
+         FROM sandbox_profiles WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(db)
@@ -667,7 +810,8 @@ pub(crate) async fn get_diff(
 /// Every materialised diff, by name.
 pub(crate) async fn list_diffs(db: &SqlitePool) -> Result<Vec<ProfileDiff>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT name, disabled, extras, env, updated_at FROM sandbox_profiles ORDER BY name",
+        "SELECT name, disabled, extras, env, image, updated_at \
+         FROM sandbox_profiles ORDER BY name",
     )
     .fetch_all(db)
     .await?;
@@ -682,24 +826,30 @@ pub(crate) async fn upsert(
     disabled: &[String],
     extras: &[String],
     env: &BTreeMap<String, String>,
+    image: Option<&crate::sandbox_image::ProfileImage>,
 ) -> Result<ProfileDiff, sqlx::Error> {
     let now = crate::event_log::now_iso();
     let disabled_json = serde_json::to_string(disabled).unwrap_or_else(|_| "[]".to_string());
     let extras_json = serde_json::to_string(extras).unwrap_or_else(|_| "[]".to_string());
     let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());
+    // `None` binds SQL NULL, which is how "poses nothing" is stored (#467) — and, `image` being
+    // a FULL replacement like every other field here, it is also how clearing one works.
+    let image_json: Option<String> = image.and_then(|i| serde_json::to_string(i).ok());
     sqlx::query(
-        "INSERT INTO sandbox_profiles (name, disabled, extras, env, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO sandbox_profiles (name, disabled, extras, env, image, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
             disabled = excluded.disabled,
             extras = excluded.extras,
             env = excluded.env,
+            image = excluded.image,
             updated_at = excluded.updated_at",
     )
     .bind(name)
     .bind(&disabled_json)
     .bind(&extras_json)
     .bind(&env_json)
+    .bind(&image_json)
     .bind(&now)
     .execute(db)
     .await?;
@@ -743,6 +893,7 @@ pub(crate) async fn resolve(
             extras: Vec::new(),
             resolved: resolve_entry_list(&base, &[], &[]),
             env: BTreeMap::new(),
+            image: None,
             updated_at: None,
         }));
     };
@@ -757,6 +908,7 @@ pub(crate) async fn resolve(
         extras: diff.extras,
         resolved,
         env: diff.env,
+        image: diff.image,
         updated_at: Some(diff.updated_at),
     }))
 }
@@ -1115,6 +1267,82 @@ mod tests {
             );
         }
         assert_eq!(env_names(&BTreeMap::new()), "");
+    }
+
+    // -- validate_profile_image (#467) ---------------------------------------
+
+    #[test]
+    fn a_profile_dockerfile_must_be_an_absolute_path_and_is_trimmed() {
+        use crate::sandbox_image::ProfileImage;
+        let df = |p: &str| ProfileImage::Dockerfile {
+            path: p.to_string(),
+        };
+        assert_eq!(
+            validate_profile_image(&df("  /repo/Dockerfile.chrome-dev  ")).unwrap(),
+            df("/repo/Dockerfile.chrome-dev"),
+            "trimmed, so two rows cannot render identically"
+        );
+        for bad in [
+            "",
+            "   ",
+            "docker/Dockerfile",
+            "./Dockerfile",
+            "~/Dockerfile",
+        ] {
+            assert!(
+                validate_profile_image(&df(bad)).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(validate_profile_image(&df("/a\0b")).is_err());
+        // The refusal NAMES the offending value, like every other one in this module.
+        assert!(validate_profile_image(&df("relative/Dockerfile"))
+            .unwrap_err()
+            .contains("relative/Dockerfile"));
+    }
+
+    #[test]
+    fn a_profile_registry_ref_rejects_the_unpullable() {
+        use crate::sandbox_image::ProfileImage;
+        let reg = |r: &str| ProfileImage::Registry {
+            image_ref: r.to_string(),
+        };
+        for ok in [
+            "ghcr.io/acme/agent:1.4",
+            "acme/agent:latest",
+            "agent",
+            "registry.example.com:5000/team/agent@sha256:abc",
+            "ghcr.io/loulen/pdo-sandbox-chrome-dev:h-0123456789ab",
+        ] {
+            assert_eq!(
+                validate_profile_image(&reg(ok)).unwrap(),
+                reg(ok),
+                "{ok} should be valid"
+            );
+        }
+        assert_eq!(
+            validate_profile_image(&reg("  acme/agent:1  ")).unwrap(),
+            reg("acme/agent:1")
+        );
+        // A leading `-` is the one refusal that is about argv rather than legibility: Docker
+        // would read it as a flag and fail with an unrelated usage error.
+        let err = validate_profile_image(&reg("-rm")).unwrap_err();
+        assert!(err.contains("-rm") && err.contains("flag"), "{err}");
+        for bad in [
+            "",
+            "   ",
+            "acme/agent :1",
+            "acme/agent\n:1",
+            "agent\u{e9}",
+            "a\0b",
+        ] {
+            assert!(
+                validate_profile_image(&reg(bad)).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(validate_profile_image(&reg(&"a".repeat(MAX_IMAGE_REF_LEN + 1))).is_err());
+        assert!(validate_profile_image(&reg(&"a".repeat(MAX_IMAGE_REF_LEN))).is_ok());
     }
 
     /// Exactly two class-(b) entries — the floor re-synthesises those two files, so

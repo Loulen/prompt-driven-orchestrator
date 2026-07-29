@@ -74,15 +74,13 @@ pub(crate) struct SandboxContext {
     pub(crate) gid: u32,
     /// Host `pdo` binary, bind-mounted read-only at `/usr/local/bin/pdo`.
     pub(crate) pdo_bin: PathBuf,
-    /// Where to source the image (#411): resolved once at the edge from
-    /// `instance_config` (stored → env → default Registry). Passed to
-    /// `sandbox_image::ensure_image` in the sync path — no DB access in the core.
-    pub(crate) image_source: sandbox_image::ImageSource,
-    /// WHICH Dockerfile to hash and build (#431): resolved once at the edge from the
-    /// SAME `instance_config` read (stored → env `PDO_SANDBOX_DOCKERFILE` → the seeded
-    /// default). Carries the winning tier, so a missing path fails with a reason that
-    /// names both the path and who chose it.
-    pub(crate) dockerfile: sandbox_image::ResolvedDockerfile,
+    /// WHERE this Run's image comes from, resolved ONCE at the edge (#411 `image_source`, #431
+    /// `dockerfile_path`, #467 the profile's own source, which wins). Two shapes in one value —
+    /// hash-derived (a Dockerfile + pull/build) or an explicit registry ref (pull or fail) —
+    /// because the two are not variations of one procedure: see
+    /// [`sandbox_image::ImagePlan`]. Passed to `sandbox_image::ensure_image` in the sync
+    /// path, so the core still needs no DB access.
+    pub(crate) image_plan: sandbox_image::ImagePlan,
 }
 
 /// Resolve the entry list a sandboxed Run must stage, from its **frozen** projection
@@ -165,6 +163,28 @@ fn frozen_env(run_state: &RunState) -> Result<BTreeMap<String, String>> {
     Ok(run_state.sandbox_env.clone().unwrap_or_default())
 }
 
+/// Resolve the image source a sandboxed Run's **profile** froze at creation (#467, ADR-0031 §9).
+/// Pure, and a strict copy of [`frozen_env`]'s three rows — same decision table, same reasons:
+///
+/// | payload | behaviour | why |
+/// |---|---|---|
+/// | `sandbox_image` present and readable | **verbatim** | the freeze. A profile whose image was edited (or deleted) since is not an error — surviving that is the point |
+/// | absent | **`None`** = "the profile posed none" | a pre-#467 daemon could pose none at all, so absence and "poses none" describe the same resolution: the instance-wide `image_source` / `dockerfile_path` decide, read fresh, exactly as before |
+/// | present but unreadable | **hard error** | undecidable; falling back to the instance setting would start the container in a DIFFERENT image than the nodes that already launched ran in — the one failure this freeze exists to prevent |
+///
+/// Note what `None` does **not** mean: it is not "no image". Every sandboxed Run has an image;
+/// `None` only says the profile did not choose it.
+fn frozen_image(run_state: &RunState) -> Result<Option<sandbox_image::ProfileImage>> {
+    if let Some(raw) = &run_state.sandbox_image_raw_error {
+        anyhow::bail!(
+            "run {} froze an unreadable sandbox image source ({raw}); refusing to start a \
+             container from a different image than the Run's nodes already ran in",
+            run_state.run_id
+        );
+    }
+    Ok(run_state.sandbox_image.clone())
+}
+
 /// Resolve a [`SandboxContext`] from the daemon state + a projected Run. The one
 /// edge function that reads `AppState` / the environment; the core is pure values.
 ///
@@ -195,12 +215,6 @@ pub(crate) async fn context_from_state(
     // never failing the prep. ONE read serves BOTH sandbox knobs (#431): two reads
     // could straddle a concurrent PUT and mix tiers.
     let cfg = crate::instance_config::get(&state.db).await.ok();
-    let image_source =
-        sandbox_image::image_source_with(cfg.as_ref().and_then(|c| c.image_source.clone()));
-    let dockerfile = sandbox_image::dockerfile_with(
-        cfg.as_ref().and_then(|c| c.dockerfile_path.clone()),
-        &sandbox_root,
-    );
     // #432: the frozen entry list, resolved here (the boundary) so the sync core stays
     // DB-free. `off` resolves to `None` without touching the DB.
     let entries = match run_state.sandbox.profile() {
@@ -214,6 +228,24 @@ pub(crate) async fn context_from_state(
     } else {
         BTreeMap::new()
     };
+    // #467: the image plan, on the same boundary, from the profile's FROZEN choice folded over
+    // the two instance knobs. `off` never reaches `ensure_ready`, so the plan it gets is the
+    // instance one — inert, and cheaper than an `Option` every consumer would have to unwrap.
+    let image_plan = sandbox_image::image_plan_with(
+        // `as_str()` and not `profile()`: it yields the profile name when there is one and `off`
+        // otherwise, and the label only ever surfaces in the explicit-ref failure reason — which
+        // is unreachable for `off`, since posing a ref requires a profile.
+        run_state.sandbox.as_str(),
+        if entries.is_some() {
+            frozen_image(run_state)?
+        } else {
+            None
+        }
+        .as_ref(),
+        cfg.as_ref().and_then(|c| c.image_source.clone()),
+        cfg.as_ref().and_then(|c| c.dockerfile_path.clone()),
+        &sandbox_root,
+    );
     Ok(SandboxContext {
         docker_bin: docker_bin(state),
         run_id: run_state.run_id.clone(),
@@ -231,8 +263,7 @@ pub(crate) async fn context_from_state(
         uid: sandbox_container::host_uid(),
         gid: sandbox_container::host_gid(),
         pdo_bin,
-        image_source,
-        dockerfile,
+        image_plan,
     })
 }
 
@@ -386,19 +417,34 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         .with_context(|| format!("failed to stage the sandbox home for run {}", ctx.run_id))?;
     }
 
-    // 2. Ensure the content-addressed image (`pdo-sandbox:h-<hash>`) exists —
-    //    pull-then-retag from GHCR (registry, default), or build it from the RESOLVED
-    //    Dockerfile (dockerfile mode / custom path / pull fallback), per
-    //    `ctx.image_source` (#411) and `ctx.dockerfile` (#431). A resolved path that is
-    //    not a readable regular file is a hard error here, never a silent fallback to
-    //    the seeded default (ADR-0030 pt 4).
-    let image_ref = sandbox_image::ensure_image(
-        &ctx.docker_bin,
-        &ctx.sandbox_root,
-        &ctx.dockerfile,
-        ctx.image_source,
-    )
-    .context("failed to ensure the sandbox image")?;
+    // 2. Ensure the Run's image exists locally, per the plan resolved at the edge:
+    //    pull-then-retag `<name>:h-<hash>` from GHCR (registry, default) or build it from the
+    //    RESOLVED Dockerfile (dockerfile mode / custom path / pull fallback), per
+    //    `image_source` (#411) and the winning `dockerfile` tier (#431, #467) — OR pull a
+    //    profile's EXPLICIT registry ref, where a failed pull is a hard error and no build is
+    //    attempted (#467, ADR-0030 pt 7 as amended). A resolved Dockerfile path that is not a
+    //    readable regular file is likewise a hard error, never a silent fallback to the seeded
+    //    default (ADR-0030 pt 4).
+    let image_ref =
+        sandbox_image::ensure_image(&ctx.docker_bin, &ctx.sandbox_root, &ctx.image_plan)
+            .context("failed to ensure the sandbox image")?;
+    // Name the image ONCE per prep (not per node — `ensure_ready` is not on the spawn path), so
+    // "which image did this Run actually get" is answerable from the log. It cannot be answered
+    // from the profile afterwards: the source is frozen, the profile is not. An image ref is not
+    // a secret (unlike the env values two blocks up), so it goes in clear.
+    info!(
+        "sandbox: run {} uses image {image_ref} (source: {})",
+        ctx.run_id,
+        match &ctx.image_plan {
+            sandbox_image::ImagePlan::ExplicitRef { profile, .. } =>
+                format!("explicit ref from profile `{profile}`"),
+            sandbox_image::ImagePlan::HashDerived { dockerfile, .. } => format!(
+                "content hash of {} (`{}` tier)",
+                dockerfile.path.display(),
+                dockerfile.source.as_str()
+            ),
+        }
+    );
 
     // 3. Assemble the container spec + ensure the long-lived container is up.
     let staged_home = sandbox_staging::staged_claude_home(&ctx.sandbox_root, &ctx.run_id);
@@ -615,13 +661,40 @@ mod tests {
         test_ctx_with(tmp, docker_bin, mode, entries, BTreeMap::new())
     }
 
-    /// Like [`test_ctx_with_entries`] but with an explicit frozen env too (#468).
+    /// Like [`test_ctx_with_entries`] but with an explicit frozen env too (#468). The image plan
+    /// is the historical one — see [`test_ctx_full`] for the #467 variants.
     fn test_ctx_with(
         tmp: &Path,
         docker_bin: String,
         mode: SandboxMode,
         entries: Option<Vec<String>>,
         env: BTreeMap<String, String>,
+    ) -> SandboxContext {
+        let sandbox_root = tmp.join("sandbox");
+        test_ctx_full(
+            tmp,
+            docker_bin,
+            mode,
+            entries,
+            env,
+            // Dockerfile → build-probe path (network-free); keeps the existing ensure_ready
+            // assertions (image inspect + build/create) intact (#411). The seeded default
+            // location / `default` tier — the pre-#431, pre-#467 input.
+            sandbox_image::ImagePlan::HashDerived {
+                dockerfile: sandbox_image::resolve_dockerfile(None, None, None, &sandbox_root),
+                source: sandbox_image::ImageSource::Dockerfile,
+            },
+        )
+    }
+
+    /// Like [`test_ctx_with`] but with an explicit image plan too (#467).
+    fn test_ctx_full(
+        tmp: &Path,
+        docker_bin: String,
+        mode: SandboxMode,
+        entries: Option<Vec<String>>,
+        env: BTreeMap<String, String>,
+        image_plan: sandbox_image::ImagePlan,
     ) -> SandboxContext {
         let home = tmp.join("home");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
@@ -642,11 +715,7 @@ mod tests {
             uid: 1000,
             gid: 1000,
             pdo_bin: tmp.join("pdo"),
-            // Dockerfile → build-probe path (network-free); keeps the existing
-            // ensure_ready assertions (image inspect + build/create) intact (#411).
-            image_source: sandbox_image::ImageSource::Dockerfile,
-            // The seeded default location / `default` tier — the pre-#431 input (#431).
-            dockerfile: sandbox_image::resolve_dockerfile(None, None, &sandbox_root),
+            image_plan,
         }
     }
 
@@ -895,6 +964,174 @@ mod tests {
         assert!(
             !lines2.iter().any(|l| l.starts_with("FOO=")),
             "a profile without env must pose nothing; log: {lines2:?}"
+        );
+    }
+
+    // --- #467: the frozen profile image source ---------------------------------
+
+    fn run_state_with_image(image: Option<sandbox_image::ProfileImage>) -> RunState {
+        let mut rs = RunState::new("r1".to_string(), "p".to_string());
+        rs.sandbox = full();
+        rs.sandbox_entries = Some(Vec::new());
+        rs.sandbox_image = image;
+        rs
+    }
+
+    /// Row 1: a frozen image source is used **verbatim**, whatever the store now says. That is
+    /// what makes an edit non-retroactive — the AC2 guarantee, at the unit level.
+    #[test]
+    fn frozen_image_is_used_verbatim() {
+        let img = sandbox_image::ProfileImage::Registry {
+            image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+        };
+        assert_eq!(
+            frozen_image(&run_state_with_image(Some(img.clone()))).unwrap(),
+            Some(img)
+        );
+    }
+
+    /// Row 2: an ABSENT source means "the profile posed none" — NOT "no image". The instance-wide
+    /// setting then decides, read fresh, exactly as before #467.
+    #[test]
+    fn an_absent_frozen_image_is_none_not_an_error() {
+        assert_eq!(frozen_image(&run_state_with_image(None)).unwrap(), None);
+    }
+
+    /// Row 3: unreadable is a HARD error naming the raw value, never a silent fallback to the
+    /// instance setting — which would start the container in a DIFFERENT image than the nodes that
+    /// already launched ran in.
+    #[test]
+    fn an_unreadable_frozen_image_fails_loud() {
+        let mut rs = run_state_with_image(None);
+        rs.sandbox_image_raw_error = Some("{\"kind\":\"ecr\"}".to_string());
+        let err = frozen_image(&rs).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("ecr"),
+            "the reason must name the raw value: {msg}"
+        );
+        assert!(msg.contains("unreadable"), "{msg}");
+    }
+
+    /// AC1 + AC4 in one harness, at the layer where the two halves are comparable: the SAME
+    /// `ensure_ready`, twice, differing only by the profile's image source.
+    ///
+    /// (a) an explicit ref reaches `docker create` as the image, with no build;
+    /// (b) NEGATIVE CONTROL / AC4: a profile posing NOTHING produces the hash-derived tag and an
+    ///     argv that is byte-identical to the pre-#467 one — asserted as full equality against the
+    ///     other Run's argv, not by spot-checking, because "identical" is the whole claim.
+    #[test]
+    fn ensure_ready_uses_the_profiles_image_and_leaves_the_others_argv_untouched() {
+        // (a) explicit ref → it IS the image at create, and nothing is built.
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, log) = write_fake_docker_absent_container(tmp.path());
+        let ctx = test_ctx_full(
+            tmp.path(),
+            docker,
+            minimal(),
+            Some(Vec::new()),
+            BTreeMap::new(),
+            sandbox_image::ImagePlan::ExplicitRef {
+                image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+                profile: "chrome".to_string(),
+            },
+        );
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+        let lines = log_lines(&log);
+        assert!(lines.contains(&"create".to_string()), "absent → create");
+        assert!(
+            lines.contains(&"ghcr.io/acme/agent:1.4".to_string()),
+            "the profile's ref must be the image at create; log: {lines:?}"
+        );
+        assert!(
+            !lines.contains(&"build".to_string()),
+            "an explicit ref has no Dockerfile to build; log: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("pdo-sandbox:h-")),
+            "and the hash-derived tag must never appear; log: {lines:?}"
+        );
+
+        // (b) same harness, profile posing NOTHING → the historical hash-derived tag.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (docker2, log2) = write_fake_docker_absent_container(tmp2.path());
+        let ctx2 = test_ctx_with(
+            tmp2.path(),
+            docker2,
+            minimal(),
+            Some(Vec::new()),
+            BTreeMap::new(),
+        );
+        retry_etxtbsy(|| ensure_ready(&ctx2)).unwrap();
+        let lines2 = log_lines(&log2);
+        assert!(
+            lines2.iter().any(|l| l.starts_with("pdo-sandbox:h-")),
+            "no profile source ⇒ the content-addressed tag, as before #467; log: {lines2:?}"
+        );
+        assert!(
+            !lines2.iter().any(|l| l.contains("ghcr.io/acme")),
+            "and never another profile's ref; log: {lines2:?}"
+        );
+    }
+
+    /// AC4 stated as the property it is: the `docker create` argv of a profile that poses no image
+    /// source is **bit for bit** what it was, tempdir-relative paths aside. Proven by rebuilding
+    /// the same context twice — once through the pre-#467 code path shape (`ImagePlan::HashDerived`
+    /// over the `default` tier), once through `image_plan_with` with `profile_image: None` — and
+    /// comparing the two argv logs verbatim.
+    #[test]
+    fn a_profile_without_an_image_source_yields_the_same_create_argv() {
+        let create_argv = |ctx: &SandboxContext, log: &Path| -> Vec<String> {
+            retry_etxtbsy(|| ensure_ready(ctx)).unwrap();
+            let lines = log_lines(log);
+            let at = lines
+                .iter()
+                .position(|l| l == "create")
+                .expect("the container is absent, so create must be reached");
+            // Drop the tempdir-specific paths: what is compared is the SHAPE and the image.
+            lines[at..]
+                .iter()
+                .map(|a| a.replace(ctx.sandbox_root.to_str().unwrap(), "<SB>"))
+                .map(|a| a.replace(ctx.repo_root.to_str().unwrap(), "<REPO>"))
+                .map(|a| a.replace(ctx.home_root.to_str().unwrap(), "<HOME>"))
+                .map(|a| a.replace(ctx.pdo_bin.to_str().unwrap(), "<PDO>"))
+                .collect()
+        };
+
+        // Reference: the plan the pre-#467 edge built (default tier, dockerfile mode).
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, log) = write_fake_docker_absent_container(tmp.path());
+        let reference = test_ctx_with(
+            tmp.path(),
+            docker,
+            minimal(),
+            Some(Vec::new()),
+            BTreeMap::new(),
+        );
+        let expected = create_argv(&reference, &log);
+
+        // The #467 edge, with a profile that poses nothing: same plan, same argv.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (docker2, log2) = write_fake_docker_absent_container(tmp2.path());
+        let sandbox_root2 = tmp2.path().join("sandbox");
+        let through_plan = test_ctx_full(
+            tmp2.path(),
+            docker2,
+            minimal(),
+            Some(Vec::new()),
+            BTreeMap::new(),
+            sandbox_image::image_plan_with(
+                "minimal",
+                None,
+                Some("dockerfile".to_string()),
+                None,
+                &sandbox_root2,
+            ),
+        );
+        assert_eq!(
+            create_argv(&through_plan, &log2),
+            expected,
+            "a profile with no image source must not change one byte of `docker create`"
         );
     }
 

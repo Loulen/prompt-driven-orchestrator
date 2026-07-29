@@ -14,6 +14,7 @@ import type {
   InstanceSettings,
   SandboxProfile,
   SandboxProfileEntry,
+  SandboxProfileImage,
   SandboxProfileReferents,
   SettingField,
   StringSettingField,
@@ -472,6 +473,24 @@ function SettingsForm({
             GHCR and falls back to a local build; <span className="font-mono">dockerfile</span>{" "}
             always builds it locally from the seeded Dockerfile.
           </div>
+          {/* AC5 of #467. This answers the one question the field provokes and never answered:
+              "I picked registry, why is the Dockerfile below still there?" It is not a leftover —
+              the tag pulled from GHCR *is* the SHA-256 of that file's bytes, so without the file
+              the image has no name to pull. Saying it here is the whole deliverable of the issue's
+              observation 1; a per-profile explicit ref (Manage staging profiles…) is the way to
+              pull an image PDO knows nothing about. */}
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-image-source-dockerfile-still-required"
+          >
+            <span className="font-mono">registry</span> still needs the{" "}
+            <strong>Sandbox Dockerfile</strong> below: the tag it pulls{" "}
+            <em>is</em> the SHA-256 of that file's bytes, so without them the image has no name.
+            Both modes are the same image, differing only in whether it is fetched or built. To run
+            an <em>arbitrary</em> image instead, give a staging profile its own explicit registry ref
+            under <span className="font-mono">Manage staging profiles…</span>.
+          </div>
           <div
             className="text-fg-3"
             style={{ fontSize: "10.5px" }}
@@ -918,14 +937,19 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
   /**
    * Write a profile's diff, then refresh both this panel and the parent's settings.
    *
-   * Every `PUT` is a FULL replacement — `env` included — so each caller passes the fields it
-   * is not changing verbatim. Threading that through one helper is what keeps "toggle an
-   * entry" from quietly clearing the env.
+   * Every `PUT` is a FULL replacement — `env` and `image` included — so each caller passes the
+   * fields it is not changing verbatim. Threading that through one helper is what keeps "toggle
+   * an entry" from quietly clearing the env or resetting the image source.
    */
   const write = useCallback(
     async (
       name: string,
-      diff: { disabled: string[]; extras: string[]; env: Record<string, string> },
+      diff: {
+        disabled: string[];
+        extras: string[];
+        env: Record<string, string>;
+        image: SandboxProfileImage | null;
+      },
     ) => {
       if (busy) return;
       setBusy(true);
@@ -954,7 +978,12 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     const disabled = entry.enabled
       ? [...current.disabled, entry.path]
       : current.disabled.filter((d) => d !== entry.path);
-    void write(current.name, { disabled, extras: current.extras, env: current.env });
+    void write(current.name, {
+      disabled,
+      extras: current.extras,
+      env: current.env,
+      image: current.image,
+    });
   };
 
   const removeExtra = (path: string) => {
@@ -963,6 +992,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
       disabled: current.disabled,
       extras: current.extras.filter((e) => e !== path),
       env: current.env,
+      image: current.image,
     });
   };
 
@@ -980,6 +1010,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
       disabled: current.disabled,
       extras: [...current.extras, rel],
       env: current.env,
+      image: current.image,
     });
   };
 
@@ -1009,6 +1040,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
       disabled: current.disabled,
       extras: current.extras,
       env: { ...current.env, [key]: envValue },
+      image: current.image,
     });
   };
 
@@ -1018,7 +1050,31 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     const env = Object.fromEntries(
       Object.entries(current.env).filter(([k]) => k !== key),
     );
-    void write(current.name, { disabled: current.disabled, extras: current.extras, env });
+    void write(current.name, {
+      disabled: current.disabled,
+      extras: current.extras,
+      env,
+      image: current.image,
+    });
+  };
+
+  /**
+   * Write the profile's image source (#467). `null` clears it — a FULL replacement, so that is
+   * literally how "go back to the instance-wide setting" is expressed.
+   *
+   * Nothing is validated here beyond emptiness: the absolute-path rule, the existence check and
+   * the ref grammar are all the daemon's 400s, which this panel surfaces verbatim. Re-deriving any
+   * of them in TypeScript is exactly the drift #373 cost us — and the existence check is not even
+   * derivable in a browser.
+   */
+  const writeImage = (image: SandboxProfileImage | null) => {
+    if (!current) return;
+    void write(current.name, {
+      disabled: current.disabled,
+      extras: current.extras,
+      env: current.env,
+      image,
+    });
   };
 
   const create = async () => {
@@ -1029,7 +1085,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
     try {
       // A blank diff: "materialise this profile exactly as the current default", which is
       // the starting point for unchecking something.
-      await saveSandboxProfile(name, { disabled: [], extras: [], env: {} });
+      await saveSandboxProfile(name, { disabled: [], extras: [], env: {}, image: null });
       setNewName("");
       setCreating(false);
       await load(name);
@@ -1451,6 +1507,16 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
               </div>
             </div>
 
+            {/* Image (#467, ADR-0031 §9): WHICH container the Run gets, as opposed to what
+                lands in its home. `key` on the profile name so switching profiles resets the
+                draft — the reset is the mount, not an effect (the #385 lesson). */}
+            <ProfileImageEditor
+              key={current.name}
+              profile={current}
+              busy={busy}
+              onWrite={writeImage}
+            />
+
             {/* Signalled no-ops (ADR-0031 §2). Not errors: the default may LOSE an entry
                 tomorrow, and unchecking one a future release will add must be remembered. */}
             {current.inactive_disabled.length > 0 && (
@@ -1511,6 +1577,204 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * The profile's image source (#467, ADR-0031 §9): a three-way `<select>` (instance default /
+ * Dockerfile / registry ref) plus the one field the chosen kind needs.
+ *
+ * Its own component for one reason: **the draft resets by remounting**. The parent keys it on the
+ * profile name, so selecting another profile cannot leave a half-typed ref from the previous one
+ * in the field — the `useEffect`-that-resets-state pattern is precisely what #385 was.
+ *
+ * The copy is the deliverable as much as the controls are. Three things have to be said, because
+ * nothing else in the product says them and each one is a real support question:
+ *
+ * 1. **`registry` here is NOT `registry` in Settings.** The instance-wide `image_source: registry`
+ *    pulls the *hash-derived* image OF YOUR DOCKERFILE — which is why the Dockerfile field stays
+ *    required there. This one is a free ref with no Dockerfile at all.
+ * 2. **An explicit ref has no fallback.** No Dockerfile ⇒ no content hash ⇒ nothing to build if
+ *    the pull fails, so the Run fails instead. That is the amendment to ADR-0030 pt 7.
+ * 3. **PDO does not check the image contains `claude`.** Whoever supplies the ref owns that.
+ */
+function ProfileImageEditor({
+  profile,
+  busy,
+  onWrite,
+}: {
+  profile: SandboxProfile;
+  busy: boolean;
+  onWrite: (image: SandboxProfileImage | null) => void;
+}) {
+  const [kind, setKind] = useState<"instance" | "dockerfile" | "registry">(
+    profile.image?.kind ?? "instance",
+  );
+  const [path, setPath] = useState(
+    profile.image?.kind === "dockerfile" ? profile.image.path : "",
+  );
+  const [ref, setRef] = useState(profile.image?.kind === "registry" ? profile.image.ref : "");
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  /** Switching to "instance default" IS the edit — there is no field to fill, so it writes
+   *  straight away, consistent with every other control in this panel (nothing is batched). */
+  const chooseKind = (next: "instance" | "dockerfile" | "registry") => {
+    setKind(next);
+    if (next === "instance" && profile.image !== null) onWrite(null);
+  };
+
+  const pending: SandboxProfileImage | null =
+    kind === "dockerfile"
+      ? { kind: "dockerfile", path: path.trim() }
+      : kind === "registry"
+        ? { kind: "registry", ref: ref.trim() }
+        : null;
+  const canSet =
+    !busy &&
+    ((pending?.kind === "dockerfile" && pending.path.length > 0) ||
+      (pending?.kind === "registry" && pending.ref.length > 0));
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="staging-profile-image">
+      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        Image
+      </span>
+      <select
+        value={kind}
+        onChange={(e) => chooseKind(e.target.value as "instance" | "dockerfile" | "registry")}
+        disabled={busy}
+        aria-label="Image source"
+        data-testid="staging-image-kind"
+        className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg focus:border-acc focus:outline-none disabled:opacity-40"
+        style={{ fontSize: "11px" }}
+      >
+        <option value="instance">instance default (Sandbox image source)</option>
+        <option value="dockerfile">dockerfile (build from a Dockerfile)</option>
+        <option value="registry">registry (pull an explicit ref)</option>
+      </select>
+
+      {kind === "instance" && (
+        <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="staging-image-none">
+          This profile does not choose an image — the instance-wide{" "}
+          <span className="font-mono">Sandbox image source</span> and{" "}
+          <span className="font-mono">Sandbox Dockerfile</span> settings decide, as they always
+          have.
+        </div>
+      )}
+
+      {kind === "dockerfile" && (
+        <>
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <input
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="/path/to/Dockerfile.chrome-dev"
+                aria-label="Dockerfile path"
+                data-testid="staging-image-path"
+                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 pr-8 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                style={{ fontSize: "11px" }}
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                className="absolute inset-y-0 right-0 flex items-center px-2 text-fg-4 transition-colors hover:text-fg-2"
+                title="Browse for a Dockerfile"
+                aria-label="Browse for a Dockerfile"
+                data-testid="staging-image-browse"
+              >
+                <Search size={12} />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => pending && onWrite(pending)}
+              disabled={!canSet}
+              data-testid="staging-image-set"
+              className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+              style={{ fontSize: "11px" }}
+            >
+              Set
+            </button>
+          </div>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Every Run on this profile builds (or pulls) the image whose tag is the SHA-256 of this
+            file's bytes — editing the file changes the tag, hence a rebuild. It must be{" "}
+            <strong>self-contained</strong>: the build context is deliberately empty, so no{" "}
+            <span className="font-mono">COPY</span>. A filename like{" "}
+            <span className="font-mono">Dockerfile.chrome-dev</span> also names the image (
+            <span className="font-mono">pdo-sandbox-chrome-dev</span>).
+          </div>
+        </>
+      )}
+
+      {kind === "registry" && (
+        <>
+          <div className="flex items-center gap-2">
+            <input
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canSet && pending) onWrite(pending);
+              }}
+              placeholder="ghcr.io/owner/image:tag"
+              aria-label="Image reference"
+              data-testid="staging-image-ref"
+              className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+              style={{ fontSize: "11px" }}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              onClick={() => pending && onWrite(pending)}
+              disabled={!canSet}
+              data-testid="staging-image-set"
+              className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+              style={{ fontSize: "11px" }}
+            >
+              Set
+            </button>
+          </div>
+          {/* Load-bearing copy: the two properties an explicit ref LOSES. Without them the first
+              failed pull looks like a PDO bug. */}
+          <div
+            className="text-st-await"
+            style={{ fontSize: "10.5px" }}
+            data-testid="staging-image-ref-no-fallback"
+          >
+            Pulled as-is, with <strong>no local build to fall back on</strong>: an explicit ref has
+            no Dockerfile, so it has no content hash and nothing to rebuild — a failed pull{" "}
+            <strong>fails the Run</strong>, naming the ref. PDO also cannot check that the image
+            contains <span className="font-mono">claude</span>; that is on whoever supplies it.
+          </div>
+        </>
+      )}
+
+      {/* The bridge between this field and the instance-wide setting, which uses the SAME word for
+          a different thing. Shown for every kind, because the confusion is not kind-specific. */}
+      <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="staging-image-note">
+        Not the same <span className="font-mono">registry</span> as the instance-wide{" "}
+        <span className="font-mono">Sandbox image source</span>: that one pulls the pre-built image{" "}
+        <em>of your Dockerfile</em>, whose tag is the hash of its bytes — which is why a Dockerfile
+        is still required there. This one is a ref you name yourself.
+      </div>
+
+      {pickerOpen && (
+        <FsExplorerModal
+          mode="file"
+          showHidden
+          title="Choose a Dockerfile for this profile"
+          confirmLabel="Use this Dockerfile"
+          startPath={dockerfileStartDir(path)}
+          onPick={(abs) => {
+            setPath(abs);
+            onWrite({ kind: "dockerfile", path: abs });
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+    </div>
   );
 }
 

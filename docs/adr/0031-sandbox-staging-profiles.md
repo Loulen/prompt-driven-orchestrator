@@ -3,14 +3,15 @@
 > Statut : accepted (grilling du 2026-07-24, PRD #403). Vocabulaire : CONTEXT.md § « Sandbox ».
 > Complète ADR-0030 (modèle d'exécution) : ADR-0030 dit *où* tourne un Run sandboxé, celle-ci dit
 > *avec quel contenu de home*. Implémentée par les slices « plancher » puis « profils » : §1 est
-> **réalisé en #426** (avec l'amendement §1 d'ADR-0030), **§2-§7 en #432**, **§8 en #468**. Deux
-> amendements en fin de document : un point de §6 relit de fait le réglage vivant dans un cas
-> borné, et l'un des critères d'acceptation de #432 était factuellement faux.
+> **réalisé en #426** (avec l'amendement §1 d'ADR-0030), **§2-§7 en #432**, **§8 en #468**,
+> **§9 en #467**. Deux amendements en fin de document : un point de §6 relit de fait le réglage
+> vivant dans un cas borné, et l'un des critères d'acceptation de #432 était factuellement faux.
 >
-> Le titre est devenu partiellement faux avec §8 : un profil ne décrit plus seulement le
-> *contenu du home*, il décrit **le contenu du home et l'environnement d'exécution**. Le nom
-> `sandbox_profiles` est conservé — le renommer coûterait une repointe des trois stockages qui
-> comparent son nom (cf. « No rename in v1 » dans `sandbox_profile.rs`) pour un gain de prose.
+> Le titre est devenu partiellement faux avec §8, puis franchement faux avec §9 : un profil ne
+> décrit plus le *contenu du home*, il décrit **le contenu du home, l'environnement d'exécution et
+> le conteneur lui-même**. Le nom `sandbox_profiles` est conservé — le renommer coûterait une
+> repointe des trois stockages qui comparent son nom (cf. « No rename in v1 » dans
+> `sandbox_profile.rs`) pour un gain de prose.
 
 Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. Il devient un
 **profil de staging** : une liste nommée, éditable, sélectionnable par Run et par Trigger.
@@ -64,9 +65,12 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
    ne supprime jamais. Sans gel, un daemon redémarré après une édition du profil produirait un home
    incohérent entre deux nœuds du même Run, avec un `plugins/` physiquement présent malgré son
    décochage. Le gel de la **liste** en plus du **nom** évite en outre qu'éditer un profil réécrive
-   rétroactivement ce qu'un Run passé a stagé. **L'env de §8 est gelé au même endroit et à la même
-   création** (clé sœur `sandbox_env`, écrite au même `resolve` : deux lectures pourraient
-   enjamber un PUT concurrent et geler une liste d'une révision avec un env d'une autre).
+   rétroactivement ce qu'un Run passé a stagé. **L'env de §8 et la source d'image de §9 sont gelés
+   au même endroit et à la même création** (clés sœurs `sandbox_env` / `sandbox_image`, écrites au
+   même `resolve` : deux lectures pourraient enjamber un PUT concurrent et geler une liste d'une
+   révision avec un env — ou une image — d'une autre). Pour l'image l'enjeu est le plus visible des
+   trois : sans gel, deux nœuds du même Run peuvent tourner dans **deux images différentes**, et le
+   second échouerait sur des outils que le premier avait.
 
 7. **Un nom de profil inconnu échoue fort, partout.** 400 à la création de Run, échec visible du tir
    de Trigger, `RunFailed` explicite en boot recovery. Jamais de retombée silencieuse sur le défaut
@@ -115,6 +119,49 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
    (`PUPPETEER_EXECUTABLE_PATH`, `CHROME_PATH`, proxys d'entreprise, endpoints clients). Sans §8, le
    profil décrivait le contenu du home et **rien** de l'exécution.
 
+9. **Un profil porte aussi sa source d'image** *(réalisé en #467)*. Jusque-là l'image d'un Run
+   sandboxé était un réglage **d'instance** (`image_source` + `dockerfile_path`, ADR-0015) : un
+   profil décrivait « quel contenu de l'hôte atterrit dans le conteneur » mais pas « quel
+   conteneur ». Conséquence concrète : impossible d'avoir un profil chrome-devtools et un profil
+   minimal côte à côte sur la même instance. Un profil (n'importe quel nom **sauf `off`**, qui n'a
+   pas de conteneur du tout et que `validate_profile_name` refuse déjà — y compris `full` /
+   `minimal`, les éditer étant ce qui les matérialise, §2) peut donc porter :
+
+   - `image: { kind: "dockerfile", path: "<abs>" }`
+   - `image: { kind: "registry",   ref: "ghcr.io/owner/image:tag" }`
+
+   Cinq décisions, dont deux sont des non-décisions assumées :
+
+   - **Précédence : profil (si posé) > `image_source`/`dockerfile_path` stored > env > défaut**
+     (ADR-0015 étendue d'un tier). Les deux réglages d'instance **restent** et ne perdent aucun
+     champ de `GET /settings` : ils sont le défaut, et la réponse pour tout profil qui ne pose rien.
+     Un profil `kind: dockerfile` ne court-circuite que `dockerfile_path` ; un `kind: registry`
+     court-circuite les deux (il n'y a plus ni hash ni Dockerfile dans l'histoire).
+   - **Ne rien poser est un état de première classe, et le défaut.** `NULL` en base, clé absente du
+     payload gelé, `null` dans la vue. Un profil qui ne pose rien produit des args `docker create`
+     **bit pour bit** identiques à avant #467 — c'est la propriété qui rend cette slice sûre pour
+     les instances existantes, et elle a son golden.
+   - **Un ref registry explicite casse l'adressage par contenu**, donc pas de repli build, pas de
+     retag, erreur dure nommant le ref, et aucune vérification que l'image contient `claude`. La
+     rationale complète est l'**amendement #467 d'ADR-0030 pt 7**, pas ici : c'est l'invariant du
+     tag qui est amendé, et il appartient à ADR-0030.
+   - **Gel par Run**, au même endroit que la liste et l'env (§6). L'asymétrie avec les entrées est
+     la même qu'en §8 : la clé est écrite **seulement si** le profil pose quelque chose, et son
+     absence signifie « le profil n'a rien posé » — indiscernable, par construction, d'un payload
+     écrit par un daemon pré-#467, puisque les deux se résolvent pareil (les réglages d'instance
+     décident, relus frais). Le gel porte donc sur le **choix du profil**, pas sur les deux knobs
+     d'instance, qui gardent leur contrat ADR-0015 « un `PUT /settings` mord au prochain ensure ».
+   - **Une colonne JSON dédiée**, posée par l'idiome idempotent `ALTER TABLE … ADD COLUMN` gardé par
+     PRAGMA (précédent `max_concurrent` #239, puis l'`env` de §8) — **jamais** un migration runner.
+     Dédiée et non fondue dans un blob fourre-tout, pour les raisons de `disabled`/`extras`/`env` :
+     validation distincte, et dégradation indépendante en `None` plutôt qu'un profil entier illisible.
+     Un enum tagué dans **une** colonne plutôt que deux colonnes nullables, parce que les deux formes
+     sont mutuellement exclusives : deux colonnes pourraient se contredire.
+
+   Ce que ça débloque, et le consommateur direct : la variante `pdo-sandbox-chrome-dev` de #466
+   devient **sélectionnable par profil** au lieu de l'être pour toute l'instance — la sélection par
+   `dockerfile_path` global forçait le choix sur tous les Runs à la fois.
+
 ## Pourquoi (ce que le mode seul ne pouvait pas faire)
 
 Le mode est un interrupteur à deux positions qui décide de *tout* d'un coup — skills, plugins,
@@ -152,6 +199,19 @@ un Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'ident
   §5 : le widget d'édition à trois endroits, plus une composition inter-tiers indevinable — et ici
   s'ajoute la question « une clé du tier bas est-elle écrasée ou fusionnée ? », dont aucune réponse
   n'est évidente.
+- **Une 3e valeur d'`image_source`** (§9), du genre `explicit`, plutôt qu'un enum tagué sur le
+  profil. Ça mettrait le *choix* sur l'instance et la *valeur* sur le profil : deux réglages à tenir
+  cohérents, et un état absurde atteignable (`explicit` sans ref).
+- **Retirer les réglages d'instance** une fois le profil capable de tout dire (§9). Ils sont le
+  défaut de tout profil qui ne pose rien, ce qui est le cas de tous les profils existants : les
+  retirer serait une migration forcée pour un gain nul.
+- **Rendre le pull d'un ref explicite tolérant** (retomber sur un build, ou sur l'image
+  hash-dérivée). C'est l'alternative la plus tentante et la plus dangereuse : elle démarrerait le
+  Run dans une image **sans rapport** avec celle demandée. Voir l'amendement #467 d'ADR-0030 pt 7.
+- **Geler aussi les deux knobs d'instance** dans `RunStarted` (§9). Ce serait cohérent en apparence,
+  mais ça changerait le contrat ADR-0015 de deux réglages existants (« un `PUT /settings` mord au
+  prochain ensure ») pour tous les Runs, y compris ceux qui n'ont aucun profil — hors périmètre, et
+  une régression de comportement déguisée en amélioration.
 
 ## Limites acceptées
 
@@ -170,15 +230,29 @@ un Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'ident
   une version future de PDO posait une var par défaut, un profil ne pourrait pas la « décocher », il
   faudrait la surcharger. Acceptable tant que PDO ne pose que des vars run-constantes — qui sont,
   elles, réservées.
+- **Un profil sur `kind: registry` ne bénéficie plus du repli build** (§9) : un registre injoignable
+  fait échouer ses Runs, là où le chemin hash-dérivé les aurait buildés localement. C'est le prix
+  explicite du ref libre, et c'est pourquoi l'éditeur l'écrit à l'endroit du choix.
+- **Un profil référence des chemins et des refs spécifiques à la machine** (§9, comme les entrées) :
+  ni le `path` d'un Dockerfile ni l'accès à un registre privé ne sont portables d'une instance à
+  l'autre. Le champ n'est pas versionné avec le repo ; le Dockerfile qu'il pointe, lui, peut l'être.
+- **La validation d'un ref est syntaxique seulement** (§9). PDO refuse ce qui ne peut pas être tiré
+  du tout (vide, espaces, un `-` initial que `docker pull` lirait comme un flag) mais ne sonde ni
+  l'existence ni le contenu : un ref valide vers une image sans `claude` est acceptée à l'écriture
+  et échoue au premier `docker exec`.
 
 ## Relations
 
-- **ADR-0030** — modèle d'exécution ; amendé pour les mounts d'exception `$HOME` et l'échec fort.
+- **ADR-0030** — modèle d'exécution ; amendé pour les mounts d'exception `$HOME`, l'échec fort, et
+  (pt 7, #467) le fait qu'un ref registry explicite sorte de l'adressage par contenu.
 - **ADR-0015** — précédence `stored → env → default` des réglages d'instance ; les défauts virtuels
-  `minimal`/`full` en sont l'application à une valeur non scalaire.
+  `minimal`/`full` en sont l'application à une valeur non scalaire, et §9 y ajoute un tier
+  `profile` en tête pour les deux réglages d'image.
 - **ADR-0001** — outil tranchant, pas outil sûr : fonde le choix « autoriser + avertir » (§3).
 - **#403** — PRD Sandbox ; ces décisions sont livrées par les slices post-validation du PRD. §1 est
-  livré par **#426**, §2-§7 par **#432**, §8 par **#468**.
+  livré par **#426**, §2-§7 par **#432**, §8 par **#468**, §9 par **#467**.
+- **#466** — la variante d'image `pdo-sandbox-chrome-dev` : le consommateur direct de §9, dont la
+  sélection était sinon un réglage d'instance imposé à tous les Runs.
 - **#447** — un fait, un propriétaire (le résolveur unique de `PDO_DAEMON_URL`) : c'est le précédent
   qui fait posséder la liste des clés réservées de §8 par `sandbox_container`, pas par le validateur.
 

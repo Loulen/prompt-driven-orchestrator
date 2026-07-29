@@ -164,6 +164,9 @@ function profileFixture(
     // Server-owned, so the fixture mirrors the daemon's constant rather than the editor
     // hard-coding it.
     reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
+    // #467: no image source by default — the instance-wide setting decides, which is both the
+    // pre-#467 behaviour and the negative control of the "instance default" affordance.
+    image: null,
     updated_at: null,
     ...overrides,
   };
@@ -870,9 +873,11 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [".claude/plugins"],
       extras: [],
-      // #468: every PUT is a FULL replacement, so a toggle must carry the env verbatim —
-      // otherwise unchecking an entry would silently wipe the profile's environment.
+      // #468/#467: every PUT is a FULL replacement, so a toggle must carry the env AND the
+      // image verbatim — otherwise unchecking an entry would silently wipe the profile's
+      // environment or reset its image source.
       env: {},
+      image: null,
     });
   });
 
@@ -902,6 +907,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       disabled: [],
       extras: ["sbx.Dockerfile"],
       env: {},
+      image: null,
     });
   });
 
@@ -981,6 +987,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
         disabled: [],
         extras: [],
         env: {},
+        image: null,
       }),
     );
   });
@@ -1043,6 +1050,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       disabled: [],
       extras: [],
       env: { PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium" },
+      image: null,
     });
   });
 
@@ -1067,6 +1075,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       disabled: [],
       extras: [],
       env: { BAZ: "qux" },
+      image: null,
     });
   });
 
@@ -1105,6 +1114,108 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(warning).toHaveTextContent(/database/i);
     expect(warning).toHaveTextContent(/event log/i);
     expect(warning).toHaveTextContent(/docker inspect/i);
+  });
+
+  // --- #467: the profile's image source -----------------------------------
+
+  it("sets an explicit registry ref on the profile", async () => {
+    await openPanel();
+    fireEvent.change(await screen.findByTestId("staging-image-kind"), {
+      target: { value: "registry" },
+    });
+    fireEvent.change(screen.getByTestId("staging-image-ref"), {
+      target: { value: "ghcr.io/acme/agent:1.4" },
+    });
+    fireEvent.click(screen.getByTestId("staging-image-set"));
+
+    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
+      disabled: [],
+      extras: [],
+      env: {},
+      image: { kind: "registry", ref: "ghcr.io/acme/agent:1.4" },
+    });
+  });
+
+  it("sets a per-profile Dockerfile path", async () => {
+    await openPanel();
+    fireEvent.change(await screen.findByTestId("staging-image-kind"), {
+      target: { value: "dockerfile" },
+    });
+    fireEvent.change(screen.getByTestId("staging-image-path"), {
+      target: { value: "/repo/docker/Dockerfile.chrome-dev" },
+    });
+    fireEvent.click(screen.getByTestId("staging-image-set"));
+
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
+        disabled: [],
+        extras: [],
+        env: {},
+        image: { kind: "dockerfile", path: "/repo/docker/Dockerfile.chrome-dev" },
+      }),
+    );
+  });
+
+  /** `image: null` is a real value, not an omission: it is the ONLY way back to the
+   *  instance-wide setting, since every PUT is a full replacement. */
+  it("clears the image source back to the instance default", async () => {
+    fetchSandboxProfilesMock.mockResolvedValue({
+      profiles: [
+        profileFixture("full", {
+          materialised: true,
+          image: { kind: "registry", ref: "ghcr.io/acme/agent:1.4" },
+        }),
+      ],
+      home: "/home/user",
+    });
+    await openPanel();
+    // The stored kind pre-selects the control, and the stored ref is shown — a draft that
+    // ignored the profile would silently offer to overwrite it with a blank.
+    const kind = await screen.findByTestId("staging-image-kind");
+    expect((kind as HTMLSelectElement).value).toBe("registry");
+    expect((screen.getByTestId("staging-image-ref") as HTMLInputElement).value).toBe(
+      "ghcr.io/acme/agent:1.4",
+    );
+
+    fireEvent.change(kind, { target: { value: "instance" } });
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
+        disabled: [],
+        extras: [],
+        env: {},
+        image: null,
+      }),
+    );
+    expect(screen.getByTestId("staging-image-none")).toHaveTextContent(/instance-wide/i);
+  });
+
+  /** The one thing an explicit ref LOSES, said where it is chosen. Without it the first
+   *  failed pull reads as a PDO bug rather than as a wrong ref. */
+  it("warns that an explicit ref has no build to fall back on", async () => {
+    await openPanel();
+    fireEvent.change(await screen.findByTestId("staging-image-kind"), {
+      target: { value: "registry" },
+    });
+    const warning = screen.getByTestId("staging-image-ref-no-fallback");
+    expect(warning).toHaveTextContent(/no local build to fall back on/i);
+    expect(warning).toHaveTextContent(/fails the Run/i);
+    // …and that PDO cannot vouch for the image's contents.
+    expect(warning).toHaveTextContent(/claude/i);
+  });
+
+  /**
+   * AC5: the answer to "I picked registry, why is the Dockerfile field still there?".
+   * The tag pulled from GHCR IS the SHA-256 of that file's bytes, so without the file the
+   * image has no name — the field is not a leftover.
+   */
+  it("explains why the instance-wide registry mode still needs the Dockerfile", async () => {
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-image-source-dockerfile-still-required");
+    expect(note).toHaveTextContent(/SHA-256/i);
+    expect(note).toHaveTextContent(/Sandbox Dockerfile/i);
+    // …and where to go instead when the image is genuinely arbitrary.
+    expect(note).toHaveTextContent(/staging profile/i);
   });
 
   it("marks a sensitive extra without refusing it (ADR-0031 §3)", async () => {

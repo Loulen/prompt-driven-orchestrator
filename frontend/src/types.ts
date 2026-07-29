@@ -170,8 +170,30 @@ export interface SandboxProfile {
    * list that would drift the day a fourth run-constant appears (#373).
    */
   reserved_env_keys: string[];
+  /**
+   * Where this profile's container image comes from (#467, ADR-0031 §9), or `null` when it poses
+   * nothing and the instance-wide `image_source` / `dockerfile_path` decide. Like `env` this is
+   * not a diff, and like `env` it is a FULL replacement on write — `null` is how you go back to
+   * the instance default.
+   */
+  image: SandboxProfileImage | null;
   updated_at: string | null;
 }
+
+/**
+ * A profile's image source (#467). The two shapes are **interchangeable in the form and
+ * radically different downstream**, which is the one thing the editor has to convey:
+ *
+ * - `dockerfile` is the hash-derived path — the tag is the SHA-256 of the file's bytes, so a pull
+ *   from the registry and a local build are interchangeable and a failed pull falls back to a
+ *   build;
+ * - `registry` is an explicit ref, pulled as-is. It has no Dockerfile, therefore no content hash,
+ *   therefore **no build to fall back to**: a failed pull fails the Run (ADR-0030 pt 7 as amended
+ *   by #467), and PDO cannot verify the image even contains `claude`.
+ */
+export type SandboxProfileImage =
+  | { kind: "dockerfile"; path: string }
+  | { kind: "registry"; ref: string };
 
 /**
  * Who still points at a profile (`GET …/{name}/referents`, #432). Server-side because the

@@ -6074,12 +6074,17 @@ async fn create_run_inner(
     // the same consequence — editing it afterwards cannot rewrite what this Run's container
     // was created with. One `resolve` feeds both keys; two reads could straddle a
     // concurrent PUT and freeze a list from one revision with an env from another.
+    // #467: and its image SOURCE, at the same resolve, for the same reason — a Run must not have
+    // its image swapped under it because someone edited the profile, or two of its nodes could
+    // land in two different images (ADR-0031 §6/§9).
     let mut sandbox_env: std::collections::BTreeMap<String, String> = Default::default();
+    let mut sandbox_image_src: Option<sandbox_image::ProfileImage> = None;
     let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
         None => None,
         Some(name) => match sandbox_profile::resolve(&state.db, name).await {
             Ok(Some(resolved)) => {
                 sandbox_env = resolved.env;
+                sandbox_image_src = resolved.image;
                 Some(resolved.resolved.entries)
             }
             Ok(None) => {
@@ -6165,6 +6170,15 @@ async fn create_run_inner(
         // exchange for no new information. See `RunState::sandbox_env`.
         if !sandbox_env.is_empty() {
             run_payload["sandbox_env"] = serde_json::json!(sandbox_env);
+        }
+        // #467: `sandbox_image` is a fourth sibling key, written ONLY when the profile poses an
+        // image source — same asymmetry as `sandbox_env`, same reason. An absent key means "the
+        // profile posed none", which is indistinguishable from "a pre-#467 daemon wrote this
+        // payload" precisely because both resolve the same way: the instance-wide `image_source` /
+        // `dockerfile_path`, read fresh at each prep (ADR-0015, unchanged by this issue). Writing
+        // `null` on every sandboxed Run would grow every existing payload for no information.
+        if let Some(image) = &sandbox_image_src {
+            run_payload["sandbox_image"] = serde_json::json!(image);
         }
     }
     if let Some(ref branch) = req.source_branch {
@@ -6829,7 +6843,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         .ok()
         .map(|(_, sandbox_root)| {
             (
-                sandbox_image::dockerfile_with(cfg.dockerfile_path.clone(), &sandbox_root),
+                // `profile: None` (#467): this page discloses the INSTANCE tiers. A profile's own
+                // choice is shown by the profile editor, and cannot be shown here anyway — it is
+                // per-profile, and this view has no profile in scope.
+                sandbox_image::dockerfile_with(None, cfg.dockerfile_path.clone(), &sandbox_root),
                 sandbox_image::default_dockerfile_path(&sandbox_root),
             )
         });
@@ -7154,6 +7171,10 @@ fn sandbox_profile_view(
         // editor greys them out instead of hard-coding a parallel list that would drift
         // the day a fourth run-constant appears.
         "reserved_env_keys": sandbox_container::RUN_CONSTANT_ENV_KEYS,
+        // #467: where this profile's container image comes from, or `null` when it poses nothing
+        // and the instance-wide `image_source` / `dockerfile_path` decide. `null` and absent are
+        // the same answer here, and the editor renders both as "instance default".
+        "image": profile.image,
         "updated_at": profile.updated_at,
     })
 }
@@ -7231,6 +7252,17 @@ struct UpsertSandboxProfileRequest {
     /// leaving it alone, which is what makes "remove a variable" expressible at all.
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
+    /// Where this profile's image comes from (#467, ADR-0031 §9), or absent/`null` to pose
+    /// nothing and let the instance-wide `image_source` / `dockerfile_path` decide. A FULL
+    /// replacement like every other field: omitting it CLEARS the profile's image source, which
+    /// is what makes "go back to the instance default" expressible at all.
+    ///
+    /// Typed rather than a `serde_json::Value`: an unknown `kind` is then rejected by serde
+    /// itself, with a message that names the offending token and the two it expects, before this
+    /// handler runs at all — the same reason `off` is refused by the name grammar rather than by
+    /// a lookup that would fail later.
+    #[serde(default)]
+    image: Option<sandbox_image::ProfileImage>,
 }
 
 /// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
@@ -7257,6 +7289,10 @@ struct UpsertSandboxProfileRequest {
 ///   filled in. Silently dropping `HOME` would leave an editor that shows it set and a
 ///   container where it is not — and a `HOME` that DID land would break the `.claude` and
 ///   `.claude.json` mounts at once.
+/// - the `image` source (#467) — an absolute path for `kind: dockerfile`, **which must exist**
+///   (the same early gate `put_settings` applies to the instance-wide `dockerfile_path`), and a
+///   pullable-looking ref for `kind: registry`, which is deliberately NOT probed: see the
+///   comment at the check.
 async fn put_sandbox_profile(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -7354,7 +7390,36 @@ async fn put_sandbox_profile(
         }
     }
 
-    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras, &env).await {
+    // Image source (#467): the grammar first (pure, in `sandbox_profile`), then — for a
+    // Dockerfile — the SAME early existence gate `put_settings` applies to the instance-wide
+    // `dockerfile_path`. Necessary, never sufficient: the authoritative check is `ensure_image`'s
+    // `is_file()` bail at prep time (the file can vanish, or sit on a volume that is not mounted
+    // yet). Catching it here turns "the Run died three minutes in" into "the form said no".
+    //
+    // A registry ref gets NO such gate, and that asymmetry is the point of the field: PDO cannot
+    // check that a ref resolves without a network round-trip inside a PUT handler, and cannot
+    // check that the image contains `claude` at all. Whoever supplies the ref owns that (ADR-0030
+    // pt 7 as amended by #467) — which is also why a failed pull is a hard error rather than a
+    // silent build.
+    let image = match req.image.as_ref() {
+        None => None,
+        Some(raw) => match sandbox_profile::validate_profile_image(raw) {
+            Err(msg) => return bad(msg),
+            Ok(sandbox_image::ProfileImage::Dockerfile { path }) => {
+                if !std::path::Path::new(&path).is_file() {
+                    return bad(format!(
+                        "`{path}`: nothing at that path, or it is not a regular file — pick the \
+                         Dockerfile this profile should build its image from"
+                    ));
+                }
+                Some(sandbox_image::ProfileImage::Dockerfile { path })
+            }
+            Ok(other) => Some(other),
+        },
+    };
+
+    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras, &env, image.as_ref()).await
+    {
         Ok(_) => match sandbox_profile::resolve(&state.db, &name).await {
             Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
             Ok(None) | Err(_) => (

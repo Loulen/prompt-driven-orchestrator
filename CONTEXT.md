@@ -897,8 +897,13 @@ plus les évolutions futures du défaut. Le nom **et** la liste résolue sont ge
 création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
 Table `sandbox_profiles` (`name` en clé, `disabled`/`extras` en JSON, `updated_at`) ; **pas de rename
 en v1** — rename = delete + create, car le nom est aussi la valeur stockée par les trois consommateurs
-(Trigger, défaut d'instance, payload `RunStarted`). Réalisé en **#432**.
-_Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template ».
+(Trigger, défaut d'instance, payload `RunStarted`). Réalisé en **#432**. Un profil porte depuis deux
+champs de plus, tous deux **non-diff** (aucun défaut intégré à folder, donc la valeur stockée *est* la
+valeur effective) et gelés dans `RunStarted` aux côtés de la liste : son **env** (`sandbox_env`, #468,
+ADR-0031 §8) et sa **source d'image** (`sandbox_image`, #467, ADR-0031 §9). Chacun est sa propre
+colonne JSON additive, posée par l'idiome PRAGMA-gardé `ALTER TABLE … ADD COLUMN`.
+_Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template » ; croire
+que le profil ne décrit que le home (il décrit le home, l'env **et** le conteneur).
 
 **Plancher de staging** :
 Les **garanties** que `prepare` tient dans les **deux** modes (`minimal` et `full`) — et demain quel
@@ -1009,8 +1014,9 @@ donc zéro collision). Le renommer renomme l'image. Trois propriétés qui se re
 `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>`, parce qu'injecter le hash de la base obligerait à
 *générer* les octets de la variante alors que ces octets **sont** la source de vérité de son propre
 tag ; (b) l'**image de base reste minimale** — le coût d'une variante n'est payé que par qui la
-pointe ; (c) la **sélection** passe aujourd'hui par `dockerfile_path` (pointer la variante change nom
-et hash, donc build local), la sélection par profil de staging arrivant séparément (#467).
+pointe ; (c) la **sélection** passe par `dockerfile_path` — global (pointer la variante change nom et
+hash, donc build local) ou, depuis **#467**, **par profil de staging**, ce qui est le chemin normal :
+un profil chrome-devtools et un profil minimal cohabitent alors sur la même instance.
 La seule variante livrée est **`pdo-sandbox-chrome-dev`** : node 22 + Google Chrome +
 `chrome-devtools-mcp` préinstallé, exception assumée à ADR-0001 (sans elle **aucun** serveur MCP node
 ne démarre dans le sandbox — l'image de base n'a ni runtime JS ni navigateur). Elle est **amd64
@@ -1031,7 +1037,12 @@ réellement : le seedé par défaut, ou celui que `dockerfile_path` désigne. _�
 trois ; « image de base ».
 
 **`ensure_image()`** :
-Garantit que `pdo-sandbox:h-<hash>` existe **localement** et retourne **toujours** le ref local
+Le **point d'entrée unique** du provisionnement d'image, un **aiguillage à deux branches** sur le
+`ImagePlan` résolu au bord (#467) : hash-dérivé (ci-dessous) ou **ref explicite** d'un profil
+(`ensure_explicit_ref` : `image inspect` puis `docker pull`, et un pull raté est une **erreur dure
+nommant le ref**, jamais un build — voir « Source d'image d'un profil »). Branche hash-dérivée
+(`ensure_hash_derived_image`, tout ce qui existait avant #467) :
+garantit que `<nom>:h-<hash>` existe **localement** et retourne **toujours** le ref local
 (invariant `sandbox_container`) : seed du Dockerfile par défaut → contrôle que le Dockerfile
 **résolu** est un fichier régulier (sinon **erreur dure** nommant chemin + tier, jamais de repli) →
 présente → réutilise (**fast-path**, zéro réseau) ; absente, `image_source=registry` (défaut) **et**
@@ -1065,10 +1076,28 @@ comme gate précoce — le tier **env** contourne ce `400` par construction (éc
 volume amovible), les deux tiers restent gatés au prep. La Settings UI affiche le **chemin résolu** et
 le **nom + tag** qui en découlent. C'est aussi, depuis #466, le **seul** chemin de sélection d'une
 **variante** d'image (`dockerfile_path` → `…/assets/sandbox/Dockerfile.chrome-dev` ⇒
-`pdo-sandbox-chrome-dev:h-<hash>`, buildée localement puisqu'un chemin non-défaut ne pulle jamais) ;
-la sélection par profil de staging arrive avec #467. _Éviter_ : « Dockerfile du run » (c'est
-par-daemon), « override d'image »
-(un ref d'image tout fait est hors périmètre), croire qu'un `COPY` fonctionne.
+`pdo-sandbox-chrome-dev:h-<hash>`, buildée localement puisqu'un chemin non-défaut ne pulle jamais).
+Depuis **#467** ce réglage est le tier **le plus bas** de la chaîne : un profil de staging peut poser
+son propre chemin, qui gagne (`profile → stored → env → default`). _Éviter_ : « Dockerfile du run »
+(c'est par-daemon — le par-profil, lui, existe), croire qu'un `COPY` fonctionne.
+
+**Source d'image d'un profil / `ProfileImage` (#467)** :
+Ce qu'un **profil de staging** peut poser pour décider **quel conteneur** ses Runs obtiennent, en
+deux formes exclusives : `{kind: "dockerfile", path}` — un `dockerfile_path` choisi par profil, donc
+strictement le tier le plus fort de la chaîne existante, même hash, même nom dérivé du nom de fichier
+— ou `{kind: "registry", ref}` — un ref **libre** (`ghcr.io/acme/agent:1.4`) tiré **tel quel**.
+Ne rien poser est l'état par défaut et reste **bit pour bit** le comportement d'avant #467 (les
+réglages d'instance décident, relus frais). Trois propriétés à retenir ensemble : (a) un ref explicite
+**sort de l'adressage par contenu**, donc pas de repli build, pas de retag, un pull raté = **erreur
+dure nommant le ref et le profil** (amendement #467 d'ADR-0030 pt 7) ; (b) la source est **gelée par
+Run** (`sandbox_image` dans `RunStarted`) — éditer le profil ne peut pas faire tourner deux nœuds du
+même Run dans deux images différentes ; (c) PDO **ne vérifie pas** que l'image contient `claude`, ni
+qu'un ref existe : c'est la responsabilité de qui le fournit. Le mot `registry` désigne donc **deux
+choses** — le réglage d'instance `image_source: registry` tire l'image prébuild *de votre Dockerfile*
+(d'où le Dockerfile qui reste **obligatoire** dans ce mode : le tag EST le sha256 de ses octets), le
+`kind: registry` d'un profil est un ref arbitraire. _Éviter_ : « override d'image » (c'est un tier de
+précédence, pas un contournement), confondre les deux `registry`, « image du profil » pour parler du
+conteneur d'un Run (c'est la **source**, résolue au bord en `ImagePlan`).
 
 **`registry_image_ref` / `ghcr.io/loulen/<variante>`** :
 Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` (ou

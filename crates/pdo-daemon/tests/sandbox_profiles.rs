@@ -32,6 +32,20 @@
 //!  12. editing the env of a **multi-node** Run in flight changes nothing for its NEXT
 //!      node — a single-node Run would prove nothing, since the container is created once;
 //!  13. an unreadable frozen `sandbox_env` is a hard `RunFailed`, never a silent "no env".
+//!
+//! ## #467 — per-profile image source
+//!
+//! Five more, at the very bottom:
+//!  14. two profiles, one on a Dockerfile and one on an explicit registry ref, put two
+//!      concurrent Runs in **two different images** — the layer-3 stand-in for
+//!      `docker inspect --format '{{.Config.Image}}'` being the image arg of `docker create`;
+//!  15. a profile that poses **nothing** keeps the content-addressed tag and grows the payload by
+//!      not one key (AC4's layer-3 half; the byte-identical argv is pinned in `sandbox_run`);
+//!  16. an unreachable explicit ref fails the Run with a reason **naming the ref**, and launches
+//!      **no `docker build`** (AC3);
+//!  17. editing a **multi-node** Run's profile image changes nothing for its next node (AC2);
+//!  18. the write-time refusals: a relative path, a path that does not exist, an unknown `kind`,
+//!      a ref starting with `-`.
 
 mod common;
 
@@ -205,6 +219,30 @@ fn write_fake_docker() -> (TempDir, String, PathBuf) {
     (dir, bin.to_str().unwrap().to_string(), log)
 }
 
+/// Like [`write_fake_docker`] but the image is **absent** and `pull` **fails** (#467) — the
+/// unreachable-ref case. `build` still exits 0, so "no build was launched" is a real signal: were
+/// a build attempted, it would SUCCEED and the Run would start.
+fn write_fake_docker_failing_pull() -> (TempDir, String, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-docker");
+    let log = dir.path().join("argv.log");
+    let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         printf '%s\\n' \"$@\" >> {log}\n\
+         case \"$1\" in\n\
+         image) exit 1 ;;\n\
+         pull) printf '%s' 'Error response from daemon: manifest unknown' >&2; exit 1 ;;\n\
+         container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         *) exit 0 ;;\n\
+         esac\n",
+        log = sq(&log.display().to_string()),
+    );
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, bin.to_str().unwrap().to_string(), log)
+}
+
 fn log_text(log: &Path) -> String {
     std::fs::read_to_string(log).unwrap_or_default()
 }
@@ -242,6 +280,22 @@ fn env_specs(log: &Path) -> Vec<String> {
 /// How many `docker create` invocations the fake logged.
 fn create_count(log: &Path) -> usize {
     log_text(log).lines().filter(|l| *l == "create").count()
+}
+
+/// The image ref of every `docker create` in the log (#467) — the layer-3 stand-in for
+/// `docker inspect --format '{{.Config.Image}}'`, which needs a real daemon.
+///
+/// Keyed on the argv shape `create … <image> sleep infinity`: the image is the arg right before
+/// `sleep`. That is not a coincidence to be defended in a comment — Docker *forces* it (after the
+/// image, everything is the command), and `sandbox_container`'s golden test pins it.
+fn create_images(log: &Path) -> Vec<String> {
+    let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| *l == "sleep")
+        .filter_map(|(i, _)| i.checked_sub(1).and_then(|p| lines.get(p)).cloned())
+        .collect()
 }
 
 /// A realistic host `$HOME`: a `~/.claude` with the allowlist content, plus the two
@@ -435,16 +489,59 @@ async fn put_profile_full(
         .iter()
         .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
         .collect();
-    reqwest::Client::new()
-        .put(format!("{}/settings/sandbox-profiles/{name}", daemon.url()))
-        .json(&serde_json::json!({
+    put_profile_body(
+        daemon,
+        name,
+        serde_json::json!({
             "disabled": disabled,
             "extras": extras,
             "env": env_obj,
-        }))
+        }),
+    )
+    .await
+}
+
+/// `PUT /settings/sandbox-profiles/<name>` with a hand-written body — the seam the #467 tests
+/// need, since `image` is a tagged object rather than a flat list and a malformed one is half the
+/// point.
+async fn put_profile_body(
+    daemon: &TestDaemon,
+    name: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .put(format!("{}/settings/sandbox-profiles/{name}", daemon.url()))
+        .json(&body)
         .send()
         .await
         .unwrap()
+}
+
+/// `PUT` a profile whose only interesting field is its image source (#467).
+async fn put_profile_image(
+    daemon: &TestDaemon,
+    name: &str,
+    image: serde_json::Value,
+) -> reqwest::Response {
+    put_profile_body(
+        daemon,
+        name,
+        serde_json::json!({ "disabled": [], "extras": [], "env": {}, "image": image }),
+    )
+    .await
+}
+
+/// A self-contained Dockerfile VARIANT on disk, whose filename drives the image NAME (#466) and
+/// whose bytes drive the tag. Returns `(path, expected local ref)` — the expected ref is computed
+/// the way the daemon computes it, in the one place a test may duplicate it: `sha256[..12]` of the
+/// exact bytes, which is also the CI-canonical form (`sha256sum | cut -c1-12`).
+fn write_variant_dockerfile(dir: &Path, variant: &str, marker: &str) -> (PathBuf, String) {
+    let path = dir.join(format!("Dockerfile.{variant}"));
+    let bytes = format!("FROM ubuntu:24.04\nRUN echo {marker}\n");
+    std::fs::write(&path, &bytes).unwrap();
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(bytes.as_bytes());
+    let hash: String = format!("{digest:x}")[..12].to_string();
+    (path, format!("pdo-sandbox-{variant}:h-{hash}"))
 }
 
 async fn get_profile(daemon: &TestDaemon, name: &str) -> reqwest::Response {
@@ -1859,5 +1956,375 @@ async fn an_unreadable_frozen_env_fails_the_run_at_boot_recovery() {
     assert!(
         reason.contains("42") && reason.contains("unreadable"),
         "the reason must carry the offending raw value: {reason}"
+    );
+}
+
+// -- #467 : la source d'image appartient au profil de staging ------------------
+
+/// AC1. Two named profiles, one `kind: dockerfile` on a Dockerfile variant, one `kind: registry`
+/// on an explicit ref. Two Runs, **each in its own image** — proven on the image arg of
+/// `docker create`, which is what `docker inspect --format '{{.Config.Image}}'` would report.
+///
+/// Both halves matter, and neither would pass alone: the Dockerfile half proves the profile beats
+/// the instance-wide `dockerfile_path` tier *and* carries the #466 variant NAME, while the registry
+/// half proves an explicit ref is used verbatim rather than re-tagged under `pdo-sandbox:h-…`.
+#[tokio::test]
+async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    let (dockerfile_a, expected_a) =
+        write_variant_dockerfile(daemon.repo_root(), "variant-a", "variant-a");
+    let explicit_ref = "ghcr.io/acme/agent:1.4";
+
+    assert_eq!(
+        put_profile_image(
+            &daemon,
+            "on-dockerfile",
+            serde_json::json!({ "kind": "dockerfile", "path": dockerfile_a.display().to_string() }),
+        )
+        .await
+        .status(),
+        200
+    );
+    let resp = put_profile_image(
+        &daemon,
+        "on-registry",
+        serde_json::json!({ "kind": "registry", "ref": explicit_ref }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    // The view serves it back, so the editor needs no refetch and the round-trip is pinned.
+    let view: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(view["image"]["kind"], "registry", "{view}");
+    assert_eq!(view["image"]["ref"], explicit_ref, "{view}");
+
+    // Two Runs, concurrently, on the same daemon and the same fake docker.
+    let run_df = start_run_of(&daemon, PIPELINE_NAME, Some("on-dockerfile")).await;
+    let run_reg = start_run_of(&daemon, PIPELINE_NAME, Some("on-registry")).await;
+
+    assert!(
+        wait_until(|| create_images(&log).len() >= 2).await,
+        "both Runs must create their container; log:\n{}",
+        log_text(&log)
+    );
+    let mut images = create_images(&log);
+    images.sort();
+    images.dedup();
+    assert!(
+        images.contains(&expected_a),
+        "the Dockerfile profile's Run must run the variant's content-addressed image \
+         ({expected_a}); images={images:?}"
+    );
+    assert!(
+        images.contains(&explicit_ref.to_string()),
+        "the registry profile's Run must run the explicit ref VERBATIM; images={images:?}"
+    );
+    assert_eq!(
+        images.len(),
+        2,
+        "two profiles, two images; images={images:?}"
+    );
+
+    // …and each Run froze its own source, which is what makes the two independent.
+    let a = get_run(&daemon, &run_df).await;
+    assert_eq!(a["sandbox_image"]["kind"], "dockerfile", "{a}");
+    assert_eq!(
+        a["sandbox_image"]["path"],
+        dockerfile_a.display().to_string(),
+        "{a}"
+    );
+    let b = get_run(&daemon, &run_reg).await;
+    assert_eq!(b["sandbox_image"]["kind"], "registry", "{b}");
+    assert_eq!(b["sandbox_image"]["ref"], explicit_ref, "{b}");
+
+    // No build, no pull: the fake reports the image present, and the fast-path precedes both on
+    // BOTH branches. This is the offline-safe reuse property, restated at layer 3.
+    assert!(
+        !log_text(&log).lines().any(|l| l == "build" || l == "pull"),
+        "a locally present image must skip build AND pull on both branches; log:\n{}",
+        log_text(&log)
+    );
+}
+
+/// AC4's layer-3 half: a profile that poses **nothing** is bit-for-bit the pre-#467 behaviour —
+/// the content-addressed `pdo-sandbox:h-…` tag, and a `run_started` payload that does not grow by
+/// one key. (The byte-identical `docker create` argv is pinned as a unit test in `sandbox_run`,
+/// where two contexts can be compared verbatim.)
+#[tokio::test]
+async fn a_profile_without_an_image_source_keeps_the_content_addressed_tag() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    // A materialised profile — so this is "poses no image", not "has no row".
+    assert_eq!(
+        put_profile(&daemon, "plain", &[".claude/plugins"], &[])
+            .await
+            .status(),
+        200
+    );
+    let view: serde_json::Value = get_profile(&daemon, "plain").await.json().await.unwrap();
+    assert!(
+        view["image"].is_null(),
+        "a profile that poses nothing serves `null`, not a fabricated default: {view}"
+    );
+
+    let run_id = start_run_of(&daemon, PIPELINE_NAME, Some("plain")).await;
+    assert!(
+        wait_until(|| !create_images(&log).is_empty()).await,
+        "the Run must create its container; log:\n{}",
+        log_text(&log)
+    );
+    let images = create_images(&log);
+    assert!(
+        images.iter().all(|i| i.starts_with("pdo-sandbox:h-")),
+        "no profile source ⇒ the base content-addressed tag, exactly as before #467; \
+         images={images:?}"
+    );
+    let run = get_run(&daemon, &run_id).await;
+    assert!(
+        run.get("sandbox_image").is_none(),
+        "posing nothing must not grow the payload: {run}"
+    );
+}
+
+/// AC3. An explicit ref that cannot be pulled fails the Run with a reason **naming the ref**, and
+/// launches **no `docker build`**. The fake's `build` exits 0, so a build would have SUCCEEDED and
+/// the Run would have started in an unrelated image — its absence is the assertion.
+#[tokio::test]
+async fn an_unreachable_explicit_ref_fails_the_run_and_never_builds() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker_failing_pull();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    assert_eq!(
+        put_profile_image(
+            &daemon,
+            "ghost",
+            serde_json::json!({ "kind": "registry", "ref": "ghcr.io/acme/nope:9" }),
+        )
+        .await
+        .status(),
+        200,
+        "PDO does not probe the ref at write time — it cannot, and says so"
+    );
+
+    let run_id = start_run(&daemon, Some("ghost")).await;
+    let run = wait_run_status(&daemon, &run_id, "failed").await;
+    assert_eq!(run["status"], "failed", "{run}");
+
+    // #431 trap: the prep reason lives on /events, not on /runs/<id>.
+    let reason = sandbox_prep_failure(&daemon, &run_id)
+        .await
+        .unwrap_or_default();
+    assert!(
+        reason.contains("ghcr.io/acme/nope:9"),
+        "the reason MUST name the ref (AC3): {reason}"
+    );
+    assert!(
+        reason.contains("ghost"),
+        "…and the profile that named it: {reason}"
+    );
+    assert!(
+        !log_text(&log).lines().any(|l| l == "build"),
+        "an explicit ref has no content hash, hence NO build to fall back to; log:\n{}",
+        log_text(&log)
+    );
+    assert_eq!(
+        create_count(&log),
+        0,
+        "and no container from an image that was never obtained; log:\n{}",
+        log_text(&log)
+    );
+}
+
+/// AC2, on a **multi-node** Run — the point the issue insists on. Editing a profile's image while
+/// a Run is alive must change nothing for that Run's next node. A single-node Run would prove
+/// nothing: the container is created once, so there would be no second occasion to get it wrong.
+///
+/// Same three mechanisms as the #468 env twin, walked in the same order: one container per Run
+/// (the next node enters by `docker exec`), the frozen payload (so a boot-recovery re-creation
+/// re-derives the SAME image), and Docker itself (`docker start` never re-evaluates a
+/// pre-existing container's image any more than its env).
+#[tokio::test]
+async fn editing_a_profiles_image_does_not_change_a_live_multi_node_run() {
+    ensure_pdo_on_path();
+    let (_fake, docker, log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed_with_two_node_pipeline(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    let before = "ghcr.io/acme/agent:before";
+    let after = "ghcr.io/acme/agent:after";
+    assert_eq!(
+        put_profile_image(
+            &daemon,
+            "evolving-image",
+            serde_json::json!({ "kind": "registry", "ref": before }),
+        )
+        .await
+        .status(),
+        200
+    );
+
+    let run_id = start_run_of(&daemon, TWO_NODE_PIPELINE_NAME, Some("evolving-image")).await;
+    wait_node_status_for(&daemon, &run_id, NODE_ID, "running").await;
+    assert!(
+        wait_until(|| create_images(&log).iter().any(|i| i == before)).await,
+        "the first node's container must run the frozen image; images={:?}",
+        create_images(&log)
+    );
+    let creates_after_first_node = create_count(&log);
+    assert_eq!(creates_after_first_node, 1, "one container per Run");
+
+    // Edit the image while the Run is alive — and swap the KIND too, the most disruptive edit
+    // available: were the live profile consulted, the Run would switch pull semantics mid-flight.
+    let (variant, variant_ref) = write_variant_dockerfile(daemon.repo_root(), "late", "late");
+    assert_eq!(
+        put_profile_image(
+            &daemon,
+            "evolving-image",
+            serde_json::json!({ "kind": "dockerfile", "path": variant.display().to_string() }),
+        )
+        .await
+        .status(),
+        200
+    );
+    // A second edit, back to a registry ref, so the final state differs from the frozen one in
+    // VALUE as well as kind.
+    assert_eq!(
+        put_profile_image(
+            &daemon,
+            "evolving-image",
+            serde_json::json!({ "kind": "registry", "ref": after }),
+        )
+        .await
+        .status(),
+        200
+    );
+
+    // (1) The second node enters the SAME container by `docker exec` — no second create.
+    write_node_output_for(&daemon, &run_id, NODE_ID, "one\n");
+    simulate_node_done_for(&daemon, &run_id, NODE_ID).await;
+    wait_node_status_for(&daemon, &run_id, NODE_ID_2, "running").await;
+    assert_eq!(
+        create_count(&log),
+        creates_after_first_node,
+        "the next node must reuse the Run's container; log:\n{}",
+        log_text(&log)
+    );
+
+    // (2) Force the re-derivation a daemon restart would take. The fake reports the container
+    // absent, so this re-creates it — from the FROZEN source, not the edited profile.
+    daemon.run_boot_recovery_tick().await;
+    assert!(
+        wait_until(|| create_count(&log) > creates_after_first_node).await,
+        "boot recovery must re-enter the sandbox prep; log:\n{}",
+        log_text(&log)
+    );
+
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(run["sandbox_image"]["ref"], before, "{run}");
+    let images = create_images(&log);
+    assert!(
+        images.iter().all(|i| i == before),
+        "every container of this Run must run the frozen image; images={images:?}"
+    );
+    assert!(
+        !images.iter().any(|i| i == after || *i == variant_ref),
+        "no edited value may reach this Run; images={images:?}"
+    );
+    assert_eq!(
+        sandbox_prep_failure(&daemon, &run_id).await,
+        None,
+        "the re-derivation must replay the frozen source, not fail"
+    );
+
+    // A Run started AFTER the edits does get the new source — the freeze is per-Run, not a
+    // one-off snapshot of the profile.
+    let fresh = start_run_of(&daemon, PIPELINE_NAME, Some("evolving-image")).await;
+    let fresh_run = get_run(&daemon, &fresh).await;
+    assert_eq!(fresh_run["sandbox_image"]["ref"], after, "{fresh_run}");
+}
+
+/// The write-time refusals (#467). Each one is a 400 that names the offending value, and none of
+/// them half-materialises the profile — the same contract as every other field of this PUT.
+#[tokio::test]
+async fn a_bad_image_source_is_rejected_at_profile_write() {
+    ensure_pdo_on_path();
+    let (_fake, docker, _log) = write_fake_docker();
+    let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
+        .await
+        .unwrap();
+    fabricate_host_home(daemon.repo_root());
+
+    let missing = daemon.repo_root().join("no-such-Dockerfile");
+    for bad in [
+        // A relative path: the daemon's cwd is not the user's.
+        serde_json::json!({ "kind": "dockerfile", "path": "docker/Dockerfile" }),
+        // Absolute but absent — the early gate, mirror of `put_settings`' `dockerfile_path`.
+        serde_json::json!({ "kind": "dockerfile", "path": missing.display().to_string() }),
+        // A directory is not a regular file (the `exists()` vs `is_file()` trap).
+        serde_json::json!({ "kind": "dockerfile", "path": daemon.repo_root().display().to_string() }),
+        // `docker pull -rm` would read the ref as a flag.
+        serde_json::json!({ "kind": "registry", "ref": "-rm" }),
+        serde_json::json!({ "kind": "registry", "ref": "" }),
+        serde_json::json!({ "kind": "registry", "ref": "acme/agent :1" }),
+        // An unknown kind: refused by the wire format itself, before any handler logic.
+        serde_json::json!({ "kind": "ecr", "ref": "acme/agent:1" }),
+        // …and a right kind with the wrong field.
+        serde_json::json!({ "kind": "registry", "path": "/x" }),
+    ] {
+        let resp = put_profile_image(&daemon, "probe-image", bad.clone()).await;
+        assert!(
+            resp.status() == 400 || resp.status() == 422,
+            "{bad} must be refused, got {}",
+            resp.status()
+        );
+    }
+    assert_eq!(
+        get_profile(&daemon, "probe-image").await.status(),
+        404,
+        "a rejected PUT must not create the row"
+    );
+
+    // …and the legal forms go through, so the refusals above are not a blanket "image is broken".
+    let (variant, _) = write_variant_dockerfile(daemon.repo_root(), "ok", "ok");
+    for good in [
+        serde_json::json!({ "kind": "dockerfile", "path": variant.display().to_string() }),
+        serde_json::json!({ "kind": "registry", "ref": "ghcr.io/acme/agent:1.4" }),
+        // `null` and an absent key both mean "poses nothing" — which is how you go back to the
+        // instance-wide setting, and therefore has to be expressible.
+        serde_json::json!(null),
+    ] {
+        let resp = put_profile_image(&daemon, "probe-image", good.clone()).await;
+        assert_eq!(resp.status(), 200, "{good} must be accepted");
+        let view: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(view["image"], good, "the view must round-trip it: {view}");
+    }
+    // Omitting the key entirely clears it too (a FULL replacement, like every other field).
+    let resp = put_profile_body(
+        &daemon,
+        "probe-image",
+        serde_json::json!({ "disabled": [], "extras": [], "env": {} }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let view: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        view["image"].is_null(),
+        "an omitted image clears it: {view}"
     );
 }

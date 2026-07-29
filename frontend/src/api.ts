@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileReferents } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents } from "./types";
 
 const BASE = "";
 
@@ -177,13 +177,25 @@ export function fetchSandboxProfile(name: string): Promise<SandboxProfile> {
 }
 
 /**
- * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2).
+ * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2) —
+ * plus its `env` map (#468, ADR-0031 §8) and its `image` source (#467, ADR-0031 §9), neither
+ * of which is a diff at all.
  * Upsert, because the caller cannot know whether `full` already has a row, and editing it
  * IS what materialises one. Returns the recomputed view so the editor needs no refetch.
+ *
+ * Every field is a FULL replacement, `env` and `image` included: omitting a variable is how you
+ * remove it, and `image: null` is how you go back to the instance-wide setting. So every caller
+ * passes the fields it is NOT changing verbatim — which is why the editor threads them through one
+ * `write` helper rather than per-control.
  */
 export function saveSandboxProfile(
   name: string,
-  diff: { disabled: string[]; extras: string[] },
+  diff: {
+    disabled: string[];
+    extras: string[];
+    env: Record<string, string>;
+    image: SandboxProfileImage | null;
+  },
 ): Promise<SandboxProfile> {
   return request<SandboxProfile>(
     "PUT",

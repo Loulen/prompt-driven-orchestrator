@@ -1,0 +1,208 @@
+# PDO sandbox image, variante `chrome-dev` : base + node 22 + Google Chrome + chrome-devtools-mcp.
+#
+# POURQUOI UNE VARIANTE ET PAS UN AJOUT À LA BASE (#466, exception assumée à ADR-0001) :
+# chrome-devtools est central aux usecases clients et ne marche PAS DU TOUT dans l'image de base :
+# celle-ci n'a ni runtime JS ni navigateur, donc les serveurs MCP node du profil `full`
+# (`npx chrome-devtools-mcp`, `npx @playwright/mcp`) meurent au démarrage. La base reste
+# minimale ; le coût (~2 Go d'image contre 608 Mo, mesuré) est payé seulement par qui pointe ce
+# fichier depuis un profil de staging (#467 ; #471 en a fait le seul chemin).
+#
+# POURQUOI CE DOCKERFILE EST AUTONOME (`FROM ubuntu:24.04` + steps de la base DUPLIQUÉS) et
+# NON `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` : le tag est le hash des OCTETS de ce fichier
+# (ADR-0030 pt 7), et ces octets sont la source de vérité. Hériter du tag de la base
+# obligerait à *générer* ce fichier pour y injecter le hash de la base — un fichier généré ne
+# peut pas être la source de vérité de son propre hash. La duplication des 3 steps de base est
+# le prix de l'adressage par contenu ; en contrepartie ce fichier se lit seul, et éditer la
+# base ne réécrit jamais cette variante.
+#   /!\ Si tu touches `Dockerfile` (la base), demande-toi si le même changement vaut ICI.
+#
+# NOM D'IMAGE : `pdo-sandbox-chrome-dev:h-<hash>` en local, `ghcr.io/loulen/…` au registre —
+# dérivé du SUFFIXE de ce nom de fichier par `sandbox_image::image_name_for_dockerfile`
+# (`Dockerfile.chrome-dev` -> `pdo-sandbox-chrome-dev`). Renommer ce fichier renomme l'image.
+#
+# amd64 UNIQUEMENT (à la différence de la base, multi-arch) : Google ne publie pas de .deb
+# Chrome linux/arm64, et Chrome for Testing non plus. Le step Chrome échoue tôt et
+# explicitement sur toute autre architecture plutôt que de laisser dpkg cracher.
+FROM ubuntu:24.04
+
+# ---------------------------------------------------------------------------
+# Steps 1 à 3 : COPIE VERBATIM de la base (`assets/sandbox/Dockerfile`).
+# Voir ce fichier pour la rationale détaillée de chacun ; elle est résumée ici.
+# ---------------------------------------------------------------------------
+
+# git/ca-certificates/curl = outillage requis ; ripgrep = backend de recherche de Claude Code ;
+# sudo = l'utilisateur runtime peut `apt install`. NON installés : tmux et `pdo` (fournis par
+# l'HÔTE au runtime, par design #403).
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      git \
+      ca-certificates \
+      curl \
+      ripgrep \
+      sudo \
+ && rm -rf /var/lib/apt/lists/*
+
+# sudo NOPASSWD pour tout utilisateur : le conteneur tourne en uid:gid hôte arbitraire
+# (`--user`), la règle ne peut donc pas être liée à un nom d'utilisateur.
+RUN echo 'ALL ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pdo-nopasswd \
+ && chmod 0440 /etc/sudoers.d/pdo-nopasswd \
+ && visudo -cf /etc/sudoers.d/pdo-nopasswd
+
+# Claude Code via l'installeur natif officiel ; le launcher pose sous le HOME de root, donc on
+# résout le vrai binaire dans /usr/local/bin (lisible+exécutable par tout uid) et on purge
+# l'arbre d'install de root.
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+ && install -D -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
+ && rm -rf /root/.local /root/.claude /root/.cache
+
+# ---------------------------------------------------------------------------
+# Steps propres à la variante.
+# ---------------------------------------------------------------------------
+
+# Node 22 LTS depuis le tarball officiel, PAS depuis apt : le `nodejs` de noble est en 18, et
+# `chrome-devtools-mcp@1.6.0` exige `^20.19.0 || ^22.12.0 || >=23` (package.json `engines`).
+# Tarball .tar.gz et non .tar.xz : ubuntu:24.04 ne livre pas `xz`, et ajouter `xz-utils`
+# coûterait un paquet pour rien. `--strip-components=1` dans /usr/local ⇒ node ET npm/npx sur
+# le PATH de tout uid, et prefix npm global = /usr/local (donc /usr/local/bin, world-readable).
+RUN curl -fsSL https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-x64.tar.gz -o /tmp/node.tar.gz \
+ && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+      --exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
+ && rm /tmp/node.tar.gz \
+ && node --version \
+ && npm --version
+
+# Google Chrome stable + le SHIM qui le rend lançable dans un conteneur.
+#
+# Pourquoi Chrome et pas `chromium` d'apt : noble n'a AUCUN deb chromium utilisable
+# (`chromium-browser` = stub qui installe snapd, `chromium` = absent des dépôts).
+#
+# Pourquoi le chemin EXACT /opt/google/chrome/chrome compte : le plugin lance
+# `npx chrome-devtools-mcp@1.6.0` SANS flag, donc le serveur retombe sur `channel: 'stable'`,
+# donc puppeteer résout le binaire par `resolveSystemExecutablePaths()` = exactement
+# `/opt/google/chrome/chrome` sur Linux. Dans ce chemin, `PUPPETEER_EXECUTABLE_PATH` est
+# IGNORÉ (puppeteer ne le lit que sans `channel`). Le .deb Google est donc le seul packaging
+# qui satisfait la résolution, et le seul point d'injection de flags est CE FICHIER.
+#
+# D'où le shim : le vrai binaire devient `chrome.real` et `chrome` est un `sh -c exec` qui
+# ajoute les flags qu'un conteneur exige, et que NI le plugin (args figés dans son `.mcp.json`)
+# NI PDO (pas de `--shm-size` sans toucher `ContainerSpec`) ne peuvent injecter :
+#   --headless=new           : `headless` vaut false par défaut dans chrome-devtools-mcp, et un
+#                              Chrome headful sans X meurt sur « Missing X server or $DISPLAY ».
+#   --no-sandbox
+#   --disable-setuid-sandbox : le sandbox interne de Chrome (user namespaces + helper setuid)
+#                              échoue sous `--user <uid>` sans CAP_SYS_ADMIN. Acceptable : le
+#                              sandbox PDO n'est explicitement PAS une frontière de sécurité
+#                              (root, egress et plan de contrôle sont assumés, ADR-0030).
+#   --disable-dev-shm-usage  : /dev/shm fait 64 Mo par défaut dans un conteneur et le renderer
+#                              crashe dessus. L'alternative (`--shm-size`) vit dans
+#                              `ContainerSpec`, hors périmètre de l'image.
+# Le shim exporte aussi `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` sous /tmp, pour la MÊME raison que le
+# `--isolated` du step suivant : `$HOME` **n'est pas inscriptible** dans le conteneur. PDO monte
+# `$HOME/.claude` et `$HOME/.claude.json`, mais `$HOME` lui-même est créé par Docker en
+# `root:root 0755` alors que le conteneur tourne en `--user <uid hôte>` — Chrome échoue alors à
+# créer `$HOME/.config/google-chrome` (crashpad : « --database is required ») et rend une page
+# VIDE, sans autre erreur. Mesuré, reproductible. Portée volontairement limitée au shim (et non
+# `ENV`) : un `XDG_CONFIG_HOME` global détournerait aussi `git config --global`, `gh`, etc.
+# Les flags précèdent "$@" : Chrome traite le premier argument non-flag comme une URL, donc
+# l'ordre inverse casserait une navigation en ligne de commande. Le shim reste transparent pour
+# `docker inspect`, pour puppeteer (même chemin, même dossier ⇒ crashpad/resources résolus) et
+# pour `google-chrome` (le wrapper du .deb finit par exec ce même `chrome`).
+RUN [ "$(dpkg --print-architecture)" = "amd64" ] || { \
+      echo "ERROR: la variante chrome-dev est amd64-only (Google ne publie pas de .deb Chrome arm64)." >&2; \
+      exit 1; \
+    } \
+ && curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+      -o /tmp/chrome.deb \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/chrome.deb \
+ && rm -rf /tmp/chrome.deb /var/lib/apt/lists/* \
+ && mv /opt/google/chrome/chrome /opt/google/chrome/chrome.real \
+ && printf '%s\n' \
+      '#!/bin/sh' \
+      '# Shim PDO (#466) : flags + état hors-$HOME exigés par un conteneur, injectables' \
+      '# nulle part ailleurs (les args du serveur MCP sont figés dans le .mcp.json du plugin).' \
+      '# Le `id -u` du chemin est LOAD-BEARING : un /tmp/pdo-chrome nu serait créé par le ROOT' \
+      '# du build (assertion --version plus bas) et resterait root:root 0755 dans le layer,' \
+      '# donc non inscriptible par un uid runtime non-root — Chrome crashait (mesuré).' \
+      'pdo_state="/tmp/pdo-chrome-$(id -u)"' \
+      'XDG_CONFIG_HOME="$pdo_state/config"' \
+      'XDG_CACHE_HOME="$pdo_state/cache"' \
+      'export XDG_CONFIG_HOME XDG_CACHE_HOME' \
+      'mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" || exit 1' \
+      'exec /opt/google/chrome/chrome.real \' \
+      '  --headless=new \' \
+      '  --no-sandbox \' \
+      '  --disable-setuid-sandbox \' \
+      '  --disable-dev-shm-usage \' \
+      '  "$@"' \
+      > /opt/google/chrome/chrome \
+ && chmod 0755 /opt/google/chrome/chrome \
+ && /opt/google/chrome/chrome --version \
+ && rm -rf /tmp/pdo-chrome-*
+
+# Préinstalle le paquet MCP pour que `npx chrome-devtools-mcp@1.6.0` (l'argv figé du plugin) ne
+# fasse PAS un aller-retour registre par démarrage de serveur MCP. Trois pièces indissociables,
+# et l'ordre est LOAD-BEARING (mesuré) :
+#   1. `npm i -g` -> /usr/local/lib/node_modules (+ bin sur le PATH de tout uid). Nécessaire mais
+#      PAS suffisant : `npx <pkg>@<version>` résout la version DEMANDÉE avant de réutiliser un
+#      binaire, donc il interroge le registre même quand le paquet est déjà là.
+#   2. un `npx` ONLINE au build, qui amorce le cache avec exactement les entrées que npx
+#      interrogera (le packument que `npm install` met en cache est l'abrégé, une autre clé de
+#      cache : sans ce step, `npx --offline` échoue en `ENOTCACHED` — vérifié).
+#   3. le cache npm à un chemin FIXE et inscriptible par tous. Le cache par défaut vit sous
+#      `$HOME/.npm`, et le HOME du runtime est le staged home (#404), pas celui du build ; l'uid
+#      hôte est arbitraire et inconnu à l'heure du build. Le sandbox n'étant pas une frontière de
+#      sécurité, un cache partagé inscriptible est le compromis assumé (pire cas : un cache
+#      empoisonné par le Run lui-même).
+# `npm_config_cache` + `npm_config_prefer_offline` sont posés en ENV (pas seulement pour le RUN)
+# pour que le RUNTIME lise le même cache et s'en contente : `prefer-offline` retombe sur le
+# réseau en cas de miss, donc rien ne casse hors ligne comme en ligne. Le `npx --offline` final
+# est l'assertion de build : il échoue si l'amorçage n'a pas pris.
+#
+# Le bin global est en outre REMPLACÉ par un wrapper qui ajoute `--isolated`, et c'est la
+# deuxième moitié du correctif `$HOME`-non-inscriptible (cf. le shim ci-dessus) : sans
+# `--isolated`, le serveur MCP fait, en Node, `mkdir(os.homedir() + '/.cache/chrome-devtools-mcp/
+# chrome-profile')` AVANT de lancer Chrome, et le premier `navigate_page` meurt sur
+# « EACCES: permission denied, mkdir '<$HOME>' » (mesuré, reproductible). `os.homedir()` lit
+# `$HOME` et ignore XDG, donc le shim ne peut pas couvrir ce cas ; `--isolated` met le profil dans
+# un répertoire temporaire jetable — ce que le README du plugin recommande de toute façon, et qui
+# permet à plusieurs serveurs MCP concurrents du MÊME conteneur (un conteneur par Run, plusieurs
+# nœuds) de ne pas se disputer un `--user-data-dir` unique.
+#   /!\ Ce wrapper n'a d'effet que parce que `npx <pkg>@<version>` exec le bin GLOBAL quand la
+#   version demandée correspond. C'est un détail d'implémentation de npm, donc le build l'ASSERTE
+#   (sonde `PDO_CHROME_MCP_WRAPPER_PROBE`) : si un npx futur cesse de passer par là, le build
+#   casse ici plutôt que le premier `navigate_page` chez l'utilisateur.
+ENV npm_config_cache=/opt/npm-cache \
+    npm_config_prefer_offline=true
+RUN npm install -g chrome-devtools-mcp@1.6.0 \
+ && npx chrome-devtools-mcp@1.6.0 --version \
+ && real="$(readlink -f /usr/local/bin/chrome-devtools-mcp)" \
+ && printf '%s\n' \
+      '#!/bin/sh' \
+      '# Wrapper PDO (#466) : ajoute --isolated (HOME non inscriptible dans le conteneur).' \
+      '[ -n "${PDO_CHROME_MCP_WRAPPER_PROBE:-}" ] && { echo pdo-chrome-mcp-wrapper-ok; exit 0; }' \
+      "exec /usr/local/bin/node \"$real\" --isolated \"\$@\"" \
+      > /usr/local/bin/chrome-devtools-mcp.pdo \
+ && mv /usr/local/bin/chrome-devtools-mcp.pdo /usr/local/bin/chrome-devtools-mcp \
+ && chmod 0755 /usr/local/bin/chrome-devtools-mcp \
+ && rm -rf /opt/npm-cache/_logs \
+ && chmod -R a+rwX /opt/npm-cache \
+ && npx --offline chrome-devtools-mcp@1.6.0 --version \
+ && PDO_CHROME_MCP_WRAPPER_PROBE=1 npx --offline chrome-devtools-mcp@1.6.0 \
+      | grep -qx pdo-chrome-mcp-wrapper-ok
+
+# ENV de la base (auto-update Claude Code off, ripgrep système) — verbatim, plus la variante.
+#   PUPPETEER_SKIP_DOWNLOAD  : un `npm i puppeteer` dans le Run ne retélécharge pas ~150 Mo de
+#                              Chrome ; celui de l'image suffit.
+#   PUPPETEER_EXECUTABLE_PATH: pour tout consommateur puppeteer qui, LUI, ne passe pas de
+#                              `channel` (chrome-devtools-mcp, si — cf. le shim ci-dessus).
+#   CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS / _NO_USAGE_STATISTICS : deux appels réseau en moins
+#                              au démarrage de chaque serveur MCP, et rien qui sorte du Run.
+ENV DISABLE_AUTOUPDATER=1 \
+    USE_BUILTIN_RIPGREP=0 \
+    PUPPETEER_SKIP_DOWNLOAD=1 \
+    PUPPETEER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
+    CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS=1 \
+    CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1
+
+CMD ["claude"]

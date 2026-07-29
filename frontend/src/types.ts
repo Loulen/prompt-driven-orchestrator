@@ -166,8 +166,47 @@ export interface SandboxProfile {
   inactive_disabled: string[];
   floor: SandboxFloorGuarantee[];
   sensitive_prefixes: string[];
+  /**
+   * Environment variables posed at `docker create` for every Run on this profile (#468,
+   * ADR-0031 §8). **Not a diff** — unlike `disabled`/`extras` there is no built-in default
+   * to fold against, so this map IS the effective env.
+   *
+   * Values are served in clear, on purpose: they already sit in clear in SQLite, in the
+   * Run's frozen `run_started` payload and in `docker inspect`. The sandbox is not a
+   * security boundary and the editor says so — masking them here would suggest PDO is
+   * protecting something it is not.
+   */
+  env: Record<string, string>;
+  /**
+   * The keys PDO poses itself and therefore refuses with a 400 naming the key (`HOME`,
+   * `PDO_DAEMON_URL`, `PDO_RUN_ID`). Server-owned so the editor never hard-codes a parallel
+   * list that would drift the day a fourth run-constant appears (#373).
+   */
+  reserved_env_keys: string[];
+  /**
+   * Where this profile's container image comes from (#467, ADR-0031 §9), or `null` when it poses
+   * nothing and PDO's built-in default decides (#471: registry-pulled, hash-derived from the
+   * seeded Dockerfile). Like `env` it is a FULL replacement on write — `null` is how you go back
+   * to the default image.
+   */
+  image: SandboxProfileImage | null;
   updated_at: string | null;
 }
+
+/**
+ * A profile's image source (#467). The two shapes are **interchangeable in the form and
+ * radically different downstream**, which is the one thing the editor has to convey:
+ *
+ * - `dockerfile` is the hash-derived path — the tag is the SHA-256 of the file's bytes, so a pull
+ *   from the registry and a local build are interchangeable and a failed pull falls back to a
+ *   build;
+ * - `registry` is an explicit ref, pulled as-is. It has no Dockerfile, therefore no content hash,
+ *   therefore **no build to fall back to**: a failed pull fails the Run (ADR-0030 pt 7 as amended
+ *   by #467), and PDO cannot verify the image even contains `claude`.
+ */
+export type SandboxProfileImage =
+  | { kind: "dockerfile"; path: string }
+  | { kind: "registry"; ref: string };
 
 /**
  * Who still points at a profile (`GET …/{name}/referents`, #432). Server-side because the
@@ -184,19 +223,18 @@ export interface SandboxProfileReferents {
   runs: { run_id: string; pipeline_name: string | null; name: string | null }[];
 }
 
-/** The full `GET /settings` view (#129, ADR-0015; default_model #347; image_source #411). */
+/**
+ * The full `GET /settings` view (#129, ADR-0015; default_model #347).
+ *
+ * `default_sandbox` is the ONLY sandbox knob here since #471 — one axis per screen: this screen
+ * answers *which profile a Run takes by default*, and a staging profile answers *what the sandbox
+ * is* (its image, its home content, its env).
+ */
 export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
   default_model: StringSettingField;
-  /**
-   * Sandbox image source (#411): `"registry"` (pull from GHCR, default) or
-   * `"dockerfile"` (build locally). A closed enum with a built-in `registry`
-   * default, so every tier (`effective`/`default`) is a present string — it reuses
-   * {@link StringSettingField} (a superset) even though it is never null.
-   */
-  image_source: StringSettingField;
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -205,26 +243,6 @@ export interface InstanceSettings {
    * run → trigger → this, and 400s on a dangling name (never a silent fallback).
    */
   default_sandbox: EnumSettingFieldWithReason;
-  /**
-   * Path to the sandbox Dockerfile (#431): `stored → env PDO_SANDBOX_DOCKERFILE →
-   * the seeded `<sandbox_root>/Dockerfile``. Reuses {@link StringSettingField} as-is:
-   * unlike `default_model` the `default` tier is a real path, and unlike the closed
-   * enums both `effective` and `default` are nullable — resolving the default needs
-   * `$HOME` and can fail.
-   */
-  dockerfile_path: StringSettingField;
-  /**
-   * The image tag the RESOLVED Dockerfile yields (#431) — `pdo-sandbox:h-<hash>`,
-   * computed server-side by the same hash `ensure_image` uses, so "editing the
-   * Dockerfile changes the tag, hence a rebuild" is visible instead of tribal.
-   * Not a settings field (no tier), just an observed fact — mirror of
-   * {@link InstanceSettings.sandbox_docker}. `tag` is null when the file cannot be
-   * read, and `reason` says why; exactly one of the two is ever set.
-   */
-  sandbox_image: {
-    tag: string | null;
-    reason: string | null;
-  };
   /**
    * Advisory Docker availability probe (#410), folded into `GET /settings` so the
    * NewRunModal learns the default AND whether Docker can run a sandbox in one fetch.
@@ -273,17 +291,13 @@ export interface UpdateSettingsRequest {
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
   default_model?: string;
-  /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
-   *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
-  image_source?: string;
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
-   *  `default_model`/`image_source`. The daemon 400s a name that does not resolve. */
+   *  `default_model`. The daemon 400s a name that does not resolve.
+   *
+   *  #471 removed `image_source` and `dockerfile_path` from this shape, and the daemon now
+   *  **400s naming the field** if either is sent — a stale client is told, not ignored. */
   default_sandbox?: string;
-  /** Sandbox Dockerfile path (#431): an absolute path to an existing regular file
-   *  (the daemon 400s otherwise), or `""` to clear back to env → the seeded default.
-   *  Same `""`-sentinel discipline as the knobs above. */
-  dockerfile_path?: string;
   /** Turn-end auto-completion (#469). A plain bool: `false` PERSISTS as a stored `0`
    *  (there is no `""` clear sentinel), so unticking the box overrides a
    *  `PDO_AUTOCOMPLETE_TURN_END=1` instead of falling back to it. */

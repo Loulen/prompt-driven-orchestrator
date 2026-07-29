@@ -988,14 +988,20 @@ async fn full_completes_without_host_config_writeback() {
     );
 }
 
-// -- #411: image_source drives the acquisition path (pull vs build) ----------
+// -- #411/#471: which acquisition path a Run takes (pull vs build) -----------
 //
 // Like `write_fake_docker` but cans `image inspect` → ABSENT (exit 1), so
 // `ensure_image` proceeds past the fast-path to acquire the image: a `docker pull`
-// in registry mode (which the fake succeeds → retag, no build), or a `docker build`
-// in dockerfile mode (never a pull). Every other subcommand — `pull`, `tag`,
-// `build`, `container`(create+start), `exec`, `rm` — exits 0. Lets the tracer
-// observe, on a real daemon, which acquisition path the stored `image_source` picks.
+// for the hash-derived image at the seeded location, or a `docker build` when the
+// resolved Dockerfile is somewhere else. Every other subcommand — `pull`, `tag`,
+// `build`, `container`(create+start), `exec`, `rm` — exits 0.
+//
+// #471 removed the `image_source` / `dockerfile_path` settings these tests used to PUT, so what
+// drives the choice here is the **staging profile**. The "dockerfile mode never pulls" property
+// (the `ImageSource::Dockerfile` branch) is pinned by `sandbox_image::dockerfile_mode_never_pulls`
+// as a unit test against the same kind of fake docker; at this layer the only remaining
+// instance-wide way to reach it is the daemon's environment, which a shared test process cannot
+// set without racing every sibling test in this file.
 fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -1016,18 +1022,26 @@ fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     (dir, bin.to_str().unwrap().to_string(), log)
 }
 
-/// `PUT /settings {"image_source": <source>}` against the real daemon.
-async fn put_image_source(daemon: &TestDaemon, source: &str) {
+/// `PUT /settings/sandbox-profiles/{name}` posing an image source, the ONLY way to choose a Run's
+/// image since #471. `minimal` is the profile every test here launches with, and a bare `image`
+/// upsert materialises it with an empty diff — which is what `minimal` already resolves to.
+async fn put_profile_image(daemon: &TestDaemon, name: &str, image: serde_json::Value) {
     let resp = reqwest::Client::new()
-        .put(format!("{}/settings", daemon.url()))
-        .json(&serde_json::json!({ "image_source": source }))
+        .put(format!("{}/settings/sandbox-profiles/{name}", daemon.url()))
+        .json(&serde_json::json!({
+            "disabled": [],
+            "extras": [],
+            "env": {},
+            "image": image,
+        }))
         .send()
         .await
         .unwrap();
+    let status = resp.status();
     assert!(
-        resp.status().is_success(),
-        "PUT /settings image_source={source} should succeed: {}",
-        resp.status()
+        status.is_success(),
+        "PUT the `{name}` profile image should succeed: {status} {}",
+        resp.text().await.unwrap_or_default()
     );
 }
 
@@ -1036,10 +1050,13 @@ fn log_has_subcommand(log: &Path, name: &str) -> bool {
     log_text(log).lines().any(|l| l == name)
 }
 
-// -- Test 11: registry mode pulls the image (no build on a successful pull) --
+// -- Test 11: the built-in default pulls the image (no build on a successful pull) --
 
+/// The profile default of #471 (`sandbox_profile::DEFAULT_PROFILE_IMAGE`) is registry-pulled and
+/// hash-derived, so this needs no setup at all any more — which is the point: on an untouched
+/// instance, a sandboxed Run pulls.
 #[tokio::test]
-async fn registry_mode_pulls_the_sandbox_image() {
+async fn the_default_profile_image_pulls_the_sandbox_image() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker_image_absent();
     let daemon =
@@ -1047,14 +1064,13 @@ async fn registry_mode_pulls_the_sandbox_image() {
             .await
             .unwrap();
 
-    // Store registry mode BEFORE starting the run — eager prep reads it fresh.
-    put_image_source(&daemon, "registry").await;
+    // No PUT: `minimal` poses no image, and the profile default decides.
     let _run_id = start_run(&daemon, Some("minimal")).await;
 
     // ensure_image (image absent) attempts a pull before any build.
     assert!(
         wait_until(|| log_has_subcommand(&log, "pull")).await,
-        "registry mode must `docker pull` the sandbox image; log:\n{}",
+        "a profile posing no image must `docker pull` the hash-derived image; log:\n{}",
         log_text(&log)
     );
     // The fake pull succeeds (exit 0) → retag → NO fallback build.
@@ -1065,44 +1081,7 @@ async fn registry_mode_pulls_the_sandbox_image() {
     );
 }
 
-// -- Test 12: dockerfile mode builds locally, never pulls --------------------
-
-#[tokio::test]
-async fn dockerfile_mode_builds_never_pulls() {
-    ensure_pdo_on_path();
-    let (_fake_dir, docker, log) = write_fake_docker_image_absent();
-    let daemon =
-        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
-            .await
-            .unwrap();
-
-    put_image_source(&daemon, "dockerfile").await;
-    let _run_id = start_run(&daemon, Some("minimal")).await;
-
-    assert!(
-        wait_until(|| log_has_subcommand(&log, "build")).await,
-        "dockerfile mode must `docker build` the sandbox image; log:\n{}",
-        log_text(&log)
-    );
-    assert!(
-        !log_has_subcommand(&log, "pull"),
-        "dockerfile mode must NEVER pull; log:\n{}",
-        log_text(&log)
-    );
-}
-
-// -- #431: dockerfile_path drives the -f flag AND skips the pull -------------
-
-/// `PUT /settings {"dockerfile_path": <path>}` against the real daemon.
-async fn put_dockerfile_path(daemon: &TestDaemon, path: &str) -> reqwest::StatusCode {
-    reqwest::Client::new()
-        .put(format!("{}/settings", daemon.url()))
-        .json(&serde_json::json!({ "dockerfile_path": path }))
-        .send()
-        .await
-        .unwrap()
-        .status()
-}
+// -- #431/#467: a profile's Dockerfile drives the -f flag AND skips the pull ---
 
 /// Argv of the `docker build` invocation in the log. Exactly 6 args
 /// (`build -t <tag> -f <dockerfile> <context>`), so we slice a fixed window rather
@@ -1144,8 +1123,12 @@ fn content_tag(bytes: &[u8]) -> String {
     format!("pdo-sandbox:h-{}", &hex[..12])
 }
 
+/// The `-f` flag, the content tag, the empty build context and the skipped pull, all from a
+/// Dockerfile a **profile** points at (#467). Since #471 that is the only way to point at one from
+/// the UI, and the "no pull" half is non-vacuous precisely because the source is still the
+/// registry-pulling default: what suppresses the pull is the LOCATION predicate, not a mode.
 #[tokio::test]
-async fn custom_dockerfile_path_builds_from_it_without_pulling() {
+async fn a_profile_dockerfile_builds_from_it_without_pulling() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker_image_absent();
     let daemon =
@@ -1161,15 +1144,12 @@ async fn custom_dockerfile_path_builds_from_it_without_pulling() {
     let custom_bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo fp-431 custom dockerfile\n";
     std::fs::write(&custom, custom_bytes).unwrap();
 
-    // BOTH knobs, before the run: without `image_source=registry` the "no pull"
-    // assertion would be vacuous (dockerfile mode never pulls anyway).
-    put_image_source(&daemon, "registry").await;
-    assert!(
-        put_dockerfile_path(&daemon, custom.to_str().unwrap())
-            .await
-            .is_success(),
-        "an existing absolute regular file must be accepted"
-    );
+    put_profile_image(
+        &daemon,
+        "minimal",
+        serde_json::json!({ "kind": "dockerfile", "path": custom.display().to_string() }),
+    )
+    .await;
 
     let _run_id = start_run(&daemon, Some("minimal")).await;
 
@@ -1178,12 +1158,12 @@ async fn custom_dockerfile_path_builds_from_it_without_pulling() {
         "a custom Dockerfile must be built locally; log:\n{}",
         log_text(&log)
     );
-    // THE assertion: registry mode, yet no pull — the hash of a custom Dockerfile
-    // cannot exist upstream (the fake pull would have SUCCEEDED, so this is a real
-    // signal). And no retag either, since there was nothing to retag.
+    // THE assertion: the registry-pulling default is in force, yet no pull — the hash of a
+    // custom Dockerfile cannot exist upstream (the fake pull would have SUCCEEDED, so this is a
+    // real signal). And no retag either, since there was nothing to retag.
     assert!(
         !log_has_subcommand(&log, "pull"),
-        "a custom Dockerfile must skip the GHCR pull even in registry mode; log:\n{}",
+        "a custom Dockerfile must skip the GHCR pull; log:\n{}",
         log_text(&log)
     );
     assert!(
@@ -1235,8 +1215,8 @@ async fn custom_dockerfile_path_builds_from_it_without_pulling() {
 }
 
 #[tokio::test]
-async fn dockerfile_path_that_vanished_fails_the_run_naming_path_and_tier() {
-    // Realistic TOCTOU: the path passes `PUT /settings` validation, then disappears
+async fn a_profile_dockerfile_that_vanished_fails_the_run_naming_path_and_tier() {
+    // Realistic TOCTOU: the path passes the profile write's existence gate, then disappears
     // before the run. The prep must fail LOUD (ADR-0030 pt 4) — never silently build
     // the seeded default, which would mean running an image the team never versioned.
     ensure_pdo_on_path();
@@ -1249,9 +1229,12 @@ async fn dockerfile_path_that_vanished_fails_the_run_naming_path_and_tier() {
     let custom = daemon.repo_root().join("docker").join("sbx.Dockerfile");
     std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
     std::fs::write(&custom, b"FROM ubuntu:24.04\nRUN echo gone-soon\n").unwrap();
-    assert!(put_dockerfile_path(&daemon, custom.to_str().unwrap())
-        .await
-        .is_success());
+    put_profile_image(
+        &daemon,
+        "minimal",
+        serde_json::json!({ "kind": "dockerfile", "path": custom.display().to_string() }),
+    )
+    .await;
 
     // …and now it's gone.
     std::fs::remove_file(&custom).unwrap();
@@ -1275,8 +1258,12 @@ async fn dockerfile_path_that_vanished_fails_the_run_naming_path_and_tier() {
         "the failure reason must name the path: {reason}"
     );
     assert!(
-        reason.contains("`stored` tier"),
+        reason.contains("`profile` tier"),
         "the failure reason must name the winning tier: {reason}"
+    );
+    assert!(
+        reason.contains("staging profile"),
+        "…and send the user to the profile, the only place that path can be fixed: {reason}"
     );
     // The bail precedes the fast-path AND the build: nothing was built.
     assert!(

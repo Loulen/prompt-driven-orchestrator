@@ -10,7 +10,7 @@
 //! defaults, validation, resolution, the [`landing`] classifier), the sqlx CRUD below.
 //! Nothing here reads `$HOME`, shells out, or touches Docker.
 //!
-//! ## The three load-bearing ideas
+//! ## The four load-bearing ideas
 //!
 //! 1. **A profile is a *diff*, never a snapshot** (ADR-0031 §2). The row stores the
 //!    user's intention — `disabled` / `extras` — so the day a PDO release adds an entry
@@ -26,7 +26,26 @@
 //!    "an entry under `.claude/` produces no extra `-v`" dedup of ADR-0031 §4 is not a
 //!    special case: it is a *consequence*.
 //!
-//! 3. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
+//! 3. **The env is a MAP, not a diff** (#468, ADR-0031 §8). Every other field here is an
+//!    intention folded over a built-in default, because the default evolves with the
+//!    release. `env` has no built-in default and never will — PDO poses the run-constant
+//!    variables itself, at `docker create`, and the three it owns are *refused* as profile
+//!    keys ([`crate::sandbox_container::RUN_CONSTANT_ENV_KEYS`]). So there is nothing to
+//!    diff against: the stored map IS the effective map, and [`ResolvedProfile::env`] is a
+//!    copy rather than a resolution. A `disabled`-style negative list would be answering a
+//!    question nobody asked.
+//!
+//! 3b. **The image source is a profile field too** (#467, ADR-0031 §9). Same shape as `env` —
+//!    not a diff, `None` meaning "this profile poses nothing" — but with one extra property: it is
+//!    the only field whose two shapes ([`crate::sandbox_image::ProfileImage`]) are mutually
+//!    exclusive rather than additive, so it is a **tagged enum in one column**, not two nullable
+//!    columns that could disagree. Unlike `env` it DOES have a built-in default since #471
+//!    ([`DEFAULT_PROFILE_IMAGE`]): the two instance-wide settings it used to fall back to are gone,
+//!    and what they resolved to by default became a constant of this layer, next to
+//!    [`DEFAULT_FULL_ENTRIES`]. It is still not a *diff* — an image is one value, not a list, so
+//!    "poses nothing" resolves to the default outright rather than folding against it.
+//!
+//! 4. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
 //!    guarantees [`crate::sandbox_staging`] holds in every profile are satisfied either
 //!    by an entry or by a fallback synthesis. Two of them need *keys* in a file the
 //!    profile may also carry (class **(b)** below) — unchecking those is safe. Three
@@ -39,6 +58,8 @@
 //! (`triggers.sandbox`, `instance_config.default_sandbox`, the frozen `RunStarted`
 //! payload). Renaming is therefore *delete + create*. A future rename must be a
 //! **repointing transaction** across those three stores — never an `UPDATE` of this key.
+
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -158,6 +179,37 @@ pub(crate) const DEFAULT_FULL_ENTRIES: &[DefaultEntry] = &[
         note: Some("May pull targets from outside ~/.claude (links into ~/.agents)."),
     },
 ];
+
+/// L'image qu'un profil **qui n'en pose pas** résout (#471, ADR-0031 §9) — le pendant image de
+/// [`DEFAULT_FULL_ENTRIES`], et pour la même raison : c'est un **défaut de profil**, plus un
+/// réglage d'instance.
+///
+/// Pourquoi une `struct` et non deux constantes nues : les deux champs ne se lisent que
+/// *ensemble* (un `ImageSource::Registry` sur un Dockerfile qui n'est pas celui publié en amont
+/// ne pulle rien), et le jour où le défaut change il doit changer d'un bloc.
+///
+/// Défini dans ce module — pas dans [`crate::sandbox_image`], qui possède le *vocabulaire*
+/// d'image ([`crate::sandbox_image::ProfileImage`], le hash, les refs) — par symétrie exacte avec
+/// `ProfileImage` : là-bas le vocabulaire appartient à `sandbox_image` et le profil le stocke, ici
+/// le défaut appartient à la couche de défauts de profil et `sandbox_image` le lit. Un fait, un
+/// propriétaire (discipline #447).
+pub(crate) struct DefaultProfileImage {
+    /// Pull-ou-build de l'image hash-dérivée. `Registry` = ce que le tier `default` de
+    /// l'ex-réglage `image_source` valait, donc un profil qui ne pose rien pulle encore.
+    pub source: crate::sandbox_image::ImageSource,
+    /// `None` = **l'emplacement seedé** `<sandbox_root>/Dockerfile`, résolu par
+    /// [`crate::sandbox_image::default_dockerfile_path`]. Un chemin littéral ici mentirait : le
+    /// défaut dépend de `<sandbox_root>`, donc de `$HOME`, que cette couche pure ne lit pas.
+    /// `Some(path)` n'existe que pour rendre le champ *exprimable* — rien ne le pose aujourd'hui.
+    pub dockerfile: Option<&'static str>,
+}
+
+/// Le défaut, en un bloc. Un profil qui ne pose pas d'image produit ce que l'instance produisait
+/// avant #471, bit pour bit — pinné par le golden `sandbox_image` sur le ref calculé (AC 3).
+pub(crate) const DEFAULT_PROFILE_IMAGE: DefaultProfileImage = DefaultProfileImage {
+    source: crate::sandbox_image::ImageSource::Registry,
+    dockerfile: None,
+};
 
 /// One class-**(c)** floor guarantee: satisfied by the *whole* file, so it is neither
 /// checkable nor addable. Shown read-only in the editor because without that block a
@@ -447,6 +499,188 @@ fn collapse_nested(sorted: Vec<String>) -> Vec<String> {
     out
 }
 
+// -- pure: environment variables (#468, ADR-0031 §8) -------------------------
+
+/// Longest accepted env key. Not a POSIX limit (there is none) — a guard against a paste
+/// accident turning a whole `.env` file into one key.
+pub(crate) const MAX_ENV_KEY_LEN: usize = 128;
+
+/// Validate and normalise one env **key**.
+///
+/// Grammar `^[A-Za-z_][A-Za-z0-9_]*$` — the portable-shell subset. Not because `-e K=V`
+/// goes through a shell (it does not: it is argv), but because a key outside that subset is
+/// unreachable from inside the container by any normal means (`$FOO` in a script, `os.environ`
+/// lookups in generated code) — accepting it would store something that silently does nothing.
+///
+/// The **reserved** keys come from [`crate::sandbox_container::RUN_CONSTANT_ENV_KEYS`], not
+/// from a second literal here: that module poses them at `docker create`, so it owns the
+/// list (the #447 lesson — one fact, one owner). Rejecting them is a **400 that names the
+/// key**, never a silent skip: the precedent is the `PDO_DAEMON_URL` guard in the `docker
+/// exec` `extra_env` loop, whose comment says why ("a re-passed `-e` would clobber the
+/// gateway"). A silent skip would leave the user staring at an editor that shows `HOME` set
+/// and a container where it is not.
+pub(crate) fn validate_env_key(raw: &str) -> Result<String, String> {
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err("an environment variable name cannot be blank".to_string());
+    }
+    if key.len() > MAX_ENV_KEY_LEN {
+        return Err(format!(
+            "environment variable name `{key}` is longer than {MAX_ENV_KEY_LEN} characters"
+        ));
+    }
+    let mut chars = key.chars();
+    let first = chars.next().expect("non-empty checked above");
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return Err(format!(
+            "`{key}`: an environment variable name must start with a letter or `_`"
+        ));
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(format!(
+            "`{key}`: an environment variable name may only contain letters, digits and `_`"
+        ));
+    }
+    if let Some(reserved) = crate::sandbox_container::RUN_CONSTANT_ENV_KEYS
+        .iter()
+        .find(|r| **r == key)
+    {
+        return Err(format!(
+            "`{reserved}` is set by PDO for every sandboxed Run and cannot be overridden — \
+             the container's home, its daemon URL and its Run id all depend on it"
+        ));
+    }
+    Ok(key.to_string())
+}
+
+/// Validate one env **value**. Returns it **verbatim**, deliberately un-trimmed.
+///
+/// Two refusals, both about legibility rather than injection (`-e K=V` is argv, never
+/// parsed by a shell):
+/// - a **NUL byte** cannot survive `execve`'s environment block at all;
+/// - a **newline** would make `docker inspect --format '{{.Config.Env}}'` — the one place
+///   an operator can check what the container actually got — unreadable, and would hide a
+///   paste accident (a whole `.env` file dropped into one field) behind something that
+///   looks like it worked.
+///
+/// No trim: whitespace can be meaningful in a value (a separator, an indent in a PEM-ish
+/// blob), and silently changing what the user typed is worse than carrying their typo. The
+/// key is trimmed because a key with spaces is unusable, not merely surprising.
+pub(crate) fn validate_env_value(key: &str, raw: &str) -> Result<String, String> {
+    if raw.contains('\0') {
+        return Err(format!(
+            "`{key}`: an environment value cannot contain a NUL byte"
+        ));
+    }
+    if raw.contains('\n') || raw.contains('\r') {
+        return Err(format!(
+            "`{key}`: an environment value cannot span multiple lines — it would make \
+             `docker inspect` unreadable and hide a paste accident"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+// -- pure: image source (#467, ADR-0031 §9) ----------------------------------
+
+/// Longest accepted registry ref. Not a Docker limit (a ref is bounded by its components, and
+/// 255 per name component at that) — a guard against a paste accident dropping a whole
+/// `docker inspect` output into the field.
+pub(crate) const MAX_IMAGE_REF_LEN: usize = 256;
+
+/// Validate and **normalise** a profile's image source (#467).
+///
+/// Returns the normalised value — both arms are trimmed — so `  ghcr.io/x:1  ` and `ghcr.io/x:1`
+/// cannot become two rows that render identically.
+///
+/// The refusals, and why each one is a 400 rather than something handled downstream:
+///
+/// - **`dockerfile`: the path must be absolute.** Same rule, same reason as the `dockerfile_path`
+///   setting #471 removed (#431): the daemon's cwd is not the user's, so a relative path resolves
+///   against something nobody chose. Existence is checked by the *handler*, not here — this stays
+///   pure, and the check has to live where `$HOME` and the filesystem are in scope
+///   (necessary-but-not-sufficient: the authoritative `is_file()` bail is `ensure_image`'s, at
+///   prep time).
+/// - **`registry`: the ref may not start with `-`.** `docker pull -x` parses as a flag. This is
+///   the one refusal that is about the *shell-less argv* rather than legibility, and it is why the
+///   check cannot be left to Docker: `docker pull` would fail with an unrelated usage error.
+/// - **`registry`: printable ASCII only, no whitespace.** A Docker reference is ASCII by
+///   specification; a value with a space or a newline is a paste accident that would otherwise
+///   fail minutes later, inside a `spawn_blocking`, as an opaque pull error.
+///
+/// PDO deliberately does **not** try to validate that the ref exists, resolves, or contains
+/// `claude`: the first is a network round-trip inside a PUT handler, and the last is the
+/// responsibility of whoever supplies the ref (ADR-0030 pt 7, amended by #467).
+pub(crate) fn validate_profile_image(
+    image: &crate::sandbox_image::ProfileImage,
+) -> Result<crate::sandbox_image::ProfileImage, String> {
+    use crate::sandbox_image::ProfileImage;
+    match image {
+        ProfileImage::Dockerfile { path } => {
+            let path = path.trim();
+            if path.is_empty() {
+                return Err(
+                    "a Dockerfile path cannot be blank — pick a file, or clear the profile's \
+                     image source to fall back to the instance-wide setting"
+                        .to_string(),
+                );
+            }
+            if path.contains('\0') {
+                return Err("a Dockerfile path cannot contain a NUL byte".to_string());
+            }
+            if !path.starts_with('/') {
+                return Err(format!(
+                    "`{path}`: the profile's Dockerfile must be an absolute path"
+                ));
+            }
+            Ok(ProfileImage::Dockerfile {
+                path: path.to_string(),
+            })
+        }
+        ProfileImage::Registry { image_ref } => {
+            let image_ref = image_ref.trim();
+            if image_ref.is_empty() {
+                return Err(
+                    "an image reference cannot be blank — type one, or clear the profile's \
+                     image source to fall back to the instance-wide setting"
+                        .to_string(),
+                );
+            }
+            if image_ref.len() > MAX_IMAGE_REF_LEN {
+                return Err(format!(
+                    "image reference `{image_ref}` is longer than {MAX_IMAGE_REF_LEN} characters"
+                ));
+            }
+            if image_ref.starts_with('-') {
+                return Err(format!(
+                    "`{image_ref}`: an image reference cannot start with `-` — `docker pull` \
+                     would read it as a flag"
+                ));
+            }
+            if !image_ref.chars().all(|c| c.is_ascii_graphic()) {
+                return Err(format!(
+                    "`{image_ref}`: an image reference may only contain printable ASCII, with no \
+                     spaces — a Docker reference is ASCII by specification"
+                ));
+            }
+            Ok(ProfileImage::Registry {
+                image_ref: image_ref.to_string(),
+            })
+        }
+    }
+}
+
+/// The **names** of a profile's env, comma-joined — the ONLY rendering of an env map that
+/// may reach a log (#468).
+///
+/// It exists as a named function rather than an inline `format!` precisely so the rule is
+/// testable: `ensure_ready` already logs the staging entry list in clear, and copying that
+/// shape for the env would put a client's API token in the systemd journal, which outlives
+/// the Run. A unit test asserts no value survives this call.
+pub(crate) fn env_names(env: &BTreeMap<String, String>) -> String {
+    env.keys().cloned().collect::<Vec<_>>().join(", ")
+}
+
 // -- store: the persisted diff ------------------------------------------------
 
 /// A materialised profile row: the user's **intention**, never the effective list.
@@ -455,6 +689,15 @@ pub(crate) struct ProfileDiff {
     pub name: String,
     pub disabled: Vec<String>,
     pub extras: Vec<String>,
+    /// Environment variables posed at `docker create` (#468, ADR-0031 §8). Unlike the two
+    /// fields above this is NOT a diff — see idea 3 in the module header. `BTreeMap` so a
+    /// key can carry exactly one value and the argv order is deterministic without the
+    /// caller sorting.
+    pub env: BTreeMap<String, String>,
+    /// Where this profile's container image comes from (#467, ADR-0031 §9). `None` = the
+    /// profile poses nothing and [`DEFAULT_PROFILE_IMAGE`] decides (#471), which is what every
+    /// pre-#467 profile keeps doing.
+    pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: String,
 }
 
@@ -469,14 +712,29 @@ pub(crate) struct ResolvedProfile {
     pub disabled: Vec<String>,
     pub extras: Vec<String>,
     pub resolved: ResolvedEntries,
+    /// The profile's env (#468). Empty for a virtual default with no row — there is no
+    /// built-in env to fall back to, by design (module header, idea 3).
+    pub env: BTreeMap<String, String>,
+    /// The profile's image source (#467). `None` for a virtual default with no row, and for
+    /// every profile that poses nothing — the two are indistinguishable on purpose: both mean
+    /// "[`DEFAULT_PROFILE_IMAGE`] decides".
+    pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: Option<String>,
 }
 
-/// Create the `sandbox_profiles` table if absent. A brand-new table, so
-/// `CREATE TABLE IF NOT EXISTS` **is** the whole migration — there is nothing to
-/// `ALTER`. Future columns go through the idempotent PRAGMA-guarded
+/// Create the `sandbox_profiles` table if absent, then apply the additive column
+/// migrations.
+///
+/// The table was brand-new in #432, so `CREATE TABLE IF NOT EXISTS` was the whole
+/// migration then. **#468 was the first `ALTER`**, and it used the idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` idiom (precedent: `max_concurrent`, #239 in
-/// [`crate::trigger_store`]), **never** a migration runner.
+/// [`crate::trigger_store`]), **never** a migration runner. #467 adds the second, by the
+/// same idiom and for the same reasons — two divergent mechanics for two fields of the same
+/// profile would be the worst possible outcome. The `CREATE` above carries both columns too,
+/// so a fresh database takes the short path and an existing one — where the `CREATE` is a
+/// no-op — takes the `ALTER`s. Both end on the same schema; that redundancy is the point of
+/// the idiom, not an oversight. The idiom being idempotent *per column*, the order in which
+/// the two landed does not matter.
 ///
 /// **No seed row**: `minimal` and `full` are virtual (ADR-0031 §2).
 ///
@@ -489,25 +747,80 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             name       TEXT PRIMARY KEY COLLATE NOCASE,
             disabled   JSON NOT NULL DEFAULT '[]',
             extras     JSON NOT NULL DEFAULT '[]',
+            env        JSON NOT NULL DEFAULT '{}',
+            image      JSON,
             updated_at TEXT NOT NULL
         )",
     )
     .execute(db)
     .await?;
+
+    // Additive migration (#468): per-profile environment variables. A pre-#468
+    // `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS` — a no-op there — so
+    // the column must be added out-of-band or every `SELECT … env` below would fail. The
+    // PRAGMA guard keeps it idempotent (a bare `ALTER … ADD COLUMN` errors "duplicate
+    // column name" on an already-migrated DB) and is preferred over swallowing the error
+    // blindly, which would hide a genuine failure. `DEFAULT '{}'` so existing rows read
+    // back as "no env", which is exactly what they had.
+    add_column_if_absent(db, "env", "JSON NOT NULL DEFAULT '{}'").await?;
+    // Additive migration (#467): the per-profile image source. NULLABLE and with **no**
+    // default, unlike `env`: "poses nothing" is a first-class state here (the instance-wide
+    // setting decides), so `NULL` is the honest empty value rather than a sentinel `'null'`
+    // string every reader would have to know about. Existing rows read back as `None`, which
+    // is exactly the behaviour they had.
+    add_column_if_absent(db, "image", "JSON").await?;
     Ok(())
 }
 
-/// Two columns rather than one `diff` blob: they validate differently, they play
-/// opposite roles at resolution (subtract vs add), and a corrupt one degrades to
-/// `Vec::new()` on its own. Precedent: `variables JSON` in
+/// The PRAGMA-guarded `ALTER TABLE … ADD COLUMN` idiom, once (#467). Extracted the moment
+/// there were two of them: the guard is the load-bearing half (a bare `ALTER` errors
+/// "duplicate column name" on an already-migrated DB, and swallowing that error blindly would
+/// hide a genuine failure), and it must not be re-typed per column.
+async fn add_column_if_absent(
+    db: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let present = sqlx::query("SELECT 1 FROM pragma_table_info('sandbox_profiles') WHERE name = ?")
+        .bind(column)
+        .fetch_optional(db)
+        .await?
+        .is_some();
+    if !present {
+        // `column`/`decl` are compile-time literals from this module, never user input — the
+        // only reason they are formatted in rather than bound is that SQLite has no bind
+        // parameter for an identifier or a type declaration.
+        sqlx::query(&format!(
+            "ALTER TABLE sandbox_profiles ADD COLUMN {column} {decl}"
+        ))
+        .execute(db)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Four columns rather than one `diff` blob: they validate differently, two of them play
+/// opposite roles at resolution (subtract vs add) while the other two are not diffs at all
+/// (#468, #467), and a corrupt one degrades to its empty value **on its own** — a shared blob
+/// would take the whole profile down with it. Precedent: `variables JSON` in
 /// [`crate::trigger_store`].
 fn row_to_diff(row: &sqlx::sqlite::SqliteRow) -> ProfileDiff {
     let disabled: String = row.get("disabled");
     let extras: String = row.get("extras");
+    let env: String = row.get("env");
+    // #467: NULL (poses nothing) and an unreadable value both degrade to `None`, i.e. "the
+    // instance-wide setting decides". That is safe HERE and only here: this is the *live* read
+    // for the editor and for the create-run resolve, where falling back to the instance setting
+    // is a legitimate answer. The Run's FROZEN copy has no such latitude — `sandbox_run::
+    // frozen_image` fails the Run loud, because there "fall back" would mean silently starting a
+    // container in a DIFFERENT image than the nodes that already launched saw.
+    let image: Option<String> = row.get("image");
     ProfileDiff {
         name: row.get("name"),
         disabled: serde_json::from_str(&disabled).unwrap_or_default(),
         extras: serde_json::from_str(&extras).unwrap_or_default(),
+        env: serde_json::from_str(&env).unwrap_or_default(),
+        image: image.as_deref().and_then(|s| serde_json::from_str(s).ok()),
         updated_at: row.get("updated_at"),
     }
 }
@@ -518,7 +831,8 @@ pub(crate) async fn get_diff(
     name: &str,
 ) -> Result<Option<ProfileDiff>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT name, disabled, extras, updated_at FROM sandbox_profiles WHERE name = ?",
+        "SELECT name, disabled, extras, env, image, updated_at \
+         FROM sandbox_profiles WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(db)
@@ -529,7 +843,8 @@ pub(crate) async fn get_diff(
 /// Every materialised diff, by name.
 pub(crate) async fn list_diffs(db: &SqlitePool) -> Result<Vec<ProfileDiff>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT name, disabled, extras, updated_at FROM sandbox_profiles ORDER BY name",
+        "SELECT name, disabled, extras, env, image, updated_at \
+         FROM sandbox_profiles ORDER BY name",
     )
     .fetch_all(db)
     .await?;
@@ -543,21 +858,31 @@ pub(crate) async fn upsert(
     name: &str,
     disabled: &[String],
     extras: &[String],
+    env: &BTreeMap<String, String>,
+    image: Option<&crate::sandbox_image::ProfileImage>,
 ) -> Result<ProfileDiff, sqlx::Error> {
     let now = crate::event_log::now_iso();
     let disabled_json = serde_json::to_string(disabled).unwrap_or_else(|_| "[]".to_string());
     let extras_json = serde_json::to_string(extras).unwrap_or_else(|_| "[]".to_string());
+    let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());
+    // `None` binds SQL NULL, which is how "poses nothing" is stored (#467) — and, `image` being
+    // a FULL replacement like every other field here, it is also how clearing one works.
+    let image_json: Option<String> = image.and_then(|i| serde_json::to_string(i).ok());
     sqlx::query(
-        "INSERT INTO sandbox_profiles (name, disabled, extras, updated_at)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO sandbox_profiles (name, disabled, extras, env, image, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
             disabled = excluded.disabled,
             extras = excluded.extras,
+            env = excluded.env,
+            image = excluded.image,
             updated_at = excluded.updated_at",
     )
     .bind(name)
     .bind(&disabled_json)
     .bind(&extras_json)
+    .bind(&env_json)
+    .bind(&image_json)
     .bind(&now)
     .execute(db)
     .await?;
@@ -600,6 +925,8 @@ pub(crate) async fn resolve(
             disabled: Vec::new(),
             extras: Vec::new(),
             resolved: resolve_entry_list(&base, &[], &[]),
+            env: BTreeMap::new(),
+            image: None,
             updated_at: None,
         }));
     };
@@ -613,6 +940,8 @@ pub(crate) async fn resolve(
         disabled: diff.disabled,
         extras: diff.extras,
         resolved,
+        env: diff.env,
+        image: diff.image,
         updated_at: Some(diff.updated_at),
     }))
 }
@@ -879,6 +1208,174 @@ mod tests {
     fn the_default_glob_is_not_user_authorable() {
         assert!(base_entries(FULL_PROFILE).contains(&".claude/*.md"));
         assert!(validate_entry(".claude/*.md").is_err());
+    }
+
+    // -- validate_env_key / validate_env_value (#468) ------------------------
+
+    #[test]
+    fn env_keys_accept_the_portable_shell_subset() {
+        for ok in [
+            "FOO",
+            "_FOO",
+            "PUPPETEER_EXECUTABLE_PATH",
+            "http_proxy",
+            "X9",
+            "_",
+        ] {
+            assert_eq!(validate_env_key(ok).unwrap(), ok, "{ok} should be valid");
+        }
+        assert_eq!(validate_env_key("  FOO  ").unwrap(), "FOO");
+    }
+
+    #[test]
+    fn env_keys_reject_the_malformed() {
+        for bad in [
+            "", "   ", "9FOO", "FOO-BAR", "FOO BAR", "FOO=BAR", "FOÔ", "a.b",
+        ] {
+            assert!(validate_env_key(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(validate_env_key(&"A".repeat(MAX_ENV_KEY_LEN + 1)).is_err());
+        assert!(validate_env_key(&"A".repeat(MAX_ENV_KEY_LEN)).is_ok());
+    }
+
+    /// AC2 of #468. The refusal is a *named* one: the message must carry the offending key,
+    /// because the whole point of preferring a 400 to a silent skip is that the user learns
+    /// WHICH variable PDO owns. A message that merely says "reserved" would send them back
+    /// to the source.
+    #[test]
+    fn env_keys_reject_the_run_constants_by_name() {
+        for reserved in crate::sandbox_container::RUN_CONSTANT_ENV_KEYS {
+            let err = validate_env_key(reserved)
+                .expect_err("a run-constant key must be refused, never skipped");
+            assert!(
+                err.contains(reserved),
+                "the 400 must name the offending key, got: {err}"
+            );
+        }
+        // Whitespace and the trim must not sneak one past the check.
+        assert!(validate_env_key("  HOME  ").is_err());
+        // Case matters: env vars are case-sensitive, so `home` is a different (allowed) var.
+        assert!(validate_env_key("home").is_ok());
+    }
+
+    #[test]
+    fn env_values_reject_nul_and_newlines_and_keep_everything_else_verbatim() {
+        // Verbatim, including surrounding whitespace: silently trimming would change a
+        // value the user may have meant, and a value is not a path.
+        assert_eq!(validate_env_value("K", "  spaced  ").unwrap(), "  spaced  ");
+        assert_eq!(validate_env_value("K", "").unwrap(), "");
+        assert_eq!(
+            validate_env_value("K", "a=b:c/d spaces & $dollars").unwrap(),
+            "a=b:c/d spaces & $dollars"
+        );
+        for bad in ["a\0b", "a\nb", "a\r\nb", "trailing\n"] {
+            assert!(
+                validate_env_value("K", bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        // The refusal names the key, like every other one here.
+        assert!(validate_env_value("TOKEN", "a\nb")
+            .unwrap_err()
+            .contains("TOKEN"));
+    }
+
+    /// AC4 of #468: what may reach a log is the NAMES. This is the whole guarantee, so it
+    /// is pinned on the function that produces the log text rather than on a log capture.
+    #[test]
+    fn env_names_never_leaks_a_value() {
+        let env: BTreeMap<String, String> = [
+            ("TOKEN", "sk-ant-super-secret"),
+            ("PUPPETEER_EXECUTABLE_PATH", "/usr/bin/chromium"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let rendered = env_names(&env);
+        assert_eq!(rendered, "PUPPETEER_EXECUTABLE_PATH, TOKEN");
+        for value in env.values() {
+            assert!(
+                !rendered.contains(value),
+                "a value leaked into the log rendering: {rendered}"
+            );
+        }
+        assert_eq!(env_names(&BTreeMap::new()), "");
+    }
+
+    // -- validate_profile_image (#467) ---------------------------------------
+
+    #[test]
+    fn a_profile_dockerfile_must_be_an_absolute_path_and_is_trimmed() {
+        use crate::sandbox_image::ProfileImage;
+        let df = |p: &str| ProfileImage::Dockerfile {
+            path: p.to_string(),
+        };
+        assert_eq!(
+            validate_profile_image(&df("  /repo/Dockerfile.chrome-dev  ")).unwrap(),
+            df("/repo/Dockerfile.chrome-dev"),
+            "trimmed, so two rows cannot render identically"
+        );
+        for bad in [
+            "",
+            "   ",
+            "docker/Dockerfile",
+            "./Dockerfile",
+            "~/Dockerfile",
+        ] {
+            assert!(
+                validate_profile_image(&df(bad)).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(validate_profile_image(&df("/a\0b")).is_err());
+        // The refusal NAMES the offending value, like every other one in this module.
+        assert!(validate_profile_image(&df("relative/Dockerfile"))
+            .unwrap_err()
+            .contains("relative/Dockerfile"));
+    }
+
+    #[test]
+    fn a_profile_registry_ref_rejects_the_unpullable() {
+        use crate::sandbox_image::ProfileImage;
+        let reg = |r: &str| ProfileImage::Registry {
+            image_ref: r.to_string(),
+        };
+        for ok in [
+            "ghcr.io/acme/agent:1.4",
+            "acme/agent:latest",
+            "agent",
+            "registry.example.com:5000/team/agent@sha256:abc",
+            "ghcr.io/loulen/pdo-sandbox-chrome-dev:h-0123456789ab",
+        ] {
+            assert_eq!(
+                validate_profile_image(&reg(ok)).unwrap(),
+                reg(ok),
+                "{ok} should be valid"
+            );
+        }
+        assert_eq!(
+            validate_profile_image(&reg("  acme/agent:1  ")).unwrap(),
+            reg("acme/agent:1")
+        );
+        // A leading `-` is the one refusal that is about argv rather than legibility: Docker
+        // would read it as a flag and fail with an unrelated usage error.
+        let err = validate_profile_image(&reg("-rm")).unwrap_err();
+        assert!(err.contains("-rm") && err.contains("flag"), "{err}");
+        for bad in [
+            "",
+            "   ",
+            "acme/agent :1",
+            "acme/agent\n:1",
+            "agent\u{e9}",
+            "a\0b",
+        ] {
+            assert!(
+                validate_profile_image(&reg(bad)).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(validate_profile_image(&reg(&"a".repeat(MAX_IMAGE_REF_LEN + 1))).is_err());
+        assert!(validate_profile_image(&reg(&"a".repeat(MAX_IMAGE_REF_LEN))).is_ok());
     }
 
     /// Exactly two class-(b) entries — the floor re-synthesises those two files, so

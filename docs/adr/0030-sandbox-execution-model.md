@@ -50,8 +50,8 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    `<hash>` = SHA-256[..12] des octets exacts du Dockerfile sur disque. Deux Dockerfiles identiques →
    même tag ; une édition → rebuild. `.gitattributes` épingle `eol=lf` pour la reproductibilité.
    C'est l'identité qui rend une image **tirée d'un registry** et une image **buildée localement**
-   interchangeables sous le même nom. Un réglage **par-daemon** `image_source`
-   (`registry` défaut | `dockerfile`, précédence `stored → env → default`, ADR-0015) pilote
+   interchangeables sous le même nom. Une **source d'image** (`registry` défaut | `dockerfile`,
+   précédence `env → défaut de profil` depuis #471 — voir l'amendement en fin de point) pilote
    `ensure_image` : en `registry`, si l'image n'est pas déjà locale, `docker pull
    ghcr.io/loulen/pdo-sandbox:h-<hash>` puis **retag** sous le ref local, avec **fallback build** si
    le pull échoue (offline / 404 tag absent / registry down) ; en `dockerfile`, build direct, jamais
@@ -61,6 +61,76 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    release publie l'image sur GHCR (job additif indépendant, multi-arch `amd64`+`arm64`, tags
    `h-<hash>` + `latest` informatif) ; le hash CI (bash `sha256sum | cut`) est byte-identique au Rust,
    gardé par un self-check de parité.
+
+   **Amendement #466 — le NOM d'image est une donnée de la variante.** Un ref d'image sandbox est
+   désormais un couple `<nom>:h-<hash>` dont les deux moitiés sortent du même fichier : le hash de
+   ses **octets**, le nom de son **nom de fichier** (`image_name_for_dockerfile` :
+   `Dockerfile` → `pdo-sandbox`, `Dockerfile.<variante>` → `pdo-sandbox-<variante>` ; tout autre nom
+   retombe sur `pdo-sandbox`, un Dockerfile que l'utilisateur *pointe* n'ayant pas à suivre notre
+   convention — son tag reste le hash de ses octets, donc aucune collision). Corollaire assumé : un
+   Dockerfile de variante est **autonome** (`FROM ubuntu:24.04` + steps de la base dupliqués), et
+   **jamais** `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` — injecter le hash de la base obligerait à
+   *générer* les octets de la variante, or ces octets **sont** la source de vérité de son propre tag.
+   La duplication est le prix de l'adressage par contenu. `release.yml` devient une matrice une-jambe-
+   par-variante (le nom y est re-dérivé en bash, avec son propre self-check de parité), et la première
+   variante livrée est `pdo-sandbox-chrome-dev` (#466 : node 22 + Chrome + `chrome-devtools-mcp`,
+   `amd64` seul faute de .deb Chrome arm64 en amont). La **sélection** de la variante reste, dans cette
+   slice, le réglage `dockerfile_path` existant (§5) — pointer la variante change nom **et** hash, donc
+   build local ; aucune 3e valeur de la source n'est inventée, la sélection par profil de staging
+   arrivant séparément (#467, et devenant l'unique chemin en #471).
+
+   **Amendement #467 — un ref registry explicite sort de l'adressage par contenu, et l'assume.**
+   Un profil de staging peut désormais porter sa propre source d'image (ADR-0031 §9), sous deux
+   formes. La première, `kind: dockerfile`, ne change **rien** ici : c'est le Dockerfile résolu (§5)
+   choisi par profil, donc un tier de précédence de plus et pas une nouvelle mécanique — même hash,
+   même nom dérivé du nom de fichier, même prédicat de skip-pull sur l'**emplacement**. La seconde, `kind: registry` avec un ref **libre** (p.ex.
+   `ghcr.io/acme/agent:1.4`), casse en revanche l'identité qui fonde tout ce point, et il faut
+   l'écrire noir sur blanc plutôt que le découvrir en prod :
+
+   - **Pas de repli build.** Le repli existe parce que `<nom>:h-<hash>` est le hash des octets d'un
+     Dockerfile *connu* : tirer ou builder produit alors la même image. Un ref libre n'a pas de
+     Dockerfile, donc pas de hash, donc rien à builder — un « fallback » ne pourrait que builder une
+     image **sans rapport** et la faire passer pour celle demandée. Un `docker pull` en échec est
+     donc une **erreur DURE** qui NOMME le ref (et le profil qui l'a désigné), jamais un build
+     silencieux.
+   - **Pas de retag.** Le ref local **est** le ref demandé, tel quel : il n'y a pas de second nom
+     content-addressé sous lequel le poser. `sandbox_container` reçoit donc, selon la branche, soit
+     `<nom>:h-<hash>` soit le ref du profil — sa seule exigence (« on me donne un ref ») tient.
+   - **Fast-path conservé.** `image inspect` précède toujours le réseau : un ref déjà local (tiré
+     hier, ou buildé à la main sous ce nom) est réutilisé offline. C'est la seule propriété du
+     chemin hash-dérivé qui survit intacte.
+   - **PDO ne vérifie pas que l'image contient `claude`**, ni au write (ce serait un aller-retour
+     réseau dans un handler PUT) ni au prep. C'est la responsabilité de qui fournit le ref ; une
+     image sans `claude` échoue au premier `docker exec`, avec le stderr de docker.
+
+   Conséquence de vocabulaire, et source de confusion à traiter dans l'UI plutôt qu'à subir : le mot
+   `registry` désigne maintenant **deux choses différentes**. La source `registry` tire l'image
+   *prébuild de VOTRE Dockerfile* — d'où le fait, non documenté avant #467 et **correct**, que le
+   Dockerfile reste **obligatoire** dans ce mode : le tag EST le sha256 de ses octets, sans eux
+   l'image est innommable. Le `kind: registry` d'un profil, lui, est un ref arbitraire sans
+   Dockerfile.
+
+   **Amendement #471 — la source d'image n'est plus un réglage d'instance, c'est un défaut de
+   profil.** `image_source` et `dockerfile_path` sortent d'`instance_config`, de `GET /settings`, du
+   validateur de `PUT /settings` et de l'écran de réglages ; ce qu'ils valaient **par défaut** devient
+   la constante `sandbox_profile::DEFAULT_PROFILE_IMAGE` (registre hash-dérivé sur le Dockerfile
+   seedé), à côté de `DEFAULT_FULL_ENTRIES`. La précédence de ce point devient donc **profil (si
+   posé) → env → défaut de profil**. Rien de ce qui est écrit ci-dessus sur le tag, le hash, le pull,
+   le retag ou le fast-path ne change : c'est la **provenance du choix** qui change, pas la mécanique.
+   Deux points qui se plantent si on les bâcle :
+
+   - **Les deux variables d'env survivent** (`PDO_SANDBOX_IMAGE_SOURCE`, `PDO_SANDBOX_DOCKERFILE`),
+     repointées sur ce défaut. Une instance **headless** fraîche n'a que des profils virtuels et pas
+     d'UI : l'env est son seul moyen de changer d'image sans POSTer un profil. Ce qui disparaît est le
+     champ d'`instance_config` et l'écran, pas la variable.
+   - **`seed_dockerfile` continue d'écrire la copie de référence** à `<sandbox_root>/Dockerfile`. Ce
+     n'est pas un réglage, c'est la **matérialisation du défaut** : l'utilisateur l'édite pour changer
+     le hash, donc l'image.
+
+   Conséquence sur la confusion de vocabulaire ci-dessus : elle rétrécit sans disparaître. Les deux
+   sens de `registry` se choisissent maintenant dans le **même** `<select>`, celui de l'éditeur de
+   profil — ce qui rend la distinction énonçable en une phrase, là où elle demandait quatre lignes
+   renvoyant vers un autre écran.
 
 8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
    muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne
@@ -185,7 +255,9 @@ modèle d'*exécution*.
 5. **Le Dockerfile résolu devient un réglage.** Le point 7 supposait un Dockerfile unique, seedé à
    `~/.pdo/sandbox/Dockerfile`. Un réglage d'instance `dockerfile_path` (précédence
    `stored → env → défaut seedé`, ADR-0015) permet d'en pointer un autre — typiquement versionné
-   dans le repo, donc partagé par l'équipe. Le tag reste le hash du contenu du fichier **pointé** :
+   dans le repo, donc partagé par l'équipe. *(#471 : ce réglage d'instance est retiré ; la
+   précédence devient `profil → env → défaut seedé`, et tout ce qui suit dans ce point vaut à
+   l'identique pour le chemin résolu, quel que soit le tier qui l'a nommé.)* Le tag reste le hash du contenu du fichier **pointé** :
    l'édition déclenche toujours le rebuild. Conséquence opérationnelle : quand le Dockerfile résolu
    **n'est pas à l'emplacement seedé par défaut** (`<sandbox_root>/Dockerfile`), `ensure_image`
    **saute le pull GHCR** (un hash custom ne peut pas exister en amont) et build directement.

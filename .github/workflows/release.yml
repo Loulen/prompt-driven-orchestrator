@@ -116,7 +116,7 @@ jobs:
             install.sh
 
   image:
-    name: Sandbox image (GHCR)
+    name: Sandbox image ${{ matrix.variant }} (GHCR)
     runs-on: ubuntu-latest
     # Job ADDITIF : PAS de `needs:` — un hoquet registry ne doit jamais faire échouer/retarder
     # la release binaire. Tourne en parallèle, échoue indépendamment. La landmine rustls des
@@ -124,6 +124,34 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Une jambe par VARIANTE d'image sandbox (#466). Le couple (fichier, nom d'image) n'est PAS
+    # une donnée de la matrice : le nom est DÉRIVÉ du nom de fichier, miroir bash de
+    # sandbox_image.rs::image_name_for_dockerfile, avec self-check de parité (cf. step `meta`).
+    # `fail-fast: false` : la variante et la base sont indépendantes, l'une ne doit pas annuler
+    # l'autre — et ni l'une ni l'autre ne touche la release binaire.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: base
+            dockerfile: Dockerfile
+            # Multi-arch : la base n'a que des paquets apt disponibles sur les deux arches.
+            platforms: linux/amd64,linux/arm64
+          - variant: chrome-dev
+            dockerfile: Dockerfile.chrome-dev
+            # amd64 SEUL, par contrainte amont : Google ne publie pas de .deb Chrome linux/arm64
+            # (ni Chrome for Testing de build arm64), et puppeteer résout `channel: stable` vers
+            # le chemin EXACT du .deb. Le Dockerfile échoue tôt et explicitement ailleurs.
+            platforms: linux/amd64
+    # #464, deuxième couche : le build record `*.dockerbuild` que publie build-push-action a
+    # DÉJÀ cassé une release (le job `release` téléchargeait tous les artefacts du run et
+    # s'étranglait sur ce zip non conforme, run 30272375005). Le fix d'alors est le `pattern:
+    # pdo-*` du job `release` ; ici on coupe à la SOURCE — aucun artefact n'est publié, donc
+    # aucune jambe de matrice ne peut réintroduire la panne, ni collisionner avec une autre sur
+    # le nom d'artefact. Les deux couches sont volontairement redondantes.
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -131,23 +159,38 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          DF="crates/pdo-daemon/assets/sandbox/Dockerfile"
+          DF_NAME="${{ matrix.dockerfile }}"
+          DF="crates/pdo-daemon/assets/sandbox/${DF_NAME}"
           # Hash canonique — byte-identique à sandbox_image.rs::dockerfile_hash.
           # sha256sum imprime "<64hex>  <file>" ; cut -c1-12 = 12 premiers hex.
           HASH="$(sha256sum "$DF" | cut -c1-12)"
-          # Self-check parité (§2.9) : prouve que le sha256sum|cut de CE runner matche la
+          # Self-check parité ALGO (§2.9) : prouve que le sha256sum|cut de CE runner matche la
           # constante figée dans sandbox_image.rs (test dockerfile_tag_stable_and_edit_sensitive).
-          # Attrape une dérive bash/coreutils invisible au test Rust. ~1 ms, sans cargo.
+          # Attrape une dérive bash/coreutils invisible au test Rust. ~1 ms, sans cargo. L'entrée
+          # est SYNTHÉTIQUE : la constante épingle l'algorithme, pas les octets de la base — elle
+          # est donc la même dans toutes les jambes de matrice, et ne bouge pas avec les variantes.
           EXPECT="5804eefb8f92"
           GOT="$(printf 'FROM ubuntu:24.04\nRUN apt-get update\n' | sha256sum | cut -c1-12)"
           if [ "$GOT" != "$EXPECT" ]; then
             echo "::error::sandbox hash-algo drift: bash=$GOT rust-pinned=$EXPECT"; exit 1
           fi
+          # Nom d'image dérivé du SUFFIXE du nom de fichier — miroir bash de
+          # sandbox_image.rs::image_name_for_dockerfile ("Dockerfile" -> pdo-sandbox,
+          # "Dockerfile.chrome-dev" -> pdo-sandbox-chrome-dev), avec le MÊME self-check de parité
+          # que le hash : c'est le daemon qui décide sous quel nom il cherche l'image, la CI ne
+          # fait que publier là où il regardera.
+          derive_name() { local s="${1#Dockerfile}"; printf 'pdo-sandbox%s' "${s//./-}"; }
+          EXPECT_NAME="pdo-sandbox-chrome-dev"
+          GOT_NAME="$(derive_name Dockerfile.chrome-dev)"
+          if [ "$GOT_NAME" != "$EXPECT_NAME" ]; then
+            echo "::error::sandbox image-name drift: bash=$GOT_NAME rust-pinned=$EXPECT_NAME"; exit 1
+          fi
+          NAME="$(derive_name "$DF_NAME")"
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"   # GHCR exige un chemin lowercase (Loulen→loulen).
-          IMAGE="ghcr.io/${OWNER}/pdo-sandbox"
+          IMAGE="ghcr.io/${OWNER}/${NAME}"
           echo "hash=${HASH}"   >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "Publishing ${IMAGE}:h-${HASH} (+ :latest)"
+          echo "Publishing ${IMAGE}:h-${HASH} (+ :latest) from ${DF}"
 
       - uses: docker/login-action@v4
         with:
@@ -160,9 +203,12 @@ jobs:
 
       - uses: docker/build-push-action@v7
         with:
+          # Contexte = le répertoire des assets, comme avant. Il contient plusieurs Dockerfiles
+          # depuis #466 ; sans importance, aucun n'a de `COPY`/`ADD` (le daemon builde contre un
+          # contexte VIDE, cf. sandbox_image D8) — c'est un test unitaire, pas une convention orale.
           context: crates/pdo-daemon/assets/sandbox
-          file: crates/pdo-daemon/assets/sandbox/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          file: crates/pdo-daemon/assets/sandbox/${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
           push: true
           provenance: false
           # `--label` (annotation de manifest) lie le package au repo SANS toucher les octets
@@ -171,7 +217,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/Loulen/prompt-driven-orchestrator
           # `latest` est INFORMATIF : le daemon ne tire QUE `h-<hash>` (content-addressed). L'AC
           # coche « aux deux tags » ; un reviewer peut retirer `latest` (pointeur mutable que le
-          # content-hash évite, cf. CONTEXT.md « Éviter : latest »).
+          # content-hash évite, cf. CONTEXT.md « Éviter : latest »). Par variante : chaque nom
+          # d'image est un dépôt GHCR distinct, donc deux `latest` qui ne s'écrasent pas.
           tags: |
             ${{ steps.meta.outputs.image }}:h-${{ steps.meta.outputs.hash }}
             ${{ steps.meta.outputs.image }}:latest

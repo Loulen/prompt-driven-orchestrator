@@ -1142,8 +1142,26 @@ Les bind-mounts qui **répliquent l'identité de l'hôte** pour que le chemin de
 des deux côtés : repo cible monté rw à son **chemin absolu hôte** (couvre tous les worktrees de
 nœuds, sous `.pdo/runs/`), *staged Claude home* → `$HOME/.claude`, `.claude.json` sibling →
 `$HOME/.claude.json`, binaire `pdo` hôte monté ro dans le PATH, **uid/gid hôte** adoptés par le
-process (`--user`). C'est ce qui garantit le **même dirname encodé** que `merge_back`. _Éviter_ :
-« volumes » seul, « partage de fichiers ».
+process (`--user`). C'est ce qui garantit le **même dirname encodé** que `merge_back`. La liste
+reste à **quatre** — c'est la propriété : donner un *nom* à l'uid hôte n'en ajoute pas un cinquième,
+c'est l'**injection d'identité** (ci-dessous), qui n'est pas un mount. _Éviter_ : « volumes » seul,
+« partage de fichiers ».
+
+**Injection d'identité (`ensure_identity`)** :
+Le `docker exec --user 0:0` que `ensure_running` lance **juste après le `start`**, sur ses **trois**
+branches, pour donner à l'uid/gid hôte une **identité nommée** (`pdo`) dans le conteneur : il
+**ajoute** deux lignes aux `/etc/passwd` et `/etc/group` **réels de l'image**, derrière une garde
+`getent`. Le défaut qu'il ferme : le conteneur tourne en `--user` **numérique**, et `ubuntu:24.04` ne
+connaît de nom que pour l'uid 1000 — pour tout autre uid, `sudo` appelle `getpwuid()` avant
+d'appliquer NOPASSWD et abandonne (« you do not exist in the passwd database »), donc l'agent perd
+`apt install`, et `whoami` échoue. La garde **est** la conditionnalité, et elle est exacte : elle
+interroge l'image réelle au lieu de supposer laquelle c'est, donc en uid 1000 rien n'est écrit
+(fichiers byte-identiques) et le script est **idempotent**. Champ mot de passe `*` et non `x` (avec
+`x`, PAM cherche `/etc/shadow` et `sudo` rend « account validation failure »), **append** et jamais
+`replace` (`sudo` résout `root` par nom avant tout le reste), **best-effort** (`warn!`, jamais un Run
+cassé : la majorité des Runs n'invoquent pas `sudo`). _Éviter_ : « créer un utilisateur » (rien n'est
+créé, le conteneur tourne toujours en `--user` numérique), « identity mount » (ce n'est pas un
+mount), « nss_wrapper » (écarté, ADR-0030).
 
 **Préfixe `docker exec` (`exec_prefix`)** :
 La séquence d'arguments préposée à la tail d'un nœud pour la faire tourner **dans** le conteneur
@@ -1375,14 +1393,27 @@ concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeSta
   complète) + unit (spawn différé sans event, `off` jamais bloqué, rejeu de bout en bout sur
   `advance_run`, `409` du force-spawn, les deux bornes de la grâce sandbox) + FP-445 (L5, Docker réel,
   recette `full-heavy`).
+- **Réalisé (#414, ADR-0030 pt 1)** : un conteneur tourne en `--user <uid>:<gid>` **numérique**, et
+  `ubuntu:24.04` ne connaît de nom que pour l'uid 1000 — sur toute machine dont l'uid ≠ 1000, `sudo`
+  refusait de démarrer (« you do not exist in the passwd database ») et `whoami` échouait, donc
+  l'agent perdait `apt install`, la raison même pour laquelle l'image embarque `sudo` NOPASSWD.
+  L'issue prescrivait de générer `/etc/passwd`+`/etc/group` au `prepare`-time et de les bind-monter :
+  **mesuré, ce mécanisme casse `useradd`/`apt` en `:ro` comme en `:rw`** (`rename()` par-dessus un
+  mount de fichier), soit une régression sur le chemin uid 1000. La livraison est donc une
+  **injection d'identité** (voir le lexique) : un `docker exec --user 0:0` **après le `start`**, sur
+  les trois branches d'`ensure_running`, qui **ajoute** les lignes manquantes derrière une garde
+  `getent` — la liste des mounts ne bouge pas et l'argv du `create` reste byte-identique. La prémisse
+  `claude`/`ERR_SYSTEM_ERROR` de l'issue était **fausse** : le `claude` de l'image est un binaire
+  **Bun**, qui ignore la base passwd. Couvert par unit (`identity_script` golden + `*` vs `x` +
+  append-jamais-truncate + quoting hostile + `identity_exec_args` + les trois branches + best-effort)
+  + layer-3 (`sandbox_tracer` : l'exec suit le `start`, `off` n'exec rien) + FP-414 (L5, Docker réel).
 - **Non traité, à ficher** : le réveil parasite du watcher. La première **lecture** de
   `<run>/pipeline.yaml` produit un `pipeline_modified` mensonger (masque inotify `OPEN`, debouncer sans
   filtre d'`EventKind`, `content_actually_changed` sans baseline pour un Run neuf —`seed_run_mtimes` ne
   tourne qu'au boot ; `copy_pipeline_to_run` est en outre le seul écrivain de l'arbre qui n'appelle
   jamais `mark_self_write`). Indépendant de #445 : la précondition tient quel que soit qui avance le Run.
-- **Différé** : injection `/etc/passwd`+`/etc/group` pour uid hôte ≠ 1000 (sudo +
-  Node `os.userInfo()`) (issue de suivi) ; auto-flip de la visibilité publique du package GHCR
-  (non supporté par l'API → manuel one-time après la 1ʳᵉ release, #411).
+- **Différé** : auto-flip de la visibilité publique du package GHCR (non supporté par l'API → manuel
+  one-time après la 1ʳᵉ release, #411).
 
 ### Ambiguïté signalée
 « sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;

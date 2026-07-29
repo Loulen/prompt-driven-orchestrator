@@ -1698,3 +1698,124 @@ async fn off_run_manager_preamble_stays_on_localhost() {
         "the `off` path must not invoke docker at all"
     );
 }
+
+// -- Test 13: the host uid gets a named identity inside the container (#414) ---
+
+/// The `argv.log` window of the identity `docker exec` (#414). The `0:0` line is its
+/// UNIQUE witness: every other invocation of the fake docker either carries no `--user`
+/// at all or carries the host `<uid>:<gid>`, never root.
+fn identity_exec_argv(log: &Path) -> Option<Vec<String>> {
+    let content = log_text(log);
+    let lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let user_at = lines.iter().position(|l| l == "0:0")?;
+    let at = user_at.checked_sub(2)?; // `exec`, `--user`, `0:0`
+    Some(lines[at..(at + 7).min(lines.len())].to_vec())
+}
+
+/// #414: a container runs as `--user <uid>:<gid>` NUMERIC, and `ubuntu:24.04` only knows
+/// uid 1000. On any other host uid, `sudo` calls `getpwuid()` before applying NOPASSWD and
+/// gives up ("you do not exist in the passwd database") — the agent loses `apt install`,
+/// which is the entire reason the image ships `sudo`. So the prep runs one
+/// `docker exec --user 0:0` right after the `start` that APPENDS the missing lines to the
+/// image's REAL `/etc/passwd` and `/etc/group`, behind a `getent` guard.
+///
+/// The daemon here runs under the live host uid, so this asserts the SHAPE, never a uid
+/// value: the argv, the guard, the two appends, the `*` password field, and the home field
+/// — which must be the harness's `sandbox_home_override`, i.e. the very path the create
+/// posed as `-e HOME=`. `getent`, `~` and the environment naming three different
+/// directories is precisely the class of bug this pins.
+///
+/// Includes its own negative control (an `off` Run adds no such exec), stronger than
+/// re-reading `off_run_never_invokes_docker`: it proves the injection is gated by the mode
+/// on a daemon that HAS just performed one.
+#[tokio::test]
+async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker();
+    // A body that writes its declared output on the host, so the `off` half of this test
+    // (the negative control) completes for real instead of failing output validation.
+    let daemon = TestDaemon::spawn_with_docker_override(
+        seed(
+            "#!/usr/bin/env bash\nset -euo pipefail\n\
+             printf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n",
+        ),
+        docker,
+    )
+    .await
+    .unwrap();
+
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    assert!(
+        wait_until(|| identity_exec_argv(&log).is_some()).await,
+        "the prep must run the identity `docker exec`; log:\n{}",
+        log_text(&log)
+    );
+    let argv = identity_exec_argv(&log).unwrap();
+
+    // (a) The argv: root, this Run's container, `sh -c <script>`. No `-e` (a session
+    // marker here would make the first targeted kill take this exec down too), no tty.
+    assert_eq!(
+        &argv[..6],
+        &[
+            "exec".to_string(),
+            "--user".to_string(),
+            "0:0".to_string(),
+            format!("pdo-sbx-{run_id}"),
+            "sh".to_string(),
+            "-c".to_string(),
+        ][..],
+        "identity exec argv; log:\n{}",
+        log_text(&log)
+    );
+
+    // (b) The script: guarded, appending, `*` in the password field.
+    let script = &argv[6];
+    for needle in [
+        "getent passwd ",
+        "getent group ",
+        ">> /etc/passwd",
+        ">> /etc/group",
+        ":*:",
+    ] {
+        assert!(
+            script.contains(needle),
+            "the identity script must contain `{needle}`: {script}"
+        );
+    }
+    // The home field IS the `-e HOME=` of the create (the harness collocates
+    // host_home == repo_root via `sandbox_home_override`).
+    let home = daemon.repo_root().display().to_string();
+    assert!(
+        script.contains(&format!("PDO sandbox:{home}:/bin/bash")),
+        "the injected home must be the container's `$HOME` ({home}): {script}"
+    );
+
+    // (c) It runs AFTER the start — an exec into a container that is not up yet fails.
+    let content = log_text(&log);
+    let lines: Vec<&str> = content.lines().collect();
+    let start_at = lines
+        .iter()
+        .position(|l| *l == "start")
+        .expect("the prep must start the container");
+    let identity_at = lines
+        .iter()
+        .position(|l| *l == "0:0")
+        .expect("the identity exec must be logged");
+    assert!(
+        start_at < identity_at,
+        "the identity exec must follow `docker start`; log:\n{content}"
+    );
+
+    // (d) Negative control on the SAME daemon: an `off` Run adds no identity exec.
+    let identity_execs = |log: &Path| log_text(log).lines().filter(|l| *l == "0:0").count();
+    let before = identity_execs(&log);
+    let off_id = start_run(&daemon, None).await;
+    let off = wait_run_status(&daemon, &off_id, "completed").await;
+    assert_eq!(off["status"], "completed", "off run must complete: {off}");
+    assert_eq!(
+        identity_execs(&log),
+        before,
+        "an `off` Run must not identify anything — it never touches docker; log:\n{}",
+        log_text(&log)
+    );
+}

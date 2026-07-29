@@ -172,9 +172,9 @@ export interface SandboxProfile {
   reserved_env_keys: string[];
   /**
    * Where this profile's container image comes from (#467, ADR-0031 §9), or `null` when it poses
-   * nothing and the instance-wide `image_source` / `dockerfile_path` decide. Like `env` this is
-   * not a diff, and like `env` it is a FULL replacement on write — `null` is how you go back to
-   * the instance default.
+   * nothing and PDO's built-in default decides (#471: registry-pulled, hash-derived from the
+   * seeded Dockerfile). Like `env` it is a FULL replacement on write — `null` is how you go back
+   * to the default image.
    */
   image: SandboxProfileImage | null;
   updated_at: string | null;
@@ -210,19 +210,18 @@ export interface SandboxProfileReferents {
   runs: { run_id: string; pipeline_name: string | null; name: string | null }[];
 }
 
-/** The full `GET /settings` view (#129, ADR-0015; default_model #347; image_source #411). */
+/**
+ * The full `GET /settings` view (#129, ADR-0015; default_model #347).
+ *
+ * `default_sandbox` is the ONLY sandbox knob here since #471 — one axis per screen: this screen
+ * answers *which profile a Run takes by default*, and a staging profile answers *what the sandbox
+ * is* (its image, its home content, its env).
+ */
 export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
   default_model: StringSettingField;
-  /**
-   * Sandbox image source (#411): `"registry"` (pull from GHCR, default) or
-   * `"dockerfile"` (build locally). A closed enum with a built-in `registry`
-   * default, so every tier (`effective`/`default`) is a present string — it reuses
-   * {@link StringSettingField} (a superset) even though it is never null.
-   */
-  image_source: StringSettingField;
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -231,26 +230,6 @@ export interface InstanceSettings {
    * run → trigger → this, and 400s on a dangling name (never a silent fallback).
    */
   default_sandbox: EnumSettingFieldWithReason;
-  /**
-   * Path to the sandbox Dockerfile (#431): `stored → env PDO_SANDBOX_DOCKERFILE →
-   * the seeded `<sandbox_root>/Dockerfile``. Reuses {@link StringSettingField} as-is:
-   * unlike `default_model` the `default` tier is a real path, and unlike the closed
-   * enums both `effective` and `default` are nullable — resolving the default needs
-   * `$HOME` and can fail.
-   */
-  dockerfile_path: StringSettingField;
-  /**
-   * The image tag the RESOLVED Dockerfile yields (#431) — `pdo-sandbox:h-<hash>`,
-   * computed server-side by the same hash `ensure_image` uses, so "editing the
-   * Dockerfile changes the tag, hence a rebuild" is visible instead of tribal.
-   * Not a settings field (no tier), just an observed fact — mirror of
-   * {@link InstanceSettings.sandbox_docker}. `tag` is null when the file cannot be
-   * read, and `reason` says why; exactly one of the two is ever set.
-   */
-  sandbox_image: {
-    tag: string | null;
-    reason: string | null;
-  };
   /**
    * Advisory Docker availability probe (#410), folded into `GET /settings` so the
    * NewRunModal learns the default AND whether Docker can run a sandbox in one fetch.
@@ -291,17 +270,13 @@ export interface UpdateSettingsRequest {
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
   default_model?: string;
-  /** Sandbox image source (#411): `"registry"` | `"dockerfile"`. The `<select>` only
-   *  ever sends a concrete variant — the `""` clear sentinel is backend-only. */
-  image_source?: string;
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
-   *  `default_model`/`image_source`. The daemon 400s a name that does not resolve. */
+   *  `default_model`. The daemon 400s a name that does not resolve.
+   *
+   *  #471 removed `image_source` and `dockerfile_path` from this shape, and the daemon now
+   *  **400s naming the field** if either is sent — a stale client is told, not ignored. */
   default_sandbox?: string;
-  /** Sandbox Dockerfile path (#431): an absolute path to an existing regular file
-   *  (the daemon 400s otherwise), or `""` to clear back to env → the seeded default.
-   *  Same `""`-sentinel discipline as the knobs above. */
-  dockerfile_path?: string;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

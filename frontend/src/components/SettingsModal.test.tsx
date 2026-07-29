@@ -46,20 +46,9 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
-    // Image source (#411): built-in default `registry`, nothing stored/env.
-    image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
-    // Default sandbox (#410): built-in default `off`, nothing stored/env.
+    // Default sandbox (#410): built-in default `off`, nothing stored/env. The ONLY sandbox
+    // knob on this screen since #471 — image and Dockerfile belong to a staging profile.
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
-    // Dockerfile path (#431): nothing stored/env, so the seeded default wins.
-    dockerfile_path: {
-      effective: "/home/user/.pdo/sandbox/Dockerfile",
-      source: "default",
-      stored: null,
-      env: null,
-      default: "/home/user/.pdo/sandbox/Dockerfile",
-    },
-    // The tag that Dockerfile yields (#431).
-    sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
     // Advisory Docker probe (#410): available by default in the fixture.
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     // Staging profiles (#432): the two virtual defaults, no materialised row. NAMES ONLY —
@@ -361,66 +350,9 @@ describe("SettingsModal", () => {
     expect(note).toHaveTextContent(/overridden/i);
   });
 
-  it("seeds the image-source select from the effective value (#411)", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-    const select = (await screen.findByTestId("setting-image-source")) as HTMLSelectElement;
-    expect(select.value).toBe("registry");
-  });
 
-  it("saves the picked image source (#411)", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    updateSettingsMock.mockResolvedValue(
-      sample({
-        image_source: {
-          effective: "dockerfile",
-          source: "stored",
-          stored: "dockerfile",
-          env: null,
-          default: "registry",
-        },
-      }),
-    );
-    const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
 
-    const select = await screen.findByTestId("setting-image-source");
-    fireEvent.change(select, { target: { value: "dockerfile" } });
-    fireEvent.click(screen.getByTestId("settings-save"));
 
-    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    // Only the image source changed; the numeric knobs stay at their effective values.
-    expect(updateSettingsMock).toHaveBeenCalledWith({ image_source: "dockerfile" });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
-
-  it("does not send image_source when left unchanged (#411)", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
-    await screen.findByTestId("setting-image-source");
-    fireEvent.click(screen.getByTestId("settings-save"));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(updateSettingsMock).not.toHaveBeenCalled();
-  });
-
-  it("discloses a shadowed env source for the image source (#411)", async () => {
-    fetchSettingsMock.mockResolvedValue(
-      sample({
-        image_source: {
-          effective: "dockerfile",
-          source: "stored",
-          stored: "dockerfile",
-          env: "registry",
-          default: "registry",
-        },
-      }),
-    );
-    render(<SettingsModal open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-image-source");
-    expect(note).toHaveTextContent("PDO_SANDBOX_IMAGE_SOURCE=registry");
-    expect(note).toHaveTextContent(/overridden/i);
-  });
 
   it("seeds the default-sandbox select from the effective value (#410)", async () => {
     fetchSettingsMock.mockResolvedValue(
@@ -476,6 +408,34 @@ describe("SettingsModal", () => {
     expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * AC1 of #471: on the sandbox side of this screen there is exactly `Default sandbox` and the
+   * way to the profiles. Asserted as an inventory rather than as two `queryBy` absences, so a
+   * future slice that re-adds an instance-wide sandbox knob has to come and edit this list —
+   * which is the whole point of "one axis per screen".
+   */
+  it("keeps only Default sandbox and the profiles button on the sandbox side (#471)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
+    expect(screen.getByTestId("setting-manage-staging-profiles")).toBeInTheDocument();
+    for (const gone of [
+      "setting-image-source",
+      "setting-source-image-source",
+      "setting-image-source-dockerfile-still-required",
+      "setting-dockerfile-path",
+      "setting-dockerfile-path-browse",
+      "setting-dockerfile-resolved",
+      "setting-dockerfile-tag",
+      "setting-source-dockerfile-path",
+    ]) {
+      expect(screen.queryByTestId(gone)).not.toBeInTheDocument();
+    }
+    // And nothing on the screen still asks the user about a Dockerfile: the word only belongs
+    // in the profile editor now.
+    expect(screen.queryByText(/Sandbox Dockerfile/i)).not.toBeInTheDocument();
+  });
+
   it("discloses a shadowed env source for the default sandbox (#410)", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
@@ -493,191 +453,6 @@ describe("SettingsModal", () => {
     const note = await screen.findByTestId("setting-source-default-sandbox");
     expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=full");
     expect(note).toHaveTextContent(/overridden/i);
-  });
-});
-
-// #431 — the Dockerfile row: the setting, the picker, and the resolved path + tag it
-// exposes (the point of the slice: "editing the Dockerfile rebuilds the image" stops
-// being tribal knowledge).
-describe("SettingsModal — sandbox Dockerfile (#431)", () => {
-  beforeEach(() => {
-    fetchSettingsMock.mockReset();
-    updateSettingsMock.mockReset();
-    browseFsMock.mockReset();
-    browseFsMock.mockResolvedValue(BROWSE_HOME);
-    resetProfileMocks();
-  });
-
-  const stored = (path: string) =>
-    sample({
-      dockerfile_path: {
-        effective: path,
-        source: "stored",
-        stored: path,
-        env: null,
-        default: "/home/user/.pdo/sandbox/Dockerfile",
-      },
-      sandbox_image: { tag: "pdo-sandbox:h-deadbeef1234", reason: null },
-    });
-
-  it("seeds the input from STORED (empty on a fresh row) and placeholders the default", async () => {
-    // Deliberate deviation from the default_model idiom: seeding from `effective` would
-    // put the seeded path in the box and make "clear the field" ambiguous.
-    fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-    const input = (await screen.findByTestId("setting-dockerfile-path")) as HTMLInputElement;
-    expect(input.value).toBe("");
-    expect(input.placeholder).toBe("/home/user/.pdo/sandbox/Dockerfile");
-  });
-
-  it("seeds the input from a stored value", async () => {
-    fetchSettingsMock.mockResolvedValue(stored("/repo/docker/sbx.Dockerfile"));
-    render(<SettingsModal open onClose={() => {}} />);
-    const input = (await screen.findByTestId("setting-dockerfile-path")) as HTMLInputElement;
-    expect(input.value).toBe("/repo/docker/sbx.Dockerfile");
-  });
-
-  it("shows the resolved path AND the tag it yields", async () => {
-    fetchSettingsMock.mockResolvedValue(stored("/repo/docker/sbx.Dockerfile"));
-    render(<SettingsModal open onClose={() => {}} />);
-    expect(await screen.findByTestId("setting-dockerfile-resolved")).toHaveTextContent(
-      "Resolved: /repo/docker/sbx.Dockerfile",
-    );
-    expect(screen.getByTestId("setting-dockerfile-tag")).toHaveTextContent(
-      "Image tag: pdo-sandbox:h-deadbeef1234",
-    );
-  });
-
-  it("shows the reason instead of a tag when the file cannot be read", async () => {
-    fetchSettingsMock.mockResolvedValue(
-      sample({
-        sandbox_image: { tag: null, reason: "cannot read /gone/Dockerfile: No such file" },
-      }),
-    );
-    render(<SettingsModal open onClose={() => {}} />);
-    const tag = await screen.findByTestId("setting-dockerfile-tag");
-    expect(tag).toHaveTextContent("unavailable");
-    expect(tag).toHaveTextContent("cannot read /gone/Dockerfile");
-  });
-
-  it("discloses the built-in default tier, naming the seeded path", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-dockerfile-path");
-    expect(note).toHaveTextContent(/built-in default/i);
-    expect(note).toHaveTextContent("/home/user/.pdo/sandbox/Dockerfile");
-  });
-
-  it("discloses a shadowed env var", async () => {
-    fetchSettingsMock.mockResolvedValue(
-      sample({
-        dockerfile_path: {
-          effective: "/repo/a.Dockerfile",
-          source: "stored",
-          stored: "/repo/a.Dockerfile",
-          env: "/env/b.Dockerfile",
-          default: "/home/user/.pdo/sandbox/Dockerfile",
-        },
-      }),
-    );
-    render(<SettingsModal open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-dockerfile-path");
-    expect(note).toHaveTextContent("PDO_SANDBOX_DOCKERFILE=/env/b.Dockerfile");
-    expect(note).toHaveTextContent(/overridden/i);
-  });
-
-  it("opens the picker in FILE mode with dotfiles shown", async () => {
-    // `showHidden` is not negotiable: the default lives at ~/.pdo/sandbox/Dockerfile.
-    fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-    fireEvent.click(await screen.findByTestId("setting-dockerfile-path-browse"));
-
-    expect(await screen.findByTestId("fs-browse-modal")).toBeInTheDocument();
-    expect(screen.getByText("Choose a Dockerfile")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(browseFsMock).toHaveBeenCalledWith("/home/user/.pdo/sandbox", {
-        files: true,
-        hidden: true,
-      }),
-    );
-  });
-
-  it("lands a picked file in the field", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-    fireEvent.click(await screen.findByTestId("setting-dockerfile-path-browse"));
-
-    const rows = await screen.findAllByTestId("fs-browse-entry");
-    fireEvent.click(rows[1]); // sbx.Dockerfile (a file → selects)
-    await waitFor(() => expect(screen.getByTestId("fs-browse-select")).toBeEnabled());
-    fireEvent.click(screen.getByTestId("fs-browse-select"));
-
-    const input = screen.getByTestId("setting-dockerfile-path") as HTMLInputElement;
-    expect(input.value).toBe("/home/user/sbx.Dockerfile");
-    // The explorer closed; the settings modal did not.
-    await waitFor(() =>
-      expect(screen.queryByTestId("fs-browse-modal")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
-  });
-
-  it("sends dockerfile_path on save", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    updateSettingsMock.mockResolvedValue(stored("/repo/docker/sbx.Dockerfile"));
-    const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
-
-    const input = await screen.findByTestId("setting-dockerfile-path");
-    fireEvent.change(input, { target: { value: "/repo/docker/sbx.Dockerfile" } });
-    fireEvent.click(screen.getByTestId("settings-save"));
-
-    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({
-      dockerfile_path: "/repo/docker/sbx.Dockerfile",
-    });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
-
-  it("clears via the '' sentinel when the field is emptied", async () => {
-    fetchSettingsMock.mockResolvedValue(stored("/repo/docker/sbx.Dockerfile"));
-    updateSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
-
-    const input = await screen.findByTestId("setting-dockerfile-path");
-    fireEvent.change(input, { target: { value: "" } });
-    fireEvent.click(screen.getByTestId("settings-save"));
-
-    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ dockerfile_path: "" });
-  });
-
-  it("does not send dockerfile_path when left unchanged", async () => {
-    fetchSettingsMock.mockResolvedValue(stored("/repo/docker/sbx.Dockerfile"));
-    const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
-    await screen.findByTestId("setting-dockerfile-path");
-    fireEvent.click(screen.getByTestId("settings-save"));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(updateSettingsMock).not.toHaveBeenCalled();
-  });
-
-  it("surfaces the daemon's 400 for a bad path in the error banner", async () => {
-    fetchSettingsMock.mockResolvedValue(sample());
-    updateSettingsMock.mockRejectedValue(
-      new Error("dockerfile_path must point to an existing regular file"),
-    );
-    const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
-
-    fireEvent.change(await screen.findByTestId("setting-dockerfile-path"), {
-      target: { value: "/gone/Dockerfile" },
-    });
-    fireEvent.click(screen.getByTestId("settings-save"));
-
-    expect(await screen.findByTestId("settings-error")).toHaveTextContent(
-      "must point to an existing regular file",
-    );
-    expect(onClose).not.toHaveBeenCalled();
   });
 });
 
@@ -1157,9 +932,9 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     );
   });
 
-  /** `image: null` is a real value, not an omission: it is the ONLY way back to the
-   *  instance-wide setting, since every PUT is a full replacement. */
-  it("clears the image source back to the instance default", async () => {
+  /** `image: null` is a real value, not an omission: it is the ONLY way back to PDO's own
+   *  default image, since every PUT is a full replacement (#471). */
+  it("clears the image source back to PDO's default image", async () => {
     fetchSandboxProfilesMock.mockResolvedValue({
       profiles: [
         profileFixture("full", {
@@ -1178,7 +953,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
       "ghcr.io/acme/agent:1.4",
     );
 
-    fireEvent.change(kind, { target: { value: "instance" } });
+    fireEvent.change(kind, { target: { value: "default" } });
     await waitFor(() =>
       expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
         disabled: [],
@@ -1187,7 +962,13 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
         image: null,
       }),
     );
-    expect(screen.getByTestId("staging-image-none")).toHaveTextContent(/instance-wide/i);
+    // #471: the copy that used to explain the instance-wide setting is gone with it. What is
+    // left is the ONE sentence that makes the default comprehensible — the tag is the hash of
+    // the seeded Dockerfile's bytes — said where the choice is made.
+    const none = screen.getByTestId("staging-image-none");
+    expect(none).toHaveTextContent(/SHA-256/i);
+    expect(none).toHaveTextContent("~/.pdo/sandbox/Dockerfile");
+    expect(none).not.toHaveTextContent(/instance/i);
   });
 
   /** The one thing an explicit ref LOSES, said where it is chosen. Without it the first
@@ -1205,17 +986,17 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
   });
 
   /**
-   * AC5: the answer to "I picked registry, why is the Dockerfile field still there?".
-   * The tag pulled from GHCR IS the SHA-256 of that file's bytes, so without the file the
-   * image has no name — the field is not a leftover.
+   * #471 AC5's UI half, stated as the absence it is: the four-line disclosure explaining how
+   * the instance-wide `image_source` related to the Dockerfile field is gone, because both
+   * fields are gone. A `queryBy*` because the point is that it renders nothing.
    */
-  it("explains why the instance-wide registry mode still needs the Dockerfile", async () => {
+  it("no longer explains an instance-wide image source, because there is none", async () => {
     render(<SettingsModal open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-image-source-dockerfile-still-required");
-    expect(note).toHaveTextContent(/SHA-256/i);
-    expect(note).toHaveTextContent(/Sandbox Dockerfile/i);
-    // …and where to go instead when the image is genuinely arbitrary.
-    expect(note).toHaveTextContent(/staging profile/i);
+    // Wait for the form, so the assertion is about the rendered screen rather than a race.
+    await screen.findByTestId("setting-default-sandbox");
+    expect(
+      screen.queryByTestId("setting-image-source-dockerfile-still-required"),
+    ).not.toBeInTheDocument();
   });
 
   it("marks a sensitive extra without refusing it (ADR-0031 §3)", async () => {

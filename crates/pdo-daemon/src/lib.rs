@@ -1549,6 +1549,11 @@ pub async fn serve_with_config(
 
     init_db(&db).await?;
 
+    // #471: say ONCE, here, that a stored `image_source` / `dockerfile_path` is now inert. After
+    // the schema is up (the reader PRAGMA-probes the columns) and before anything can consume a
+    // setting — this is the only moment where "one line per boot" is a fact rather than a hope.
+    warn_about_retired_sandbox_settings(&db).await;
+
     // #231: one-shot migration of prompts stranded in the flat
     // `<repo>/.pdo/pipelines/prompts/` dir by the old run-scoped sync into each
     // pipeline's canonical `<stem>.prompts/` dir. Runs before the file watcher
@@ -1941,7 +1946,7 @@ enum EntryKind {
 /// The set of **discarded** entries is unchanged by #431; the flag only ADDS regular
 /// files. Special files (fifo / socket / device) are neither a dir nor a regular file →
 /// `Skip` in both modes, because nothing downstream can consume one: every consumer of
-/// a picked path resolves it (`/repos/validate`, this issue's `dockerfile_path`
+/// a picked path resolves it (`/repos/validate`, this issue's Dockerfile-path
 /// resolver), so the row would be unpickable by construction — and a fifo handed to
 /// `ensure_image` is a read that blocks forever. Surfacing a dangling link as
 /// `is_dir: false` would be a lie by omission too (it is not a file either).
@@ -2204,8 +2209,8 @@ fn default_overlap_policy() -> String {
 ///
 /// A **write-time** gate, deliberately not the authoritative one (the create-run
 /// chokepoint is, and it re-resolves at every fire). It exists so the error lands where
-/// the user can fix it, at the moment they typed it — same posture as #431's
-/// `dockerfile_path` `is_file()` check. The `env` tier (`PDO_DEFAULT_SANDBOX`) never
+/// the user can fix it, at the moment they typed it — same posture as the `is_file()` check
+/// on a profile's Dockerfile. The `env` tier (`PDO_DEFAULT_SANDBOX`) never
 /// passes through here at all, which is why `build_settings_view` also discloses a
 /// `reason` on `default_sandbox`.
 async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), String> {
@@ -6042,8 +6047,8 @@ async fn create_run_inner(
     // run-level choice (JSON/multipart) OR the trigger's mode (folded in at fire time,
     // Slice C — a Run has a single origin), so the trigger arm stays `None` in
     // production; the 3-arg resolver is still the canonical precedence chain, exercised
-    // by the layer-1 test. `default_sandbox` is read FRESH from the DB at the edge
-    // (mirror `image_source`, `sandbox_run.rs`), so a `PUT /settings` bites on the very
+    // by the layer-1 test. `default_sandbox` is read FRESH from the DB at the edge, so a
+    // `PUT /settings` bites on the very
     // next create with no restart. Absent everywhere → `Off` → the payload and events
     // stay byte-identical to the legacy host path.
     let stored_default = instance_config::get(&state.db)
@@ -6174,9 +6179,9 @@ async fn create_run_inner(
         // #467: `sandbox_image` is a fourth sibling key, written ONLY when the profile poses an
         // image source — same asymmetry as `sandbox_env`, same reason. An absent key means "the
         // profile posed none", which is indistinguishable from "a pre-#467 daemon wrote this
-        // payload" precisely because both resolve the same way: the instance-wide `image_source` /
-        // `dockerfile_path`, read fresh at each prep (ADR-0015, unchanged by this issue). Writing
-        // `null` on every sandboxed Run would grow every existing payload for no information.
+        // payload" precisely because both resolve the same way: the profile default of #471
+        // (`sandbox_profile::DEFAULT_PROFILE_IMAGE`, plus the two env vars). Writing `null` on
+        // every sandboxed Run would grow every existing payload for no information.
         if let Some(image) = &sandbox_image_src {
             run_payload["sandbox_image"] = serde_json::json!(image);
         }
@@ -6628,46 +6633,6 @@ fn settings_field_str(
     })
 }
 
-/// String sibling of [`settings_field`] for an *enum* knob with a built-in NON-null
-/// default (#411 `image_source`). Same `{effective, source, stored, env, default}`
-/// shape as [`settings_field_str`], but `effective`/`default` are always present
-/// strings (there is a meaningful built-in default, unlike `default_model`).
-fn settings_field_enum(
-    effective: &str,
-    source: &str,
-    stored: Option<&str>,
-    env: Option<&str>,
-    default: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "effective": effective,
-        "source": source,
-        "stored": stored,
-        "env": env,
-        "default": default,
-    })
-}
-
-/// String sibling of [`settings_field`] for a knob whose default is a
-/// machine-specific PATH (#431 `dockerfile_path`): unlike [`settings_field_str`] the
-/// `default` tier is a real value, and unlike [`settings_field_enum`] both `effective`
-/// and `default` are nullable — resolving the default needs `$HOME` and can fail.
-fn settings_field_path(
-    effective: Option<&str>,
-    source: &str,
-    stored: Option<&str>,
-    env: Option<&str>,
-    default: Option<&str>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "effective": effective,
-        "source": source,
-        "stored": stored,
-        "env": env,
-        "default": default,
-    })
-}
-
 /// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
 /// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
 /// round-trip, short enough that a user who starts Docker mid-session sees `full`/
@@ -6781,25 +6746,12 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- sandbox image source (enum ; built-in default `registry`) (#411) ---
-    // The empty-string filter mirrors the resolver: a stored `""` is treated as
-    // unset. `effective` is computed by the SAME resolver ensure_image consumes, so
-    // the disclosed value can never drift from what the daemon actually uses (#373).
-    let img_stored = cfg.image_source.as_deref().filter(|s| !s.is_empty());
-    let img_env = sandbox_image::env_image_source();
-    let img_effective = sandbox_image::image_source_with(cfg.image_source.clone());
-    let img_source = if img_stored.is_some() {
-        "stored"
-    } else if img_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
     // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
-    // Same discipline as `image_source`: the empty-string filter treats a stored `""`
-    // as unset, and `effective` is computed by the SAME resolver the create-run
-    // chokepoint consumes, so the disclosed value can never drift (#373).
+    // The empty-string filter treats a stored `""` as unset, and `effective` is computed by
+    // the SAME resolver the create-run chokepoint consumes, so the disclosed value can never
+    // drift (#373). Since #471 this is the ONLY sandbox knob on this screen: what a sandboxed
+    // Run *is* — its image, its home content, its env — belongs to the staging profile, one
+    // axis per screen.
     let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
     let sbx_env = event_log::DEFAULT_SANDBOX_ENV;
     let sbx_env_val = std::env::var(sbx_env)
@@ -6829,63 +6781,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
                  default will fail at launch (tier: {sbx_source})"
             )),
             Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
-        },
-    };
-
-    // --- resolved sandbox Dockerfile (path ; default = <sandbox_root>/Dockerfile) (#431) ---
-    // `sandbox_home_roots` honours `sandbox_home_override` (the layer-3 seam, #181), so
-    // this view discloses the SAME path the prep will consume. A missing `$HOME` is
-    // pathological: degrade to null tiers + a `reason`, never 500 the settings page.
-    // `effective` comes from the SAME resolver `ensure_image` consumes (#373).
-    let dfp_stored = cfg.dockerfile_path.as_deref().filter(|s| !s.is_empty());
-    let dfp_env = sandbox_image::env_dockerfile_path();
-    let dfp_resolved = sandbox_run::sandbox_home_roots(state)
-        .ok()
-        .map(|(_, sandbox_root)| {
-            (
-                // `profile: None` (#467): this page discloses the INSTANCE tiers. A profile's own
-                // choice is shown by the profile editor, and cannot be shown here anyway — it is
-                // per-profile, and this view has no profile in scope.
-                sandbox_image::dockerfile_with(None, cfg.dockerfile_path.clone(), &sandbox_root),
-                sandbox_image::default_dockerfile_path(&sandbox_root),
-            )
-        });
-    let dfp_effective = dfp_resolved
-        .as_ref()
-        .map(|(r, _)| r.path.to_string_lossy().into_owned());
-    let dfp_default = dfp_resolved
-        .as_ref()
-        .map(|(_, d)| d.to_string_lossy().into_owned());
-    // The winning tier comes from the resolver itself when it ran; with no `$HOME` the
-    // stored/env tiers still decide, and only the default tier is unknowable.
-    let dfp_source = match dfp_resolved.as_ref() {
-        Some((r, _)) => r.source.as_str(),
-        None if dfp_stored.is_some() => "stored",
-        None if dfp_env.is_some() => "env",
-        None => "default",
-    };
-
-    // --- the image tag that Dockerfile yields (#431) ---
-    // Mirror of `sandbox_docker`'s shape: no stored/env/default tier, just an observed
-    // fact. Computed by the SAME `dockerfile_hash`/`local_image_ref` as `ensure_image`
-    // (single source of truth, lesson #373) so "editing the Dockerfile changes the tag,
-    // hence a rebuild" stops being tribal knowledge. Best-effort read: an absent or
-    // unreadable file yields `tag: null` + a `reason`, never a 500. A ~3 KB read + a
-    // SHA-256 is far below what `list_pipelines` or `get_run` already do, and there is no
-    // `docker_probe_cached`-style TTL because a local read cannot hang for 3 s.
-    let (sandbox_image_tag, sandbox_image_reason) = match dfp_resolved.as_ref() {
-        None => (
-            None,
-            Some("HOME is not set; cannot resolve the sandbox Dockerfile".to_string()),
-        ),
-        Some((r, _)) => match std::fs::read(&r.path) {
-            // Le NOM vient du fichier résolu comme le hash vient de ses octets (#466) : pointer
-            // `Dockerfile.chrome-dev` affiche `pdo-sandbox-chrome-dev:h-…`, pas la base.
-            Ok(bytes) => (
-                Some(sandbox_image::local_image_ref(&r.image_name, &bytes)),
-                None,
-            ),
-            Err(e) => (None, Some(format!("cannot read {}: {e}", r.path.display()))),
         },
     };
 
@@ -6922,13 +6817,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
-        "image_source": settings_field_enum(
-            img_effective.as_str(),
-            img_source,
-            img_stored,
-            img_env.as_deref(),
-            sandbox_image::ImageSource::DEFAULT.as_str(),
-        ),
         "default_sandbox": {
             "effective": sbx_effective.as_str(),
             "source": sbx_source,
@@ -6943,17 +6831,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         // #432: names only (see the note above), and the host `$HOME` as an observed fact.
         "sandbox_profiles": sandbox_profiles,
         "home": host_home,
-        "dockerfile_path": settings_field_path(
-            dfp_effective.as_deref(),
-            dfp_source,
-            dfp_stored,
-            dfp_env.as_deref(),
-            dfp_default.as_deref(),
-        ),
-        "sandbox_image": {
-            "tag": sandbox_image_tag,
-            "reason": sandbox_image_reason,
-        },
         "sandbox_docker": {
             "available": docker_probe.available,
             "reason": docker_probe.reason,
@@ -6977,15 +6854,97 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+/// The ONE boot line #471 owes a user whose database still holds `image_source` or
+/// `dockerfile_path`: those values are now **inert**, and a value that stops mattering must never
+/// do so in silence (same principle as #470).
+///
+/// Pure so it can be pinned by a test rather than by squinting at a terminal, and it returns
+/// `Option` rather than logging so "nothing stored ⇒ nothing said" is a property of the value, not
+/// of a branch at the call site. ONE line for both columns: two lines for one obsolete decision
+/// would read like two problems.
+///
+/// `profile_hint` is the profile a Run currently falls back to, when the instance default names
+/// one — the concrete thing to go and edit. `None` (`off`, or an unreadable config) degrades to
+/// naming the screen instead of a profile, which is still actionable.
+fn retired_sandbox_settings_warning(
+    stored: &[(&'static str, String)],
+    profile_hint: Option<&str>,
+) -> Option<String> {
+    if stored.is_empty() {
+        return None;
+    }
+    let values = stored
+        .iter()
+        .map(|(field, value)| format!("`{field}` = `{value}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let where_to_go = match profile_hint {
+        Some(name) => format!("the staging profile `{name}`, which is this instance's default"),
+        None => "the staging profile your Runs launch with".to_string(),
+    };
+    let env_vars = instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS
+        .iter()
+        .map(|(_, env)| format!("`{env}`"))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    Some(format!(
+        "instance_config still stores {values}, and #471 made those values IGNORED — a staging \
+         profile's own image source decides now. Set the image on {where_to_go} (Settings → \
+         Manage staging profiles…), or set {env_vars} in the daemon's environment to move the \
+         built-in default. No Run is affected either way."
+    ))
+}
+
+/// Say the above ONCE per boot, right after the schema is up. Best-effort by construction: a DB
+/// read failure here must not stop a daemon from starting over a message about a setting that is
+/// already inert.
+async fn warn_about_retired_sandbox_settings(db: &sqlx::SqlitePool) {
+    let stored = match instance_config::retired_sandbox_image_values(db).await {
+        Ok(stored) => stored,
+        Err(e) => {
+            warn!("#471: cannot check for retired sandbox image settings: {e}");
+            return;
+        }
+    };
+    let hint = instance_config::get(db).await.ok().and_then(|cfg| {
+        event_log::default_sandbox_with(cfg.default_sandbox)
+            .profile()
+            .map(String::from)
+    });
+    if let Some(msg) = retired_sandbox_settings_warning(&stored, hint.as_deref()) {
+        warn!("{msg}");
+    }
+}
+
+/// The message a `PUT /settings` gets for a field #471 removed. Pure, so the exact wording is
+/// pinned by a unit test rather than by whoever reads the 400 in a browser first.
+///
+/// It has to answer the only question the caller now has — *where did it go?* — which is why it
+/// names the profile editor AND the surviving env var. A bare "unknown field" would be technically
+/// true and useless.
+fn retired_setting_message(field: &str, env_var: &str) -> String {
+    format!(
+        "`{field}` is no longer an instance-wide setting: a staging profile's own image source \
+         replaced it (#471). Set the image on the profile itself (Settings → Manage staging \
+         profiles…), or set `{env_var}` in the daemon's environment to move the built-in default."
+    )
+}
+
 /// `PUT /settings` — persist the stored tier of one or more knobs, then return
 /// the recomputed [`build_settings_view`] so the UI shows the new
 /// effective/source without a second round-trip (#129, ADR-0015, D6). Validation
 /// is fail-fast (D7): a cap `< 1`, a TTL `< 1`, or a guard timeout outside
 /// `[1, 600]` s is rejected `400` before anything is persisted — no silent
 /// default like the env parser.
+///
+/// The body is taken as raw JSON rather than straight into
+/// [`instance_config::UpdateInstanceConfig`] for ONE reason (#471): a field this endpoint has
+/// *retired* must 400 **naming itself**, not be silently ignored by serde and answered 200 as
+/// though it had been applied. Letting the extractor deserialise would also turn every type error
+/// into axum's opaque 422; going through `from_value` here makes both a 400 with a message.
 async fn put_settings(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<instance_config::UpdateInstanceConfig>,
+    Json(body): Json<serde_json::Value>,
 ) -> Response {
     let bad = |msg: &str| -> Response {
         (
@@ -6993,6 +6952,17 @@ async fn put_settings(
             Json(serde_json::json!({ "error": msg })),
         )
             .into_response()
+    };
+    // #471: the two retired sandbox-image knobs. Checked BEFORE parsing, so the answer is about
+    // the field the caller sent rather than about the shape of the struct that no longer has it.
+    for (field, env_var) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
+        if body.get(field).is_some() {
+            return bad(&retired_setting_message(field, env_var));
+        }
+    }
+    let req: instance_config::UpdateInstanceConfig = match serde_json::from_value(body) {
+        Ok(req) => req,
+        Err(e) => return bad(&format!("invalid settings payload: {e}")),
     };
     if let Some(c) = req.session_cap {
         if c < 1 {
@@ -7009,43 +6979,12 @@ async fn put_settings(
             return bad("guard_timeout_secs must be between 1 and 600 seconds");
         }
     }
-    if let Some(s) = req.image_source.as_deref() {
-        // "" = clear sentinel (accepted, normalised to NULL by `update`); any other
-        // non-variant → 400 (fail-fast, no silent default) (#411).
-        if !s.is_empty() && sandbox_image::ImageSource::parse(s).is_none() {
-            return bad("image_source must be `registry` or `dockerfile`");
-        }
-    }
     if let Some(s) = req.default_sandbox.as_deref() {
         // "" = clear sentinel (accepted, normalised to NULL by `update`); anything else
         // must be `off` or a staging profile that RESOLVES → 400 otherwise (fail-fast,
         // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
         if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
             return bad(&msg);
-        }
-    }
-    if let Some(p) = req.dockerfile_path.as_deref() {
-        // "" = clear sentinel (accepted, normalised to NULL by `update`). Otherwise:
-        // an absolute path AND an existing regular file. `is_file()` and NOT `exists()`
-        // (which is TRUE for a directory).
-        //
-        // This is the FIRST put_settings validator that touches the filesystem (the
-        // others are pure: a numeric bound, an enum parse). One `stat(2)`, and
-        // `fs_browse` already does blocking IO in an async handler — precedent enough.
-        //
-        // Necessary but NOT sufficient, so it is a UX gate at the moment of the error
-        // (with the picker to hand), never the authoritative one: the **env** tier never
-        // passes through here at all, the file can be removed / renamed / its volume
-        // unmounted between save and run, and the DB can be carried to another machine.
-        // The authoritative gate is `ensure_image`'s `is_file()` bail at prep.
-        if !p.is_empty() {
-            let path = std::path::Path::new(p);
-            if !path.is_absolute() {
-                return bad("dockerfile_path must be an absolute path");
-            }
-            if !path.is_file() {
-                return bad("dockerfile_path must point to an existing regular file");
-            }
         }
     }
 
@@ -7172,8 +7111,8 @@ fn sandbox_profile_view(
         // the day a fourth run-constant appears.
         "reserved_env_keys": sandbox_container::RUN_CONSTANT_ENV_KEYS,
         // #467: where this profile's container image comes from, or `null` when it poses nothing
-        // and the instance-wide `image_source` / `dockerfile_path` decide. `null` and absent are
-        // the same answer here, and the editor renders both as "instance default".
+        // and the profile default decides (#471). `null` and absent are the same answer here, and
+        // the editor renders both as "default".
         "image": profile.image,
         "updated_at": profile.updated_at,
     })
@@ -7253,9 +7192,9 @@ struct UpsertSandboxProfileRequest {
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
     /// Where this profile's image comes from (#467, ADR-0031 §9), or absent/`null` to pose
-    /// nothing and let the instance-wide `image_source` / `dockerfile_path` decide. A FULL
-    /// replacement like every other field: omitting it CLEARS the profile's image source, which
-    /// is what makes "go back to the instance default" expressible at all.
+    /// nothing and let the profile default decide (#471). A FULL replacement like every other
+    /// field: omitting it CLEARS the profile's image source, which is what makes "go back to the
+    /// default image" expressible at all.
     ///
     /// Typed rather than a `serde_json::Value`: an unknown `kind` is then rejected by serde
     /// itself, with a message that names the offending token and the two it expects, before this
@@ -7275,7 +7214,7 @@ struct UpsertSandboxProfileRequest {
 /// - each `extras` path through [`sandbox_profile::validate_entry`] — absolute, `..`,
 ///   backslash, NUL, glob, `.claude` bare, `.pdo`, and the three floor-owned paths are
 ///   rejected — and it must **exist under `$HOME` right now**, an early UX gate in the
-///   same spirit as #431's `dockerfile_path` (necessary, never sufficient: `prepare`
+///   same spirit as the Dockerfile-path gate below (necessary, never sufficient: `prepare`
 ///   warns-and-skips, and mount rule M1 handles a path that vanishes later);
 /// - each `disabled` name by **membership in the built-in default**, which is also what
 ///   makes the default's `.claude/*.md` glob unauthorable by hand;
@@ -7290,9 +7229,8 @@ struct UpsertSandboxProfileRequest {
 ///   container where it is not — and a `HOME` that DID land would break the `.claude` and
 ///   `.claude.json` mounts at once.
 /// - the `image` source (#467) — an absolute path for `kind: dockerfile`, **which must exist**
-///   (the same early gate `put_settings` applies to the instance-wide `dockerfile_path`), and a
-///   pullable-looking ref for `kind: registry`, which is deliberately NOT probed: see the
-///   comment at the check.
+///   (an early UX gate, not the authoritative one), and a pullable-looking ref for
+///   `kind: registry`, which is deliberately NOT probed: see the comment at the check.
 async fn put_sandbox_profile(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -7391,10 +7329,10 @@ async fn put_sandbox_profile(
     }
 
     // Image source (#467): the grammar first (pure, in `sandbox_profile`), then — for a
-    // Dockerfile — the SAME early existence gate `put_settings` applies to the instance-wide
-    // `dockerfile_path`. Necessary, never sufficient: the authoritative check is `ensure_image`'s
-    // `is_file()` bail at prep time (the file can vanish, or sit on a volume that is not mounted
-    // yet). Catching it here turns "the Run died three minutes in" into "the form said no".
+    // Dockerfile — an early existence gate. Necessary, never sufficient: the authoritative check
+    // is `ensure_image`'s `is_file()` bail at prep time (the file can vanish, or sit on a volume
+    // that is not mounted yet). Catching it here turns "the Run died three minutes in" into "the
+    // form said no".
     //
     // A registry ref gets NO such gate, and that asymmetry is the point of the field: PDO cannot
     // check that a ref resolves without a network round-trip inside a PUT handler, and cannot
@@ -24607,26 +24545,19 @@ edges:
         // env-mutating unit test could transiently shadow it, so we assert the
         // effective/source pairing only in the stored-wins tests below.
 
-        // image_source (#411): enum knob with a built-in default `registry`. On a
-        // fresh row (and no PDO_SANDBOX_IMAGE_SOURCE — no test ever sets it) the
-        // stored tier is null and the resolver falls through to the built-in default.
-        let img = &view["image_source"];
-        assert!(
-            img["stored"].is_null(),
-            "image_source.stored must be null on a fresh row: {img}"
-        );
-        assert_eq!(
-            img["default"], "registry",
-            "built-in default is registry: {img}"
-        );
-        assert_eq!(
-            img["effective"], "registry",
-            "effective falls to default: {img}"
-        );
-        assert_eq!(
-            img["source"], "default",
-            "source is the built-in default: {img}"
-        );
+        // #471 AC1: the two sandbox-image knobs are GONE from the payload, along with the
+        // `sandbox_image` tag disclosure that only existed to explain the Dockerfile field.
+        // Asserted here, on the shape test, so a re-add cannot slip in as an extra key.
+        for gone in ["image_source", "dockerfile_path", "sandbox_image"] {
+            assert!(
+                view.get(gone).is_none(),
+                "#471 removed `{gone}` from GET /settings: {view}"
+            );
+        }
+        // What is left on the sandbox side: the profile knob, the profile list, the probe.
+        for kept in ["default_sandbox", "sandbox_profiles", "sandbox_docker"] {
+            assert!(view.get(kept).is_some(), "`{kept}` must stay: {view}");
+        }
     }
 
     #[tokio::test]
@@ -24738,227 +24669,147 @@ edges:
         assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
     }
 
+    // --- #471: the two retired sandbox-image knobs ---
+
+    /// AC2: a `PUT` carrying a retired field is a **400 naming the field**, not a 200 that
+    /// silently ignores it. Both fields, and the store is untouched either way.
     #[tokio::test]
-    async fn put_settings_persists_image_source() {
-        // Stored always wins over env/default, so the effective/source assertions
-        // are race-free (#411).
+    async fn put_settings_rejects_a_retired_sandbox_image_field() {
         let state = test_state().await;
-        let (status, view) = put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(view["image_source"]["stored"], "dockerfile");
-        assert_eq!(view["image_source"]["source"], "stored");
-        assert_eq!(view["image_source"]["effective"], "dockerfile");
-        assert_eq!(view["image_source"]["default"], "registry");
-
-        // Re-GET confirms persistence.
-        let reget = get_settings_json(&state).await;
-        assert_eq!(reget["image_source"]["stored"], "dockerfile");
-        assert_eq!(reget["image_source"]["effective"], "dockerfile");
-    }
-
-    #[tokio::test]
-    async fn put_settings_clears_image_source_on_empty_string() {
-        // "" is the clear sentinel: accepted (not 400), resets the stored tier to
-        // null so the resolver falls back to the built-in default `registry` (#411).
-        let state = test_state().await;
-        put_settings_resp(&state, r#"{"image_source": "dockerfile"}"#).await;
-        let (status, view) = put_settings_resp(&state, r#"{"image_source": ""}"#).await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "empty string must be accepted, not 400"
-        );
-        assert!(
-            view["image_source"]["stored"].is_null(),
-            "empty string clears the stored image source: {}",
-            view["image_source"]
-        );
-        assert_eq!(view["image_source"]["source"], "default");
-        assert_eq!(view["image_source"]["effective"], "registry");
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_invalid_image_source() {
-        // A non-variant token is rejected 400 before anything is persisted (#411).
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(&state, r#"{"image_source": "ecr"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["error"].is_string(), "400 must carry an error: {body}");
-        // Store untouched (still the default).
-        let view = get_settings_json(&state).await;
-        assert!(view["image_source"]["stored"].is_null());
-    }
-
-    // --- #431: dockerfile_path settings knob + the sandbox_image tag it yields ---
-
-    #[tokio::test]
-    async fn put_settings_persists_dockerfile_path_and_the_tag_follows() {
-        // Stored always wins over env/default, so these assertions are race-free
-        // (`lib.rs` convention: only stored-wins is safe at the HTTP level, since env
-        // reads a process-global var a concurrent test could shadow). The env-tier
-        // assertions live in `sandbox_image::resolve_dockerfile`'s pure tests.
-        let state = test_state().await;
-        let tmp = tempfile::tempdir().unwrap();
-        let custom = tmp.path().join("sbx.Dockerfile");
-        let bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo settings-431\n";
-        std::fs::write(&custom, bytes).unwrap();
-        let body = format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap());
-
-        let (status, view) = put_settings_resp(&state, &body).await;
-        assert_eq!(status, StatusCode::OK);
-        let f = &view["dockerfile_path"];
-        assert_eq!(f["stored"], custom.to_str().unwrap());
-        assert_eq!(f["source"], "stored");
-        assert_eq!(f["effective"], custom.to_str().unwrap());
-        assert!(
-            f["default"].is_string() || f["default"].is_null(),
-            "default is the seeded path, or null when HOME is unset: {f}"
-        );
-
-        // The disclosed tag is computed by the SAME hash `ensure_image` uses (#373), so
-        // "editing the Dockerfile changes the tag, hence a rebuild" is now visible. The NAME is
-        // `pdo-sandbox` here because `sbx.Dockerfile` is not a `Dockerfile.<variant>` (#466).
-        assert_eq!(
-            view["sandbox_image"]["tag"],
-            sandbox_image::local_image_ref(sandbox_image::BASE_IMAGE_NAME, bytes),
-            "the tag must be the hash of the RESOLVED file's bytes: {}",
-            view["sandbox_image"]
-        );
-        assert!(view["sandbox_image"]["reason"].is_null());
-
-        // Re-GET confirms persistence.
-        let reget = get_settings_json(&state).await;
-        assert_eq!(reget["dockerfile_path"]["stored"], custom.to_str().unwrap());
-        assert_eq!(
-            reget["sandbox_image"]["tag"],
-            sandbox_image::local_image_ref(sandbox_image::BASE_IMAGE_NAME, bytes)
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_clears_dockerfile_path_on_empty_string() {
-        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null so
-        // the resolver falls back env → the seeded default (#431).
-        let state = test_state().await;
-        let tmp = tempfile::tempdir().unwrap();
-        let custom = tmp.path().join("sbx.Dockerfile");
-        std::fs::write(&custom, b"FROM ubuntu:24.04\n").unwrap();
-        put_settings_resp(
-            &state,
-            &format!(r#"{{"dockerfile_path": "{}"}}"#, custom.to_str().unwrap()),
-        )
-        .await;
-
-        let (status, view) = put_settings_resp(&state, r#"{"dockerfile_path": ""}"#).await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "empty string must be accepted, not 400"
-        );
-        assert!(
-            view["dockerfile_path"]["stored"].is_null(),
-            "empty string clears the stored Dockerfile path: {}",
-            view["dockerfile_path"]
-        );
-        // With nothing stored and no PDO_SANDBOX_DOCKERFILE, the seeded default wins and
-        // `effective == default` (both null only if HOME is unset).
-        let f = &view["dockerfile_path"];
-        assert_eq!(f["source"], "default");
-        assert_eq!(
-            f["effective"], f["default"],
-            "default tier: effective == default"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_relative_dockerfile_path() {
-        let state = test_state().await;
-        let (status, body) =
-            put_settings_resp(&state, r#"{"dockerfile_path": "relative/Dockerfile"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"].as_str().unwrap().contains("absolute"),
-            "the error must name the absolute-path requirement: {body}"
-        );
-        // Store untouched.
-        let view = get_settings_json(&state).await;
-        assert!(view["dockerfile_path"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_nonexistent_dockerfile_path() {
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(
-            &state,
-            r#"{"dockerfile_path": "/this/path/does/not/exist/431/Dockerfile"}"#,
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"].as_str().unwrap().contains("regular file"),
-            "the error must name the regular-file requirement: {body}"
-        );
-        let view = get_settings_json(&state).await;
-        assert!(view["dockerfile_path"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_a_directory_as_dockerfile_path() {
-        // The `exists()` vs `is_file()` trap: `Path::exists()` is TRUE for a directory,
-        // so a validator written with `exists()` would accept this and defer the failure
-        // to the middle of a run.
-        let state = test_state().await;
-        let tmp = tempfile::tempdir().unwrap();
-        let (status, body) = put_settings_resp(
-            &state,
-            &format!(
-                r#"{{"dockerfile_path": "{}"}}"#,
-                tmp.path().to_str().unwrap()
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"].as_str().unwrap().contains("regular file"),
-            "a directory must be rejected as not-a-regular-file: {body}"
-        );
-        let view = get_settings_json(&state).await;
-        assert!(view["dockerfile_path"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn get_settings_surfaces_the_dockerfile_field_and_image_tag_shape() {
-        // Shape only: `effective`/`default`/`tag` depend on the real `$HOME` (this state
-        // has no `sandbox_home_override`) and on whether that machine has ever seeded a
-        // Dockerfile, so the exact values belong to the stored-wins test above. What is
-        // invariant is that the keys are ALWAYS present and never 500 the page.
-        let state = test_state().await;
-        let view = get_settings_json(&state).await;
-
-        let f = &view["dockerfile_path"];
-        assert!(
-            f["stored"].is_null(),
-            "dockerfile_path.stored must be null on a fresh row: {f}"
-        );
-        for key in ["effective", "source", "env", "default"] {
-            assert!(f.get(key).is_some(), "dockerfile_path.{key} missing: {f}");
+        for (field, env_var) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
+            let (status, body) =
+                put_settings_resp(&state, &format!(r#"{{"{field}": "registry"}}"#)).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "`{field}` must be refused, not ignored: {body}"
+            );
+            let err = body["error"].as_str().unwrap_or_default();
+            assert!(err.contains(field), "the 400 must NAME the field: {body}");
+            assert!(
+                err.contains("staging profile") && err.contains(env_var),
+                "…and say where the knob went: {body}"
+            );
         }
-        assert!(f["source"].is_string());
+        // Nothing was persisted.
+        let view = get_settings_json(&state).await;
+        assert!(view["session_cap"]["stored"].is_null());
+    }
 
-        let img = &view["sandbox_image"];
-        assert!(img.get("tag").is_some(), "sandbox_image.tag missing: {img}");
+    /// The refusal must not let a legitimate edit riding in the same body through: a `PUT` is one
+    /// transaction, so a retired field poisons the whole thing rather than applying half of it.
+    #[tokio::test]
+    async fn a_retired_field_rejects_the_whole_put() {
+        let state = test_state().await;
+        let (status, _) = put_settings_resp(
+            &state,
+            r#"{"session_cap": 5, "image_source": "dockerfile"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let view = get_settings_json(&state).await;
         assert!(
-            img.get("reason").is_some(),
-            "sandbox_image.reason missing: {img}"
+            view["session_cap"]["stored"].is_null(),
+            "the sibling edit must NOT have been applied: {view}"
         );
-        // Exactly one of the two is populated — a tag, or the reason there is none.
+    }
+
+    /// A field nobody has ever heard of stays what it always was — ignored by serde. Only the
+    /// two RETIRED names get the named 400: they are the ones a real client might still send.
+    #[tokio::test]
+    async fn an_unknown_field_is_still_ignored_not_rejected() {
+        let state = test_state().await;
+        let (status, _) =
+            put_settings_resp(&state, r#"{"session_cap": 5, "no_such_knob": 1}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        let view = get_settings_json(&state).await;
+        assert_eq!(view["session_cap"]["stored"], 5);
+    }
+
+    /// A malformed body is a 400 with a message, not axum's opaque 422 — the consequence of
+    /// taking the body as raw JSON so the retired-field check can run first.
+    #[tokio::test]
+    async fn a_type_error_in_the_body_is_a_400_with_a_message() {
+        let state = test_state().await;
+        let (status, body) = put_settings_resp(&state, r#"{"session_cap": "many"}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
-            img["tag"].is_null() != img["reason"].is_null(),
-            "exactly one of tag/reason must be set: {img}"
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("invalid settings payload"),
+            "{body}"
         );
-        if let Some(tag) = img["tag"].as_str() {
-            assert!(tag.starts_with("pdo-sandbox:h-"), "unexpected tag: {tag}");
+    }
+
+    /// AC5, the message half: what the boot says when a retired value is still in the row. Pure,
+    /// so the wording is pinned here rather than discovered in a terminal.
+    #[test]
+    fn the_retired_settings_warning_names_the_values_and_where_to_go() {
+        // Nothing stored ⇒ nothing said. The reference instance's case.
+        assert_eq!(retired_sandbox_settings_warning(&[], Some("full")), None);
+
+        let stored = vec![
+            ("image_source", "dockerfile".to_string()),
+            ("dockerfile_path", "/repo/Dockerfile".to_string()),
+        ];
+        let msg = retired_sandbox_settings_warning(&stored, Some("chrome")).unwrap();
+        // ONE line, both values, verbatim.
+        assert!(msg.contains("`image_source` = `dockerfile`"), "{msg}");
+        assert!(
+            msg.contains("`dockerfile_path` = `/repo/Dockerfile`"),
+            "{msg}"
+        );
+        assert!(!msg.contains('\n'), "one line, not two: {msg}");
+        // It says the values are ignored, names the profile to edit, and the env escape hatch.
+        assert!(msg.contains("IGNORED"), "{msg}");
+        assert!(msg.contains("`chrome`"), "the profile to edit: {msg}");
+        assert!(msg.contains(sandbox_image::IMAGE_SOURCE_ENV), "{msg}");
+        assert!(msg.contains(sandbox_image::DOCKERFILE_PATH_ENV), "{msg}");
+        // And that no Run is affected — the whole point of it being a warning, not an error.
+        assert!(msg.contains("No Run is affected"), "{msg}");
+
+        // With no default profile (`off`), it names the screen instead of a profile.
+        let msg = retired_sandbox_settings_warning(&stored, None).unwrap();
+        assert!(
+            msg.contains("the staging profile your Runs launch with"),
+            "{msg}"
+        );
+    }
+
+    /// AC5, the wiring half: the boot path reads a seeded value out of a pre-#471 row and produces
+    /// exactly that message. Exercises `retired_sandbox_image_values` + the profile hint together,
+    /// which is the pair the boot uses — `warn_about_retired_sandbox_settings` itself only logs.
+    #[tokio::test]
+    async fn a_seeded_retired_value_produces_the_boot_warning() {
+        let state = test_state().await;
+        // Re-add the columns a pre-#471 daemon left behind, and seed one.
+        for (column, _) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
+            sqlx::query(&format!(
+                "ALTER TABLE instance_config ADD COLUMN {column} TEXT"
+            ))
+            .execute(&state.db)
+            .await
+            .unwrap();
         }
+        sqlx::query("UPDATE instance_config SET image_source = 'dockerfile' WHERE id = 1")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
+
+        let stored = instance_config::retired_sandbox_image_values(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(stored, vec![("image_source", "dockerfile".to_string())]);
+        let msg = retired_sandbox_settings_warning(&stored, Some("minimal")).unwrap();
+        assert!(msg.contains("`image_source` = `dockerfile`"), "{msg}");
+        assert!(msg.contains("`minimal`"), "{msg}");
+        // And it did NOT come back as config: the view has no such key, so no Run can read it.
+        let view = get_settings_json(&state).await;
+        assert!(view.get("image_source").is_none(), "{view}");
+        // The logging wrapper is exercised too — it must not panic on this row.
+        warn_about_retired_sandbox_settings(&state.db).await;
     }
 
     // --- #410: default_sandbox settings knob + sandbox_docker probe ---
@@ -24966,7 +24817,8 @@ edges:
     #[tokio::test]
     async fn put_settings_persists_default_sandbox() {
         // Stored always wins over env/default, so the effective/source assertions are
-        // race-free (mirror of image_source, #411).
+        // race-free (the `lib.rs` convention: env reads a process-global a concurrent test
+        // could shadow, so only stored-wins is safe at the HTTP level).
         let state = test_state().await;
         let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
         assert_eq!(status, StatusCode::OK);

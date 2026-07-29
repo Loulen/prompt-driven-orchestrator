@@ -1966,8 +1966,8 @@ async fn an_unreadable_frozen_env_fails_the_run_at_boot_recovery() {
 /// `docker create`, which is what `docker inspect --format '{{.Config.Image}}'` would report.
 ///
 /// Both halves matter, and neither would pass alone: the Dockerfile half proves the profile beats
-/// the instance-wide `dockerfile_path` tier *and* carries the #466 variant NAME, while the registry
-/// half proves an explicit ref is used verbatim rather than re-tagged under `pdo-sandbox:h-…`.
+/// the built-in default *and* carries the #466 variant NAME, while the registry half proves an
+/// explicit ref is used verbatim rather than re-tagged under `pdo-sandbox:h-…`.
 #[tokio::test]
 async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
     ensure_pdo_on_path();
@@ -2274,7 +2274,7 @@ async fn a_bad_image_source_is_rejected_at_profile_write() {
     for bad in [
         // A relative path: the daemon's cwd is not the user's.
         serde_json::json!({ "kind": "dockerfile", "path": "docker/Dockerfile" }),
-        // Absolute but absent — the early gate, mirror of `put_settings`' `dockerfile_path`.
+        // Absolute but absent — the early UX gate, not the authoritative one (`ensure_image`).
         serde_json::json!({ "kind": "dockerfile", "path": missing.display().to_string() }),
         // A directory is not a regular file (the `exists()` vs `is_file()` trap).
         serde_json::json!({ "kind": "dockerfile", "path": daemon.repo_root().display().to_string() }),

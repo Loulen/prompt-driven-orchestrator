@@ -838,7 +838,8 @@ La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur 
 > **mode `full` de bout en bout** (#409 : vérifie `prepare`(allowlist `full`) → conteneur →
 > `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `minimal` que par le seed de
 > `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
-> l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`,
+> l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`
+> depuis retiré par #471,
 > job release GHCR) + **exposition run-level + sources de config** (#410 : sélecteur tri-état du
 > NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
 > `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`) +
@@ -1014,9 +1015,9 @@ donc zéro collision). Le renommer renomme l'image. Trois propriétés qui se re
 `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>`, parce qu'injecter le hash de la base obligerait à
 *générer* les octets de la variante alors que ces octets **sont** la source de vérité de son propre
 tag ; (b) l'**image de base reste minimale** — le coût d'une variante n'est payé que par qui la
-pointe ; (c) la **sélection** passe par `dockerfile_path` — global (pointer la variante change nom et
-hash, donc build local) ou, depuis **#467**, **par profil de staging**, ce qui est le chemin normal :
-un profil chrome-devtools et un profil minimal cohabitent alors sur la même instance.
+pointe ; (c) la **sélection** se fait **par profil de staging** (#467, seul chemin depuis #471 —
+pointer la variante change nom et hash, donc build local) : un profil chrome-devtools et un profil
+minimal cohabitent alors sur la même instance.
 La seule variante livrée est **`pdo-sandbox-chrome-dev`** : node 22 + Google Chrome +
 `chrome-devtools-mcp` préinstallé, exception assumée à ADR-0001 (sans elle **aucun** serveur MCP node
 ne démarre dans le sandbox — l'image de base n'a ni runtime JS ni navigateur). Elle est **amd64
@@ -1033,8 +1034,8 @@ Ubuntu, git, ripgrep, Claude Code auto-update off, sudo NOPASSWD ; ni tmux ni `p
 l'hôte). Au premier usage il est **seedé** sur disque à `~/.pdo/sandbox/Dockerfile` — inconditionnellement,
 et **jamais ailleurs** — puis **jamais écrasé** : c'est la copie de référence éditable et la
 matérialisation du tier `default`. Le **résolu** est celui que `ensure_image` hashe et builde
-réellement : le seedé par défaut, ou celui que `dockerfile_path` désigne. _Éviter_ : confondre les
-trois ; « image de base ».
+réellement : le seedé par défaut, ou celui qu'un **profil** (ou `PDO_SANDBOX_DOCKERFILE`) désigne.
+_Éviter_ : confondre les trois ; « image de base ».
 
 **`ensure_image()`** :
 Le **point d'entrée unique** du provisionnement d'image, un **aiguillage à deux branches** sur le
@@ -1045,59 +1046,58 @@ nommant le ref**, jamais un build — voir « Source d'image d'un profil »). Br
 garantit que `<nom>:h-<hash>` existe **localement** et retourne **toujours** le ref local
 (invariant `sandbox_container`) : seed du Dockerfile par défaut → contrôle que le Dockerfile
 **résolu** est un fichier régulier (sinon **erreur dure** nommant chemin + tier, jamais de repli) →
-présente → réutilise (**fast-path**, zéro réseau) ; absente, `image_source=registry` (défaut) **et**
-Dockerfile résolu **à l'emplacement seedé par défaut** → `docker pull` le ref GHCR puis **retag** sous
-le ref local, avec **fallback build** si le pull échoue (offline / 404 / registry down) ;
-`image_source=dockerfile` **ou** Dockerfile résolu ailleurs → `docker build` direct, **jamais** de pull
+présente → réutilise (**fast-path**, zéro réseau) ; absente, source `registry` (le défaut de profil)
+**et** Dockerfile résolu **à l'emplacement seedé par défaut** → `docker pull` le ref GHCR puis **retag**
+sous le ref local, avec **fallback build** si le pull échoue (offline / 404 / registry down) ;
+source `dockerfile` **ou** Dockerfile résolu ailleurs → `docker build` direct, **jamais** de pull
 (un hash custom ne peut pas exister en amont) ; échec de build → erreur explicite (consommée par le
 fail-fast du Run). Le prédicat de skip-pull porte sur le **chemin**, pas sur les octets (ADR-0030 §5 —
 un prédicat-octets classerait « custom » toute machine ayant mis PDO à jour). _Éviter_ : « ensure =
 build-**seul** » (c'est build-**si-absent**, et pull-**d'abord** en registry au chemin par défaut),
 « warm-up ».
 
-**`image_source` (par-daemon)** :
-Le réglage qui pilote d'où `ensure_image` tire l'image : `registry` (défaut, pull GHCR-puis-retag +
-fallback build) | `dockerfile` (build local direct). **Par-daemon**, jamais par-Run (à la différence
-du **mode** sandbox porté par `RunStarted`) : colonne additive `instance_config`, précédence
-`stored → env (PDO_SANDBOX_IMAGE_SOURCE) → default(registry)` (ADR-0015), éditable dans la Settings
-UI. _Éviter_ : « mode registry » (le mode = off/minimal/full), « image_source par run ».
-
-**`dockerfile_path` (par-daemon)** :
-Le réglage qui pilote **quel** Dockerfile `ensure_image` hashe et builde — typiquement un Dockerfile
-versionné dans le repo, donc partagé par l'équipe. **Par-daemon**, jamais par-Run : colonne additive
-nullable `instance_config`, sentinelle `Some("")` = clear, précédence
-`stored → env (PDO_SANDBOX_DOCKERFILE) → défaut seedé` (ADR-0015), résolveur **pur**
-(`resolve_dockerfile`) partagé par la prep **et** `GET /settings` (0 drift, leçon #373). Trois
-propriétés qui se retiennent ensemble : (a) le tag reste le hash du contenu du fichier **pointé**, donc
-l'édition rebuilde ; (b) le contexte de build reste `<sandbox_root>/.build-ctx`, **vide** — un
-Dockerfile pointé doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemin qui n'est pas un fichier
-régulier **échoue fort au prep** (`RunFailed` nommant chemin + tier), plus un `400` à `PUT /settings`
-comme gate précoce — le tier **env** contourne ce `400` par construction (échappatoire assumée pour un
-volume amovible), les deux tiers restent gatés au prep. La Settings UI affiche le **chemin résolu** et
-le **nom + tag** qui en découlent. C'est aussi, depuis #466, le **seul** chemin de sélection d'une
-**variante** d'image (`dockerfile_path` → `…/assets/sandbox/Dockerfile.chrome-dev` ⇒
-`pdo-sandbox-chrome-dev:h-<hash>`, buildée localement puisqu'un chemin non-défaut ne pulle jamais).
-Depuis **#467** ce réglage est le tier **le plus bas** de la chaîne : un profil de staging peut poser
-son propre chemin, qui gagne (`profile → stored → env → default`). _Éviter_ : « Dockerfile du run »
-(c'est par-daemon — le par-profil, lui, existe), croire qu'un `COPY` fonctionne.
+**Défaut d'image de profil / `DEFAULT_PROFILE_IMAGE` (#471)** :
+Ce qu'un profil **qui ne pose pas d'image** résout : source `registry` (pull GHCR-puis-retag +
+fallback build) sur le **Dockerfile seedé** `<sandbox_root>/Dockerfile`. Une **constante de la couche
+de défauts de profil**, à côté de `DEFAULT_FULL_ENTRIES` — plus un réglage : #471 a retiré
+`image_source` et `dockerfile_path` d'`instance_config`, de `GET /settings`, du validateur de
+`PUT /settings` et de l'écran, parce que depuis #467 la source d'image d'un Run se configurait à
+**deux** endroits dont un seul décidait. Ce qui subsiste au-dessus du défaut, dans l'ordre :
+un **profil** qui pose une image (le tier le plus fort, gelé par Run), puis les **deux variables
+d'env** `PDO_SANDBOX_IMAGE_SOURCE` et `PDO_SANDBOX_DOCKERFILE` — conservées exprès, parce qu'une
+instance **headless** n'a que des profils virtuels et pas d'UI, donc l'env est son seul moyen de
+changer d'image sans POSTer un profil. Résolution **pure** (`resolve_image_plan`,
+`resolve_dockerfile`, `resolve_image_source` — les tiers env sont *injectés*, jamais lus dans le
+cœur), une seule lecture d'env au bord (`image_plan_with`). Trois propriétés du Dockerfile résolu se
+retiennent ensemble : (a) le tag reste le hash du contenu du fichier **pointé**, donc l'édition
+rebuilde ; (b) le contexte de build reste `<sandbox_root>/.build-ctx`, **vide** — un Dockerfile pointé
+doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemin qui n'est pas un fichier régulier
+**échoue fort au prep** (`RunFailed` nommant chemin + tier, et la remédiation dépend du tier gagnant).
+Une valeur laissée en base dans l'une des deux colonnes retirées est **inerte** et déclenche **un**
+`warn!` au boot qui la nomme et renvoie vers le profil ; un `PUT /settings` portant l'un des deux
+champs répond **400 en le nommant**, jamais 200 en l'ignorant. _Éviter_ : « le réglage d'image »
+(il n'y en a plus), « mode registry » (le mode = off/`<profil>`), croire qu'un `COPY` fonctionne.
 
 **Source d'image d'un profil / `ProfileImage` (#467)** :
 Ce qu'un **profil de staging** peut poser pour décider **quel conteneur** ses Runs obtiennent, en
-deux formes exclusives : `{kind: "dockerfile", path}` — un `dockerfile_path` choisi par profil, donc
-strictement le tier le plus fort de la chaîne existante, même hash, même nom dérivé du nom de fichier
-— ou `{kind: "registry", ref}` — un ref **libre** (`ghcr.io/acme/agent:1.4`) tiré **tel quel**.
-Ne rien poser est l'état par défaut et reste **bit pour bit** le comportement d'avant #467 (les
-réglages d'instance décident, relus frais). Trois propriétés à retenir ensemble : (a) un ref explicite
+deux formes exclusives : `{kind: "dockerfile", path}` — un Dockerfile choisi par profil, le tier le
+plus fort de la chaîne, même hash, même nom dérivé du nom de fichier — ou `{kind: "registry", ref}` —
+un ref **libre** (`ghcr.io/acme/agent:1.4`) tiré **tel quel**.
+Ne rien poser est l'état par défaut et reste **bit pour bit** le comportement d'avant #467 (le
+**défaut d'image de profil** décide, l'env pouvant l'override — voir l'entrée ci-dessus). Trois
+propriétés à retenir ensemble : (a) un ref explicite
 **sort de l'adressage par contenu**, donc pas de repli build, pas de retag, un pull raté = **erreur
 dure nommant le ref et le profil** (amendement #467 d'ADR-0030 pt 7) ; (b) la source est **gelée par
 Run** (`sandbox_image` dans `RunStarted`) — éditer le profil ne peut pas faire tourner deux nœuds du
 même Run dans deux images différentes ; (c) PDO **ne vérifie pas** que l'image contient `claude`, ni
-qu'un ref existe : c'est la responsabilité de qui le fournit. Le mot `registry` désigne donc **deux
-choses** — le réglage d'instance `image_source: registry` tire l'image prébuild *de votre Dockerfile*
-(d'où le Dockerfile qui reste **obligatoire** dans ce mode : le tag EST le sha256 de ses octets), le
-`kind: registry` d'un profil est un ref arbitraire. _Éviter_ : « override d'image » (c'est un tier de
-précédence, pas un contournement), confondre les deux `registry`, « image du profil » pour parler du
-conteneur d'un Run (c'est la **source**, résolue au bord en `ImagePlan`).
+qu'un ref existe : c'est la responsabilité de qui le fournit. Le mot `registry` désigne encore **deux
+choses** — la source `registry` du **défaut de profil** tire l'image prébuild *du Dockerfile seedé*
+(dont le tag EST le sha256 de ses octets), le `kind: registry` d'un profil est un ref arbitraire —
+mais depuis #471 les deux se choisissent dans le **même** `<select>`, ce qui est précisément ce qui
+rend la distinction énonçable en une phrase au lieu de quatre lignes renvoyant vers un autre écran.
+_Éviter_ : « override d'image » (c'est un tier de précédence, pas un contournement), confondre les
+deux `registry`, « image du profil » pour parler du conteneur d'un Run (c'est la **source**, résolue
+au bord en `ImagePlan`).
 
 **`registry_image_ref` / `ghcr.io/loulen/<variante>`** :
 Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` (ou
@@ -1197,15 +1197,17 @@ convergent), juste avant le gel du mode dans `RunStarted` (immuable, ADR-0030 pt
 Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`minimal`/`full`,
 `""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
 → default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
-/settings` (0 drift #373, miroir exact d'`image_source`). Éditable dans la Settings UI (`<select>`).
+/settings` (0 drift #373). Éditable dans la Settings UI (`<select>`).
 **Atteignable depuis le dialogue de lancement** (#452) : le sélecteur du NewRunModal mène, dans les
 **deux** modes, sur « Use instance default » — la sentinelle `""` qui **omet** la clé `sandbox` de la
 requête. C'est la seule façon de déférer, `Some(Off)` étant final ; en mode run l'option **nomme** le
 défaut résolu au lieu de le **recopier** dans le champ (un prefill async best-effort ratait sa fenêtre
 sur un fetch lent, en échec, ou en cache d'une ouverture précédente, et atterrissait sur un `off`
 explicite que l'utilisateur n'avait pas choisi).
-_Éviter_ : confondre avec `image_source` (provisionnement d'image, orthogonal) ; « mode d'instance » ;
-dire que le dialogue de lancement « choisit toujours » un mode (c'était le défaut #452).
+_Éviter_ : confondre avec la **source d'image** d'un profil (provisionnement, orthogonal) ; « mode
+d'instance » ; dire que le dialogue de lancement « choisit toujours » un mode (c'était le défaut
+#452). Depuis **#471** c'est le **seul** réglage sandbox de cet écran, avec l'accès aux profils : cet
+écran répond « quel profil un Run prend par défaut », un profil répond « ce qu'est le sandbox ».
 
 **Défaut par-Trigger (`Trigger.sandbox`)** :
 Mode par défaut d'un **Trigger** : colonne **nullable** `sandbox` sur `triggers`. `None` = **déférer**
@@ -1285,12 +1287,12 @@ concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeSta
   pull rate ; en `dockerfile`, build direct. Valeur de retour **toujours le ref local** → aucun
   changement dans `sandbox_container`. Réglage **par-daemon** `image_source` (`instance_config`,
   résolveur `stored → env → default(registry)` partagé par `ensure_image` **et** `GET /settings`,
-  0 drift #373), éditable dans la Settings UI (`<select>`). `context_from_state` devient **async**
-  (lit `instance_config` frais au bord) ; `ensure_ready` reste sync. La release publie l'image sur
+  0 drift #373), éditable dans la Settings UI (`<select>`) — **retiré par #471**, dont le défaut de
+  profil reprend la valeur. `context_from_state` devient **async** (lit `instance_config` frais au
+  bord) ; `ensure_ready` reste sync. La release publie l'image sur
   GHCR (job additif, multi-arch, tags `h-<hash>` + `latest`) avec parité hash bash/Rust. Pull anonyme
   sur image publique → trou d'auth #260 inchangé. Couvert par unit (`sandbox_image`/`instance_config`
-  /settings) + 2 tests layer-3 (`sandbox_tracer` : pull vs build selon `image_source`) + FP-411 (L5,
-  Docker réel).
+  /settings) + tests layer-3 (`sandbox_tracer`) + FP-411 (L5, Docker réel).
 - **Câblé (#410, ADR-0030 pt 8+10)** : **exposition run-level + sources de config**. Précédence
   **réalisée** — résolveur pur `effective_sandbox(explicit, trigger, instance_default)` (run → trigger
   → `default_sandbox`, plancher `off`) au chokepoint `create_run_inner` ; param filaire
@@ -1321,15 +1323,35 @@ concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeSta
   détail). Côté FE, l'explorateur sort de `RepoCombobox` dans un `FsExplorerModal` réutilisable
   (`mode: "dir" | "file"`, `showHidden`, testids préfixés) — `RepoCombobox` en est le premier
   consommateur, **inchangé au pixel** (ses 12 tests et l'e2e `repo-explorer-pick` passent sans édition
-  d'assertion), le `SettingsModal` le second. Réglage **par-daemon** `dockerfile_path` (voir le lexique
-  ci-dessus) ; la Settings UI expose le **chemin résolu** et le **tag** `pdo-sandbox:h-<hash>` qui en
-  découle, pour que « éditer le Dockerfile déclenche un rebuild » cesse d'être un savoir tribal.
+  d'assertion), le `SettingsModal` le second. Réglage **par-daemon** `dockerfile_path` — **retiré par
+  #471** avec le champ de la Settings UI, le chemin résolu et le tag qu'elle exposait ; ce que ce
+  réglage valait par défaut est devenu le **défaut d'image de profil** (voir le lexique), et
+  `PDO_SANDBOX_DOCKERFILE` survit comme échappatoire headless.
   `/fs` étant un **nouveau préfixe top-level**, il entre dans la whitelist du proxy vite (même piège que
   `/nodes` #345 et `/stats` #377). Couvert par unit (query/classification/merge, résolveur pur,
   `ensure_image`, `instance_config`, settings HTTP) + layer-3 (`fs_browse` : anti-SPA sur le
   content-type, forme additive, les 2 drapeaux, liens cassés et spéciaux invisibles ; `sandbox_tracer` :
   build depuis le chemin custom **sans pull**, et chemin disparu → `RunFailed` nommant chemin + tier)
   + FE (vitest) + FP-431 (L5, Docker réel).
+- **Réalisé (#471, ADR-0031 §9 amendée, ADR-0015 amendée)** : **un axe par écran** — `image_source`
+  et `dockerfile_path` sortent d'`instance_config`, de `GET /settings`, du validateur de
+  `PUT /settings`, de `types.ts` et du `SettingsModal` (avec la disclosure de 4 lignes qui devait
+  renvoyer vers un autre écran : quand un réglage a besoin d'un paragraphe pour expliquer sa relation
+  à un autre écran, il est sur le mauvais écran). Depuis #467 les deux étaient redondants avec la
+  source d'image du profil, qui gagnait déjà ; sur la seule instance existante ils n'avaient **jamais**
+  porté de décision. Ce qu'ils valaient par défaut devient `DEFAULT_PROFILE_IMAGE`, **constante de la
+  couche de défauts de profil** à côté de `DEFAULT_FULL_ENTRIES` — registre hash-dérivé sur le
+  Dockerfile seedé, donc un profil qui ne pose rien produit **exactement** le même ref qu'avant (test
+  golden sur le ref). Les deux tiers **env** sont **conservés** et repointés sur ce défaut (une
+  instance headless n'a que des profils virtuels et pas d'UI). Trois conséquences non négociables : un
+  `PUT /settings` portant l'un des champs répond **400 en le nommant** (jamais 200 en l'ignorant) ; une
+  valeur restée en base déclenche **un** `warn!` au boot qui la nomme et renvoie vers le profil, et
+  n'affecte **aucun** Run ; un Run **archivé** dont le payload porte les anciens champs s'ouvre et se
+  chiffre toujours. Bénéfice collatéral : `image_plan_with` se scinde en `resolve_image_plan` **pur**
+  (tiers env *injectés*) + un wrapper de bord, ce qui rend la précédence env testable sans muter
+  `std::env`. Couvert par unit (`sandbox_image` golden + précédence, `instance_config` colonnes
+  retirées, settings HTTP 400/boot-warn) + layer-3 (`sandbox_tracer` repointé sur le profil) + FE
+  (vitest : inventaire de l'écran).
 - **Réalisé (#445, amendement ADR-0030 « précondition du spawn »)** : la garantie du point 4 (« conteneur
   prêt avant le premier spawn ») était rejouée par le **seul** parcours de création ; le watcher de
   pipeline et `retry_waiting_nodes` atteignaient le spawn pendant la prep → `docker exec` sur un

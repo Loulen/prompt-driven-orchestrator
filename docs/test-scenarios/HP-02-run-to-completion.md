@@ -76,9 +76,11 @@ Features validated while crossing the run screens (grafted from retired per-issu
 12. **Control twin.** Relaunch the same pipeline with sandbox **`off`**: no preparation phase, the
     node starts straight away, the Run reaches **Completed**. Compare the two Runs — same business
     outcome, visibly different route.
-13. Open **Settings** → the sandbox section shows the **resolved Dockerfile** path with its tier and
-    the **image tag** derived from it, and the **staging profile** editor lists the floor entry by
-    entry.
+13. Open **Settings** → on the sandbox side there is **only** `Default sandbox` and
+    **Manage staging profiles…** (#471: the image source and Dockerfile fields moved to the profile).
+    Open the profile editor → it lists the floor entry by entry, and its **Image** control offers
+    `default` / `dockerfile` / `registry`, the `default` option saying in one sentence that the tag is
+    the SHA-256 of the seeded Dockerfile's bytes.
 
 ## Checks
 
@@ -111,9 +113,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - **Both** Runs reach **Completed**, End `result` **received**, and the output artifact opens from
   the host UI in both cases (for the sandboxed one, that is the merge-back).
 - The `off` twin shows **no** preparation phase.
-- Settings: the resolved Dockerfile path carries its tier, the image tag derives from it
-  (`pdo-sandbox:h-<hash>`), the profile editor lists the floor entry by entry, warns on
-  credential-bearing entries, and lists a profile's referents before confirming its deletion.
+- Settings: the sandbox side shows `Default sandbox` and the profiles button and **nothing else**
+  (no image-source select, no Dockerfile input, no image tag — #471); the profile editor lists the
+  floor entry by entry, offers the three-way **Image** control, warns on credential-bearing entries,
+  and lists a profile's referents before confirming its deletion.
 
 ### Backing store
 

@@ -119,11 +119,11 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
    (`PUPPETEER_EXECUTABLE_PATH`, `CHROME_PATH`, proxys d'entreprise, endpoints clients). Sans §8, le
    profil décrivait le contenu du home et **rien** de l'exécution.
 
-9. **Un profil porte aussi sa source d'image** *(réalisé en #467)*. Jusque-là l'image d'un Run
-   sandboxé était un réglage **d'instance** (`image_source` + `dockerfile_path`, ADR-0015) : un
-   profil décrivait « quel contenu de l'hôte atterrit dans le conteneur » mais pas « quel
-   conteneur ». Conséquence concrète : impossible d'avoir un profil chrome-devtools et un profil
-   minimal côte à côte sur la même instance. Un profil (n'importe quel nom **sauf `off`**, qui n'a
+9. **Un profil porte aussi sa source d'image** *(réalisé en #467, complété en #471)*. Jusque-là
+   l'image d'un Run sandboxé était un réglage **d'instance** (`image_source` + `dockerfile_path`,
+   ADR-0015) : un profil décrivait « quel contenu de l'hôte atterrit dans le conteneur » mais pas
+   « quel conteneur ». Conséquence concrète : impossible d'avoir un profil chrome-devtools et un
+   profil minimal côte à côte sur la même instance. Un profil (n'importe quel nom **sauf `off`**, qui n'a
    pas de conteneur du tout et que `validate_profile_name` refuse déjà — y compris `full` /
    `minimal`, les éditer étant ce qui les matérialise, §2) peut donc porter :
 
@@ -132,15 +132,31 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
 
    Cinq décisions, dont deux sont des non-décisions assumées :
 
-   - **Précédence : profil (si posé) > `image_source`/`dockerfile_path` stored > env > défaut**
-     (ADR-0015 étendue d'un tier). Les deux réglages d'instance **restent** et ne perdent aucun
-     champ de `GET /settings` : ils sont le défaut, et la réponse pour tout profil qui ne pose rien.
-     Un profil `kind: dockerfile` ne court-circuite que `dockerfile_path` ; un `kind: registry`
-     court-circuite les deux (il n'y a plus ni hash ni Dockerfile dans l'histoire).
+   - **Précédence : profil (si posé) > env > défaut de profil** *(amendée par #471 ; #467 avait
+     livré `profil > stored > env > défaut`)*. Un profil `kind: dockerfile` ne court-circuite que le
+     Dockerfile ; un `kind: registry` court-circuite tout (il n'y a plus ni hash ni Dockerfile dans
+     l'histoire, donc plus rien à décider en aval).
    - **Ne rien poser est un état de première classe, et le défaut.** `NULL` en base, clé absente du
      payload gelé, `null` dans la vue. Un profil qui ne pose rien produit des args `docker create`
      **bit pour bit** identiques à avant #467 — c'est la propriété qui rend cette slice sûre pour
      les instances existantes, et elle a son golden.
+   - **Le défaut est une constante de cette couche, plus un réglage** *(#471)*. `image_source` et
+     `dockerfile_path` sortent d'`instance_config`, de `GET /settings`, du validateur de
+     `PUT /settings` et de l'écran de réglages ; ce qu'ils valaient par défaut devient
+     `DEFAULT_PROFILE_IMAGE`, à côté de `DEFAULT_FULL_ENTRIES` — registre hash-dérivé sur le
+     Dockerfile seedé. Trois raisons, dans l'ordre où elles pèsent : (a) **un axe par écran** — les
+     réglages répondent « quel profil un Run prend par défaut », un profil répond « ce qu'est le
+     sandbox » ; (b) le **symptôme était déjà dans l'UI** : l'AC 5 de #467 avait produit une note de
+     quatre lignes qui devait renvoyer vers un autre écran, et quand un réglage a besoin d'un
+     paragraphe pour expliquer sa relation avec un autre écran, il est sur le mauvais écran ; (c) le
+     coût est **nul et mesuré** : sur la seule instance existante les deux champs n'ont jamais porté
+     de décision (`stored=None`, `env=None`). Les deux tiers **env** sont **conservés** et repointés
+     sur ce défaut — une instance headless fraîche n'a que des profils virtuels et pas d'UI, donc
+     c'est son seul moyen de changer d'image sans POSTer un profil. Ce qui disparaît est le champ
+     d'`instance_config` et l'écran, pas la variable. Corollaire non négociable : une valeur laissée
+     en base est **inerte**, donc le boot la dit **une fois** (`warn!` la nommant et renvoyant vers
+     le profil, même principe que #470), et un `PUT /settings` qui la porte répond **400 en la
+     nommant** — jamais 200 en l'ignorant.
    - **Un ref registry explicite casse l'adressage par contenu**, donc pas de repli build, pas de
      retag, erreur dure nommant le ref, et aucune vérification que l'image contient `claude`. La
      rationale complète est l'**amendement #467 d'ADR-0030 pt 7**, pas ici : c'est l'invariant du
@@ -148,9 +164,12 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
    - **Gel par Run**, au même endroit que la liste et l'env (§6). L'asymétrie avec les entrées est
      la même qu'en §8 : la clé est écrite **seulement si** le profil pose quelque chose, et son
      absence signifie « le profil n'a rien posé » — indiscernable, par construction, d'un payload
-     écrit par un daemon pré-#467, puisque les deux se résolvent pareil (les réglages d'instance
-     décident, relus frais). Le gel porte donc sur le **choix du profil**, pas sur les deux knobs
-     d'instance, qui gardent leur contrat ADR-0015 « un `PUT /settings` mord au prochain ensure ».
+     écrit par un daemon pré-#467, puisque les deux se résolvent pareil (le défaut de profil décide,
+     l'env pouvant l'override). Le gel porte donc sur le **choix du profil**. Depuis #471 il n'y a
+     plus de knob d'instance à ne pas geler ; les deux tiers env, eux, restent relus à chaque prep —
+     comme les deux réglages retirés l'étaient (ADR-0015, « un changement mord au prochain ensure »).
+     Un Run **archivé** dont le payload porte les anciens champs s'ouvre et se chiffre toujours : ce
+     qui est retiré est une surface d'API, pas un format de lecture.
    - **Une colonne JSON dédiée**, posée par l'idiome idempotent `ALTER TABLE … ADD COLUMN` gardé par
      PRAGMA (précédent `max_concurrent` #239, puis l'`env` de §8) — **jamais** un migration runner.
      Dédiée et non fondue dans un blob fourre-tout, pour les raisons de `disabled`/`extras`/`env` :
@@ -160,7 +179,9 @@ Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. I
 
    Ce que ça débloque, et le consommateur direct : la variante `pdo-sandbox-chrome-dev` de #466
    devient **sélectionnable par profil** au lieu de l'être pour toute l'instance — la sélection par
-   `dockerfile_path` global forçait le choix sur tous les Runs à la fois.
+   `dockerfile_path` global forçait le choix sur tous les Runs à la fois. Et depuis #471, la phrase
+   qui rend le défaut compréhensible (« le tag EST le sha256 des octets du Dockerfile ») vit dans
+   l'éditeur de profil, là où le choix se fait, en **une** phrase.
 
 ## Pourquoi (ce que le mode seul ne pouvait pas faire)
 
@@ -202,9 +223,14 @@ un Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'ident
 - **Une 3e valeur d'`image_source`** (§9), du genre `explicit`, plutôt qu'un enum tagué sur le
   profil. Ça mettrait le *choix* sur l'instance et la *valeur* sur le profil : deux réglages à tenir
   cohérents, et un état absurde atteignable (`explicit` sans ref).
-- **Retirer les réglages d'instance** une fois le profil capable de tout dire (§9). Ils sont le
+- ~~**Retirer les réglages d'instance** une fois le profil capable de tout dire (§9). Ils sont le
   défaut de tout profil qui ne pose rien, ce qui est le cas de tous les profils existants : les
-  retirer serait une migration forcée pour un gain nul.
+  retirer serait une migration forcée pour un gain nul.~~ **Retenu en #471** : l'argument était faux
+  sur son point central. Retirer les réglages n'impose **aucune** migration, parce que ce qu'ils
+  valaient par défaut peut devenir une constante de la couche de défauts de profil — un profil qui ne
+  pose rien produit alors exactement le même ref qu'avant. Ce que le raisonnement de #467 avait
+  confondu : « le défaut doit exister » (vrai) et « le défaut doit être réglable sur cet écran »
+  (faux, et c'était l'origine de la note de quatre lignes de son AC 5).
 - **Rendre le pull d'un ref explicite tolérant** (retomber sur un build, ou sur l'image
   hash-dérivée). C'est l'alternative la plus tentante et la plus dangereuse : elle démarrerait le
   Run dans une image **sans rapport** avec celle demandée. Voir l'amendement #467 d'ADR-0030 pt 7.

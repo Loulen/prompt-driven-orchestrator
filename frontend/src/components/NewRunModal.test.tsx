@@ -24,16 +24,7 @@ vi.mock("../api", () => ({
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
-    image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
-    dockerfile_path: {
-      effective: "/home/user/.pdo/sandbox/Dockerfile",
-      source: "default",
-      stored: null,
-      env: null,
-      default: "/home/user/.pdo/sandbox/Dockerfile",
-    },
-    sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     // #432: the sandbox `<select>` options are DATA now — the two virtual defaults.
     sandbox_profiles: [
@@ -1434,18 +1425,9 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
-      image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       // #431: required fields on InstanceSettings; this modal reads neither, they are
       // here to satisfy the typed fixture.
-      dockerfile_path: {
-        effective: "/home/user/.pdo/sandbox/Dockerfile",
-        source: "default",
-        stored: null,
-        env: null,
-        default: "/home/user/.pdo/sandbox/Dockerfile",
-      },
-      sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       // #432: the `<select>` options come from here. Both virtual defaults, no row.
       sandbox_profiles: [
@@ -1720,16 +1702,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
-      image_source: { effective: "registry", source: "default", stored: null, env: null, default: "registry" },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
-      dockerfile_path: {
-        effective: "/home/user/.pdo/sandbox/Dockerfile",
-        source: "default",
-        stored: null,
-        env: null,
-        default: "/home/user/.pdo/sandbox/Dockerfile",
-      },
-      sandbox_image: { tag: "pdo-sandbox:h-9a67637571a4", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [
         { name: "full", virtual: true },

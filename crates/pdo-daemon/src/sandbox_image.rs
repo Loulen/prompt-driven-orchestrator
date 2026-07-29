@@ -28,7 +28,7 @@
 //! `pdo-sandbox-chrome-dev`. Le hash, lui, ne dépend que des octets — nom et tag varient donc
 //! ensemble et indépendamment, et deux variantes ne peuvent pas se recouvrir.
 //!
-//! Depuis #467 la **source** de l'image peut appartenir au profil de staging
+//! Depuis #467 la **source** de l'image appartient au profil de staging
 //! ([`ProfileImage`]), et [`ensure_image`] devient un aiguillage sur un [`ImagePlan`] à **deux**
 //! branches qui ne partagent presque rien :
 //! - [`ImagePlan::HashDerived`] — tout ce qui précède : le tag EST le hash des octets d'un
@@ -37,6 +37,15 @@
 //!   Dockerfile, donc pas de hash, donc **aucun repli build** : un pull en échec est une erreur
 //!   DURE, et le ref local est le ref tel quel (jamais de retag en `h-<hash>`). C'est l'amendement
 //!   #467 d'ADR-0030 pt 7.
+//!
+//! Depuis #471 le profil est le **seul** endroit où ce choix se fait : les deux réglages
+//! d'instance (`image_source`, `dockerfile_path`) sont retirés, et ce qu'un profil qui ne pose
+//! rien résout est devenu une **constante de défaut de profil**
+//! ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`], à côté de `DEFAULT_FULL_ENTRIES`) —
+//! registre hash-dérivé sur le Dockerfile seedé, exactement ce que le tier `default` des deux
+//! réglages produisait. Les deux tiers ENV ([`IMAGE_SOURCE_ENV`], [`DOCKERFILE_PATH_ENV`]) sont
+//! CONSERVÉS et repointés sur ce défaut : une instance headless n'a que des profils virtuels et
+//! pas d'UI, donc l'env est son seul moyen de changer d'image sans POSTer un profil.
 
 #![allow(dead_code)] // Tracer bullet : consommé par #406/#407, non câblé dans cette slice.
 
@@ -160,7 +169,7 @@ pub(crate) const BASE_IMAGE_NAME: &str = "pdo-sandbox";
 ///
 /// Tout autre nom de fichier (`sbx.Dockerfile`, `Dockerfile-custom`, …) retombe sur
 /// [`BASE_IMAGE_NAME`] : la variante est une donnée du fichier LIVRÉ par PDO, pas une convention
-/// imposée aux Dockerfiles que l'utilisateur pointe via `dockerfile_path` (#431) — le tag reste
+/// imposée aux Dockerfiles qu'un profil pointe (#431, #467) — le tag reste
 /// de toute façon le hash de SES octets, donc deux variantes distinctes ne peuvent pas collisionner
 /// sous le même nom.
 ///
@@ -445,16 +454,24 @@ pub(crate) fn ensure_hash_derived_image(
     //    le tag EST le hash de ces octets, donc sans eux l'image est innommable.
     let path = dockerfile.path.as_path();
     if !path.is_file() {
-        // La remédiation dépend du tier gagnant : dire « fix `dockerfile_path` » à qui a pointé
-        // ce chemin depuis un PROFIL (#467) l'enverrait éditer le réglage d'instance, qui ne
-        // gagne même pas. Le tier et le chemin, eux, sont nommés dans les deux cas.
+        // La remédiation dépend du tier gagnant : dire « édite le profil » à qui a posé
+        // `PDO_SANDBOX_DOCKERFILE` dans l'env du daemon l'enverrait au mauvais endroit, et
+        // réciproquement. Le tier et le chemin, eux, sont nommés dans les trois cas. Le tier
+        // `default` ne peut pointer que le Dockerfile seedé, que `seed_dockerfile` vient
+        // d'écrire quelques lignes plus haut : y arriver signifie que quelque chose l'a
+        // supprimé entre-temps (#471 — plus aucun réglage stocké ne peut pointer ailleurs).
+        let seeded = default_dockerfile_path(sandbox_root).display().to_string();
         let fix = match dockerfile.source {
             DockerfileSource::Profile => "point the staging profile's image at an existing \
-                 Dockerfile, or clear it to fall back to the instance-wide setting"
+                 Dockerfile, or set the profile back to the default image"
                 .to_string(),
-            _ => format!(
-                "fix `dockerfile_path` or clear it to fall back to the seeded default at {}",
-                default_dockerfile_path(sandbox_root).display()
+            DockerfileSource::Env => format!(
+                "fix `{DOCKERFILE_PATH_ENV}` in the daemon's environment, or unset it to fall \
+                 back to the seeded default at {seeded}"
+            ),
+            DockerfileSource::Default => format!(
+                "the seeded Dockerfile at {seeded} vanished under the daemon; restart it to \
+                 re-seed the reference copy"
             ),
         };
         anyhow::bail!(
@@ -524,22 +541,21 @@ pub(crate) fn default_sandbox_root_from_env() -> Option<PathBuf> {
     Some(home.join(".pdo").join("sandbox"))
 }
 
-/// D'où [`ensure_image`] tire l'image (#411). **Par-daemon**, PAS par-Run : contrairement à
-/// [`crate::event_log::SandboxMode`], NE PAS la porter sur `RunStarted`. Défini dans ce module
-/// feuille (provisionnement) ; le sens de dépendance config → sandbox_image existe déjà → 0 cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// D'où [`ensure_image`] tire l'image hash-dérivée (#411). **Par-daemon**, PAS par-Run :
+/// contrairement à [`crate::event_log::SandboxMode`], NE PAS la porter sur `RunStarted`.
+///
+/// Ni `Default` ni `DEFAULT` ici depuis #471 : le défaut est une donnée de la **couche de défauts
+/// de profil** ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`]), et un `#[default]` dupliqué ici
+/// serait un second propriétaire du même fait (discipline #447), donc une dérive en attente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImageSource {
-    /// Pull `ghcr.io/loulen/pdo-sandbox:h-<hash>`, retag local, build en fallback. **Défaut.**
-    #[default]
+    /// Pull `ghcr.io/loulen/pdo-sandbox:h-<hash>`, retag local, build en fallback.
     Registry,
-    /// Ne jamais tirer : build local depuis le Dockerfile seedé (comportement #405).
+    /// Ne jamais tirer : build local depuis le Dockerfile résolu (comportement #405).
     Dockerfile,
 }
 
 impl ImageSource {
-    /// Le tier défaut (jamais `None`), surfacé par `GET /settings`.
-    pub(crate) const DEFAULT: ImageSource = ImageSource::Registry;
-
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             ImageSource::Registry => "registry",
@@ -547,8 +563,10 @@ impl ImageSource {
         }
     }
 
-    /// Parse la forme filaire ; `None` pour tout token inconnu (le validateur PUT les rejette ;
-    /// le résolveur les traite comme unset défensivement). Miroir de `ServiceHealthOverride::parse`.
+    /// Parse la forme filaire ; `None` pour tout token inconnu (le résolveur les traite comme
+    /// unset). Miroir de `ServiceHealthOverride::parse`. Depuis #471 son seul appelant est le
+    /// tier env : il ne passe par aucun validateur, donc un token bidon dans l'env du daemon
+    /// retombe silencieusement sur le défaut de profil — le contraire d'un `panic!` au boot.
     pub(crate) fn parse(s: &str) -> Option<ImageSource> {
         match s.trim().to_ascii_lowercase().as_str() {
             "registry" => Some(ImageSource::Registry),
@@ -558,44 +576,43 @@ impl ImageSource {
     }
 }
 
-/// Env var overridant la source stockée (tier optionnel). Lue UNE fois au bord, jamais dans le
-/// cœur — miroir de [`DOCKER_CMD_OVERRIDE_ENV`].
+/// Env var overridant la source d'image du **défaut de profil** (tier optionnel). Lue UNE fois au
+/// bord, jamais dans le cœur — miroir de [`DOCKER_CMD_OVERRIDE_ENV`].
+///
+/// CONSERVÉE par #471 alors que le réglage d'instance disparaît, et ce n'est pas une exception à
+/// « on ne garde pas de champ mort » : une instance headless fraîche n'a que des profils virtuels
+/// et pas d'UI, donc c'est son SEUL moyen de changer d'image sans POSTer un profil.
 pub(crate) const IMAGE_SOURCE_ENV: &str = "PDO_SANDBOX_IMAGE_SOURCE";
 
-/// Tier env pour la disclosure `GET /settings` : `Some("registry"|"dockerfile")` si un
-/// `PDO_SANDBOX_IMAGE_SOURCE` valide est posé, sinon `None` (unset/invalide).
-pub(crate) fn env_image_source() -> Option<String> {
+/// Résolution PURE de la source d'image, `env → défaut de profil` (#471) — testable sans toucher
+/// `std::env`, miroir de [`resolve_dockerfile`]. Le défaut n'est pas nommé ici : il appartient à
+/// [`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`], comme la liste d'entrées de `full`.
+pub(crate) fn resolve_image_source(env: Option<ImageSource>) -> ImageSource {
+    env.unwrap_or(crate::sandbox_profile::DEFAULT_PROFILE_IMAGE.source)
+}
+
+/// Le tier env de la source d'image : `Some` si [`IMAGE_SOURCE_ENV`] porte un token connu, `None`
+/// s'il est absent, vide, ou inconnu. Lu UNE fois au bord par [`image_plan_with`].
+pub(crate) fn env_image_source() -> Option<ImageSource> {
     std::env::var(IMAGE_SOURCE_ENV)
         .ok()
         .as_deref()
         .and_then(ImageSource::parse)
-        .map(|s| s.as_str().to_string())
 }
 
-/// Source effective, précédence `stored → env → default(Registry)` (#411, ADR-0015). Une valeur
-/// stockée vide/invalide est traitée comme unset (miroir de la sentinelle `""` + du validateur PUT).
-/// SOURCE UNIQUE consommée par [`ensure_image`] ET `build_settings_view` (0 drift, leçon #373).
-pub(crate) fn image_source_with(stored: Option<String>) -> ImageSource {
-    stored
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .and_then(ImageSource::parse)
-        .or_else(|| env_image_source().and_then(|s| ImageSource::parse(&s)))
-        .unwrap_or(ImageSource::DEFAULT)
-}
+// -- Dockerfile résolu : 3 tiers depuis #471 (profil → env → défaut) ---------
 
-// -- Dockerfile résolu : réglage 3-tiers (#431) -------------------------------
-
-/// Quel tier a choisi le Dockerfile (#431). Miroir de la discipline `as_str` d'[`ImageSource`] ;
-/// surfacé par `GET /settings` **ET** par la `reason` du `RunFailed` — qui regarde un
-/// « no such file » a besoin de savoir QUI l'a dit.
+/// Quel tier a choisi le Dockerfile (#431, amputé du tier `stored` par #471). Miroir de la
+/// discipline `as_str` d'[`ImageSource`] ; surfacé par la `reason` du `RunFailed` — qui regarde
+/// un « no such file » a besoin de savoir QUI l'a dit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DockerfileSource {
     /// Le profil de staging du Run (#467) — le tier le plus fort, et le seul qui soit **par
     /// Run** plutôt que par daemon : il est gelé dans `RunStarted`, pas relu à chaque prep.
     Profile,
-    Stored,
+    /// [`DOCKERFILE_PATH_ENV`] dans l'env du daemon (#471 : l'échappatoire headless).
     Env,
+    /// Le Dockerfile seedé, matérialisation de [`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`].
     Default,
 }
 
@@ -603,7 +620,6 @@ impl DockerfileSource {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             DockerfileSource::Profile => "profile",
-            DockerfileSource::Stored => "stored",
             DockerfileSource::Env => "env",
             DockerfileSource::Default => "default",
         }
@@ -614,8 +630,8 @@ impl DockerfileSource {
 
 /// La source d'image que porte un **profil de staging** (#467), telle qu'elle est stockée
 /// (colonne JSON `sandbox_profiles.image`), gelée (clé `sandbox_image` de `RunStarted`) et servie
-/// (vue de l'éditeur de profil). `None` côté appelant = « ce profil ne pose rien » → les réglages
-/// d'instance décident, comme avant.
+/// (vue de l'éditeur de profil). `None` côté appelant = « ce profil ne pose rien » → le défaut de
+/// profil décide ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`], overridable par l'env).
 ///
 /// Les deux bras sont **interchangeables** dans le formulaire, mais radicalement différents en
 /// aval : voir [`ImagePlan`]. Le tag interne (`kind`) est la forme filaire, et elle est
@@ -631,8 +647,8 @@ impl DockerfileSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileImage {
-    /// Un Dockerfile choisi PAR PROFIL : exactement le réglage `dockerfile_path` (#431), mais au
-    /// tier [`DockerfileSource::Profile`]. Tout le reste est inchangé — le tag reste le hash de
+    /// Un Dockerfile choisi PAR PROFIL : la même mécanique que #431, au tier
+    /// [`DockerfileSource::Profile`]. Tout le reste est inchangé — le tag reste le hash de
     /// ses octets, le nom vient de son nom de fichier (#466), le contexte de build reste vide,
     /// donc **il doit être auto-porteur** (pas de `COPY`).
     Dockerfile { path: String },
@@ -659,8 +675,8 @@ impl ProfileImage {
 /// contenu (pull et build interchangeables), la seconde ne l'est pas (pull ou rien).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ImagePlan {
-    /// Le chemin historique : un Dockerfile + le réglage `image_source`. Le ref rendu est
-    /// `<nom>:h-<hash>`.
+    /// Le chemin historique : un Dockerfile + une [`ImageSource`] (pull-ou-build). Le ref rendu
+    /// est `<nom>:h-<hash>`.
     HashDerived {
         dockerfile: ResolvedDockerfile,
         source: ImageSource,
@@ -683,27 +699,29 @@ impl ImagePlan {
     }
 }
 
-/// Le plan d'image d'un Run, précédence **profil (si posé) → `image_source`/`dockerfile_path`
-/// stored → env → défaut** (ADR-0015, complétée par #467).
+/// Le plan d'image d'un Run, précédence **profil (si posé) → env → défaut de profil**
+/// (#467, amputé du tier `stored` par #471). **PUR** : les deux tiers env sont *injectés*, pas lus
+/// — c'est [`image_plan_with`] qui les lit, une fois, au bord.
 ///
-/// Pur pour ses deux premiers tiers, mais il lit l'env via les wrappers de bord
-/// [`image_source_with`] / [`dockerfile_with`] : c'est la SOURCE UNIQUE consommée par
-/// `sandbox_run::context_from_state`, donc elle doit voir exactement les mêmes tiers que ce que
-/// `ensure_image` consommera (0 drift, leçon #373).
+/// Ce découpage n'est pas cosmétique. Tant que cette fonction lisait `std::env` elle-même, aucun
+/// test ne pouvait couvrir le tier env sans muter l'environnement du binaire de test, ce que le
+/// reste du module refuse explicitement (D2 : `cargo test` parallélise). Séparés, la précédence
+/// complète se teste sans effet de bord et les *noms* des variables restent couverts par le seul
+/// test qui les mute.
 ///
 /// Deux détails qui se plantent si on les bâcle :
-/// - un profil `registry` **court-circuite** `image_source` ET `dockerfile_path` : il n'y a plus
-///   ni hash ni Dockerfile dans l'histoire ;
-/// - un profil `dockerfile` ne court-circuite **que** `dockerfile_path`. `image_source` reste
-///   consulté, et reste inerte dans le cas normal parce que le prédicat de skip-pull porte sur
-///   l'EMPLACEMENT (un chemin custom ne peut pas avoir de tag publié en amont). Un profil qui
-///   pointe l'emplacement seedé retire donc bien la pull — c'est le même fichier, le même hash,
-///   et #431 a déjà tranché que le prédicat n'est pas du tier-math.
-pub(crate) fn image_plan_with(
+/// - un profil `registry` **court-circuite tout** : il n'y a plus ni hash ni Dockerfile dans
+///   l'histoire, donc les deux tiers env n'ont plus rien à décider ;
+/// - un profil `dockerfile` ne court-circuite **que** le Dockerfile. La source (pull-ou-build)
+///   reste résolue par `env → défaut`, et reste inerte dans le cas normal parce que le prédicat
+///   de skip-pull porte sur l'EMPLACEMENT (un chemin custom ne peut pas avoir de tag publié en
+///   amont). Un profil qui pointe l'emplacement seedé retire donc bien la pull — c'est le même
+///   fichier, le même hash, et #431 a déjà tranché que le prédicat n'est pas du tier-math.
+pub(crate) fn resolve_image_plan(
     profile_name: &str,
     profile_image: Option<&ProfileImage>,
-    stored_source: Option<String>,
-    stored_dockerfile_path: Option<String>,
+    env_source: Option<ImageSource>,
+    env_dockerfile: Option<&str>,
     sandbox_root: &Path,
 ) -> ImagePlan {
     match profile_image {
@@ -712,14 +730,34 @@ pub(crate) fn image_plan_with(
             profile: profile_name.to_string(),
         },
         Some(ProfileImage::Dockerfile { path }) => ImagePlan::HashDerived {
-            dockerfile: dockerfile_with(Some(path), stored_dockerfile_path, sandbox_root),
-            source: image_source_with(stored_source),
+            dockerfile: resolve_dockerfile(Some(path), env_dockerfile, sandbox_root),
+            source: resolve_image_source(env_source),
         },
+        // Le profil ne pose rien : le défaut de profil décide, l'env pouvant l'override
+        // (#471). C'est ce bras qui doit produire EXACTEMENT le ref d'avant #471 — pinné par
+        // `the_default_profile_image_yields_the_pre_471_image_ref`.
         None => ImagePlan::HashDerived {
-            dockerfile: dockerfile_with(None, stored_dockerfile_path, sandbox_root),
-            source: image_source_with(stored_source),
+            dockerfile: resolve_dockerfile(None, env_dockerfile, sandbox_root),
+            source: resolve_image_source(env_source),
         },
     }
+}
+
+/// Wrapper de bord de [`resolve_image_plan`] : lit les DEUX variables d'env une fois chacune, puis
+/// délègue. SOURCE UNIQUE consommée par `sandbox_run::context_from_state`, donc elle voit
+/// exactement les mêmes tiers que ce que `ensure_image` consommera (0 drift, leçon #373).
+pub(crate) fn image_plan_with(
+    profile_name: &str,
+    profile_image: Option<&ProfileImage>,
+    sandbox_root: &Path,
+) -> ImagePlan {
+    resolve_image_plan(
+        profile_name,
+        profile_image,
+        env_image_source(),
+        env_dockerfile_path().as_deref(),
+        sandbox_root,
+    )
 }
 
 /// Le Dockerfile que [`ensure_image`] hashe et builde, résolu UNE fois au bord (#431).
@@ -728,8 +766,8 @@ pub(crate) struct ResolvedDockerfile {
     pub(crate) path: PathBuf,
     pub(crate) source: DockerfileSource,
     /// Prédicat de skip-pull (ADR-0030 §5, précisé par #431) : porte sur l'EMPLACEMENT par
-    /// défaut, **pas** sur le tier — un utilisateur peut épingler le chemin par défaut via le
-    /// picker, et ça doit continuer à puller. Égalité `PathBuf` volontairement nue :
+    /// défaut, **pas** sur le tier — un profil peut épingler le chemin seedé via le picker, et ça
+    /// doit continuer à puller. Égalité `PathBuf` volontairement nue :
     /// `canonicalize` est de l'IO, échoue sur un chemin absent, et empoisonnerait la pureté du
     /// résolveur. Mal classer est inoffensif dans les deux sens (un 404 gâché, ou un pull évité
     /// qui aurait 404 de toute façon) — le skip-pull est une optimisation, pas un gate de
@@ -742,41 +780,41 @@ pub(crate) struct ResolvedDockerfile {
     pub(crate) image_name: String,
 }
 
-/// Env var pointant le Dockerfile de la sandbox (tier optionnel, #431). Lue UNE fois au bord,
-/// jamais dans le cœur — miroir de [`IMAGE_SOURCE_ENV`]. Contourne par construction la validation
-/// de `PUT /settings` : c'est l'échappatoire assumée pour un chemin sur volume amovible ; les deux
-/// tiers restent gatés au prep.
+/// Env var pointant le Dockerfile du **défaut de profil** (tier optionnel, #431). Lue UNE fois au
+/// bord, jamais dans le cœur — miroir de [`IMAGE_SOURCE_ENV`], et CONSERVÉE par #471 pour la même
+/// raison headless. Ne passe par aucun validateur : c'est l'échappatoire assumée pour un chemin sur
+/// volume amovible, et le gate autoritaire reste le `is_file()` d'[`ensure_hash_derived_image`].
 pub(crate) const DOCKERFILE_PATH_ENV: &str = "PDO_SANDBOX_DOCKERFILE";
 
-/// Tier env pour la disclosure `GET /settings` : `Some(path)` si un [`DOCKERFILE_PATH_ENV`] non
-/// vide est posé, sinon `None`.
+/// Tier env : `Some(path)` si un [`DOCKERFILE_PATH_ENV`] non vide est posé, sinon `None`.
 pub(crate) fn env_dockerfile_path() -> Option<String> {
     std::env::var(DOCKERFILE_PATH_ENV)
         .ok()
         .filter(|s| !s.is_empty())
 }
 
-/// Résolution 4-tiers **PURE** — testable sans toucher `std::env` (AC #431 : « précédence testée
-/// stored / env / défaut », étendue par #467 au tier `profile`). Une valeur vide est traitée comme
-/// unset à TOUS les tiers (miroir de la sentinelle `""` et du validateur PUT).
+/// Résolution 3-tiers **PURE** `profil → env → défaut de profil` — testable sans toucher
+/// `std::env` (AC #431, étendue par #467 au tier `profile`, amputée du tier `stored` par #471).
+/// Une valeur vide est traitée comme unset à TOUS les tiers.
 ///
-/// Ce découpage pur/bord est une amélioration délibérée sur [`image_source_with`], qui lit l'env
-/// dans lui-même et dont le test ne peut donc couvrir que stored+default.
+/// Le tier `default` ne nomme pas de chemin en dur : il lit
+/// [`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`], dont le `dockerfile: None` veut dire
+/// « l'emplacement seedé », le seul défaut exprimable — un chemin littéral dans la constante
+/// mentirait, puisqu'il dépend de `<sandbox_root>`, donc de `$HOME`.
 pub(crate) fn resolve_dockerfile(
     profile: Option<&str>,
-    stored: Option<&str>,
     env: Option<&str>,
     sandbox_root: &Path,
 ) -> ResolvedDockerfile {
-    let default = default_dockerfile_path(sandbox_root);
+    let default = match crate::sandbox_profile::DEFAULT_PROFILE_IMAGE.dockerfile {
+        Some(p) => PathBuf::from(p),
+        None => default_dockerfile_path(sandbox_root),
+    };
     let (path, source) = match profile.filter(|s| !s.is_empty()) {
         Some(p) => (PathBuf::from(p), DockerfileSource::Profile),
-        None => match stored.filter(|s| !s.is_empty()) {
-            Some(p) => (PathBuf::from(p), DockerfileSource::Stored),
-            None => match env.filter(|s| !s.is_empty()) {
-                Some(p) => (PathBuf::from(p), DockerfileSource::Env),
-                None => (default.clone(), DockerfileSource::Default),
-            },
+        None => match env.filter(|s| !s.is_empty()) {
+            Some(p) => (PathBuf::from(p), DockerfileSource::Env),
+            None => (default.clone(), DockerfileSource::Default),
         },
     };
     ResolvedDockerfile {
@@ -785,24 +823,6 @@ pub(crate) fn resolve_dockerfile(
         path,
         source,
     }
-}
-
-/// Wrapper de bord : lit [`DOCKERFILE_PATH_ENV`] UNE fois puis délègue au résolveur pur.
-/// SOURCE UNIQUE consommée par [`image_plan_with`] (donc par
-/// `sandbox_run::context_from_state`) **ET** par `build_settings_view` (0 drift, leçon #373).
-/// `build_settings_view` passe `profile: None` : la page de réglages expose les tiers
-/// d'**instance**, le choix par profil vivant dans l'éditeur de profil.
-pub(crate) fn dockerfile_with(
-    profile: Option<&str>,
-    stored: Option<String>,
-    sandbox_root: &Path,
-) -> ResolvedDockerfile {
-    resolve_dockerfile(
-        profile,
-        stored.as_deref(),
-        env_dockerfile_path().as_deref(),
-        sandbox_root,
-    )
 }
 
 #[cfg(test)]
@@ -918,12 +938,14 @@ mod tests {
     /// The pre-#431 `ensure_image` input: the seeded default location, `default` tier.
     /// Every legacy test threads this so its behaviour is pinned unchanged.
     fn seeded(sandbox_root: &Path) -> ResolvedDockerfile {
-        resolve_dockerfile(None, None, None, sandbox_root)
+        resolve_dockerfile(None, None, sandbox_root)
     }
 
-    /// A custom Dockerfile at `path`, as a `stored` tier would resolve it.
-    fn stored_at(path: &Path, sandbox_root: &Path) -> ResolvedDockerfile {
-        resolve_dockerfile(None, Some(path.to_str().unwrap()), None, sandbox_root)
+    /// A custom Dockerfile at `path`, as the `env` tier resolves it. Was the `stored` tier
+    /// until #471 removed it; the env tier is now the surviving instance-wide one, and every
+    /// custom-path assertion below is about the PATH, not about which tier named it.
+    fn env_at(path: &Path, sandbox_root: &Path) -> ResolvedDockerfile {
+        resolve_dockerfile(None, Some(path.to_str().unwrap()), sandbox_root)
     }
 
     /// Under `cargo test --workspace`, exec-ing a **freshly written** binary can
@@ -1526,117 +1548,146 @@ mod tests {
         );
         assert_eq!(ImageSource::parse("ecr"), None);
         assert_eq!(ImageSource::parse(""), None);
-        // as_str round-trips both variants; the built-in default is Registry.
+        // as_str round-trips both variants.
         assert_eq!(ImageSource::Registry.as_str(), "registry");
         assert_eq!(ImageSource::Dockerfile.as_str(), "dockerfile");
-        assert_eq!(ImageSource::DEFAULT, ImageSource::Registry);
 
-        // resolver: a concrete stored value wins; empty/invalid falls through to
-        // env→default (no test sets PDO_SANDBOX_IMAGE_SOURCE, so default = Registry).
-        assert_eq!(image_source_with(None), ImageSource::Registry);
+        // #471: the resolver is PURE — `env → défaut de profil`, two tiers, no `std::env`.
         assert_eq!(
-            image_source_with(Some(String::new())),
-            ImageSource::Registry
+            resolve_image_source(None),
+            crate::sandbox_profile::DEFAULT_PROFILE_IMAGE.source,
+            "unset env ⇒ the profile-defaults constant, and nothing else names that default"
         );
         assert_eq!(
-            image_source_with(Some("ecr".to_string())),
-            ImageSource::Registry
+            resolve_image_source(Some(ImageSource::Dockerfile)),
+            ImageSource::Dockerfile,
+            "AC4: the env tier still changes the default"
         );
         assert_eq!(
-            image_source_with(Some("dockerfile".to_string())),
-            ImageSource::Dockerfile
-        );
-        assert_eq!(
-            image_source_with(Some("registry".to_string())),
+            resolve_image_source(Some(ImageSource::Registry)),
             ImageSource::Registry
         );
     }
 
-    // -- #431 : le Dockerfile résolu est un réglage 3-tiers (4 depuis #467) ----
+    /// AC3, la moitié « source » : la constante de défaut de profil vaut EXACTEMENT ce que le tier
+    /// `default` des deux réglages retirés produisait — registre hash-dérivé sur le Dockerfile
+    /// seedé. Le golden sur le ref complet est
+    /// [`the_default_profile_image_yields_the_pre_471_image_ref`].
+    #[test]
+    fn the_default_profile_image_is_the_pre_471_instance_default() {
+        let d = crate::sandbox_profile::DEFAULT_PROFILE_IMAGE;
+        assert_eq!(
+            d.source,
+            ImageSource::Registry,
+            "pre-#471 `image_source.default` était `registry`"
+        );
+        assert_eq!(
+            d.dockerfile, None,
+            "pre-#471 `dockerfile_path.default` était l'emplacement seedé, pas un chemin littéral"
+        );
+    }
+
+    /// AC3, LE golden : un profil qui ne pose pas d'image produit le ref d'avant #471, bit pour
+    /// bit. `pdo-sandbox` (nom de la base, #466) + `h-` + les 12 premiers hex du SHA-256 des octets
+    /// du Dockerfile embarqué. Le littéral est là exprès : dériver l'attendu du même code que le
+    /// sujet ne prouverait rien, alors qu'un ref écrit en dur casse le jour où la résolution du
+    /// défaut change de sens — ce que cette issue jure ne pas faire.
+    #[test]
+    fn the_default_profile_image_yields_the_pre_471_image_ref() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        // Le plan d'un profil qui ne pose rien, tiers env vides comme sur l'instance de référence.
+        let plan = resolve_image_plan("full", None, None, None, root);
+        let ImagePlan::HashDerived { dockerfile, source } = plan else {
+            panic!("un profil sans image doit rester hash-dérivé");
+        };
+        assert_eq!(dockerfile.path, default_dockerfile_path(root));
+        assert_eq!(dockerfile.source, DockerfileSource::Default);
+        assert!(dockerfile.is_default_location, "donc la pull reste tentée");
+        assert_eq!(dockerfile.image_name, BASE_IMAGE_NAME);
+        assert_eq!(source, ImageSource::Registry);
+        // Le ref que `ensure_hash_derived_image` rendra pour ces octets, en dur.
+        assert_eq!(
+            local_image_ref(&dockerfile.image_name, EMBEDDED_DOCKERFILE.as_bytes()),
+            format!(
+                "pdo-sandbox:h-{}",
+                dockerfile_hash(EMBEDDED_DOCKERFILE.as_bytes())
+            )
+        );
+        assert_eq!(
+            registry_image_ref(&dockerfile.image_name, EMBEDDED_DOCKERFILE.as_bytes()),
+            format!(
+                "ghcr.io/loulen/pdo-sandbox:h-{}",
+                dockerfile_hash(EMBEDDED_DOCKERFILE.as_bytes())
+            ),
+            "et c'est ce ref GHCR que la pull vise, comme avant"
+        );
+    }
+
+    // -- #431 : le Dockerfile résolu est un réglage à tiers (3 depuis #471) ----
 
     #[test]
-    fn resolve_dockerfile_precedence_stored_env_default() {
+    fn resolve_dockerfile_precedence_profile_env_default() {
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
 
-        // default tier: nothing stored, nothing in env.
-        let r = resolve_dockerfile(None, None, None, root);
+        // default tier: nothing posed by the profile, nothing in env.
+        let r = resolve_dockerfile(None, None, root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
         assert!(r.is_default_location);
 
-        // #467: the PROFILE tier beats both of the instance tiers.
-        let r = resolve_dockerfile(
-            Some("/profile/Dockerfile"),
-            Some("/stored/Dockerfile"),
-            Some("/env/Dockerfile"),
-            root,
-        );
+        // #467: the PROFILE tier beats the env one.
+        let r = resolve_dockerfile(Some("/profile/Dockerfile"), Some("/env/Dockerfile"), root);
         assert_eq!(r.path, Path::new("/profile/Dockerfile"));
         assert_eq!(r.source, DockerfileSource::Profile);
         // …and an empty profile value is unset at that tier too, like every other one.
-        let r = resolve_dockerfile(Some(""), Some("/stored/Dockerfile"), None, root);
-        assert_eq!(r.source, DockerfileSource::Stored);
+        let r = resolve_dockerfile(Some(""), Some("/env/Dockerfile"), root);
+        assert_eq!(r.source, DockerfileSource::Env);
 
-        // env tier wins over the default.
-        let r = resolve_dockerfile(None, None, Some("/env/Dockerfile"), root);
+        // env tier wins over the default (AC4: still true after #471).
+        let r = resolve_dockerfile(None, Some("/env/Dockerfile"), root);
         assert_eq!(r.path, Path::new("/env/Dockerfile"));
         assert_eq!(r.source, DockerfileSource::Env);
-        assert!(!r.is_default_location);
-
-        // stored tier wins over env (ADR-0015).
-        let r = resolve_dockerfile(
-            None,
-            Some("/stored/Dockerfile"),
-            Some("/env/Dockerfile"),
-            root,
-        );
-        assert_eq!(r.path, Path::new("/stored/Dockerfile"));
-        assert_eq!(r.source, DockerfileSource::Stored);
         assert!(!r.is_default_location);
     }
 
     #[test]
     fn resolve_dockerfile_treats_empty_string_as_unset_at_both_tiers() {
-        // Mirror of the `""` clear sentinel + the PUT validator: an empty value must never
-        // win precedence at either tier.
+        // An empty value must never win precedence at either surviving tier.
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
 
-        let r = resolve_dockerfile(None, Some(""), None, root);
+        let r = resolve_dockerfile(None, Some(""), root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
 
-        let r = resolve_dockerfile(None, Some(""), Some("/env/Dockerfile"), root);
-        assert_eq!(
-            r.source,
-            DockerfileSource::Env,
-            "empty stored falls through"
-        );
-
-        let r = resolve_dockerfile(None, None, Some(""), root);
+        let r = resolve_dockerfile(Some(""), Some(""), root);
         assert_eq!(r.path, default);
         assert_eq!(r.source, DockerfileSource::Default);
     }
 
     #[test]
     fn is_default_location_is_about_the_path_not_the_tier() {
-        // THE tier-vs-path trap: pinning the DEFAULT path through the picker stores a
-        // value, so the tier is `stored` — but the location is still the seeded one, so
-        // the pull must still be attempted. `is_default_location` is path-math, not tier-math.
+        // THE tier-vs-path trap: pinning the DEFAULT path through the profile picker names a
+        // tier — but the location is still the seeded one, so the pull must still be attempted.
+        // `is_default_location` is path-math, not tier-math.
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
-        let r = resolve_dockerfile(None, Some(default.to_str().unwrap()), None, root);
-        assert_eq!(r.source, DockerfileSource::Stored);
+        let r = resolve_dockerfile(Some(default.to_str().unwrap()), None, root);
+        assert_eq!(r.source, DockerfileSource::Profile);
         assert!(
             r.is_default_location,
-            "a stored value pointing AT the default location must still pull"
+            "a profile pointing AT the default location must still pull"
         );
+        // Same, through the env tier.
+        let r = resolve_dockerfile(None, Some(default.to_str().unwrap()), root);
+        assert_eq!(r.source, DockerfileSource::Env);
+        assert!(r.is_default_location);
     }
 
     #[test]
     fn dockerfile_source_as_str_round_trips() {
-        assert_eq!(DockerfileSource::Stored.as_str(), "stored");
+        assert_eq!(DockerfileSource::Profile.as_str(), "profile");
         assert_eq!(DockerfileSource::Env.as_str(), "env");
         assert_eq!(DockerfileSource::Default.as_str(), "default");
     }
@@ -1665,7 +1716,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&custom, &sandbox_root),
+                &env_at(&custom, &sandbox_root),
                 ImageSource::Dockerfile,
             )
         })
@@ -1706,7 +1757,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&custom, &sandbox_root),
+                &env_at(&custom, &sandbox_root),
                 ImageSource::Registry,
             )
         })
@@ -1781,7 +1832,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&missing, &sandbox_root),
+                &env_at(&missing, &sandbox_root),
                 ImageSource::Registry,
             )
         })
@@ -1793,8 +1844,13 @@ mod tests {
             "the reason must name the path (US-16 actionable): {msg}"
         );
         assert!(
-            msg.contains("`stored` tier"),
+            msg.contains("`env` tier"),
             "the reason must name the WINNING TIER: {msg}"
+        );
+        assert!(
+            msg.contains(DOCKERFILE_PATH_ENV),
+            "…and the remediation must name the knob that CAN be fixed, which since #471 is \
+             the env var and no longer a setting: {msg}"
         );
         // No silent fallback to the seeded default: nothing was built, nothing probed.
         assert!(
@@ -1813,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn dockerfile_path_pointing_at_a_directory_is_an_error() {
+    fn a_dockerfile_path_pointing_at_a_directory_is_an_error() {
         // The `exists()` vs `is_file()` trap: `Path::exists()` is TRUE for a directory.
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _) = write_fake_docker(tmp.path(), &FakeSpec::default());
@@ -1825,7 +1881,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&dir, &sandbox_root),
+                &env_at(&dir, &sandbox_root),
                 ImageSource::Dockerfile,
             )
         })
@@ -1858,7 +1914,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&custom, &sandbox_root),
+                &env_at(&custom, &sandbox_root),
                 ImageSource::Dockerfile,
             )
         })
@@ -1883,7 +1939,7 @@ mod tests {
     // -- #466 : le NOM d'image est une donnée de la variante ------------------
 
     /// Le Dockerfile de variante LIVRÉ, lu au build du test uniquement (`#[cfg(test)]`) : il n'a
-    /// pas à grossir le binaire, personne ne le seede — c'est `dockerfile_path` qui le pointe.
+    /// pas à grossir le binaire, personne ne le seede — c'est un profil (ou l'env) qui le pointe.
     const EMBEDDED_CHROME_DEV_DOCKERFILE: &str =
         include_str!("../assets/sandbox/Dockerfile.chrome-dev");
 
@@ -1937,23 +1993,21 @@ mod tests {
         let root = Path::new("/home/u/.pdo/sandbox");
         // Le tier `default` (Dockerfile seedé) → nom de base.
         assert_eq!(
-            resolve_dockerfile(None, None, None, root).image_name,
+            resolve_dockerfile(None, None, root).image_name,
             BASE_IMAGE_NAME
         );
-        // Un `dockerfile_path` pointant la variante → nom de variante, SANS 3e valeur d'enum
-        // `image_source` : c'est le chemin de sélection le plus court (#466 périmètre pt 4).
+        // Un chemin pointant la variante → nom de variante, SANS 3e valeur d'enum
+        // [`ImageSource`] : c'est le chemin de sélection le plus court (#466 périmètre pt 4).
         let r = resolve_dockerfile(
             None,
             Some("/repo/assets/sandbox/Dockerfile.chrome-dev"),
-            None,
             root,
         );
         assert_eq!(r.image_name, "pdo-sandbox-chrome-dev");
-        assert_eq!(r.source, DockerfileSource::Stored);
+        assert_eq!(r.source, DockerfileSource::Env);
         assert!(
             !r.is_default_location,
-            "la variante n'est pas à l'emplacement seedé → build local, jamais de pull (#467 \
-             câblera la sélection par profil)"
+            "la variante n'est pas à l'emplacement seedé → build local, jamais de pull"
         );
     }
 
@@ -1973,7 +2027,7 @@ mod tests {
             ensure_hash_derived_image(
                 &docker_str(&docker),
                 &sandbox_root,
-                &stored_at(&variant, &sandbox_root),
+                &env_at(&variant, &sandbox_root),
                 ImageSource::Registry,
             )
         })
@@ -2119,18 +2173,24 @@ mod tests {
         .is_err());
     }
 
-    /// La précédence de #467, sur les trois cas qui comptent. `image_plan_with` lit l'env, mais
-    /// aucun test ne pose `PDO_SANDBOX_*`, donc les tiers env sont `None` ici.
+    /// Le plan d'un profil, tiers env explicitement vides — le cas nominal.
+    fn plan_of(profile_name: &str, image: Option<&ProfileImage>, root: &Path) -> ImagePlan {
+        resolve_image_plan(profile_name, image, None, None, root)
+    }
+
+    /// La précédence de #467 telle que #471 la laisse, sur les trois cas qui comptent. Tiers env
+    /// vides ici (voir `the_env_tiers_override_the_profile_default` pour l'autre moitié), donc le
+    /// tier `default` est celui de la couche de défauts de profil.
     #[test]
     fn image_plan_puts_the_profile_first() {
         let root = Path::new("/home/u/.pdo/sandbox");
 
-        // (a) aucun profil ne pose rien → exactement le comportement d'avant #467.
-        let plan = image_plan_with("full", None, None, Some("/stored/Dockerfile".into()), root);
+        // (a) le profil ne pose rien → le défaut de profil, c.-à-d. le Dockerfile seedé.
+        let plan = plan_of("full", None, root);
         assert_eq!(
             plan,
             ImagePlan::HashDerived {
-                dockerfile: resolve_dockerfile(None, Some("/stored/Dockerfile"), None, root),
+                dockerfile: resolve_dockerfile(None, None, root),
                 source: ImageSource::Registry,
             }
         );
@@ -2140,14 +2200,12 @@ mod tests {
             "le tag hash-dérivé n'est pas connu sans IO"
         );
 
-        // (b) profil `dockerfile` → il gagne le tier, `image_source` reste consulté.
-        let plan = image_plan_with(
+        // (b) profil `dockerfile` → il gagne le tier ; la source reste résolue env→défaut.
+        let plan = plan_of(
             "chrome",
             Some(&ProfileImage::Dockerfile {
                 path: "/repo/Dockerfile.chrome-dev".to_string(),
             }),
-            Some("dockerfile".to_string()),
-            Some("/stored/Dockerfile".into()),
             root,
         );
         match plan {
@@ -2156,19 +2214,21 @@ mod tests {
                 assert_eq!(dockerfile.source, DockerfileSource::Profile);
                 // #466 : le NOM d'image suit le nom de fichier, y compris par ce chemin-là.
                 assert_eq!(dockerfile.image_name, "pdo-sandbox-chrome-dev");
-                assert_eq!(source, ImageSource::Dockerfile);
+                assert_eq!(source, ImageSource::Registry);
+                assert!(
+                    !dockerfile.is_default_location,
+                    "un chemin custom n'a pas de tag publié en amont → build local"
+                );
             }
             other => panic!("expected a hash-derived plan, got {other:?}"),
         }
 
-        // (c) profil `registry` → court-circuite les DEUX réglages d'instance.
-        let plan = image_plan_with(
+        // (c) profil `registry` → court-circuite tout : plus ni hash ni Dockerfile.
+        let plan = plan_of(
             "chrome",
             Some(&ProfileImage::Registry {
                 image_ref: "ghcr.io/acme/agent:1.4".to_string(),
             }),
-            Some("dockerfile".to_string()),
-            Some("/stored/Dockerfile".into()),
             root,
         );
         assert_eq!(
@@ -2181,19 +2241,122 @@ mod tests {
         assert_eq!(plan.known_ref(), Some("ghcr.io/acme/agent:1.4"));
     }
 
+    /// AC4 : les deux tiers ENV changent encore le défaut, et un profil qui pose une image gagne
+    /// toujours sur eux. Entièrement PUR grâce au découpage `resolve_image_plan` / `image_plan_with`
+    /// — avant #471 ce test n'était pas écrivable sans muter l'environnement du binaire de test.
+    #[test]
+    fn the_env_tiers_override_the_profile_default() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let env_df = "/env/Dockerfile.from-env";
+
+        // (a) profil muet + les deux tiers env → l'env décide des DEUX moitiés du plan.
+        let plan = resolve_image_plan(
+            "full",
+            None,
+            Some(ImageSource::Dockerfile),
+            Some(env_df),
+            root,
+        );
+        match &plan {
+            ImagePlan::HashDerived { dockerfile, source } => {
+                assert_eq!(dockerfile.path, Path::new(env_df));
+                assert_eq!(dockerfile.source, DockerfileSource::Env);
+                assert_eq!(*source, ImageSource::Dockerfile);
+            }
+            other => panic!("expected a hash-derived plan, got {other:?}"),
+        }
+
+        // (b) un profil `dockerfile` bat `DOCKERFILE_PATH_ENV`…
+        let plan = resolve_image_plan(
+            "chrome",
+            Some(&ProfileImage::Dockerfile {
+                path: "/repo/Dockerfile.chrome-dev".to_string(),
+            }),
+            Some(ImageSource::Dockerfile),
+            Some(env_df),
+            root,
+        );
+        match &plan {
+            ImagePlan::HashDerived { dockerfile, source } => {
+                assert_eq!(dockerfile.path, Path::new("/repo/Dockerfile.chrome-dev"));
+                assert_eq!(dockerfile.source, DockerfileSource::Profile);
+                // …et ne touche PAS à la source, qui reste celle de l'env.
+                assert_eq!(*source, ImageSource::Dockerfile);
+            }
+            other => panic!("expected a hash-derived plan, got {other:?}"),
+        }
+
+        // (c) un profil `registry` bat les DEUX : plus de Dockerfile, plus de source à décider.
+        assert_eq!(
+            resolve_image_plan(
+                "chrome",
+                Some(&ProfileImage::Registry {
+                    image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+                }),
+                Some(ImageSource::Dockerfile),
+                Some(env_df),
+                root,
+            ),
+            ImagePlan::ExplicitRef {
+                image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+                profile: "chrome".to_string(),
+            },
+            "un ref explicite ne consulte aucun tier env"
+        );
+    }
+
+    /// Les deux *noms* de variables, et rien d'autre. LE seul test du module qui mute
+    /// `std::env` — toléré ici, et seulement ici, parce que depuis #471 plus aucun autre test du
+    /// workspace ne lit ces deux variables : la précédence passe par `resolve_image_plan` (pur), et
+    /// `context_from_state` n'est exercé que par des tests d'intégration, qui sont d'autres
+    /// processus. Restaure ce qu'il trouve, pour ne pas empoisonner un binaire de test réutilisé.
+    #[test]
+    fn the_edge_wrappers_read_the_documented_env_var_names() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        let before_src = std::env::var(IMAGE_SOURCE_ENV).ok();
+        let before_df = std::env::var(DOCKERFILE_PATH_ENV).ok();
+
+        std::env::set_var(IMAGE_SOURCE_ENV, "dockerfile");
+        std::env::set_var(DOCKERFILE_PATH_ENV, "/env/Dockerfile.named");
+        assert_eq!(env_image_source(), Some(ImageSource::Dockerfile));
+        assert_eq!(
+            env_dockerfile_path().as_deref(),
+            Some("/env/Dockerfile.named")
+        );
+        // And the edge wrapper threads both into the plan.
+        match image_plan_with("full", None, root) {
+            ImagePlan::HashDerived { dockerfile, source } => {
+                assert_eq!(dockerfile.path, Path::new("/env/Dockerfile.named"));
+                assert_eq!(dockerfile.source, DockerfileSource::Env);
+                assert_eq!(source, ImageSource::Dockerfile);
+            }
+            other => panic!("expected a hash-derived plan, got {other:?}"),
+        }
+
+        // An unknown token is unset, not a panic and not a third variant.
+        std::env::set_var(IMAGE_SOURCE_ENV, "ecr");
+        assert_eq!(env_image_source(), None);
+        // An empty path is unset too (the sentinel discipline the resolvers share).
+        std::env::set_var(DOCKERFILE_PATH_ENV, "");
+        assert_eq!(env_dockerfile_path(), None);
+
+        match before_src {
+            Some(v) => std::env::set_var(IMAGE_SOURCE_ENV, v),
+            None => std::env::remove_var(IMAGE_SOURCE_ENV),
+        }
+        match before_df {
+            Some(v) => std::env::set_var(DOCKERFILE_PATH_ENV, v),
+            None => std::env::remove_var(DOCKERFILE_PATH_ENV),
+        }
+    }
+
     /// Un profil qui pointe l'emplacement SEEDÉ garde la pull : le prédicat de skip-pull porte sur
-    /// l'emplacement, pas sur le tier (#431), et #467 ne change pas cette règle.
+    /// l'emplacement, pas sur le tier (#431), et ni #467 ni #471 ne changent cette règle.
     #[test]
     fn a_profile_dockerfile_at_the_default_location_still_pulls() {
         let root = Path::new("/home/u/.pdo/sandbox");
         let default = default_dockerfile_path(root);
-        let plan = image_plan_with(
-            "chrome",
-            Some(&profile_dockerfile(&default)),
-            None,
-            None,
-            root,
-        );
+        let plan = plan_of("chrome", Some(&profile_dockerfile(&default)), root);
         match plan {
             ImagePlan::HashDerived { dockerfile, .. } => {
                 assert_eq!(dockerfile.source, DockerfileSource::Profile);
@@ -2391,8 +2554,8 @@ mod tests {
         );
     }
 
-    /// Un chemin de profil manquant échoue en nommant le tier `profile` — et la remédiation ne
-    /// renvoie PAS vers `dockerfile_path`, qui n'est pas le réglage gagnant.
+    /// Un chemin de profil manquant échoue en nommant le tier `profile` — et la remédiation
+    /// renvoie vers le PROFIL, pas vers l'env var, qui n'est pas le tier gagnant.
     #[test]
     fn a_missing_profile_dockerfile_names_the_profile_tier() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2408,7 +2571,6 @@ mod tests {
                     dockerfile: resolve_dockerfile(
                         Some(missing.to_str().unwrap()),
                         None,
-                        None,
                         &sandbox_root,
                     ),
                     source: ImageSource::Registry,
@@ -2422,7 +2584,11 @@ mod tests {
         assert!(msg.contains(&missing.display().to_string()), "{msg}");
         assert!(
             msg.contains("staging profile"),
-            "la remédiation doit pointer le profil, pas `dockerfile_path`: {msg}"
+            "la remédiation doit pointer le profil, pas l'env var: {msg}"
+        );
+        assert!(
+            !msg.contains(DOCKERFILE_PATH_ENV),
+            "…et surtout PAS l'env var, que l'utilisateur n'a pas posée: {msg}"
         );
         assert!(build_argv(&argv_log).is_empty());
     }

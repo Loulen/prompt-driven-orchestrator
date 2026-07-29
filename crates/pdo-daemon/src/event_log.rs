@@ -642,10 +642,11 @@ pub struct RunState {
     ///
     /// `None` therefore means "this Run's profile posed no image source", which is
     /// indistinguishable, by construction, from "a pre-#467 daemon created this Run": in both
-    /// cases the instance-wide `image_source` / `dockerfile_path` decide, read fresh at each prep
-    /// exactly as they were before. That is the one place the freeze is deliberately *not* total,
-    /// and it is not a hole — it is the pre-existing ADR-0015 contract for those two knobs
-    /// ("a `PUT /settings` bites at the next ensure"), which this issue explicitly does not change.
+    /// cases the **profile default** decides ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`],
+    /// #471), with the two env vars able to override it, read fresh at each prep. That is the one
+    /// place the freeze is deliberately *not* total, and it is not a hole — since #471 what is left
+    /// above the default is a compile-time constant and two env vars, and a daemon's environment
+    /// does not change under a running Run.
     ///
     /// What IS frozen is the profile's choice, and that is what matters: a Run cannot have its
     /// image swapped under it because someone edited the profile, so two nodes of the same Run can
@@ -2353,8 +2354,8 @@ mod tests {
     }
 
     /// The same asymmetry with `sandbox_entries` as the env has: an absent `sandbox_image` is NOT
-    /// a legacy arm to re-resolve, it means "the profile posed none" — and the instance-wide
-    /// `image_source` / `dockerfile_path` then decide, read fresh, exactly as before #467.
+    /// a legacy arm to re-resolve, it means "the profile posed none" — and the profile default of
+    /// #471 then decides, exactly as the two retired settings did before it.
     #[test]
     fn an_absent_frozen_image_source_projects_none() {
         let events = vec![make_event_with_payload(
@@ -2411,6 +2412,48 @@ mod tests {
         let value = serde_json::to_value(&state).unwrap();
         assert!(value.get("sandbox_image_raw_error").is_none());
         assert!(value.get("sandbox_image").is_none());
+    }
+
+    /// #471, the one guarantee that has nothing to do with API compatibility: an **archived** Run
+    /// whose payload was written by an older daemon still opens. Payload projection is additive —
+    /// keys it does not know are ignored, keys it knows are read — so a `run_started` carrying the
+    /// retired setting names (a hand-edited payload, or a future daemon's key seen by an older
+    /// reader) projects exactly like one without them, including the #467 frozen source.
+    #[test]
+    fn an_older_payload_with_retired_setting_keys_still_projects() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "sandbox": "chrome",
+                "sandbox_entries": [".claude/skills"],
+                "sandbox_image": { "kind": "registry", "ref": "ghcr.io/acme/agent:1.4" },
+                // Names #471 retired from `instance_config`. They never belonged in a Run payload;
+                // seeing them here must be a non-event, not a projection failure.
+                "image_source": "dockerfile",
+                "dockerfile_path": "/repo/docker/sbx.Dockerfile",
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.pipeline_name, "p");
+        assert_eq!(state.sandbox.as_str(), "chrome");
+        assert_eq!(
+            state.sandbox_entries.as_deref(),
+            Some(&[".claude/skills".to_string()][..])
+        );
+        assert_eq!(
+            state.sandbox_image,
+            Some(crate::sandbox_image::ProfileImage::Registry {
+                image_ref: "ghcr.io/acme/agent:1.4".to_string(),
+            }),
+            "the frozen source still reads: an unknown sibling key changes nothing"
+        );
+        assert_eq!(state.sandbox_image_raw_error, None);
+        // And the projection does not echo the stray keys back onto the wire.
+        let value = serde_json::to_value(&state).unwrap();
+        assert!(value.get("image_source").is_none(), "{value}");
+        assert!(value.get("dockerfile_path").is_none(), "{value}");
     }
 
     // -- Slice E (#410): sandbox-prep projection ------------------------------

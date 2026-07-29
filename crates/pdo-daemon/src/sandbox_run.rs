@@ -74,8 +74,8 @@ pub(crate) struct SandboxContext {
     pub(crate) gid: u32,
     /// Host `pdo` binary, bind-mounted read-only at `/usr/local/bin/pdo`.
     pub(crate) pdo_bin: PathBuf,
-    /// WHERE this Run's image comes from, resolved ONCE at the edge (#411 `image_source`, #431
-    /// `dockerfile_path`, #467 the profile's own source, which wins). Two shapes in one value —
+    /// WHERE this Run's image comes from, resolved ONCE at the edge (#467 the profile's own
+    /// source, else the profile default of #471). Two shapes in one value —
     /// hash-derived (a Dockerfile + pull/build) or an explicit registry ref (pull or fail) —
     /// because the two are not variations of one procedure: see
     /// [`sandbox_image::ImagePlan`]. Passed to `sandbox_image::ensure_image` in the sync
@@ -169,8 +169,8 @@ fn frozen_env(run_state: &RunState) -> Result<BTreeMap<String, String>> {
 /// | payload | behaviour | why |
 /// |---|---|---|
 /// | `sandbox_image` present and readable | **verbatim** | the freeze. A profile whose image was edited (or deleted) since is not an error — surviving that is the point |
-/// | absent | **`None`** = "the profile posed none" | a pre-#467 daemon could pose none at all, so absence and "poses none" describe the same resolution: the instance-wide `image_source` / `dockerfile_path` decide, read fresh, exactly as before |
-/// | present but unreadable | **hard error** | undecidable; falling back to the instance setting would start the container in a DIFFERENT image than the nodes that already launched ran in — the one failure this freeze exists to prevent |
+/// | absent | **`None`** = "the profile posed none" | a pre-#467 daemon could pose none at all, so absence and "poses none" describe the same resolution: the profile default decides (`sandbox_profile::DEFAULT_PROFILE_IMAGE`, #471), exactly as before |
+/// | present but unreadable | **hard error** | undecidable; falling back to the profile default would start the container in a DIFFERENT image than the nodes that already launched ran in — the one failure this freeze exists to prevent |
 ///
 /// Note what `None` does **not** mean: it is not "no image". Every sandboxed Run has an image;
 /// `None` only says the profile did not choose it.
@@ -188,10 +188,10 @@ fn frozen_image(run_state: &RunState) -> Result<Option<sandbox_image::ProfileIma
 /// Resolve a [`SandboxContext`] from the daemon state + a projected Run. The one
 /// edge function that reads `AppState` / the environment; the core is pure values.
 ///
-/// **Async** (#411): reads a fresh `instance_config` at the boundary to resolve the
-/// image source (stored → env → default Registry), so a `PUT /settings` takes effect
-/// at the next ensure — consistent with the cap/TTL/model seams. A DB read error is
-/// swallowed (falls back env→default), never failing the prep.
+/// **Async**: reads the DB at the boundary to resolve the Run's **frozen** staging profile
+/// (#432 the entry list, #468 the env). Since #471 the image plan needs no DB read at all —
+/// the two instance-wide knobs it used to fold in are gone, and what is left is the Run's frozen
+/// profile choice folded over a compile-time default plus two env vars.
 ///
 /// Fails (loud) when `$HOME` is unset, the current exe path can't be resolved, or the
 /// Run's **frozen** staging-profile selection cannot be resolved (#432) — a sandboxed
@@ -210,11 +210,6 @@ pub(crate) async fn context_from_state(
     let (home_root, sandbox_root) = sandbox_home_roots(state)?;
     let host_home = home_root.clone();
     let pdo_bin = sandbox_container::pdo_bin_path()?;
-    // Read fresh at each prep → a PUT /settings takes effect at the next ensure
-    // (ADR-0015), like the cap/TTL/model seams. A DB error falls back env→default,
-    // never failing the prep. ONE read serves BOTH sandbox knobs (#431): two reads
-    // could straddle a concurrent PUT and mix tiers.
-    let cfg = crate::instance_config::get(&state.db).await.ok();
     // #432: the frozen entry list, resolved here (the boundary) so the sync core stays
     // DB-free. `off` resolves to `None` without touching the DB.
     let entries = match run_state.sandbox.profile() {
@@ -229,8 +224,8 @@ pub(crate) async fn context_from_state(
         BTreeMap::new()
     };
     // #467: the image plan, on the same boundary, from the profile's FROZEN choice folded over
-    // the two instance knobs. `off` never reaches `ensure_ready`, so the plan it gets is the
-    // instance one — inert, and cheaper than an `Option` every consumer would have to unwrap.
+    // the profile default (#471). `off` never reaches `ensure_ready`, so the plan it gets is the
+    // default one — inert, and cheaper than an `Option` every consumer would have to unwrap.
     let image_plan = sandbox_image::image_plan_with(
         // `as_str()` and not `profile()`: it yields the profile name when there is one and `off`
         // otherwise, and the label only ever surfaces in the explicit-ref failure reason — which
@@ -242,8 +237,6 @@ pub(crate) async fn context_from_state(
             None
         }
         .as_ref(),
-        cfg.as_ref().and_then(|c| c.image_source.clone()),
-        cfg.as_ref().and_then(|c| c.dockerfile_path.clone()),
         &sandbox_root,
     );
     Ok(SandboxContext {
@@ -420,7 +413,7 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     // 2. Ensure the Run's image exists locally, per the plan resolved at the edge:
     //    pull-then-retag `<name>:h-<hash>` from GHCR (registry, default) or build it from the
     //    RESOLVED Dockerfile (dockerfile mode / custom path / pull fallback), per
-    //    `image_source` (#411) and the winning `dockerfile` tier (#431, #467) — OR pull a
+    //    the [`ImageSource`] and the winning `dockerfile` tier (#431, #467, #471) — OR pull a
     //    profile's EXPLICIT registry ref, where a failed pull is a hard error and no build is
     //    attempted (#467, ADR-0030 pt 7 as amended). A resolved Dockerfile path that is not a
     //    readable regular file is likewise a hard error, never a silent fallback to the seeded
@@ -681,7 +674,7 @@ mod tests {
             // assertions (image inspect + build/create) intact (#411). The seeded default
             // location / `default` tier — the pre-#431, pre-#467 input.
             sandbox_image::ImagePlan::HashDerived {
-                dockerfile: sandbox_image::resolve_dockerfile(None, None, None, &sandbox_root),
+                dockerfile: sandbox_image::resolve_dockerfile(None, None, &sandbox_root),
                 source: sandbox_image::ImageSource::Dockerfile,
             },
         )
@@ -1074,11 +1067,16 @@ mod tests {
         );
     }
 
-    /// AC4 stated as the property it is: the `docker create` argv of a profile that poses no image
-    /// source is **bit for bit** what it was, tempdir-relative paths aside. Proven by rebuilding
-    /// the same context twice — once through the pre-#467 code path shape (`ImagePlan::HashDerived`
-    /// over the `default` tier), once through `image_plan_with` with `profile_image: None` — and
+    /// AC4 of #467, and the argv half of AC3 of #471: the `docker create` argv of a profile that
+    /// poses no image source is **bit for bit** what it was, tempdir-relative paths aside. Proven
+    /// by rebuilding the same context twice — once through a hand-written `HashDerived` plan over
+    /// the `default` tier, once through `resolve_image_plan` with `profile_image: None` — and
     /// comparing the two argv logs verbatim.
+    ///
+    /// The two plans differ in their [`sandbox_image::ImageSource`] (the hand-written one builds,
+    /// the resolved one pulls) and that is deliberate: the fake docker answers `image inspect`
+    /// with exit 0, so BOTH take the fast path and land on the same content-addressed ref. What is
+    /// compared is what `docker create` receives, which is exactly what must not move.
     #[test]
     fn a_profile_without_an_image_source_yields_the_same_create_argv() {
         let create_argv = |ctx: &SandboxContext, log: &Path| -> Vec<String> {
@@ -1120,13 +1118,9 @@ mod tests {
             minimal(),
             Some(Vec::new()),
             BTreeMap::new(),
-            sandbox_image::image_plan_with(
-                "minimal",
-                None,
-                Some("dockerfile".to_string()),
-                None,
-                &sandbox_root2,
-            ),
+            // The PURE resolver (#471), env tiers explicitly empty: this test compares two argv
+            // logs, so it must not depend on the environment of whoever runs it.
+            sandbox_image::resolve_image_plan("minimal", None, None, None, &sandbox_root2),
         );
         assert_eq!(
             create_argv(&through_plan, &log2),

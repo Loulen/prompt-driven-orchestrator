@@ -4,8 +4,8 @@
 # chrome-devtools est central aux usecases clients et ne marche PAS DU TOUT dans l'image de base :
 # celle-ci n'a ni runtime JS ni navigateur, donc les serveurs MCP node du profil `full`
 # (`npx chrome-devtools-mcp`, `npx @playwright/mcp`) meurent au démarrage. La base reste
-# minimale ; le coût (~2 Go d'image contre 608 Mo, mesuré) est payé seulement par qui pointe
-# `dockerfile_path` ici.
+# minimale ; le coût (~2 Go d'image contre 608 Mo, mesuré) est payé seulement par qui pointe ce
+# fichier depuis un profil de staging (#467 ; #471 en a fait le seul chemin).
 #
 # POURQUOI CE DOCKERFILE EST AUTONOME (`FROM ubuntu:24.04` + steps de la base DUPLIQUÉS) et
 # NON `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` : le tag est le hash des OCTETS de ce fichier

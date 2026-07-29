@@ -36,12 +36,14 @@
 //!    question nobody asked.
 //!
 //! 3b. **The image source is a profile field too** (#467, ADR-0031 §9). Same shape as `env` —
-//!    not a diff, no built-in default to fold against, `None` meaning "this profile poses
-//!    nothing" — but with one extra property: it is the only field whose two shapes
-//!    ([`crate::sandbox_image::ProfileImage`]) are mutually exclusive rather than additive, so
-//!    it is a **tagged enum in one column**, not two nullable columns that could disagree.
-//!    A profile that poses nothing falls back to the instance-wide `image_source` /
-//!    `dockerfile_path`, which is precisely what keeps every pre-#467 profile bit-identical.
+//!    not a diff, `None` meaning "this profile poses nothing" — but with one extra property: it is
+//!    the only field whose two shapes ([`crate::sandbox_image::ProfileImage`]) are mutually
+//!    exclusive rather than additive, so it is a **tagged enum in one column**, not two nullable
+//!    columns that could disagree. Unlike `env` it DOES have a built-in default since #471
+//!    ([`DEFAULT_PROFILE_IMAGE`]): the two instance-wide settings it used to fall back to are gone,
+//!    and what they resolved to by default became a constant of this layer, next to
+//!    [`DEFAULT_FULL_ENTRIES`]. It is still not a *diff* — an image is one value, not a list, so
+//!    "poses nothing" resolves to the default outright rather than folding against it.
 //!
 //! 4. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
 //!    guarantees [`crate::sandbox_staging`] holds in every profile are satisfied either
@@ -177,6 +179,37 @@ pub(crate) const DEFAULT_FULL_ENTRIES: &[DefaultEntry] = &[
         note: Some("May pull targets from outside ~/.claude (links into ~/.agents)."),
     },
 ];
+
+/// L'image qu'un profil **qui n'en pose pas** résout (#471, ADR-0031 §9) — le pendant image de
+/// [`DEFAULT_FULL_ENTRIES`], et pour la même raison : c'est un **défaut de profil**, plus un
+/// réglage d'instance.
+///
+/// Pourquoi une `struct` et non deux constantes nues : les deux champs ne se lisent que
+/// *ensemble* (un `ImageSource::Registry` sur un Dockerfile qui n'est pas celui publié en amont
+/// ne pulle rien), et le jour où le défaut change il doit changer d'un bloc.
+///
+/// Défini dans ce module — pas dans [`crate::sandbox_image`], qui possède le *vocabulaire*
+/// d'image ([`crate::sandbox_image::ProfileImage`], le hash, les refs) — par symétrie exacte avec
+/// `ProfileImage` : là-bas le vocabulaire appartient à `sandbox_image` et le profil le stocke, ici
+/// le défaut appartient à la couche de défauts de profil et `sandbox_image` le lit. Un fait, un
+/// propriétaire (discipline #447).
+pub(crate) struct DefaultProfileImage {
+    /// Pull-ou-build de l'image hash-dérivée. `Registry` = ce que le tier `default` de
+    /// l'ex-réglage `image_source` valait, donc un profil qui ne pose rien pulle encore.
+    pub source: crate::sandbox_image::ImageSource,
+    /// `None` = **l'emplacement seedé** `<sandbox_root>/Dockerfile`, résolu par
+    /// [`crate::sandbox_image::default_dockerfile_path`]. Un chemin littéral ici mentirait : le
+    /// défaut dépend de `<sandbox_root>`, donc de `$HOME`, que cette couche pure ne lit pas.
+    /// `Some(path)` n'existe que pour rendre le champ *exprimable* — rien ne le pose aujourd'hui.
+    pub dockerfile: Option<&'static str>,
+}
+
+/// Le défaut, en un bloc. Un profil qui ne pose pas d'image produit ce que l'instance produisait
+/// avant #471, bit pour bit — pinné par le golden `sandbox_image` sur le ref calculé (AC 3).
+pub(crate) const DEFAULT_PROFILE_IMAGE: DefaultProfileImage = DefaultProfileImage {
+    source: crate::sandbox_image::ImageSource::Registry,
+    dockerfile: None,
+};
 
 /// One class-**(c)** floor guarantee: satisfied by the *whole* file, so it is neither
 /// checkable nor addable. Shown read-only in the editor because without that block a
@@ -562,12 +595,12 @@ pub(crate) const MAX_IMAGE_REF_LEN: usize = 256;
 ///
 /// The refusals, and why each one is a 400 rather than something handled downstream:
 ///
-/// - **`dockerfile`: the path must be absolute.** Same rule, same reason as the instance-wide
-///   `dockerfile_path` (#431): the daemon's cwd is not the user's, so a relative path resolves
+/// - **`dockerfile`: the path must be absolute.** Same rule, same reason as the `dockerfile_path`
+///   setting #471 removed (#431): the daemon's cwd is not the user's, so a relative path resolves
 ///   against something nobody chose. Existence is checked by the *handler*, not here — this stays
-///   pure, and the check has to live where `$HOME` and the filesystem are in scope (mirror of
-///   `put_settings`, and equally necessary-but-not-sufficient: the authoritative `is_file()` bail
-///   is `ensure_image`'s, at prep time).
+///   pure, and the check has to live where `$HOME` and the filesystem are in scope
+///   (necessary-but-not-sufficient: the authoritative `is_file()` bail is `ensure_image`'s, at
+///   prep time).
 /// - **`registry`: the ref may not start with `-`.** `docker pull -x` parses as a flag. This is
 ///   the one refusal that is about the *shell-less argv* rather than legibility, and it is why the
 ///   check cannot be left to Docker: `docker pull` would fail with an unrelated usage error.
@@ -662,8 +695,8 @@ pub(crate) struct ProfileDiff {
     /// caller sorting.
     pub env: BTreeMap<String, String>,
     /// Where this profile's container image comes from (#467, ADR-0031 §9). `None` = the
-    /// profile poses nothing and the instance-wide `image_source` / `dockerfile_path` decide,
-    /// which is what every pre-#467 profile keeps doing.
+    /// profile poses nothing and [`DEFAULT_PROFILE_IMAGE`] decides (#471), which is what every
+    /// pre-#467 profile keeps doing.
     pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: String,
 }
@@ -684,7 +717,7 @@ pub(crate) struct ResolvedProfile {
     pub env: BTreeMap<String, String>,
     /// The profile's image source (#467). `None` for a virtual default with no row, and for
     /// every profile that poses nothing — the two are indistinguishable on purpose: both mean
-    /// "the instance-wide setting decides".
+    /// "[`DEFAULT_PROFILE_IMAGE`] decides".
     pub image: Option<crate::sandbox_image::ProfileImage>,
     pub updated_at: Option<String>,
 }

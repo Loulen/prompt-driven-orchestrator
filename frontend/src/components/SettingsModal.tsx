@@ -122,8 +122,8 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
 
         {settings ? (
           // HIDDEN, never unmounted, while the drill-down is open (#432): the form holds
-          // UNSAVED edits (`capStr`, `dockerfilePath`) seeded on mount, and a conditional
-          // render would throw them away in silence.
+          // UNSAVED edits (`capStr`, `model`, …) seeded on mount, and a conditional render
+          // would throw them away in silence.
           <div
             className={
               profilesOpen ? "hidden" : "flex min-h-0 flex-1 flex-col"
@@ -247,11 +247,6 @@ function SettingsForm({
   // Model is `null` when unset (account default); ModelPicker speaks the same
   // `string | null` contract as the per-node inspector (#296/#324/#347).
   const [model, setModel] = useState<string | null>(() => settings.default_model.effective);
-  // Sandbox image source (#411): a closed enum with a built-in `registry` default,
-  // so `effective` is always a present string (the `?? "registry"` is belt-and-braces).
-  const [imageSource, setImageSource] = useState<string>(
-    () => settings.image_source.effective ?? "registry",
-  );
   // Default sandbox (#410/#432): `off` or a staging-profile name. `effective` is always
   // a present string (the `?? "off"` is belt-and-braces).
   const [defaultSandbox, setDefaultSandbox] = useState<string>(
@@ -264,15 +259,6 @@ function SettingsForm({
     defaultSandbox !== "off" &&
     defaultSandbox !== "" &&
     !settings.sandbox_profiles.some((p) => p.name === defaultSandbox);
-  // Sandbox Dockerfile path (#431). DELIBERATE DEVIATION from the `default_model`
-  // idiom: seeded from `stored`, not `effective`. This knob's default IS a real
-  // non-null path, so seeding from `effective` would show the seeded path in the input
-  // and make "clear the field" ambiguous (a clear, or an explicit pin of the default?).
-  // The resolved path is shown read-only alongside instead.
-  const [dockerfilePath, setDockerfilePath] = useState<string>(
-    () => settings.dockerfile_path.stored ?? "",
-  );
-  const [dockerfilePickerOpen, setDockerfilePickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -326,23 +312,10 @@ function SettingsForm({
       patch.default_model = model ?? "";
     }
 
-    // Image source (#411): a concrete enum variant, only sent when it changed. The
+    // Default sandbox mode (#410): a concrete enum variant, only sent when it changed. The
     // select never emits "" — the clear path is backend-only.
-    if (imageSource !== settings.image_source.effective) {
-      patch.image_source = imageSource;
-    }
-
-    // Default sandbox mode (#410): a concrete enum variant, only sent when it
-    // changed. Like image_source, the select never emits "" (clear is backend-only).
     if (defaultSandbox !== settings.default_sandbox.effective) {
       patch.default_sandbox = defaultSandbox;
-    }
-
-    // Dockerfile path (#431): diffed against `stored` (the seed source), not
-    // `effective`. An emptied field sends the `""` clear sentinel; the daemon 400s a
-    // relative path or a non-file and the banner surfaces it verbatim.
-    if (dockerfilePath !== (settings.dockerfile_path.stored ?? "")) {
-      patch.dockerfile_path = dockerfilePath;
     }
 
     // Nothing changed → close without a round-trip.
@@ -444,62 +417,6 @@ function SettingsForm({
           </div>
         </div>
 
-        {/* Sandbox image source (#411): where a sandboxed run's image comes from —
-            pull from GHCR (default) or build locally. A closed enum → native
-            <select> (NOT the free-text ModelPicker). It only ever emits a concrete
-            variant; the "" clear sentinel is backend-only. */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="setting-image-source"
-            className="font-medium text-fg-2"
-            style={{ fontSize: "11.5px" }}
-          >
-            Sandbox image source
-          </label>
-          <select
-            id="setting-image-source"
-            data-testid="setting-image-source"
-            value={imageSource}
-            onChange={(e) => setImageSource(e.target.value)}
-            className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none"
-            style={{ fontSize: "12px" }}
-          >
-            <option value="registry">registry (pull from GHCR)</option>
-            <option value="dockerfile">dockerfile (build locally)</option>
-          </select>
-          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Where a sandboxed run's image comes from.{" "}
-            <span className="font-mono">registry</span> pulls the content-addressed image from
-            GHCR and falls back to a local build; <span className="font-mono">dockerfile</span>{" "}
-            always builds it locally from the seeded Dockerfile.
-          </div>
-          {/* AC5 of #467. This answers the one question the field provokes and never answered:
-              "I picked registry, why is the Dockerfile below still there?" It is not a leftover —
-              the tag pulled from GHCR *is* the SHA-256 of that file's bytes, so without the file
-              the image has no name to pull. Saying it here is the whole deliverable of the issue's
-              observation 1; a per-profile explicit ref (Manage staging profiles…) is the way to
-              pull an image PDO knows nothing about. */}
-          <div
-            className="text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="setting-image-source-dockerfile-still-required"
-          >
-            <span className="font-mono">registry</span> still needs the{" "}
-            <strong>Sandbox Dockerfile</strong> below: the tag it pulls{" "}
-            <em>is</em> the SHA-256 of that file's bytes, so without them the image has no name.
-            Both modes are the same image, differing only in whether it is fetched or built. To run
-            an <em>arbitrary</em> image instead, give a staging profile its own explicit registry ref
-            under <span className="font-mono">Manage staging profiles…</span>.
-          </div>
-          <div
-            className="text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="setting-source-image-source"
-          >
-            {imageSourceSourceNote(settings.image_source)}
-          </div>
-        </div>
-
         {/* Default sandbox (#410/#432): what a Run uses when neither the launch dialog
             nor a firing Trigger picks one. Since #432 the options are DATA — `off` plus
             the instance's staging profiles — so this is no longer a closed enum, and a
@@ -570,96 +487,6 @@ function SettingsForm({
             {defaultSandboxSourceNote(settings.default_sandbox)}
           </div>
         </div>
-
-        {/* Sandbox Dockerfile (#431): WHICH Dockerfile the sandbox image is built
-            from. Free text (a path, not a closed enum) + a loupe that opens the
-            generic FsExplorerModal in FILE mode. `showHidden` is not negotiable
-            here: the default lives at `~/.pdo/sandbox/Dockerfile`. */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="setting-dockerfile-path"
-            className="font-medium text-fg-2"
-            style={{ fontSize: "11.5px" }}
-          >
-            Sandbox Dockerfile
-          </label>
-          <div className="relative">
-            <input
-              id="setting-dockerfile-path"
-              data-testid="setting-dockerfile-path"
-              type="text"
-              value={dockerfilePath}
-              onChange={(e) => setDockerfilePath(e.target.value)}
-              placeholder={settings.dockerfile_path.default ?? ""}
-              className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 pr-9 font-mono text-fg placeholder:text-fg-4 transition-colors focus:border-acc focus:outline-none"
-              style={{ fontSize: "12px" }}
-              autoComplete="off"
-            />
-            <button
-              type="button"
-              onClick={() => setDockerfilePickerOpen(true)}
-              className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
-              title="Browse for a Dockerfile"
-              aria-label="Browse for a Dockerfile"
-              data-testid="setting-dockerfile-path-browse"
-            >
-              <Search size={14} />
-            </button>
-          </div>
-          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Point at a Dockerfile versioned in your repo to share it with the team. Leave
-            empty for the seeded default. It must be <strong>self-contained</strong> — the
-            build context is deliberately empty, so no <span className="font-mono">COPY</span>.
-          </div>
-          {/* The link the issue exists to make non-tribal: the resolved path AND the
-              tag it yields. Server-computed, so it only refreshes after Save (the PUT
-              returns the recomputed view; the modal closes, so it shows on re-open).
-              Computing a tag client-side would duplicate the SHA-256 and re-open
-              exactly the drift #373 cost us. */}
-          <div
-            className="truncate font-mono text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            title={settings.dockerfile_path.effective ?? undefined}
-            data-testid="setting-dockerfile-resolved"
-          >
-            Resolved: {settings.dockerfile_path.effective ?? "(unresolved)"}
-          </div>
-          <div
-            className="truncate font-mono text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="setting-dockerfile-tag"
-          >
-            {settings.sandbox_image.tag
-              ? `Image tag: ${settings.sandbox_image.tag}`
-              : `Image tag: unavailable — ${settings.sandbox_image.reason ?? "unknown reason"}`}
-          </div>
-          <div
-            className="text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="setting-source-dockerfile-path"
-          >
-            {dockerfilePathSourceNote(settings.dockerfile_path)}
-          </div>
-        </div>
-
-        {/* First modal-in-modal of SettingsModal. The explorer's backdrop is z-[60]
-            above this modal's z-50, and it stopPropagation's its own clicks, so the
-            settings backdrop's guard-less onClick={onClose} is never reached through
-            it. SettingsModal has no Escape handler, so the explorer's
-            stopPropagation is harmless here. */}
-        {dockerfilePickerOpen && (
-          <FsExplorerModal
-            mode="file"
-            showHidden
-            title="Choose a Dockerfile"
-            confirmLabel="Use this Dockerfile"
-            startPath={dockerfileStartDir(
-              dockerfilePath || settings.dockerfile_path.effective,
-            )}
-            onPick={setDockerfilePath}
-            onClose={() => setDockerfilePickerOpen(false)}
-          />
-        )}
 
         {error && (
           <div
@@ -788,22 +615,7 @@ function modelSourceNote(field: StringSettingField): string {
   return `Source: your Claude account default (no --model).`;
 }
 
-/** Which tier the sandbox image source comes from (#411). Unlike default_model there
- *  IS a built-in default (`registry`). Discloses a shadowed env var too. */
-function imageSourceSourceNote(field: StringSettingField): string {
-  const envDisplay = field.env ? `PDO_SANDBOX_IMAGE_SOURCE=${field.env}` : null;
-  if (field.source === "stored") {
-    return envDisplay
-      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
-      : `Source: stored value (overrides env and default).`;
-  }
-  if (field.source === "env") {
-    return `Source: env ${envDisplay ?? "PDO_SANDBOX_IMAGE_SOURCE"}.`;
-  }
-  return `Source: built-in default (${field.default ?? "registry"}).`;
-}
-
-/** Open-at directory for the Dockerfile picker (#431): the PARENT of the current
+/** Open-at directory for the Dockerfile picker (#431/#467): the PARENT of the current
  *  absolute path, so the explorer lands where the file lives rather than at `$HOME`.
  *  Anything non-absolute (or absent) → undefined, i.e. the daemon's default chain. The
  *  daemon also clamps a file path to its parent, but resolving it here keeps the very
@@ -815,23 +627,7 @@ function dockerfileStartDir(path: string | null): string | undefined {
   return lastSlash <= 0 ? "/" : trimmed.slice(0, lastSlash);
 }
 
-/** Which tier the sandbox Dockerfile path comes from (#431). Like image_source there IS
- *  a built-in default — but it is a machine-specific PATH, not a constant, so the
- *  default note names the seeded location. Discloses a shadowed env var too. */
-function dockerfilePathSourceNote(field: StringSettingField): string {
-  const envDisplay = field.env ? `PDO_SANDBOX_DOCKERFILE=${field.env}` : null;
-  if (field.source === "stored") {
-    return envDisplay
-      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
-      : `Source: stored value (overrides env and default).`;
-  }
-  if (field.source === "env") {
-    return `Source: env ${envDisplay ?? "PDO_SANDBOX_DOCKERFILE"}.`;
-  }
-  return `Source: built-in default (${field.default ?? "the seeded Dockerfile"}).`;
-}
-
-/** Which tier the instance default_sandbox comes from (#410). Like image_source there
+/** Which tier the instance default_sandbox comes from (#410). Unlike `default_model` there
  *  IS a built-in default (`off`). Discloses a shadowed env var too. The dangling-profile
  *  `reason` is rendered separately — it is a health signal, not a precedence note. */
 function defaultSandboxSourceNote(field: EnumSettingFieldWithReason): string {
@@ -856,9 +652,9 @@ function defaultSandboxSourceNote(field: EnumSettingFieldWithReason): string {
  *
  * A pure helper next to {@link dockerfileStartDir}, and the reason `GET /settings` grew a
  * `home` field: `onPick` yields an ABSOLUTE path, an entry is RELATIVE, and no endpoint
- * exposed `$HOME` before this. Do NOT string-surgery `dockerfile_path.default` for it —
- * that value is `null` when `HOME` is absent and it lives behind the
- * `sandbox_home_override` seam. The daemon revalidates at the edge regardless.
+ * exposed `$HOME` before this. Do NOT derive it from any other path the payload happens to
+ * carry — `home` lives behind the `sandbox_home_override` seam, and the daemon revalidates
+ * at the edge regardless.
  */
 // Exported for its own unit test. Precedent: `RUN_INTENT` in `NewRunModal.tsx` — a pure,
 // render-free value whose Fast-Refresh cost is nil, opted out one line at a time rather
@@ -1060,7 +856,7 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
 
   /**
    * Write the profile's image source (#467). `null` clears it — a FULL replacement, so that is
-   * literally how "go back to the instance-wide setting" is expressed.
+   * literally how "go back to PDO's default image" is expressed (#471).
    *
    * Nothing is validated here beyond emptiness: the absolute-path rule, the existence check and
    * the ref grammar are all the daemon's 400s, which this panel surfaces verbatim. Re-deriving any
@@ -1581,22 +1377,26 @@ function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
 }
 
 /**
- * The profile's image source (#467, ADR-0031 §9): a three-way `<select>` (instance default /
+ * The profile's image source (#467, ADR-0031 §9): a three-way `<select>` (PDO's default /
  * Dockerfile / registry ref) plus the one field the chosen kind needs.
+ *
+ * Since #471 this is the ONLY place an image is chosen — the two instance-wide settings are gone,
+ * and what they resolved to by default is a constant of the profile-defaults layer. So the copy
+ * that used to live under the Settings field lives here now, in one sentence per kind: **the tag
+ * is the SHA-256 of the Dockerfile's bytes.** That is what makes "edit the file to change the
+ * image" comprehensible, and it belongs where the choice is made.
  *
  * Its own component for one reason: **the draft resets by remounting**. The parent keys it on the
  * profile name, so selecting another profile cannot leave a half-typed ref from the previous one
  * in the field — the `useEffect`-that-resets-state pattern is precisely what #385 was.
  *
- * The copy is the deliverable as much as the controls are. Three things have to be said, because
- * nothing else in the product says them and each one is a real support question:
+ * The copy is the deliverable as much as the controls are. Two things have to be said about an
+ * explicit ref, because nothing else in the product says them and each one is a real support
+ * question:
  *
- * 1. **`registry` here is NOT `registry` in Settings.** The instance-wide `image_source: registry`
- *    pulls the *hash-derived* image OF YOUR DOCKERFILE — which is why the Dockerfile field stays
- *    required there. This one is a free ref with no Dockerfile at all.
- * 2. **An explicit ref has no fallback.** No Dockerfile ⇒ no content hash ⇒ nothing to build if
+ * 1. **An explicit ref has no fallback.** No Dockerfile ⇒ no content hash ⇒ nothing to build if
  *    the pull fails, so the Run fails instead. That is the amendment to ADR-0030 pt 7.
- * 3. **PDO does not check the image contains `claude`.** Whoever supplies the ref owns that.
+ * 2. **PDO does not check the image contains `claude`.** Whoever supplies the ref owns that.
  */
 function ProfileImageEditor({
   profile,
@@ -1607,8 +1407,8 @@ function ProfileImageEditor({
   busy: boolean;
   onWrite: (image: SandboxProfileImage | null) => void;
 }) {
-  const [kind, setKind] = useState<"instance" | "dockerfile" | "registry">(
-    profile.image?.kind ?? "instance",
+  const [kind, setKind] = useState<"default" | "dockerfile" | "registry">(
+    profile.image?.kind ?? "default",
   );
   const [path, setPath] = useState(
     profile.image?.kind === "dockerfile" ? profile.image.path : "",
@@ -1616,11 +1416,11 @@ function ProfileImageEditor({
   const [ref, setRef] = useState(profile.image?.kind === "registry" ? profile.image.ref : "");
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  /** Switching to "instance default" IS the edit — there is no field to fill, so it writes
-   *  straight away, consistent with every other control in this panel (nothing is batched). */
-  const chooseKind = (next: "instance" | "dockerfile" | "registry") => {
+  /** Switching to "default" IS the edit — there is no field to fill, so it writes straight
+   *  away, consistent with every other control in this panel (nothing is batched). */
+  const chooseKind = (next: "default" | "dockerfile" | "registry") => {
     setKind(next);
-    if (next === "instance" && profile.image !== null) onWrite(null);
+    if (next === "default" && profile.image !== null) onWrite(null);
   };
 
   const pending: SandboxProfileImage | null =
@@ -1641,24 +1441,23 @@ function ProfileImageEditor({
       </span>
       <select
         value={kind}
-        onChange={(e) => chooseKind(e.target.value as "instance" | "dockerfile" | "registry")}
+        onChange={(e) => chooseKind(e.target.value as "default" | "dockerfile" | "registry")}
         disabled={busy}
         aria-label="Image source"
         data-testid="staging-image-kind"
         className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg focus:border-acc focus:outline-none disabled:opacity-40"
         style={{ fontSize: "11px" }}
       >
-        <option value="instance">instance default (Sandbox image source)</option>
+        <option value="default">default (PDO's own sandbox image)</option>
         <option value="dockerfile">dockerfile (build from a Dockerfile)</option>
         <option value="registry">registry (pull an explicit ref)</option>
       </select>
 
-      {kind === "instance" && (
+      {kind === "default" && (
         <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="staging-image-none">
-          This profile does not choose an image — the instance-wide{" "}
-          <span className="font-mono">Sandbox image source</span> and{" "}
-          <span className="font-mono">Sandbox Dockerfile</span> settings decide, as they always
-          have.
+          PDO's own image, whose tag is the SHA-256 of the bytes of the Dockerfile it seeded at{" "}
+          <span className="font-mono">~/.pdo/sandbox/Dockerfile</span> — edit that file to change
+          the image, or pick another kind here.
         </div>
       )}
 
@@ -1750,15 +1549,6 @@ function ProfileImageEditor({
           </div>
         </>
       )}
-
-      {/* The bridge between this field and the instance-wide setting, which uses the SAME word for
-          a different thing. Shown for every kind, because the confusion is not kind-specific. */}
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="staging-image-note">
-        Not the same <span className="font-mono">registry</span> as the instance-wide{" "}
-        <span className="font-mono">Sandbox image source</span>: that one pulls the pre-built image{" "}
-        <em>of your Dockerfile</em>, whose tag is the hash of its bytes — which is why a Dockerfile
-        is still required there. This one is a ref you name yourself.
-      </div>
 
       {pickerOpen && (
         <FsExplorerModal

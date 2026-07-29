@@ -21,6 +21,12 @@
 //! Le tag est **adressé par contenu**, pas versionné :
 //! rationale (content-hash vs semver ; interchangeabilité pull #411 / build local)
 //! -> ADR-0030 (#407, pt 7).
+//!
+//! Depuis #466 le **nom** de l'image est une donnée de la **variante** de Dockerfile, dérivée de
+//! son nom de fichier par [`image_name_for_dockerfile`] : la base `Dockerfile` donne
+//! `pdo-sandbox`, la variante `Dockerfile.chrome-dev` (node + Chrome + chrome-devtools-mcp) donne
+//! `pdo-sandbox-chrome-dev`. Le hash, lui, ne dépend que des octets — nom et tag varient donc
+//! ensemble et indépendamment, et deux variantes ne peuvent pas se recouvrir.
 
 #![allow(dead_code)] // Tracer bullet : consommé par #406/#407, non câblé dans cette slice.
 
@@ -131,21 +137,66 @@ pub(crate) fn dockerfile_hash(dockerfile_bytes: &[u8]) -> String {
     full[..12].to_string()
 }
 
-/// Ref locale `pdo-sandbox:h-<hash>`. (GHCR #411 formate son propre préfixe autour du même hash.)
-pub(crate) fn local_image_ref(dockerfile_bytes: &[u8]) -> String {
-    format!("pdo-sandbox:h-{}", dockerfile_hash(dockerfile_bytes))
+/// Nom d'image de la variante de BASE (`assets/sandbox/Dockerfile`).
+pub(crate) const BASE_IMAGE_NAME: &str = "pdo-sandbox";
+
+/// Nom d'image dérivé du NOM DE FICHIER du Dockerfile résolu (#466) — path math pure, zéro IO.
+///
+/// `Dockerfile` → `pdo-sandbox` ; `Dockerfile.chrome-dev` → `pdo-sandbox-chrome-dev`. Le suffixe
+/// est slugifié (minuscules, tout non-alphanumérique → `-`, runs collapsés, bords rognés) parce
+/// qu'un nom de dépôt Docker doit matcher `[a-z0-9]+([._-]+[a-z0-9]+)*` : un nom de fichier
+/// arbitraire ne peut pas être recopié tel quel dans un tag.
+///
+/// Tout autre nom de fichier (`sbx.Dockerfile`, `Dockerfile-custom`, …) retombe sur
+/// [`BASE_IMAGE_NAME`] : la variante est une donnée du fichier LIVRÉ par PDO, pas une convention
+/// imposée aux Dockerfiles que l'utilisateur pointe via `dockerfile_path` (#431) — le tag reste
+/// de toute façon le hash de SES octets, donc deux variantes distinctes ne peuvent pas collisionner
+/// sous le même nom.
+///
+/// C'est le SEUL endroit qui connaît la règle ; `release.yml` la re-dérive en bash avec un
+/// self-check de parité, miroir de celui de [`dockerfile_hash`].
+pub(crate) fn image_name_for_dockerfile(path: &Path) -> String {
+    let Some(suffix) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("Dockerfile."))
+    else {
+        return BASE_IMAGE_NAME.to_string();
+    };
+    let mut slug = String::with_capacity(suffix.len());
+    for c in suffix.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.extend(c.to_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        BASE_IMAGE_NAME.to_string()
+    } else {
+        format!("{BASE_IMAGE_NAME}-{slug}")
+    }
 }
 
-/// Namespace GHCR de l'image publiée (#411). Owner lowercasé (GHCR rejette l'uppercase).
-/// MÊME hash que [`local_image_ref`] → pull et build local interchangeables sous le même contenu
-/// (ADR-0030 pt 7). `release.yml` construit ce même chemin en bash (`${GITHUB_REPOSITORY_OWNER,,}`).
-pub(crate) const REGISTRY_NAMESPACE: &str = "ghcr.io/loulen/pdo-sandbox";
+/// Ref locale `<image_name>:h-<hash>` (p.ex. `pdo-sandbox:h-<hash>`). Le NOM est un paramètre
+/// depuis #466 (variantes d'image) ; le hash, lui, ne dépend que des octets du Dockerfile.
+/// (GHCR #411 formate son propre préfixe autour du même couple nom+hash.)
+pub(crate) fn local_image_ref(image_name: &str, dockerfile_bytes: &[u8]) -> String {
+    format!("{image_name}:h-{}", dockerfile_hash(dockerfile_bytes))
+}
 
-/// Ref registry `ghcr.io/loulen/pdo-sandbox:h-<hash>` (MÊME hash que [`local_image_ref`], donc pull
-/// et build sont interchangeables sous le ref local après retag).
-pub(crate) fn registry_image_ref(dockerfile_bytes: &[u8]) -> String {
+/// Préfixe GHCR des images publiées (#411, paramétré par #466). Owner lowercasé (GHCR rejette
+/// l'uppercase). MÊME hash que [`local_image_ref`] → pull et build local interchangeables sous le
+/// même contenu (ADR-0030 pt 7). `release.yml` construit ce même chemin en bash
+/// (`${GITHUB_REPOSITORY_OWNER,,}`).
+pub(crate) const REGISTRY_PREFIX: &str = "ghcr.io/loulen";
+
+/// Ref registry `ghcr.io/loulen/<image_name>:h-<hash>` (MÊME nom+hash que [`local_image_ref`], donc
+/// pull et build sont interchangeables sous le ref local après retag).
+pub(crate) fn registry_image_ref(image_name: &str, dockerfile_bytes: &[u8]) -> String {
     format!(
-        "{REGISTRY_NAMESPACE}:h-{}",
+        "{REGISTRY_PREFIX}/{image_name}:h-{}",
         dockerfile_hash(dockerfile_bytes)
     )
 }
@@ -314,7 +365,9 @@ pub(crate) fn ensure_image(
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read sandbox Dockerfile at {}", path.display()))?;
     // 4. Ref local content-addressé = TOUJOURS la valeur de retour (invariant sandbox_container).
-    let local_ref = local_image_ref(&bytes);
+    //    Le NOM vient du fichier résolu (#466 : `Dockerfile.chrome-dev` → `pdo-sandbox-chrome-dev`),
+    //    le TAG de ses octets — deux variantes ne partagent donc ni nom ni tag.
+    let local_ref = local_image_ref(&dockerfile.image_name, &bytes);
     // 5. FAST PATH — précède TOUT réseau : image déjà locale → ni pull ni build (offline-safe).
     if image_exists(docker_bin, &local_ref)? {
         return Ok(local_ref);
@@ -328,7 +381,7 @@ pub(crate) fn ensure_image(
     //    OK → retag sous le ref local → retour. Échec (offline / 404 / registry down) →
     //    fallthrough vers le build local ci-dessous.
     if matches!(source, ImageSource::Registry) && dockerfile.is_default_location {
-        let registry_ref = registry_image_ref(&bytes);
+        let registry_ref = registry_image_ref(&dockerfile.image_name, &bytes);
         if pull_image(docker_bin, &registry_ref)? {
             tag_image(docker_bin, &registry_ref, &local_ref)?;
             return Ok(local_ref);
@@ -463,6 +516,11 @@ pub(crate) struct ResolvedDockerfile {
     /// qui aurait 404 de toute façon) — le skip-pull est une optimisation, pas un gate de
     /// correction.
     pub(crate) is_default_location: bool,
+    /// Nom d'image que ce Dockerfile produit (#466), dérivé de son NOM DE FICHIER par
+    /// [`image_name_for_dockerfile`] — `pdo-sandbox` pour la base, `pdo-sandbox-chrome-dev` pour
+    /// `Dockerfile.chrome-dev`. Résolu ici, avec le chemin, pour que `ensure_image` **et** la
+    /// disclosure `GET /settings` nomment la même image (0 drift, leçon #373).
+    pub(crate) image_name: String,
 }
 
 /// Env var pointant le Dockerfile de la sandbox (tier optionnel, #431). Lue UNE fois au bord,
@@ -500,6 +558,7 @@ pub(crate) fn resolve_dockerfile(
     };
     ResolvedDockerfile {
         is_default_location: path == default,
+        image_name: image_name_for_dockerfile(&path),
         path,
         source,
     }
@@ -685,7 +744,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(
             build_argv(&argv_log).is_empty(),
             "aucun build ne doit être lancé quand l'image est présente"
@@ -714,7 +776,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert_eq!(
             build_argv(&argv_log),
             vec![
@@ -858,8 +923,11 @@ mod tests {
             "le seed ne doit jamais écraser un Dockerfile existant"
         );
         // (b) Tag + argv reflètent le hash des octets ÉDITÉS, pas de l'embarqué.
-        assert_eq!(tag, local_image_ref(edited));
-        assert_ne!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(tag, local_image_ref(BASE_IMAGE_NAME, edited));
+        assert_ne!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(build_argv(&argv_log).contains(&tag));
     }
 
@@ -896,7 +964,10 @@ mod tests {
     fn dockerfile_tag_stable_and_edit_sensitive() {
         let base: &[u8] = b"FROM ubuntu:24.04\nRUN apt-get update\n";
         // Stable pour un contenu identique.
-        assert_eq!(local_image_ref(base), local_image_ref(base));
+        assert_eq!(
+            local_image_ref(BASE_IMAGE_NAME, base),
+            local_image_ref(BASE_IMAGE_NAME, base)
+        );
         // Change à l'édition.
         let edited: &[u8] = b"FROM ubuntu:24.04\nRUN apt-get update\nRUN apt-get install -y git\n";
         assert_ne!(dockerfile_hash(base), dockerfile_hash(edited));
@@ -906,7 +977,7 @@ mod tests {
         assert!(h
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
-        assert!(local_image_ref(base).starts_with("pdo-sandbox:h-"));
+        assert!(local_image_ref(BASE_IMAGE_NAME, base).starts_with("pdo-sandbox:h-"));
 
         // GARDE-FOU PARITÉ CI : figer l'algo canonique. Épingle la sortie Rust au préfixe que
         // `release.yml`/#411 produiront en bash :
@@ -933,8 +1004,8 @@ mod tests {
         })
         .unwrap();
 
-        let local_ref = local_image_ref(EMBEDDED_DOCKERFILE.as_bytes());
-        let registry_ref = registry_image_ref(EMBEDDED_DOCKERFILE.as_bytes());
+        let local_ref = local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes());
+        let registry_ref = registry_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes());
         assert_eq!(tag, local_ref);
         // `pull` fut invoqué sur le ref registry content-addressé.
         assert_eq!(
@@ -977,7 +1048,10 @@ mod tests {
         .unwrap();
 
         // Retour TOUJOURS le ref local (prouve sandbox_container 0-change) — jamais le ref GHCR.
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(
             tag.starts_with("pdo-sandbox:h-"),
             "must return the local ref: {tag}"
@@ -1013,7 +1087,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(invocation(&argv_log, "tag").is_some(), "must still retag");
         assert!(
             build_argv(&argv_log).is_empty(),
@@ -1044,7 +1121,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(
             invocation(&argv_log, "pull").is_some(),
             "pull was attempted"
@@ -1111,7 +1191,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(
             !build_argv(&argv_log).is_empty(),
             "dockerfile mode builds locally"
@@ -1149,7 +1232,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         assert!(
             invocation(&argv_log, "pull").is_none(),
             "fast-path must skip pull (offline-safe reuse)"
@@ -1338,8 +1424,11 @@ mod tests {
         .unwrap();
 
         // The tag is the hash of the CUSTOM bytes, never the seeded ones.
-        assert_eq!(tag, local_image_ref(bytes));
-        assert_ne!(tag, local_image_ref(EMBEDDED_DOCKERFILE.as_bytes()));
+        assert_eq!(tag, local_image_ref(BASE_IMAGE_NAME, bytes));
+        assert_ne!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes())
+        );
         // The build points `-f` at the custom path, with the SAME empty context (D2:
         // a custom Dockerfile must be self-contained — no COPY).
         assert_eq!(
@@ -1418,10 +1507,13 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(tag, local_image_ref(edited));
+        assert_eq!(tag, local_image_ref(BASE_IMAGE_NAME, edited));
         assert_eq!(
             invocation(&argv_log, "pull"),
-            Some(vec!["pull".to_string(), registry_image_ref(edited)]),
+            Some(vec![
+                "pull".to_string(),
+                registry_image_ref(BASE_IMAGE_NAME, edited)
+            ]),
             "an edited SEEDED Dockerfile must still attempt the pull (path predicate)"
         );
         assert!(
@@ -1537,6 +1629,191 @@ mod tests {
             std::fs::read(&custom).unwrap(),
             custom_bytes,
             "the seed must never overwrite the custom Dockerfile"
+        );
+    }
+
+    // -- #466 : le NOM d'image est une donnée de la variante ------------------
+
+    /// Le Dockerfile de variante LIVRÉ, lu au build du test uniquement (`#[cfg(test)]`) : il n'a
+    /// pas à grossir le binaire, personne ne le seede — c'est `dockerfile_path` qui le pointe.
+    const EMBEDDED_CHROME_DEV_DOCKERFILE: &str =
+        include_str!("../assets/sandbox/Dockerfile.chrome-dev");
+
+    #[test]
+    fn image_name_for_dockerfile_derives_the_variant_from_the_filename() {
+        // La base garde le nom historique — sinon toute instance existante rebuild pour rien.
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("/home/u/.pdo/sandbox/Dockerfile")),
+            "pdo-sandbox"
+        );
+        // La variante livrée : c'est CE couple que `release.yml` publie.
+        assert_eq!(
+            image_name_for_dockerfile(Path::new(
+                "/repo/crates/pdo-daemon/assets/sandbox/Dockerfile.chrome-dev"
+            )),
+            "pdo-sandbox-chrome-dev"
+        );
+        // Slugification : minuscules, non-alphanumériques → `-`, runs collapsés, bords rognés —
+        // un nom de dépôt Docker doit matcher `[a-z0-9]+([._-]+[a-z0-9]+)*`.
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile.Chrome_Dev")),
+            "pdo-sandbox-chrome-dev"
+        );
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile.a..b")),
+            "pdo-sandbox-a-b"
+        );
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile.-x-")),
+            "pdo-sandbox-x"
+        );
+        // Suffixe vide ou nom sans le préfixe `Dockerfile.` → la base. Un Dockerfile que
+        // l'utilisateur POINTE (#431) n'a aucune raison de suivre notre convention de nommage ;
+        // son tag reste le hash de SES octets, donc aucune collision possible.
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile.")),
+            "pdo-sandbox"
+        );
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("/repo/docker/sbx.Dockerfile")),
+            "pdo-sandbox"
+        );
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile-custom")),
+            "pdo-sandbox"
+        );
+    }
+
+    #[test]
+    fn resolve_dockerfile_carries_the_variant_image_name() {
+        let root = Path::new("/home/u/.pdo/sandbox");
+        // Le tier `default` (Dockerfile seedé) → nom de base.
+        assert_eq!(
+            resolve_dockerfile(None, None, root).image_name,
+            BASE_IMAGE_NAME
+        );
+        // Un `dockerfile_path` pointant la variante → nom de variante, SANS 3e valeur d'enum
+        // `image_source` : c'est le chemin de sélection le plus court (#466 périmètre pt 4).
+        let r = resolve_dockerfile(
+            Some("/repo/assets/sandbox/Dockerfile.chrome-dev"),
+            None,
+            root,
+        );
+        assert_eq!(r.image_name, "pdo-sandbox-chrome-dev");
+        assert_eq!(r.source, DockerfileSource::Stored);
+        assert!(
+            !r.is_default_location,
+            "la variante n'est pas à l'emplacement seedé → build local, jamais de pull (#467 \
+             câblera la sélection par profil)"
+        );
+    }
+
+    #[test]
+    fn variant_dockerfile_drives_the_image_name_and_the_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Fake registry-heureux : un pull, s'il était tenté, RÉUSSIRAIT — l'absence de `pull`
+        // ci-dessous est donc un signal, pas une coïncidence.
+        let (docker, argv_log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        let sandbox_root = tmp.path().join("sandbox");
+        let variant = tmp.path().join("assets").join("Dockerfile.chrome-dev");
+        std::fs::create_dir_all(variant.parent().unwrap()).unwrap();
+        let bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo chrome-dev\n";
+        std::fs::write(&variant, bytes).unwrap();
+
+        let tag = retry_etxtbsy(|| {
+            ensure_image(
+                &docker_str(&docker),
+                &sandbox_root,
+                &stored_at(&variant, &sandbox_root),
+                ImageSource::Registry,
+            )
+        })
+        .unwrap();
+
+        // AC 2 : le tag porte le NOM de la variante, et le hash de SES octets.
+        assert_eq!(
+            tag,
+            "pdo-sandbox-chrome-dev:h-".to_string() + &dockerfile_hash(bytes)
+        );
+        assert_eq!(tag, local_image_ref("pdo-sandbox-chrome-dev", bytes));
+        assert_ne!(
+            tag,
+            local_image_ref(BASE_IMAGE_NAME, bytes),
+            "le nom ne doit pas retomber sur celui de la base"
+        );
+        // C'est bien ce tag que `docker build -t` reçoit (donc ce que `docker inspect` montrera).
+        assert_eq!(
+            build_argv(&argv_log),
+            vec![
+                "build".to_string(),
+                "-t".to_string(),
+                tag.clone(),
+                "-f".to_string(),
+                variant.display().to_string(),
+                build_context_dir(&sandbox_root).display().to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_ref_is_namespaced_per_variant() {
+        let bytes: &[u8] = b"FROM ubuntu:24.04\n";
+        let h = dockerfile_hash(bytes);
+        // La base garde son chemin GHCR historique, octet pour octet.
+        assert_eq!(
+            registry_image_ref(BASE_IMAGE_NAME, bytes),
+            format!("ghcr.io/loulen/pdo-sandbox:h-{h}")
+        );
+        // La variante est un dépôt GHCR distinct sous le même owner (lowercase : GHCR rejette
+        // l'uppercase) — c'est ce que la matrice de `release.yml` pousse.
+        assert_eq!(
+            registry_image_ref("pdo-sandbox-chrome-dev", bytes),
+            format!("ghcr.io/loulen/pdo-sandbox-chrome-dev:h-{h}")
+        );
+        // MÊME hash des deux côtés du couple local/registry → pull et build interchangeables.
+        assert!(registry_image_ref("pdo-sandbox-chrome-dev", bytes)
+            .ends_with(&local_image_ref("pdo-sandbox-chrome-dev", bytes)));
+    }
+
+    #[test]
+    fn shipped_chrome_dev_dockerfile_is_self_contained() {
+        // Pin des DEUX décisions structurantes du fichier livré (#466), qu'une « simplification »
+        // future casserait silencieusement :
+        //   1. AUTONOME : `FROM ubuntu:24.04`, pas `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` —
+        //      injecter le hash de la base demanderait de GÉNÉRER ces octets, or ces octets SONT
+        //      la source de vérité du tag (ADR-0030 pt 7).
+        //   2. Pas de `COPY`/`ADD` : le contexte de build est `<sandbox_root>/.build-ctx`, VIDE
+        //      (D8) — un `COPY` échouerait au premier build, en prod, chez l'utilisateur.
+        let df = EMBEDDED_CHROME_DEV_DOCKERFILE;
+        let directives: Vec<&str> = df
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert_eq!(
+            directives.first().copied(),
+            Some("FROM ubuntu:24.04"),
+            "la variante doit être autonome, pas dérivée du tag de la base"
+        );
+        assert!(
+            !directives.iter().any(|l| l.starts_with("FROM ghcr.io")),
+            "un `FROM ghcr.io/...:h-<hash>` obligerait à générer ce fichier"
+        );
+        assert!(
+            !directives
+                .iter()
+                .any(|l| l.starts_with("COPY ") || l.starts_with("ADD ")),
+            "le contexte de build est vide (D8) : un COPY/ADD échouerait au premier build"
+        );
+        // Le nom d'image de la variante vient du nom de ce fichier, pas d'une constante à part.
+        assert_eq!(
+            image_name_for_dockerfile(Path::new("Dockerfile.chrome-dev")),
+            "pdo-sandbox-chrome-dev"
+        );
+        // Le hash de la BASE ne dépend pas de ce fichier (AC 3) : deux fichiers, deux tags.
+        assert_ne!(
+            dockerfile_hash(df.as_bytes()),
+            dockerfile_hash(EMBEDDED_DOCKERFILE.as_bytes())
         );
     }
 

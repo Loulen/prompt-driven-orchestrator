@@ -62,6 +62,23 @@ PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, p
    `h-<hash>` + `latest` informatif) ; le hash CI (bash `sha256sum | cut`) est byte-identique au Rust,
    gardé par un self-check de parité.
 
+   **Amendement #466 — le NOM d'image est une donnée de la variante.** Un ref d'image sandbox est
+   désormais un couple `<nom>:h-<hash>` dont les deux moitiés sortent du même fichier : le hash de
+   ses **octets**, le nom de son **nom de fichier** (`image_name_for_dockerfile` :
+   `Dockerfile` → `pdo-sandbox`, `Dockerfile.<variante>` → `pdo-sandbox-<variante>` ; tout autre nom
+   retombe sur `pdo-sandbox`, un Dockerfile que l'utilisateur *pointe* n'ayant pas à suivre notre
+   convention — son tag reste le hash de ses octets, donc aucune collision). Corollaire assumé : un
+   Dockerfile de variante est **autonome** (`FROM ubuntu:24.04` + steps de la base dupliqués), et
+   **jamais** `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` — injecter le hash de la base obligerait à
+   *générer* les octets de la variante, or ces octets **sont** la source de vérité de son propre tag.
+   La duplication est le prix de l'adressage par contenu. `release.yml` devient une matrice une-jambe-
+   par-variante (le nom y est re-dérivé en bash, avec son propre self-check de parité), et la première
+   variante livrée est `pdo-sandbox-chrome-dev` (#466 : node 22 + Chrome + `chrome-devtools-mcp`,
+   `amd64` seul faute de .deb Chrome arm64 en amont). La **sélection** de la variante reste, dans cette
+   slice, le réglage `dockerfile_path` existant (§5) — pointer la variante change nom **et** hash, donc
+   build local ; aucune 3e valeur d'`image_source` n'est inventée, la sélection par profil de staging
+   arrivant séparément (#467).
+
 8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
    muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne
    retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrivait que par

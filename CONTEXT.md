@@ -991,12 +991,35 @@ Périmètre **provisionnement** (fabrication + nommage de l'image), landé par #
 L'**exécution** de l'image (instanciation en conteneur, mounts, réseau) → #406/#407, ADR-0030.
 
 **Image sandbox (`pdo-sandbox:h-<hash>`)** :
-L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son tag est le **hash du
-contenu du Dockerfile** (`h-<hash>`), pas une version : deux Dockerfiles identiques → même tag, une
-édition → tag différent. Identité **adressée par contenu** — c'est elle qui rend une image tirée
-d'un registry et une image buildée localement **interchangeables sous le même nom** (#411).
-_Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le
-conteneur, #406).
+L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son ref est un **couple**
+dont les deux moitiés sortent du même fichier : le **tag** est le hash du **contenu** du Dockerfile
+(`h-<hash>`), pas une version — deux Dockerfiles identiques → même tag, une édition → tag
+différent ; le **nom** est celui de la **variante**, dérivé du nom de fichier (#466, ci-dessous).
+Identité **adressée par contenu** — c'est elle qui rend une image tirée d'un registry et une image
+buildée localement **interchangeables sous le même nom** (#411). _Éviter_ : « image latest », « tag
+de version », « image du conteneur » (l'image n'est pas le conteneur, #406).
+
+**Variante d'image / `image_name_for_dockerfile` (#466)** :
+Un **nom d'image** distinct pour un Dockerfile sandbox outillé différemment, dérivé de son **nom de
+fichier** : `Dockerfile` → `pdo-sandbox`, `Dockerfile.chrome-dev` → `pdo-sandbox-chrome-dev` (tout
+autre nom — `sbx.Dockerfile`, `Dockerfile-custom` — retombe sur `pdo-sandbox` : un Dockerfile que
+l'utilisateur *pointe* n'a pas à suivre notre convention, et son tag reste le hash de ses octets,
+donc zéro collision). Le renommer renomme l'image. Trois propriétés qui se retiennent ensemble :
+(a) une variante est **autonome** — `FROM ubuntu:24.04` + les steps de la base **dupliqués**, jamais
+`FROM ghcr.io/loulen/pdo-sandbox:h-<hash>`, parce qu'injecter le hash de la base obligerait à
+*générer* les octets de la variante alors que ces octets **sont** la source de vérité de son propre
+tag ; (b) l'**image de base reste minimale** — le coût d'une variante n'est payé que par qui la
+pointe ; (c) la **sélection** passe aujourd'hui par `dockerfile_path` (pointer la variante change nom
+et hash, donc build local), la sélection par profil de staging arrivant séparément (#467).
+La seule variante livrée est **`pdo-sandbox-chrome-dev`** : node 22 + Google Chrome +
+`chrome-devtools-mcp` préinstallé, exception assumée à ADR-0001 (sans elle **aucun** serveur MCP node
+ne démarre dans le sandbox — l'image de base n'a ni runtime JS ni navigateur). Elle est **amd64
+seule** (pas de .deb Chrome arm64 en amont) et son point non-évident est un **shim** à
+`/opt/google/chrome/chrome` : le plugin lance `npx chrome-devtools-mcp` sans flag, puppeteer résout
+donc `channel: stable` vers ce chemin exact (en ignorant `PUPPETEER_EXECUTABLE_PATH`), et le shim est
+le seul endroit où injecter `--headless=new` (pas de X dans le conteneur), `--no-sandbox` (namespaces
+sous `--user`) et `--disable-dev-shm-usage` (`/dev/shm` à 64 Mo). _Éviter_ : « image chrome » (c'est
+une variante nommée), croire qu'un `FROM` de la base ferait l'affaire, ajouter node/chromium à la base.
 
 **Dockerfile embarqué / seedé / résolu** :
 Trois choses distinctes depuis #431. Le Dockerfile est **embarqué dans le binaire** (contenu minimal :
@@ -1040,13 +1063,23 @@ Dockerfile pointé doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemi
 régulier **échoue fort au prep** (`RunFailed` nommant chemin + tier), plus un `400` à `PUT /settings`
 comme gate précoce — le tier **env** contourne ce `400` par construction (échappatoire assumée pour un
 volume amovible), les deux tiers restent gatés au prep. La Settings UI affiche le **chemin résolu** et
-le **tag** qui en découle. _Éviter_ : « Dockerfile du run » (c'est par-daemon), « override d'image »
+le **nom + tag** qui en découlent. C'est aussi, depuis #466, le **seul** chemin de sélection d'une
+**variante** d'image (`dockerfile_path` → `…/assets/sandbox/Dockerfile.chrome-dev` ⇒
+`pdo-sandbox-chrome-dev:h-<hash>`, buildée localement puisqu'un chemin non-défaut ne pulle jamais) ;
+la sélection par profil de staging arrive avec #467. _Éviter_ : « Dockerfile du run » (c'est
+par-daemon), « override d'image »
 (un ref d'image tout fait est hors périmètre), croire qu'un `COPY` fonctionne.
 
-**`registry_image_ref` / `ghcr.io/loulen/pdo-sandbox`** :
-Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` — **même hash** que le ref
-local, d'où l'interchangeabilité. Owner **lowercasé** (`Loulen`→`loulen` : GHCR rejette l'uppercase).
-Poussé par un job release additif (multi-arch, tags `h-<hash>` + `latest`). _Éviter_ : « latest »
+**`registry_image_ref` / `ghcr.io/loulen/<variante>`** :
+Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` (ou
+`…/pdo-sandbox-chrome-dev:h-<hash>`) — **mêmes nom et hash** que le ref local, d'où
+l'interchangeabilité. Owner **lowercasé** (`Loulen`→`loulen` : GHCR rejette l'uppercase).
+Poussé par un job release additif, **en matrice une-jambe-par-variante** depuis #466 (tags
+`h-<hash>` + `latest` ; multi-arch pour la base, `amd64` seul pour `chrome-dev`) : chaque variante est
+un dépôt GHCR distinct, donc deux `latest` qui ne s'écrasent pas. Ce job reste **additif** (aucun
+`needs:`) et ne publie **aucun artefact** (`DOCKER_BUILD_RECORD_UPLOAD=false`) — le build record
+`*.dockerbuild` avait déjà cassé une release en s'invitant dans le `download-artifact` du job
+`release` (#464, dont le `pattern: pdo-*` reste en deuxième couche). _Éviter_ : « latest »
 (le daemon ne tire que `h-<hash>` ; `latest` est informatif), « tag de version ».
 
 **`pull_image` / `tag_image`** :

@@ -6843,7 +6843,12 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             Some("HOME is not set; cannot resolve the sandbox Dockerfile".to_string()),
         ),
         Some((r, _)) => match std::fs::read(&r.path) {
-            Ok(bytes) => (Some(sandbox_image::local_image_ref(&bytes)), None),
+            // Le NOM vient du fichier résolu comme le hash vient de ses octets (#466) : pointer
+            // `Dockerfile.chrome-dev` affiche `pdo-sandbox-chrome-dev:h-…`, pas la base.
+            Ok(bytes) => (
+                Some(sandbox_image::local_image_ref(&r.image_name, &bytes)),
+                None,
+            ),
             Err(e) => (None, Some(format!("cannot read {}: {e}", r.path.display()))),
         },
     };
@@ -24678,10 +24683,11 @@ edges:
         );
 
         // The disclosed tag is computed by the SAME hash `ensure_image` uses (#373), so
-        // "editing the Dockerfile changes the tag, hence a rebuild" is now visible.
+        // "editing the Dockerfile changes the tag, hence a rebuild" is now visible. The NAME is
+        // `pdo-sandbox` here because `sbx.Dockerfile` is not a `Dockerfile.<variant>` (#466).
         assert_eq!(
             view["sandbox_image"]["tag"],
-            sandbox_image::local_image_ref(bytes),
+            sandbox_image::local_image_ref(sandbox_image::BASE_IMAGE_NAME, bytes),
             "the tag must be the hash of the RESOLVED file's bytes: {}",
             view["sandbox_image"]
         );
@@ -24692,7 +24698,7 @@ edges:
         assert_eq!(reget["dockerfile_path"]["stored"], custom.to_str().unwrap());
         assert_eq!(
             reget["sandbox_image"]["tag"],
-            sandbox_image::local_image_ref(bytes)
+            sandbox_image::local_image_ref(sandbox_image::BASE_IMAGE_NAME, bytes)
         );
     }
 

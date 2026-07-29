@@ -386,10 +386,28 @@ async fn cost_reads_staging_during_minimal_run() {
     );
 }
 
-// -- Test 2: stale-detection reads the staged home while live ------------------
+// -- Test 2: the liveness sweep reads the staged home while live ---------------
 
+/// The real tail of the transcript of #469's node: parses as `TurnEnded` (an
+/// assistant `text` message, no tool call pending).
+const FIXTURE_TURN_ENDED: &str = include_str!("fixtures/turn_state/turn_ended.jsonl");
+
+/// #408 invariant, re-proven on a signal that still exists (#469).
+///
+/// This test used to plant an idle transcript in the staging and assert the node
+/// went `stale`, `stale` being observable *only* if the sweep had read the staged
+/// file. #469 deleted the idle threshold and the `Stale` verdict outright, so that
+/// vehicle is gone — but the invariant it protected (`transcripts_root` sources the
+/// STAGING for a live sandboxed Run, not `~/.claude`) is untouched and still needs a
+/// witness.
+///
+/// The witness is now turn-end auto-completion: it is the one thing the sweep does
+/// that depends on reading a transcript. Planting a `TurnEnded` tail in the
+/// **staging only** and getting a completion proves the staged file was read; the
+/// same tail planted in the **host home only** must produce nothing, which is the
+/// negative control that makes the first half mean something.
 #[tokio::test]
-async fn stale_detection_reads_staging_during_minimal_run() {
+async fn liveness_sweep_reads_staging_during_minimal_run() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
@@ -404,6 +422,48 @@ async fn stale_detection_reads_staging_during_minimal_run() {
     .await
     .unwrap();
 
+    // Turn-end auto-completion is the probe under test; it is off by default.
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "autocomplete_turn_end": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // --- negative control first: the tail at the HOST home must do nothing ---
+    let control_run = start_run(&daemon, Some("minimal")).await;
+    wait_node_status(&daemon, &control_run, "running").await;
+    // The control is only a control while the STAGING exists: `transcripts_root`
+    // falls back to the host home when it does not, which is precisely the
+    // fallback this half is meant to exclude.
+    assert!(
+        wait_until(|| staging_projects(&daemon, &control_run)
+            .parent()
+            .unwrap()
+            .exists())
+        .await,
+        "the control needs a live staging, or the host fallback is legitimate"
+    );
+    write_node_output(&daemon, &control_run, "# out\n");
+    plant_transcript(
+        &host_projects(&daemon),
+        &daemon,
+        &control_run,
+        FIXTURE_TURN_ENDED,
+        // Settled past the anti-bounce window, so only the ROOT can explain a no-op.
+        Some(Duration::from_secs(600)),
+    );
+
+    daemon.run_stale_detection_tick().await;
+
+    let run = get_run(&daemon, &control_run).await;
+    assert_eq!(
+        run["nodes"][NODE_ID]["status"], "running",
+        "a live sandboxed Run must NOT be judged on the host transcript: {run}"
+    );
+
+    // --- the invariant: the same tail in the STAGING is read ---
     let run_id = start_run(&daemon, Some("minimal")).await;
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
@@ -414,24 +474,22 @@ async fn stale_detection_reads_staging_during_minimal_run() {
         .await,
         "the staging home must exist during a live sandboxed run"
     );
-
-    // Idle (back-dated 300s) transcript in the STAGING only; outputs incomplete
-    // (worker `out` never written). If the sweep read `~/.claude` (empty) the
-    // node would stay Running — so `stale` proves it read the staging.
+    write_node_output(&daemon, &run_id, "# out\n");
     plant_transcript(
         &staging_projects(&daemon, &run_id),
         &daemon,
         &run_id,
-        "{}\n",
-        Some(Duration::from_secs(300)),
+        FIXTURE_TURN_ENDED,
+        Some(Duration::from_secs(600)),
     );
 
     daemon.run_stale_detection_tick().await;
 
-    let run = get_run(&daemon, &run_id).await;
+    // The completion tail is detached (#304 / ADR-0023), so poll.
+    let run = wait_node_status(&daemon, &run_id, "completed").await;
     assert_eq!(
-        run["nodes"][NODE_ID]["status"], "stale",
-        "stale-detection must read the STAGED transcript for a live sandboxed run: {run}"
+        run["nodes"][NODE_ID]["status"], "completed",
+        "the liveness sweep must read the STAGED transcript for a live sandboxed run: {run}"
     );
 }
 

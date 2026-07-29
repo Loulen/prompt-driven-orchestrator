@@ -351,6 +351,13 @@ silencieuse, non déterministe, et affirmative.
 
 ## Relations
 
+- **ADR-0032** (liveness) : le seam `transcripts_root` du point 9 reste **vivant et à deux
+  consommateurs**, mais l'un des deux a changé de nature. « stale/AutoComplete » n'existe plus :
+  #469 a supprimé le seuil d'idle et ses verdicts, et le second consommateur est désormais la sonde
+  de **fin de tour** (`parse_turn_state`, opt-in, décochée par défaut) — qui lit le même
+  `projects/` root, par le même encodeur unique. À lire aussi pour la raison pour laquelle la mort
+  d'un nœud sandboxé est exacte par construction : le pane porte le client `docker exec`, qui rend
+  la main dès que `claude` sort dans le conteneur.
 - **ADR-0031** (profils de staging) : *ce que* le home stagé contient, là où cette ADR fixe *où* et
   *comment* le Run s'exécute. §1 (le plancher de garanties) est **réalisé en #426**, avec le point 1
   de l'amendement ci-dessus.

@@ -10,6 +10,7 @@ import {
   saveSandboxProfile,
 } from "../api";
 import type {
+  BoolSettingField,
   EnumSettingFieldWithReason,
   InstanceSettings,
   SandboxProfile,
@@ -272,6 +273,12 @@ function SettingsForm({
     () => settings.dockerfile_path.stored ?? "",
   );
   const [dockerfilePickerOpen, setDockerfilePickerOpen] = useState(false);
+  // Turn-end auto-completion (#469). Seeded from `effective`, like the numeric
+  // knobs: there is no "unset" affordance for a checkbox, and both directions
+  // persist as a stored decision (see the note on the PUT below).
+  const [autocompleteTurnEnd, setAutocompleteTurnEnd] = useState<boolean>(
+    () => settings.autocomplete_turn_end.effective,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -342,6 +349,13 @@ function SettingsForm({
     // relative path or a non-file and the banner surfaces it verbatim.
     if (dockerfilePath !== (settings.dockerfile_path.stored ?? "")) {
       patch.dockerfile_path = dockerfilePath;
+    }
+
+    // Turn-end auto-completion (#469): a plain bool, only sent when it changed.
+    // `false` is a real value here, NOT a clear sentinel — the daemon persists a
+    // stored `0` so unticking overrides a `PDO_AUTOCOMPLETE_TURN_END=1`.
+    if (autocompleteTurnEnd !== settings.autocomplete_turn_end.effective) {
+      patch.autocomplete_turn_end = autocompleteTurnEnd;
     }
 
     // Nothing changed → close without a round-trip.
@@ -421,6 +435,44 @@ function SettingsForm({
           unit=" ms"
           envIsMs
         />
+
+        {/* Turn-end auto-completion (#469). Labelled on what is MEASURED — an end
+            of turn constated in the agent's transcript — and deliberately not on a
+            duration: "no activity for N seconds" is the framing #469 removed,
+            because a `docker build` is indistinguishable from a dead agent that
+            way. Off by default (ADR-0012). */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="setting-autocomplete-turn-end"
+            className="flex cursor-pointer items-start gap-2"
+          >
+            <input
+              id="setting-autocomplete-turn-end"
+              data-testid="setting-autocomplete-turn-end"
+              type="checkbox"
+              checked={autocompleteTurnEnd}
+              onChange={(e) => setAutocompleteTurnEnd(e.target.checked)}
+              className="mt-0.5 shrink-0 accent-acc"
+            />
+            <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+              Try to auto-complete a node when its agent has clearly finished its turn
+            </span>
+          </label>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            When an agent stops without running <span className="font-mono">pdo complete</span>,
+            PDO can finish the node for it — but only when its transcript shows the turn
+            actually ended (no tool call in flight) <strong>and</strong> its declared outputs
+            validate. An agent still inside a long tool call, waiting on a reply, or stopped
+            to ask a question is never touched. Leave this off and such a node waits for you.
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-autocomplete-turn-end"
+          >
+            {autocompleteSourceNote(settings.autocomplete_turn_end)}
+          </div>
+        </div>
 
         {/* Default model (#347): the instance-wide model a work node uses when it
             has no `model:` override. Precedence: node → instance → account
@@ -810,6 +862,25 @@ function dockerfilePathSourceNote(field: StringSettingField): string {
     return `Source: env ${envDisplay ?? "PDO_SANDBOX_DOCKERFILE"}.`;
   }
   return `Source: built-in default (${field.default ?? "the seeded Dockerfile"}).`;
+}
+
+/** Which tier turn-end auto-completion comes from (#469). Like the enum knobs there IS
+ *  a built-in default (`off`), and both directions of a save are a stored decision — so
+ *  "stored (off)" is a meaningful state and must read differently from the default. */
+function autocompleteSourceNote(field: BoolSettingField): string {
+  const onOff = (v: boolean) => (v ? "on" : "off");
+  const envDisplay =
+    field.env != null ? `PDO_AUTOCOMPLETE_TURN_END=${onOff(field.env)}` : null;
+  if (field.source === "stored") {
+    const base = `Source: stored value (${onOff(field.effective)}).`;
+    return envDisplay
+      ? `${base} Env ${envDisplay} is set but overridden.`
+      : `${base} Overrides env and default.`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_AUTOCOMPLETE_TURN_END"}.`;
+  }
+  return `Source: built-in default (${onOff(field.default)}).`;
 }
 
 /** Which tier the instance default_sandbox comes from (#410). Like image_source there

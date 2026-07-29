@@ -5258,8 +5258,17 @@ pub(crate) async fn retry_waiting_nodes(state: &AppState) {
 /// be driven. `advance_run` starts a ready node within milliseconds of it
 /// becoming ready; if the run has instead sat idle this long with the node never
 /// started, the event-driven spawn aborted (a panic, or a dropped completion
-/// future) and nothing will re-drive it. Matches `stale_detector::STALE_THRESHOLD`
-/// so the daemon's two "idle past N" notions agree.
+/// future) and nothing will re-drive it.
+///
+/// It bounds **an event-driven spawn**, which is milliseconds of work: worktree
+/// creation plus a `tmux new-session`. Two minutes is three orders of magnitude
+/// of headroom over that, and — unlike the threshold it used to be aligned with —
+/// it is never compared against *an agent's* silence, so a long tool call cannot
+/// trip it. (It used to be documented as "matching
+/// `stale_detector::STALE_THRESHOLD` so the daemon's two idle notions agree";
+/// #469 deleted that constant precisely because measuring an agent by a duration
+/// does not work, and the alignment was never the reason this number is right.
+/// Do not "re-align" it on anything.)
 const SPAWN_STALL_GRACE_SECS: i64 = 120;
 
 /// Idle window (#445) after which a sandboxed Run stuck at `sandbox_prep = pending` is
@@ -6635,6 +6644,25 @@ fn settings_field_path(
     })
 }
 
+/// Boolean sibling of [`settings_field`] for a checkbox knob (#469
+/// `autocomplete_turn_end`). Same `{effective, source, stored, env, default}`
+/// shape; every tier is a bool-or-null, and `default` is a real value (`false`).
+fn settings_field_bool(
+    effective: bool,
+    source: &str,
+    stored: Option<bool>,
+    env: Option<bool>,
+    default: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "effective": effective,
+        "source": source,
+        "stored": stored,
+        "env": env,
+        "default": default,
+    })
+}
+
 /// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
 /// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
 /// round-trip, short enough that a user who starts Docker mid-session sees `full`/
@@ -6848,6 +6876,21 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         },
     };
 
+    // --- turn-end auto-completion (bool ; built-in default `false`) (#469) ---
+    // `effective` comes from the SAME resolver the sweep consumes, so what the page
+    // discloses can never drift from what the daemon does (lesson of #373). Stored
+    // is `0`/`1`; both are a stored *decision* and both win over the env.
+    let ate_stored = cfg.autocomplete_turn_end.map(|v| v != 0);
+    let ate_env = stale_detector::env_autocomplete_turn_end();
+    let ate_effective = stale_detector::autocomplete_turn_end_with(cfg.autocomplete_turn_end);
+    let ate_source = if ate_stored.is_some() {
+        "stored"
+    } else if ate_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
@@ -6918,6 +6961,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "reason": docker_probe.reason,
             "checked_at": event_log::now_iso(),
         },
+        "autocomplete_turn_end": settings_field_bool(
+            ate_effective,
+            ate_source,
+            ate_stored,
+            ate_env,
+            stale_detector::AUTOCOMPLETE_TURN_END_DEFAULT,
+        ),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -8174,13 +8224,13 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
         tmux_session_manager::session_exists(self.socket, self.session_name)
     }
 
-    fn jsonl_mtime(&self) -> Option<std::time::SystemTime> {
+    fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
         stale_detector::find_session_jsonl(self.projects_root, self.working_dir)
-            .and_then(|p| std::fs::metadata(&p).ok())
-            .and_then(|m| m.modified().ok())
+            .as_deref()
+            .and_then(stale_detector::read_transcript_tail)
     }
 
-    fn validate_outputs(&self) -> bool {
+    fn outputs_valid(&self) -> bool {
         stale_detector::validate_outputs(
             self.pipeline_path,
             self.node_id,
@@ -8204,7 +8254,10 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 }
 
-async fn run_stale_detection(state: &AppState) {
+// Takes `&Arc<AppState>` (not `&AppState`) since #469: the turn-end arm calls the
+// shared node-completion body, whose detached tail (#304, ADR-0023) must own a
+// clone of the state that outlives this sweep.
+async fn run_stale_detection(state: &Arc<AppState>) {
     // Record liveness at sweep start (#251): a wedged sweep freezes this value
     // while an isolated panic still advances it, so `GET /stale/health` answers
     // "is the sweep loop alive?". Mirrors the Trigger scheduler heartbeat (#222).
@@ -8257,6 +8310,20 @@ async fn run_stale_detection(state: &AppState) {
     // sweep (leak-free — a node that leaves the live set drops out naturally);
     // published to the `blocked_on_limit` gauge after the loop.
     let mut blocked_on_limit_count: i64 = 0;
+
+    // #469 §4: resolve turn-end auto-completion ONCE PER SWEEP, `stored → env →
+    // default(false)`. Inside the loop and not at boot (same posture as the
+    // reaper TTL, #129 / ADR-0015 D5), so ticking the box takes effect within one
+    // sweep interval without restarting the daemon — and one read per sweep, not
+    // one per node. A DB read error degrades the *stored* tier to unset (env →
+    // default(false) then decide), never to an assumed "on": the failure mode of
+    // guessing "on" is a terminal action nobody asked for.
+    let autocomplete_turn_end = stale_detector::autocomplete_turn_end_with(
+        instance_config::get(&state.db)
+            .await
+            .ok()
+            .and_then(|c| c.autocomplete_turn_end),
+    );
 
     for run_id in &run_ids {
         let events = match load_events(&state.db, run_id).await {
@@ -8320,11 +8387,6 @@ async fn run_stale_detection(state: &AppState) {
                 running: &running,
             };
 
-            // #373 Unit A: auto-complete is OBSERVE-ONLY. Re-arming the terminal
-            // reap/advance is the trust-gated Unit B decision (ADR-0012) — it can
-            // fire falsely on a node mid a legitimate >STALE_THRESHOLD tool call
-            // whose outputs already validate. `Stale` (recoverable, session stays
-            // alive) and `SessionDied` ship live.
             let assessment = stale_detector::assess_node(
                 &probes,
                 &events,
@@ -8332,7 +8394,7 @@ async fn run_stale_detection(state: &AppState) {
                 node_id,
                 *iter,
                 now,
-                stale_detector::AutoCompletePolicy::Observe,
+                autocomplete_turn_end,
             );
 
             if assessment.blocked_on_limit {
@@ -8342,10 +8404,10 @@ async fn run_stale_detection(state: &AppState) {
             for event in &assessment.events {
                 // Transition guard (#212): append_event re-validates against the
                 // freshly projected state, so a node that terminated organically
-                // since this loop's snapshot never receives a late
-                // NodeStale/NodeFailed (dropped as a no-op). The informational
-                // markers (NodeBlockedOnLimit, NodeAutoCompleteObserved) are not
-                // lifecycle transitions and pass straight through.
+                // since this loop's snapshot never receives a late NodeFailed
+                // (dropped as a no-op). The informational NodeBlockedOnLimit
+                // marker is not a lifecycle transition and passes straight
+                // through.
                 if let Err(e) = append_event(state, event).await {
                     error!("Stale detector: failed to append event: {e}");
                 }
@@ -8376,31 +8438,47 @@ async fn run_stale_detection(state: &AppState) {
                     );
                     retry_waiting_nodes(state).await;
                 }
-                stale_detector::Detection::AutoComplete => {
-                    // #373 Unit A observe-only: `assess_node` emitted the
-                    // non-terminal NodeAutoCompleteObserved marker (node stays
-                    // Running); we deliberately do NOT reap / spawn / retry. Under
-                    // `AutoCompletePolicy::Act` (Unit B) this arm would reap the
-                    // idle session and advance the pipeline.
-                    info!(
-                        "Stale detector: node {node_id} in run {run_id} — WOULD auto-complete \
-                         (idle + valid outputs); observe-only (#373 Unit A), node left Running"
-                    );
-                }
-                stale_detector::Detection::Stale => {
-                    info!(
-                        "Stale detector: node {node_id} in run {run_id} — stale (idle + incomplete outputs)"
-                    );
+                stale_detector::Detection::TurnEnded => {
+                    // #469 §3: complete through the SAME body `POST …/done`
+                    // runs, not by appending a terminal event here. On a
+                    // `code-mutating`/`merge` node a bare append would record a
+                    // `Completed` whose commit stayed on `pdo/sub-…`, leaving the
+                    // downstream with nothing — the exact defect of the old
+                    // observe-only design's `Act` half.
+                    match complete_node_iteration(
+                        state,
+                        run_id.clone(),
+                        node_id.clone(),
+                        *iter,
+                        CompletionSource::TurnEnded,
+                    )
+                    .await
+                    {
+                        CompletionAttempt::Completed => info!(
+                            "Stale detector: node {node_id} in run {run_id} — agent finished its \
+                             turn without signalling; auto-completed (#469)"
+                        ),
+                        CompletionAttempt::Aborted { reason, .. } => info!(
+                            "Stale detector: node {node_id} in run {run_id} — turn ended but \
+                             auto-completion did not apply: {reason}"
+                        ),
+                    }
                 }
                 stale_detector::Detection::Ok => {}
             }
         }
 
         // #214: after node-level detection, a run may now have no live node and
-        // nothing schedulable (e.g. a node just turned Stale/Failed with no
-        // downstream to drive). Reconcile such a run-level stall to terminal so
-        // it never sits Running forever (sprint invariant). Re-reads fresh state
-        // so it observes any failure just appended above.
+        // nothing schedulable (e.g. a node just turned Failed with no downstream
+        // to drive). Reconcile such a run-level stall to terminal so it never sits
+        // Running forever (sprint invariant). Re-reads fresh state so it observes
+        // any failure just appended above.
+        //
+        // Safe under a turn-end auto-completion whose detached tail has not yet
+        // spawned the successor (#469): `run_stall_reason` returns `None` for
+        // "all nodes Completed" (that is `maybe_complete_run`'s), and the
+        // ready-but-not-driven arm needs `idle_secs >= SPAWN_STALL_GRACE_SECS`,
+        // which the `NodeAutoCompleted` we just appended resets to ~0.
         reconcile_run_level_stall(state, run_id).await;
     }
 
@@ -9084,26 +9162,141 @@ fn completion_head_gate(
     }
 }
 
+/// Who is asking for a node iteration to be completed (#469 §3).
+///
+/// The **only** thing it changes is the kind of the terminal event appended.
+/// Every check, side effect and tail below is byte-identical for both, which is
+/// the point: the sweep cannot drift from `POST …/done` because it *is*
+/// `POST …/done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompletionSource {
+    /// The agent called `pdo complete` (`POST /runs/…/nodes/…/done`).
+    Explicit,
+    /// The liveness sweep constated the end of the agent's turn (#469 §2) and
+    /// turn-end auto-completion is enabled. Records `NodeAutoCompleted`, so the
+    /// log says the completion was automatic.
+    TurnEnded,
+}
+
+impl CompletionSource {
+    /// The terminal event kind this source records. Both are projected as a
+    /// completion and both go through the same completion guard; they differ only
+    /// in what the log — and therefore the UI and the stats — will say happened.
+    fn event_kind(self) -> event_log::EventKind {
+        match self {
+            CompletionSource::Explicit => event_log::EventKind::NodeCompleted,
+            CompletionSource::TurnEnded => event_log::EventKind::NodeAutoCompleted,
+        }
+    }
+
+    /// Label for log lines and the aborted-attempt reason.
+    fn label(self) -> &'static str {
+        match self {
+            CompletionSource::Explicit => "node_done",
+            CompletionSource::TurnEnded => "node_done(auto:turn_ended)",
+        }
+    }
+}
+
+/// What one pass through [`complete_node_iteration`] did (#469 §3).
+///
+/// Two variants only, deliberately: either the terminal event landed and the
+/// detached tail is scheduled, or the attempt stopped short. Every early return
+/// of the shared body funnels into [`Self::Aborted`], so the HTTP handler and the
+/// sweep cannot disagree about *which* branches abort — the handler returns the
+/// carried `response`, the sweep logs the carried `reason` and drops it.
+pub(crate) enum CompletionAttempt {
+    /// The terminal event is appended (durable) and the tail is scheduled. The
+    /// `2xx` an HTTP caller gets means exactly that, not "advanced" (ADR-0023).
+    Completed,
+    /// Nothing was completed. `reason` is the log-friendly cause; `response` is
+    /// the verbatim HTTP shape `POST …/done` has always returned for it.
+    Aborted {
+        reason: String,
+        response: Box<Response>,
+    },
+}
+
+impl CompletionAttempt {
+    fn aborted(reason: impl Into<String>, response: Response) -> Self {
+        CompletionAttempt::Aborted {
+            reason: reason.into(),
+            response: Box::new(response),
+        }
+    }
+
+    /// Collapse back to the HTTP response `POST …/done` answers with.
+    fn into_response(self) -> Response {
+        match self {
+            CompletionAttempt::Completed => (StatusCode::OK, "ok").into_response(),
+            CompletionAttempt::Aborted { response, .. } => *response,
+        }
+    }
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/done` — a thin HTTP adapter over
+/// [`complete_node_iteration`].
+///
+/// The whole body lives in that shared function since #469 §3, because the
+/// liveness sweep's turn-end auto-completion must take the *same* path: the
+/// forgotten-run refusal (#328), the completion guard (#212/#354), the
+/// sub-worktree commit+merge, the doc-only cleanliness check, output validation,
+/// the terminal append, then the detached reap+advance tail (#304/ADR-0023).
 async fn node_done(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     body: Option<Json<NodeDoneRequest>>,
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
+    complete_node_iteration(&state, run_id, node_id, iter, CompletionSource::Explicit)
+        .await
+        .into_response()
+}
+
+/// The shared node-completion body: everything `POST …/done` does, for either
+/// caller (#469 §3).
+///
+/// Returns [`CompletionAttempt`] rather than a `Response` so the sweep is not
+/// forced to read HTTP status codes to know what happened — while the response
+/// each abort would have produced is carried verbatim, so the handler stays a
+/// two-line adapter and no branch can be answered differently by the two
+/// callers.
+///
+/// `MERGE_RESOLVER_NODE_ID` keeps its own handler
+/// (`handle_merge_resolver_done`): it has no transition-guard head and no
+/// iteration of its own. The sweep never reaches it (a resolver is not a
+/// projected node in `running_nodes`), so the branch is preserved here purely for
+/// the HTTP caller.
+async fn complete_node_iteration(
+    state: &Arc<AppState>,
+    run_id: String,
+    node_id: String,
+    iter: i64,
+    source: CompletionSource,
+) -> CompletionAttempt {
+    let caller = source.label();
 
     // #328 / ADR-0024: refuse completions for a forgotten run BEFORE any side
     // effect (sub-worktree merge in particular).
     match run_is_forgotten(&state.db, &run_id).await {
         Ok(true) => {
-            return (
-                StatusCode::GONE,
-                Json(serde_json::json!({ "error": format!("run {run_id} has been forgotten") })),
-            )
-                .into_response();
+            return CompletionAttempt::aborted(
+                format!("run {run_id} has been forgotten"),
+                (
+                    StatusCode::GONE,
+                    Json(
+                        serde_json::json!({ "error": format!("run {run_id} has been forgotten") }),
+                    ),
+                )
+                    .into_response(),
+            );
         }
         Ok(false) => {}
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            return CompletionAttempt::aborted(
+                format!("forgotten-run check failed: {e}"),
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+            );
         }
     }
 
@@ -9117,22 +9310,33 @@ async fn node_done(
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            return CompletionAttempt::aborted(
+                format!("failed to load events: {e}"),
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+            );
         }
     };
 
     let pre_run_state = match event_log::project(&events) {
         Some(s) => s,
         None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
+            return CompletionAttempt::aborted(
+                "run not found",
+                (StatusCode::NOT_FOUND, "run not found").into_response(),
+            );
         }
     };
 
-    let repo_root = effective_repo_root(&state, &pre_run_state);
+    let repo_root = effective_repo_root(state, &pre_run_state);
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
 
     if node_id == MERGE_RESOLVER_NODE_ID {
-        return handle_merge_resolver_done(&state, &run_id, &worktree_dir, &pre_run_state).await;
+        // Not a projected node, so not a `CompletionAttempt`: its handler owns
+        // its own response shape end to end.
+        return CompletionAttempt::aborted(
+            "merge resolver: handled by its own path",
+            handle_merge_resolver_done(state, &run_id, &worktree_dir, &pre_run_state).await,
+        );
     }
 
     // Transition guard (#212, #354): validate the completion against the
@@ -9140,14 +9344,20 @@ async fn node_done(
     // cleanliness check, output validation, downstream dispatch). A duplicate
     // completion is a no-op — it must not merge again nor re-trigger downstream
     // spawns. The pure decision lives in the shared head.
-    if let Some(resp) = completion_head_gate(
-        run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter),
-        "node_done",
-        &run_id,
-        &node_id,
-        iter,
-    ) {
-        return resp;
+    //
+    // This is also the gate that made the pre-#469 `Stale` verdict irrecoverable:
+    // it admits only `Running`/`AwaitingUser`/`Failed`, so a latched-`Stale` node's
+    // eventual `pdo complete` was refused with its work already on disk. Nothing
+    // marks a live node `Stale` any more, so the agent of a long tool call is
+    // still `Running` here and its late completion is accepted.
+    let head = run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter);
+    let head_reason = match &head {
+        run_advance::CompletionHead::Reject { reason }
+        | run_advance::CompletionHead::NoOp { reason } => reason.clone(),
+        run_advance::CompletionHead::Allow => String::new(),
+    };
+    if let Some(resp) = completion_head_gate(head, caller, &run_id, &node_id, iter) {
+        return CompletionAttempt::aborted(head_reason, resp);
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -9167,8 +9377,10 @@ async fn node_done(
                 Ok(r) => r,
                 Err(e) => {
                     error!("failed to commit/merge sub-worktree for {node_id}: {e}");
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
+                    return CompletionAttempt::aborted(
+                        format!("commit/merge of the sub-worktree failed: {e}"),
+                        (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+                    );
                 }
             };
             match merge_result {
@@ -9186,7 +9398,7 @@ async fn node_done(
                             "detail": detail,
                         })),
                     };
-                    let _ = append_event(&state, &conflict_event).await;
+                    let _ = append_event(state, &conflict_event).await;
 
                     let run_failed = event_log::Event {
                         id: None,
@@ -9199,14 +9411,17 @@ async fn node_done(
                             "reason": format!("merge conflict on {node_id}")
                         })),
                     };
-                    let _ = append_event(&state, &run_failed).await;
+                    let _ = append_event(state, &run_failed).await;
 
                     warn!("Merge conflict for node {node_id} in run {run_id}");
-                    return (
-                        StatusCode::OK,
-                        Json(serde_json::json!({ "status": "merge_conflict" })),
-                    )
-                        .into_response();
+                    return CompletionAttempt::aborted(
+                        format!("merge conflict on {node_id}"),
+                        (
+                            StatusCode::OK,
+                            Json(serde_json::json!({ "status": "merge_conflict" })),
+                        )
+                            .into_response(),
+                    );
                 }
                 MergeResult::ConflictPendingResolution(detail) => {
                     let conflict_event = event_log::Event {
@@ -9221,10 +9436,12 @@ async fn node_done(
                             "detail": detail,
                         })),
                     };
-                    let _ = append_event(&state, &conflict_event).await;
+                    let _ = append_event(state, &conflict_event).await;
 
-                    return spawn_merge_resolver(&state, &run_id, &node_id, iter, &worktree_dir)
-                        .await;
+                    return CompletionAttempt::aborted(
+                        format!("merge conflict on {node_id}: resolver spawned"),
+                        spawn_merge_resolver(state, &run_id, &node_id, iter, &worktree_dir).await,
+                    );
                 }
             }
         }
@@ -9246,7 +9463,7 @@ async fn node_done(
                         "reason": "doc_violated_code_immutability"
                     })),
                 };
-                let _ = append_event(&state, &fail_event).await;
+                let _ = append_event(state, &fail_event).await;
 
                 let run_failed = event_log::Event {
                     id: None,
@@ -9259,14 +9476,17 @@ async fn node_done(
                         "reason": format!("doc-only node {node_id} violated code immutability")
                     })),
                 };
-                let _ = append_event(&state, &run_failed).await;
+                let _ = append_event(state, &run_failed).await;
 
                 warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({ "status": "doc_violated_code_immutability" })),
-                )
-                    .into_response();
+                return CompletionAttempt::aborted(
+                    format!("doc-only node {node_id} violated code immutability"),
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({ "status": "doc_violated_code_immutability" })),
+                    )
+                        .into_response(),
+                );
             }
             Ok(false) => {}
             Err(e) => {
@@ -9279,8 +9499,14 @@ async fn node_done(
     let pipeline_path =
         resolve_run_pipeline_path(&repo_root, &run_id, &pre_run_state.pipeline_name);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+    // Reached on the auto path too, and not redundant with the sweep's own
+    // outputs guard: that guard read the artifacts a moment earlier, this one is
+    // the authority (and owns the frontmatter corrective loop, #36). In practice
+    // it passes — the sweep only proposes `TurnEnded` when validation already
+    // succeeded — but if the two ever disagree the answer is `node_done`'s, not a
+    // second opinion.
     if let Some(resp) = check_output_validation_with_retry(
-        &state,
+        state,
         &pipeline_path,
         &node_id,
         iter,
@@ -9290,29 +9516,40 @@ async fn node_done(
     )
     .await
     {
-        return resp;
+        return CompletionAttempt::aborted("output validation refused the completion", resp);
     }
 
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
         ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeCompleted,
+        // #469 §3: `NodeAutoCompleted` on the sweep path — already projected as a
+        // completion and already covered by the same guard, but the log must say
+        // the completion was automatic. Deliberately NOT a `source` field in the
+        // payload (see `node_done_completion_has_no_source_payload`).
+        kind: source.event_kind(),
         node_id: Some(node_id.clone()),
         iter: Some(iter),
         payload: None,
     };
 
-    if let Err(e) = append_event(&state, &event).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+    if let Err(e) = append_event(state, &event).await {
+        return CompletionAttempt::aborted(
+            format!("failed to append the terminal event: {e}"),
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+        );
     }
 
     // Detached tail (#304, ADR-0023): the reap below kills the very tmux
     // session `pdo complete` runs in, closing this request's client socket —
     // inline, hyper would cancel this future at its next `.await` and silently
     // drop the advance (successor spawn / end-port finalization). Everything
-    // past the durable `NodeCompleted` append runs on its own task; the 2xx
-    // means "terminal event recorded, advance scheduled", not "advanced".
+    // past the durable terminal append runs on its own task; the 2xx means
+    // "terminal event recorded, advance scheduled", not "advanced".
+    //
+    // On the auto path there is no client socket to lose, but the reap is exactly
+    // as load-bearing: it is what finally kills the REPL the finished agent is
+    // still sitting in. Detaching it too keeps the two paths one path.
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
@@ -9320,7 +9557,7 @@ async fn node_done(
     // `bool`, not the mode: the mode owns a String since profiles landed, and this value
     // is captured into a detached `async move` where a reference cannot live.
     let tail_sandbox = !pre_run_state.sandbox.is_off();
-    detach_terminal_tail("node_done", state.clone(), run_id, node_id, async move {
+    detach_terminal_tail(caller, state.clone(), run_id, node_id, async move {
         // Reap on terminal state (#205): snapshot the pane then kill the session,
         // so a completed node never holds a live session toward the tmux-collapse
         // point (#77/#78). Post-mortem inspection survives via the snapshot.
@@ -9333,10 +9570,10 @@ async fn node_done(
             tail_sandbox,
         );
 
-        // Shared post-`NodeCompleted` tail (#275): fire this node's edges, advance the
+        // Shared post-completion tail (#275): fire this node's edges, advance the
         // run, re-drive throttled waiters, then the single completion gate. Everything
         // above — guard, node-type merge / cleanliness check, output validation, the
-        // `NodeCompleted` append — is the in-request head, untouched.
+        // terminal append — is the head, untouched.
         match run_advance::complete_node(
             &tail_state,
             &tail_run,
@@ -9347,10 +9584,10 @@ async fn node_done(
         .await
         {
             run_advance::CompletionOutcome::Halted => info!("Run {tail_run} halted"),
-            _ => info!("Node {tail_node} completed in run {tail_run}"),
+            _ => info!("Node {tail_node} completed in run {tail_run} ({caller})"),
         }
     });
-    (StatusCode::OK, "ok").into_response()
+    CompletionAttempt::Completed
 }
 
 async fn node_fail(
@@ -20161,10 +20398,14 @@ edges:
 
     #[tokio::test]
     async fn stale_detector_terminal_events_on_terminal_node_are_dropped() {
-        // #212: the stale detector probes a snapshot; if the node completed
-        // organically in between, its NodeStale / NodeAutoCompleted must be
-        // dropped by the guard at append time (re-checked against the freshly
-        // projected state).
+        // #212: the liveness sweep probes a snapshot; if the node completed
+        // organically in between, its late `NodeFailed` must be dropped by the
+        // guard at append time (re-checked against the freshly projected state).
+        //
+        // Since #469 the only terminal event the sweep builds itself is the
+        // session-died `NodeFailed` — the turn-end path goes through the shared
+        // node-completion body, whose own guard head refuses a completed
+        // iteration (see `completion_head_noops_duplicate_completion`).
         let state = test_state().await;
         let run_id = "guard-stale-terminal";
         for event in [
@@ -20194,8 +20435,9 @@ edges:
         }
 
         for detection in [
-            stale_detector::Detection::Stale,
-            stale_detector::Detection::AutoComplete,
+            stale_detector::Detection::SessionDied,
+            stale_detector::Detection::TurnEnded,
+            stale_detector::Detection::Ok,
         ] {
             for event in stale_detector::detection_events(&detection, run_id, "worker", 1) {
                 // The guard turns these into no-ops, not errors.
@@ -20206,18 +20448,134 @@ edges:
         let events = load_events(&state.db, run_id).await.unwrap();
         assert_eq!(
             count_events(&events, event_log::EventKind::NodeStale, "worker"),
-            0
+            0,
+            "#469: nothing in the daemon emits NodeStale any more"
+        );
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeFailed, "worker"),
+            0,
+            "a late session-died failure must be dropped on an already-completed node"
         );
         assert_eq!(
             count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
             1,
-            "no duplicate completion from the auto-complete path"
+            "no duplicate completion"
         );
         let run_state = event_log::project(&events).unwrap();
         assert_eq!(
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Completed
         );
+    }
+
+    #[tokio::test]
+    async fn a_historical_node_stale_run_still_projects_and_displays() {
+        // AC3 (#469). `NodeStale` keeps its `EventKind` variant and its projection
+        // arm on purpose: the log is APPEND-ONLY, so removing the variant would
+        // fail deserialisation for every historical Run that carries one,
+        // `project()` would return None, and those Runs would VANISH from the UI.
+        // Nothing emits it any more — but everything can still read it.
+        let state = test_state().await;
+        let run_id = "historical-stale";
+        for event in [
+            seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "test" })),
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            seed_event(
+                run_id,
+                event_log::EventKind::NodeStale,
+                Some("worker"),
+                Some(1),
+                Some(serde_json::json!({ "reason": "idle_outputs_incomplete" })),
+            ),
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        // The projection survives …
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).expect("a historical stale Run must project");
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Stale
+        );
+
+        // … and so does the HTTP view the UI reads.
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "the Run must still be served"
+        );
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            body["nodes"]["worker"]["status"], "stale",
+            "a historical stale node must still read `stale` in the UI: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_view_discloses_the_autocomplete_tiers() {
+        // #469 §4 / ADR-0015: `effective` comes from the SAME resolver the sweep
+        // consumes, and both directions of an explicit save are a STORED decision
+        // (a stored 0 must beat `PDO_AUTOCOMPLETE_TURN_END=1`, or unticking the box
+        // would be a no-op on a machine that sets the env var).
+        let state = test_state().await;
+
+        let fresh = build_settings_view(&state).await.unwrap();
+        assert_eq!(fresh["autocomplete_turn_end"]["effective"], false);
+        assert_eq!(fresh["autocomplete_turn_end"]["default"], false);
+        assert!(fresh["autocomplete_turn_end"]["stored"].is_null());
+
+        for (on, want_source) in [(true, "stored"), (false, "stored")] {
+            instance_config::update(
+                &state.db,
+                instance_config::UpdateInstanceConfig {
+                    autocomplete_turn_end: Some(on),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let view = build_settings_view(&state).await.unwrap();
+            assert_eq!(
+                view["autocomplete_turn_end"]["effective"],
+                serde_json::json!(on)
+            );
+            assert_eq!(
+                view["autocomplete_turn_end"]["stored"],
+                serde_json::json!(on),
+                "the stored tier is disclosed as a bool, not as 0/1"
+            );
+            assert_eq!(
+                view["autocomplete_turn_end"]["source"],
+                serde_json::json!(want_source)
+            );
+        }
     }
 
     #[tokio::test]
@@ -24488,6 +24846,42 @@ edges:
         assert_eq!(
             img["source"], "default",
             "source is the built-in default: {img}"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_round_trips_the_autocomplete_flag_both_ways() {
+        // #469 §4: the checkbox is authoritative in BOTH directions. Unticking must
+        // persist a stored `0` (source still "stored"), not clear back to unset —
+        // otherwise it could not override `PDO_AUTOCOMPLETE_TURN_END=1`.
+        let state = test_state().await;
+
+        let (status, view) = put_settings_resp(&state, r#"{"autocomplete_turn_end": true}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["autocomplete_turn_end"]["effective"], true);
+        assert_eq!(view["autocomplete_turn_end"]["source"], "stored");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .autocomplete_turn_end,
+            Some(1)
+        );
+
+        let (status, view) = put_settings_resp(&state, r#"{"autocomplete_turn_end": false}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["autocomplete_turn_end"]["effective"], false);
+        assert_eq!(
+            view["autocomplete_turn_end"]["source"], "stored",
+            "unticking is a stored decision, not a fall-through: {view}"
+        );
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .autocomplete_turn_end,
+            Some(0),
+            "off must persist a stored 0, never NULL"
         );
     }
 

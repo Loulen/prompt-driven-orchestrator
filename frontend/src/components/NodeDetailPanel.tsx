@@ -360,7 +360,17 @@ export default function NodeDetailPanel({
         </div>
       )}
 
-      {/* Stale banner */}
+      {/* Stale banner — HISTORICAL RUNS ONLY since #469 (ADR-0032 §1).
+          Nothing in the daemon marks a live node `stale` any more: the idle
+          threshold that produced it killed healthy agents mid `docker build`. This
+          block is therefore dead code for every new Run, and kept because Runs
+          recorded before #469 still project `stale` and must still render as they
+          always did. Do NOT "clean it up", and do not wire a producer back in to
+          give it something to show.
+          Its Retry button is also the only working action here: `Mark complete` is
+          rendered for a stale node below but the completion guard refuses the
+          transition, so it clicks into the void — a known, deliberately unfixed
+          consequence (ADR-0032 § "Ce qu'on ne fait pas": no catch-up). */}
       {node.status === "stale" && (
         <div
           className="flex items-center gap-2 border-b border-st-stale/30 bg-st-stale-bg px-3 py-2"

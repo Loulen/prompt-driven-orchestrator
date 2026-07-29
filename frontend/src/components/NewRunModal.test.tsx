@@ -32,6 +32,8 @@ vi.mock("../api", () => ({
       { name: "minimal", virtual: true },
     ],
     home: "/home/user",
+    // #469: required on InstanceSettings; this modal does not read it.
+    autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
     updated_at: "2026-07-01T10:00:00.000Z",
   }),
   // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
@@ -1435,6 +1437,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
         { name: "minimal", virtual: true },
       ],
       home: "/home/user",
+      // #469: required on InstanceSettings; this modal does not read it.
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -1709,6 +1713,8 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
         { name: "minimal", virtual: true },
       ],
       home: "/home/user",
+      // #469: required on InstanceSettings; this modal does not read it.
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };

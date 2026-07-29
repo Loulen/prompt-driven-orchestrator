@@ -124,6 +124,50 @@ impl TestDaemon {
         })
     }
 
+    /// Spawn a daemon whose `$HOME` for transcript reads is the tempdir (#469).
+    ///
+    /// `sandbox_home_override` is the seam `sandbox_run::transcripts_root` resolves
+    /// against, and for an `off` Run it *is* the host home — so a test can plant a
+    /// Claude Code transcript at `<repo_root>/.claude/projects/<encoded cwd>/` and
+    /// the sweep will read it, without touching the real `~/.claude` and without a
+    /// process-global `std::env::set_var("HOME", …)` (which would confine the whole
+    /// binary to a single test, #181).
+    ///
+    /// No fake docker: these tests exercise the `off` path.
+    pub async fn spawn_with_home_override<F>(
+        setup: F,
+        tmux_cmd_override: Option<String>,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override,
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
     /// Spawn a daemon with a **fake `docker`** AND an explicit tmux tail override
     /// (#408). Like [`TestDaemon::spawn_with_docker_override`] but the caller
     /// chooses the tail: pass `Some("exec sleep 600")` so a sandboxed node's

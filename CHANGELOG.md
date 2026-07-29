@@ -10,7 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.0.0
+## 1.2.0
+
+Deux changements cassants livrés sous un bump **mineur**, par décision explicite du mainteneur : la
+v2.0.0 qu'avaient choisie les deux slices n'a jamais été taggée ni publiée (la dernière release est la
+v1.0.0), et aucune des deux ruptures ne change la surface qu'un utilisateur pilote au quotidien.
+
+### Cassant — `session_died` est le seul verdict de liveness, l'état `Stale` disparaît (#469)
+
+Un nœud n'est plus déclaré mort sur une absence d'activité : seule la mort de sa session compte, et la
+complétion sur fin de tour constatée est opt-in (ADR-0032, ADR-0012). L'état de nœud `Stale` est
+supprimé — un client qui l'attendait ne le verra plus. Nouveau réglage `autocomplete_turn_end`
+(`PDO_AUTOCOMPLETE_TURN_END`), off par défaut.
 
 ### Cassant — `GET`/`PUT /settings` perdent `image_source` et `dockerfile_path` (#471)
 

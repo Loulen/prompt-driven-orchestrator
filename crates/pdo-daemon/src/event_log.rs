@@ -94,12 +94,15 @@ pub enum EventKind {
     /// Behaviour-preserving no-op in projection — the node stays Running;
     /// recovery is deferred (Slice 2/3). Wire form: `"node_blocked_on_limit"`.
     NodeBlockedOnLimit,
-    /// Informational (#373 Unit A): the stale sweep found a node idle past the
-    /// threshold with valid outputs — it *would* auto-complete, but the terminal
-    /// reap/advance is trust-gated (Unit B / ADR-0012), so under the `Observe`
-    /// policy this non-terminal marker is emitted instead of `NodeAutoCompleted`.
-    /// Behaviour-preserving no-op in projection — the node stays Running.
-    /// Wire form: `"node_auto_complete_observed"`.
+    /// Informational (#373 Unit A) — **no producer since #469 (ADR-0032 §3)**.
+    /// The sweep used to emit this when a node had been idle past a threshold with
+    /// valid outputs: "it *would* auto-complete". #469 deleted the threshold (a
+    /// `docker build` is indistinguishable from a dead agent that way) and closed
+    /// Unit B in won't-do, so nothing writes this any more. The variant is KEPT
+    /// because the log is append-only: a Run that recorded one before #469 must
+    /// still deserialise, or `project()` would return `None` and the Run would
+    /// vanish from the UI. Behaviour-preserving no-op in projection — the node
+    /// stays Running. Wire form: `"node_auto_complete_observed"`.
     NodeAutoCompleteObserved,
     PipelineLint,
     PipelineModified,
@@ -971,9 +974,9 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             // #290 / #373: informational only — the node stays in its current
             // status (Running). Behaviour-preserving no-op, exactly like
             // `PipelineLint`. `NodeBlockedOnLimit` recovery is deferred (Slice
-            // 2/3); `NodeAutoCompleteObserved` is the observe-only marker whose
-            // terminal counterpart (`NodeAutoCompleted`) is trust-gated to Unit
-            // B (#373 / ADR-0012). No node/run state touched.
+            // 2/3); `NodeAutoCompleteObserved` has had no producer since #469
+            // (ADR-0032 §3) and is read-only for historical Runs. No node/run
+            // state touched.
             EventKind::NodeBlockedOnLimit | EventKind::NodeAutoCompleteObserved => {}
 
             EventKind::CommandIssued => apply_command_event(&mut state, event),
@@ -1849,19 +1852,29 @@ fn finalize(state: &mut RunState) {
 
 /// Is this Run *stalled* (#180)? A run with no node currently `running` or
 /// `waiting` and no active merge resolver, where at least one node has gone
-/// `stale`, has nothing left to drive it forward: the stale node's session is
-/// wedged (idle with incomplete outputs, per `stale_detector`) so its
-/// downstream can never be scheduled, and the scheduler — which reacts to every
-/// event — has produced no other active node. The run is therefore stuck with
-/// no forward progress, which CONTEXT.md's "never a silent stall" requires us
-/// to surface (amber dot) instead of leaving it looking active.
+/// `stale`, has nothing left to drive it forward.
 ///
-/// This is a **display-only** derivation: the run's canonical `status` stays
-/// `Running`, so stale detection keeps probing it and the stalled state clears
-/// automatically as soon as activity resumes (a `NodeStarted`/`NodeWaiting`
-/// flips a node back to active, or the stale node completes). We deliberately
-/// avoid a persisted `RunStatus::Stale` variant — the condition is recomputed
-/// from the projection on every read.
+/// **VESTIGIAL since #469 (ADR-0032): reserved for historical Runs.** This
+/// predicate tests `NodeStatus::Stale` and nothing else, and nothing in the
+/// daemon produces that status any more — so it is constantly `false` for every
+/// new Run, and **#180's amber dot will never light again**. That is a deliberate
+/// removal of functionality, recorded in ADR-0032 § "Ce qu'on ne fait pas": do
+/// not wire a producer back in to "fix" the amber dot. What replaced the stale
+/// verdict is the absence of one — an agent alive but not progressing stays
+/// `Running`, with its session attachable and the human's Stop/Retry to hand.
+///
+/// The function is kept, live and correct, because the event log is append-only:
+/// a Run that recorded a `NodeStale` before #469 still projects `Stale` and must
+/// still render as it always did.
+///
+/// Historical note on the intention, which never held. The docstring here used to
+/// claim this was a **display-only** derivation that "clears automatically as soon
+/// as activity resumes, since stale detection keeps probing it". Both halves were
+/// false: `running_nodes` filtered strictly on `Running`, so a `Stale` node was
+/// never probed again, and `reconcile_run_level_stall` (#214) failed the whole Run
+/// in the very same sweep — 27 ms after the `node_stale`, on the Run that
+/// produced #469. Two mechanisms contradicted each other, the terminal one won,
+/// and the doc described the other.
 pub fn is_stalled(run: &RunState) -> bool {
     if run.status != RunStatus::Running {
         return false;

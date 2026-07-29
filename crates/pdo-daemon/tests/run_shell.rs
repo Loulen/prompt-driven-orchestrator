@@ -148,7 +148,12 @@ fn seed_plain(
 }
 
 async fn start_run(daemon: &TestDaemon, pipeline: &str) -> String {
-    let body = serde_json::json!({ "pipeline": pipeline, "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)

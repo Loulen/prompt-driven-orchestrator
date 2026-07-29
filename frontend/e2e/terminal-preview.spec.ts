@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupRuns } from "./helpers";
+import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — Inline xterm.js terminal (refs #55, ADR 0004).
 // Verifies:
@@ -73,10 +73,10 @@ test("selecting a running node shows inline xterm terminal", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "e2e inline terminal test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -135,10 +135,10 @@ test("terminal toolbar shows expand and detach buttons", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "e2e toolbar test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

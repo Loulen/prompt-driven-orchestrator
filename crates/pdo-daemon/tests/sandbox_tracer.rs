@@ -139,7 +139,12 @@ fn log_text(log: &Path) -> String {
 
 /// `POST /runs` with an optional `sandbox` mode. Returns the new run id.
 async fn start_run(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
-    let mut body = serde_json::json!({ "pipeline": "sbx-cycle", "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let mut body = serde_json::json!({
+        "pipeline": "sbx-cycle",
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     if let Some(mode) = sandbox {
         body["sandbox"] = serde_json::json!(mode);
     }
@@ -1302,11 +1307,13 @@ async fn put_default_sandbox(daemon: &TestDaemon, mode: &str) {
 /// `POST /triggers` with an optional per-Trigger `sandbox` mode. Returns the id.
 /// A non-empty `input_template` keeps the prompt-required reject rule satisfied.
 async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let mut body = serde_json::json!({
         "name": "sbx-trigger",
         "pipeline_id": "sbx-cycle",
         "cron": "0 9 * * *",
         "input_template": "fired input",
+        "target_repo": daemon.target_repo(),
     });
     if let Some(mode) = sandbox {
         body["sandbox"] = serde_json::json!(mode);

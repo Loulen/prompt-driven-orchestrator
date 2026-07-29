@@ -79,13 +79,15 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -100,7 +102,7 @@ async fn create_run(daemon_url: &str) -> String {
 #[tokio::test]
 async fn sub_worktree_survives_node_completion() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // The daemon creates the sub-worktree at spawn time. Verify it exists.
     let sub_wt_dir = daemon
@@ -183,7 +185,7 @@ async fn sub_worktree_survives_node_completion() {
 #[tokio::test]
 async fn cleanup_run_removes_surviving_sub_worktrees() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let sub_wt_dir = daemon
         .repo_root()

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { openPipelineForEdit, runMultipart } from "./helpers";
 
 // Layer 3b — Inspector Run/Edit tabs (refs #68, refs #1, refs #271).
 // Verifies:
@@ -89,7 +89,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
 
   // Create a run
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "tab test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "tab test" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -204,7 +204,7 @@ test("terminal run: clicking a node defaults to Run tab (#271)", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "terminal tab test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "terminal tab test" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -273,7 +273,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
 
   // Create a run — worker-a runs, worker-b stays pending
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "pending test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "pending test" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

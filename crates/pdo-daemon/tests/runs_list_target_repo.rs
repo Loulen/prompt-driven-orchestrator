@@ -7,6 +7,11 @@
 //!   `target_repo` of a null-target trigger stays null (no server-side rewrite).
 //! - The flattened Trigger fields (`name`, `cron`, …) stay top-level under the
 //!   `effective_repo` wrapper.
+//!
+//! #470/ADR-0033: the null-target rows here are seeded UNDER the API — `POST
+//! /runs` and `POST /triggers` refuse an unnamed repo now. Only historical
+//! records carry a null target, and this file is what pins that they stay
+//! readable and bucketed forever.
 
 mod common;
 
@@ -130,12 +135,13 @@ async fn runs_list_carries_resolved_effective_repo() {
         serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "x", "target_repo": path_b }),
     )
     .await;
-    // No target_repo → must resolve to the daemon's repo_root.
-    create_run(
-        &daemon,
-        serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "x" }),
-    )
-    .await;
+    // A pre-#470 Run with no target_repo → must still resolve to the daemon's
+    // repo_root. Seeded UNDER the API on purpose: `POST /runs` refuses that shape
+    // now (ADR-0033), but what this test demonstrates — no "Unassigned" bucket for
+    // a historical row — is exactly what the read-side fallback must keep doing.
+    daemon
+        .seed_legacy_run_without_target_repo("legacy-null-target", PIPELINE_NAME)
+        .await;
 
     let rows: Vec<serde_json::Value> = reqwest::get(format!("{}/runs", daemon.url()))
         .await
@@ -190,15 +196,12 @@ async fn triggers_list_resolves_effective_repo_without_mutating_raw_target() {
         }),
     )
     .await;
-    create_trigger(
-        &daemon,
-        serde_json::json!({
-            "name": "t-null",
-            "pipeline_id": PIPELINE_NAME,
-            "cron": "0 0 1 1 *",
-        }),
-    )
-    .await;
+    // A pre-#470 Trigger with no target_repo, seeded under the API: `POST
+    // /triggers` refuses that shape now (ADR-0033), yet the list must keep
+    // resolving the historical row instead of dropping it.
+    daemon
+        .seed_legacy_trigger_without_target_repo("t-null", PIPELINE_NAME, "0 0 1 1 *", None)
+        .await;
 
     let rows: Vec<serde_json::Value> = reqwest::get(format!("{}/triggers", daemon.url()))
         .await

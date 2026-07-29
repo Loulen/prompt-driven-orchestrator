@@ -112,14 +112,16 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str, pipeline: &str) -> String {
+async fn create_run(daemon: &TestDaemon, pipeline: &str) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": pipeline,
         "input": "test input",
-        "variables": {}
+        "variables": {},
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -167,7 +169,7 @@ async fn command_events(daemon_url: &str, run_id: &str, command: &str) -> Vec<se
 #[tokio::test]
 async fn extend_cycle_unknown_node_is_400_and_leaves_no_trace() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LEGACY_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
 
     let (status, body) = post_command(
         &daemon.url(),
@@ -200,7 +202,7 @@ async fn extend_cycle_unknown_node_is_400_and_leaves_no_trace() {
 #[tokio::test]
 async fn extend_cycle_on_region_member_is_409_naming_the_region() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LOOP_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
 
     // `worker` is both a member AND the entry/head of `review_loop` — the head
     // is a member like any other, so it must be 409 too (grilling decision 1).
@@ -228,7 +230,7 @@ async fn extend_cycle_on_region_member_is_409_naming_the_region() {
 #[tokio::test]
 async fn extend_cycle_on_legacy_pipeline_is_200_with_truthful_body() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LEGACY_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
 
     // No `loops:` block → legacy cycles keep working through extend_cycle.
     let (status, body) = post_command(
@@ -261,7 +263,7 @@ async fn extend_cycle_on_legacy_pipeline_is_200_with_truthful_body() {
 #[tokio::test]
 async fn bump_region_unknown_region_is_400_and_leaves_no_trace() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LOOP_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
 
     let (status, body) = post_command(
         &daemon.url(),
@@ -283,7 +285,7 @@ async fn bump_region_unknown_region_is_400_and_leaves_no_trace() {
 #[tokio::test]
 async fn end_region_unknown_region_is_400() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LOOP_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
 
     let (status, body) = post_command(
         &daemon.url(),
@@ -305,7 +307,7 @@ async fn end_region_unknown_region_is_400() {
 #[tokio::test]
 async fn bump_region_with_live_iteration_is_noop_with_reason() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LOOP_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
 
     // `worker` iter 1 is live (the harmless sleep session): nothing is eligible
     // to re-spawn, so the truthful body is an explicit noop with a reason.
@@ -338,7 +340,7 @@ async fn bump_region_with_live_iteration_is_noop_with_reason() {
 #[tokio::test]
 async fn resume_run_reports_noop_when_nothing_to_spawn() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url(), LEGACY_PIPELINE_NAME).await;
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
 
     let (status, body) = post_command(
         &daemon.url(),

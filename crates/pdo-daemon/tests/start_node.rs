@@ -76,13 +76,15 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "hello world",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -95,7 +97,7 @@ async fn create_run(daemon_url: &str) -> String {
 #[tokio::test]
 async fn run_state_includes_start_node_with_entry_targets() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
@@ -131,7 +133,7 @@ async fn run_state_includes_start_node_with_entry_targets() {
 #[tokio::test]
 async fn run_state_includes_end_node_with_pending_port() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
@@ -188,8 +190,14 @@ async fn run_state_includes_uploaded_input_images() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
+    // #470: the multipart create boundary requires a named repo too (ADR-0033).
+    let target_repo = daemon.target_repo();
     let (body, content_type) = build_multipart(
-        &[("pipeline", PIPELINE_NAME), ("input", "look at these")],
+        &[
+            ("pipeline", PIPELINE_NAME),
+            ("input", "look at these"),
+            ("target_repo", target_repo.as_str()),
+        ],
         &[("ui-bug.png", PNG), ("trace.png", PNG)],
     );
 
@@ -248,7 +256,7 @@ async fn run_state_includes_uploaded_input_images() {
 #[tokio::test]
 async fn artifact_endpoint_serves_input_md() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let resp = reqwest::get(format!(
         "{}/runs/{}/artifact?path=_input/output.md",

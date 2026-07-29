@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
 // The dirty edit canvas raises an "External edit conflict" modal when the
@@ -96,10 +96,10 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
 
   // Create a run to get into run mode
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "e2e info panel test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -245,7 +245,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
 
   // Step 1 — create + select a run so selectedRun is populated.
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "library-tab regression" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "library-tab regression" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -322,7 +322,7 @@ test("selecting a different run closes the pipeline info panel (#385)", async ({
   // between them still moves activeTabId (the make-or-break edge case for #385).
   const mkRun = async (): Promise<string> => {
     const r = await page.request.post(`${baseURL}/runs`, {
-      multipart: { pipeline: PIPELINE_NAME, input: "e2e #385" },
+      multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e #385" }),
     });
     expect(r.status()).toBe(201);
     return (await r.json()).run_id as string;
@@ -375,11 +375,13 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
   // seeded pipeline is prompt_required by default (a cron-only trigger would be
   // rejected). cron never fires within the test window.
   const trigResp = await page.request.post(`${baseURL}/triggers`, {
+    // #470: a Trigger is a Run template — it must name its target repo (ADR-0033).
     data: {
       name: `e2e-385-${process.pid}`,
       pipeline_id: PIPELINE_NAME,
       cron: "0 0 1 1 *",
       input_template: "e2e #385 trigger",
+      target_repo: E2E_TARGET_REPO,
     },
   });
   expect(trigResp.status()).toBe(201);
@@ -389,7 +391,7 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
   // Trigger's pipeline template tab, so selecting the Trigger genuinely moves
   // activeTabId (avoids the "pipeline already active" no-op).
   const runResp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "e2e #385 trigger-run" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e #385 trigger-run" }),
   });
   expect(runResp.status()).toBe(201);
   const runId = (await runResp.json()).run_id as string;

@@ -7,8 +7,13 @@ import { fileURLToPath } from "node:url";
 
 // Layer 4 (e2e) per ADR 0004 — proves #258 end-to-end in a browser: the Runs and
 // Triggers lists group by project (target repo), conditionally (only when ≥ 2
-// distinct repos are present), with a null `target_repo` resolved to the daemon's
-// own repo_root (no "Unassigned" bucket) and the raw `target_repo` left untouched.
+// distinct repos are present), with no "Unassigned" bucket and the raw
+// `target_repo` left untouched (the row badge mirrors it, the header does not).
+//
+// #470/ADR-0033: this spec used to reach the daemon's own repo by OMITTING
+// `target_repo`. That shape is refused now, so the daemon repo is named
+// explicitly here. The behaviour of a genuinely null-target (pre-#470) row is
+// pinned at layer 3a, where it can be seeded under the API.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -91,19 +96,24 @@ test.beforeEach(async ({ page, baseURL }) => {
   }
 });
 
+// #470/ADR-0033: `targetRepo` is no longer optional — `POST /triggers` refuses a
+// Trigger that names no repo. A row with a null target can only be a pre-#470
+// record, which the API cannot create; the read-side resolution of such a row is
+// pinned at layer 3a (`runs_list_target_repo.rs`, which seeds it under the API).
 async function createTrigger(
   page: import("@playwright/test").Page,
   baseURL: string,
   name: string,
-  targetRepo: string | null,
+  targetRepo: string,
 ) {
-  const data: Record<string, unknown> = {
-    name,
-    pipeline_id: PIPELINE_NAME,
-    cron: "0 0 1 1 *",
-  };
-  if (targetRepo) data.target_repo = targetRepo;
-  const resp = await page.request.post(`${baseURL}/triggers`, { data });
+  const resp = await page.request.post(`${baseURL}/triggers`, {
+    data: {
+      name,
+      pipeline_id: PIPELINE_NAME,
+      cron: "0 0 1 1 *",
+      target_repo: targetRepo,
+    },
+  });
   expect(resp.status(), `POST /triggers ${name}`).toBe(201);
 }
 
@@ -128,13 +138,16 @@ test("Triggers list stays flat (no group header) when all triggers share one rep
   await expect(page.getByTestId("trigger-repo-group")).toHaveCount(0);
 });
 
-test("Triggers list groups by repo across ≥2 repos; null target resolves to the daemon repo, no Unassigned", async ({
+test("Triggers list groups by repo across ≥2 repos, including the daemon's own, no Unassigned", async ({
   page,
   baseURL,
 }) => {
   await createTrigger(page, baseURL!, "g-a", repoA);
   await createTrigger(page, baseURL!, "g-b", repoB);
-  await createTrigger(page, baseURL!, "g-null", null); // resolves to WORKSPACE_ROOT
+  // #470: the daemon's own repo is now named explicitly rather than reached by
+  // omission. The grouping under it — and the absence of an "Unassigned" bucket —
+  // is what this spec is about, and both still hold.
+  await createTrigger(page, baseURL!, "g-root", WORKSPACE_ROOT);
 
   await openTriggersTab(page);
   await expect(page.getByText("g-a")).toBeVisible();
@@ -145,8 +158,8 @@ test("Triggers list groups by repo across ≥2 repos; null target resolves to th
   const labels = await page.getByTestId("trigger-repo-label").allTextContents();
   expect(labels).toContain(path.basename(repoA));
   expect(labels).toContain(path.basename(repoB));
-  // The null-target trigger grouped under the daemon's own repo (basename), not
-  // a separate "Unassigned" bucket.
+  // The daemon-repo trigger grouped under that repo (basename), not a separate
+  // "Unassigned" bucket.
   expect(labels).toContain(path.basename(WORKSPACE_ROOT));
   expect(labels.join(" ")).not.toMatch(/unassigned/i);
 
@@ -166,11 +179,17 @@ test("Triggers list groups by repo across ≥2 repos; null target resolves to th
     .filter({ hasText: path.basename(repoA) });
   await expect(repoALabel.locator("xpath=..")).toHaveAttribute("title", repoA);
 
-  // Raw target_repo unchanged: g-null shows NO badge; g-a shows a badge titled repoA.
-  const nullRow = page.getByTestId("trigger-row").filter({ hasText: "g-null" });
-  await expect(nullRow.locator(`[title="${WORKSPACE_ROOT}"]`)).toHaveCount(0);
+  // The row badge mirrors the RAW `target_repo`, never the resolved
+  // `effective_repo`: each row is titled with the repo its Trigger actually names.
+  //
+  // #470: the converse — a null-target row showing NO badge — is no longer
+  // creatable through the API, so it is pinned at layer 3a instead
+  // (`triggers_list_resolves_effective_repo_without_mutating_raw_target`, which
+  // seeds the historical row under the API and asserts the raw field stays null).
   const aRow = page.getByTestId("trigger-row").filter({ hasText: "g-a" });
   await expect(aRow.locator(`[title="${repoA}"]`)).toHaveCount(1);
+  const rootRow = page.getByTestId("trigger-row").filter({ hasText: "g-root" });
+  await expect(rootRow.locator(`[title="${WORKSPACE_ROOT}"]`)).toHaveCount(1);
 });
 
 test("Runs list groups by repo when runs span ≥2 repos", async ({ page, baseURL }) => {

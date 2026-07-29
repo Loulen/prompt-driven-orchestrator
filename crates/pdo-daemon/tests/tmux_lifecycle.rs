@@ -118,13 +118,15 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -179,7 +181,7 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -341,7 +343,7 @@ async fn dead_session_respawn_via_pane_endpoint() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(

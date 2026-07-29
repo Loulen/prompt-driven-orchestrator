@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
+import { runMultipart } from "./helpers";
 
 // Layer 3b — Start pseudo-node + StartInspector (#30).
 // Verifies: selecting the Run start node shows the StartInspector with header,
@@ -83,10 +84,10 @@ test.afterAll(async () => {
 // declared start node's `user_prompt` as the run input.
 async function createRun(page: Page): Promise<string> {
   const resp = await page.request.post(`/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "hello from start node test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const json = await resp.json();

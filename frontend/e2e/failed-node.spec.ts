@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openRunNodeDetails, cleanupRuns } from "./helpers";
+import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — Failed-node interactivity (#36).
 // Verifies:
@@ -88,7 +88,7 @@ async function waitForWorkerStatus(
 
 async function createRun(page: Page, baseURL: string): Promise<string> {
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "e2e failed-node test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e failed-node test" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

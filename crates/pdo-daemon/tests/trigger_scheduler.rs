@@ -78,11 +78,13 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_trigger(daemon: &TestDaemon, name: &str, cron: &str) -> serde_json::Value {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "input_template": "audit the codebase",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -102,11 +104,13 @@ async fn create_trigger_with_guard(
     cron: &str,
     guard_command: &str,
 ) -> serde_json::Value {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "guard_command": guard_command,
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -131,12 +135,14 @@ async fn create_trigger_with_overlap(
     overlap_policy: &str,
     max_concurrent: Option<i64>,
 ) -> reqwest::Response {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let mut body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "input_template": "audit the codebase",
         "overlap_policy": overlap_policy,
+        "target_repo": daemon.target_repo(),
     });
     if let Some(m) = max_concurrent {
         body["max_concurrent"] = serde_json::json!(m);
@@ -615,6 +621,96 @@ async fn dangling_target_repo_reference_yields_error_outcome() {
     assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
 }
 
+/// #470, layer 3a — the test that proves the hole does not reopen through the
+/// *fire* path, and the reason the refusal lives in `trigger_dangling_reason`
+/// rather than at `create_run_inner`.
+///
+/// A 400 at the creation chokepoint would come too late: the guard runs first, so
+/// a Trigger with an unnamed repo would keep executing its `sh -c` in the daemon's
+/// own working directory (5 of the 9 live Triggers guard with `git pull` /
+/// `gh issue list` — real side effects), and would emit one red fire row per tick
+/// forever. Refusing upstream buys all three: no guard execution, a dormant
+/// Trigger, and a 409 on "Run now".
+#[tokio::test]
+async fn trigger_with_null_target_repo_goes_dormant_without_running_its_guard() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A guard whose ONLY job is to leave a witness file behind. Seeded under the
+    // API because `POST /triggers` refuses a null repo now — that is the point.
+    let witness = daemon.repo_root().join("guard-side-effect.txt");
+    let trigger_id = daemon
+        .seed_legacy_trigger_without_target_repo(
+            "legacy-null-repo",
+            PIPELINE_NAME,
+            "* * * * *",
+            Some("touch guard-side-effect.txt"),
+        )
+        .await;
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a Trigger with no target repo must not create a Run"
+    );
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("error"),
+        "the refusal must be visible in the fire history: {:?}",
+        fires[0]
+    );
+    assert!(
+        fires[0]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the reason must name the field verbatim: {:?}",
+        fires[0]
+    );
+
+    // The distinguishing assertion: refusing at the chokepoint would have let the
+    // guard run first. Nothing executed in the daemon's own repository.
+    assert!(
+        !witness.exists(),
+        "the guard command must NOT have executed — no side effect in the unnamed repo"
+    );
+
+    // Dormant, not one red row per tick forever.
+    let trigger = get_trigger(&daemon, &trigger_id).await;
+    assert!(
+        trigger["next_fire_at"].is_null(),
+        "the Dangling transition must NULL next_fire_at: {trigger:?}"
+    );
+
+    // "Run now" answers 409 with a reason, instead of a 200 {fired:false} the
+    // operator would have to go dig out of the fire history.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        409,
+        "Run now on a dangling Trigger must be a loud 409"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the 409 body must carry the reason: {body:?}"
+    );
+    assert!(
+        !witness.exists(),
+        "Run now must not have executed the guard either"
+    );
+}
+
 #[tokio::test]
 async fn create_trigger_rejects_prompt_required_pipeline_without_input() {
     let daemon = TestDaemon::spawn(seed_prompt_required).await.unwrap();
@@ -623,6 +719,8 @@ async fn create_trigger_rejects_prompt_required_pipeline_without_input() {
         "name": "bad",
         "pipeline_id": "needs-prompt",
         "cron": "* * * * *",
+        // #470: name a repo, else the 400 would be for the wrong reason.
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -643,6 +741,8 @@ async fn create_trigger_rejects_invalid_cron() {
         "pipeline_id": PIPELINE_NAME,
         "cron": "not a cron expr",
         "input_template": "x",
+        // #470: name a repo, else the 400 would be for the wrong reason.
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))

@@ -91,7 +91,12 @@ async fn timeout_returns_error_outcome() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers/guard/test", daemon.url()))
-        .json(&serde_json::json!({ "guard_command": "sleep 30" }))
+        // #470: the dry-run requires a named repo (ADR-0033) — the daemon's own,
+        // explicitly, so this test stays about the timeout.
+        .json(&serde_json::json!({
+            "guard_command": "sleep 30",
+            "target_repo": daemon.target_repo(),
+        }))
         .send()
         .await
         .unwrap();

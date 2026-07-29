@@ -131,7 +131,12 @@ fn seed_with(
 }
 
 async fn start_run(daemon: &TestDaemon, pipeline: &str) -> String {
-    let body = serde_json::json!({ "pipeline": pipeline, "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)
@@ -306,7 +311,12 @@ async fn empty_script_body_refuses_launch() {
         .await
         .unwrap();
 
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)

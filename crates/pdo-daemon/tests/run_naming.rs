@@ -91,9 +91,14 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// `POST /runs` with the given body, asserting 201, returning the new run id.
-async fn create_run(daemon_url: &str, body: serde_json::Value) -> String {
+async fn create_run(daemon: &TestDaemon, mut body: serde_json::Value) -> String {
+    // #470: default the target repo to the daemon's own root, so each call site
+    // stays about naming and none of them has to restate the boundary rule.
+    if body.get("target_repo").is_none() {
+        body["target_repo"] = serde_json::json!(daemon.target_repo());
+    }
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -120,7 +125,7 @@ async fn prompt_less_run_gets_placeholder_name() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let run_id = create_run(
-        &daemon.url(),
+        &daemon,
         serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "" }),
     )
     .await;
@@ -149,7 +154,7 @@ async fn run_with_input_but_no_name_has_no_placeholder() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let run_id = create_run(
-        &daemon.url(),
+        &daemon,
         serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "do a thing" }),
     )
     .await;
@@ -168,7 +173,7 @@ async fn user_named_run_keeps_its_name() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let run_id = create_run(
-        &daemon.url(),
+        &daemon,
         serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "", "name": "My Run" }),
     )
     .await;

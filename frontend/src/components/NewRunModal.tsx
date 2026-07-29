@@ -206,6 +206,14 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         setEditingTriggerId(trigger.id);
         setSelectedPipelineId(trigger.pipeline_id);
         setTargetRepo(trigger.target_repo ?? "");
+        // #470: reset the validity verdict with the field. The modal stays
+        // mounted (#386), so a `repoValid === true` left over from a previous
+        // open would survive next to an EMPTY repo field — reachable by opening
+        // New Run with a valid repo, closing it, then editing a legacy Trigger
+        // whose target repo is null. `canLaunch` would then be true with no
+        // repo, which is exactly the case the daemon now 400s.
+        setRepoValid(null);
+        setRepoError(null);
         setSourceBranch(trigger.source_branch ?? "");
         setInput(trigger.input_template ?? "");
         setOverrides(

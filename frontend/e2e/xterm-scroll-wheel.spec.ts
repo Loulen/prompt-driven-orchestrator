@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupRuns } from "./helpers";
+import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — xterm.js wheel-scroll regression (refs #73, ADR 0005).
 //
@@ -107,10 +107,10 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "e2e scroll wheel test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

@@ -76,14 +76,16 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
-        "variables": {}
+        "variables": {},
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -123,7 +125,7 @@ async fn wait_for_node_status(
 #[tokio::test]
 async fn changing_type_of_live_node_is_rejected_with_message() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
 
     // Same graph, but the worker's type flips doc-only -> code-mutating.
@@ -159,7 +161,7 @@ async fn changing_type_of_live_node_is_rejected_with_message() {
 #[tokio::test]
 async fn adding_node_and_edge_mid_run_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
 
     // ADR-0007 (c): free addition of node + edge while the run is live.
@@ -212,7 +214,7 @@ edges:
 #[tokio::test]
 async fn prompt_edit_of_unspawned_node_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
 
     // Add a pending reviewer (no incoming edge satisfied yet) with a prompt.

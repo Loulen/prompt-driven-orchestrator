@@ -181,6 +181,9 @@ async fn create_run_rejects_nonexistent_source_branch() {
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
+        // #470: the target-repo check runs FIRST, so this test must name one —
+        // otherwise it 400s for the wrong reason and stops testing the branch.
+        "target_repo": daemon.target_repo(),
         "source_branch": "nonexistent-branch",
     });
 
@@ -261,8 +264,17 @@ async fn create_run_with_valid_target_repo_and_source_branch() {
     );
 }
 
+/// #470/AC1, layer 3a — the exact reproduction of the 2026-07-29 incident, in
+/// which two Runs wrote code into `~/.pdo/app` (the daemon's own working
+/// directory) because nobody had named a repo. That directory is no longer an
+/// implicit Run target: the request is refused, and nothing at all is created.
+///
+/// ADR-0004's rule of thumb ("no AC closed without a layer ≥ 3 test") makes this
+/// the load-bearing test of the change — the inline `create_run_without_target_repo_is_400`
+/// exercises the same boundary, but only this one runs a real daemon against a
+/// real git repo and can prove no worktree appeared on disk.
 #[tokio::test]
-async fn create_run_without_target_repo_uses_daemon_repo() {
+async fn create_run_without_target_repo_is_refused() {
     let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
 
     let body = serde_json::json!({
@@ -277,15 +289,41 @@ async fn create_run_without_target_repo_uses_daemon_repo() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 201);
+    assert_eq!(
+        resp.status(),
+        400,
+        "a Run that names no target repo must be refused, not silently \
+         redirected at the daemon's own working directory"
+    );
     let json: serde_json::Value = resp.json().await.unwrap();
-    let run_id = json["run_id"].as_str().unwrap();
-
-    // Artifacts should be under daemon's repo root
-    let run_dir = daemon.repo_root().join(".pdo").join("runs").join(run_id);
+    let error = json["error"].as_str().unwrap_or_default();
     assert!(
-        run_dir.exists(),
-        "run dir must exist under daemon repo root"
+        error.contains("target_repo"),
+        "the error must name the field: {json:?}"
+    );
+
+    // Nothing was created: no Run in the list...
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{}/runs", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        runs.is_empty(),
+        "no Run may be created on refusal: {runs:?}"
+    );
+
+    // ...and — the incident itself — no worktree scaffolding under the daemon root.
+    // The `.pdo/runs` directory itself exists from boot (the pipeline watcher
+    // creates it to watch run-scoped edits), so what must be empty is its contents.
+    let runs_dir = daemon.repo_root().join(".pdo").join("runs");
+    let entries: Vec<_> = std::fs::read_dir(&runs_dir)
+        .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(
+        entries.is_empty(),
+        "no run dir may appear under the daemon's own repo root, found: {entries:?}"
     );
 }
 

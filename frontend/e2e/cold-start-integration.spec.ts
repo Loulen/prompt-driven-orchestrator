@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
-import { openRunNodeDetails, cleanupRuns } from "./helpers";
+import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 4 — Cold-start integration spec (#37).
 // Drives the full flow from empty state: goto("/") → connected → click run →
@@ -97,10 +97,10 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
 
   // 2. Create a run via the API and seed an output artifact
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "cold-start integration test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const json = await resp.json();

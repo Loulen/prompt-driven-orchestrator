@@ -24,6 +24,12 @@ fn info_logs_emitted_when_rust_log_is_unset() {
         .args(["daemon", "--port", "0"])
         .env_remove("RUST_LOG")
         .env_remove("PDO_TMUX_CMD_OVERRIDE")
+        // #427: this harness runs the REAL binary, so it goes through
+        // `DaemonConfig::from_env()` where the boot price refresh defaults to armed.
+        // It would still make no request (a fresh tempdir has no `fetched.json`, and
+        // the boot pass refreshes rather than seeds), but a test must not depend on
+        // the network being irrelevant — it must not reach for it at all.
+        .env("PDO_PRICE_SYNC", "off")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()

@@ -37,7 +37,9 @@ LOG="$TMPDIR/daemon.log"
 echo "[smoke] Using port $PORT, working dir $TMPDIR"
 
 # Run daemon from the tempdir so its .pdo lives there, not in the repo.
-( cd "$TMPDIR" && "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
+# PDO_PRICE_SYNC=off (#427): the smoke test polls /runs for up to 30 s, so a boot
+# price fetch waiting on a DNS timeout would pass anyway while masking exactly that.
+( cd "$TMPDIR" && PDO_PRICE_SYNC=off "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
 DAEMON_PID=$!
 
 cleanup() {

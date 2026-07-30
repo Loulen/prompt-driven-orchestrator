@@ -276,7 +276,61 @@ export interface InstanceSettings {
    * #469 removed.
    */
   autocomplete_turn_end: BoolSettingField;
+  /**
+   * Which price tiers are in force (#427, ADR-0034) — an observed STATE, not a
+   * settings knob, hence no `{effective, source, stored, env, default}` shape.
+   *
+   * Both paths are always reported, **even when neither file exists**: nothing is
+   * ever seeded, so naming them is the whole discoverability story. `reason` is the
+   * same string the daemon logs, and is non-null exactly when a file or a row went
+   * inert — a hand-edited file passes through no validator, so this is the only
+   * honest place to surface it (the #432 argument).
+   */
+  price_table: PriceTableView;
   updated_at: string;
+}
+
+/** `GET /settings` → `price_table` (#427). */
+export interface PriceTableView {
+  /** `~/.pdo/prices/models.yaml` — the human's file. PDO never writes it.
+   *  `null` only when `HOME` is unset. */
+  manual_path: string | null;
+  /** `~/.pdo/prices/fetched.json` — the daemon's file. Rewritten whole. */
+  fetched_path: string | null;
+  /** URL of the last successful fetch, or `null` if none ever ran. */
+  source: string | null;
+  /** The fetched table's vintage — readable, not guessed. */
+  fetched_at: string | null;
+  fetched_rows: number;
+  /** Family keys the manual tier actually decides — i.e. what shadows a sync. */
+  manual_keys: string[];
+  /** Advisory: an inert file or refused row, named. `null` when all is well. */
+  reason: string | null;
+}
+
+/**
+ * Response of `POST /settings/cost-prices/sync` (#427, ADR-0034).
+ *
+ * A noop is an honest 200 carrying `noop: true` + `reason` (ADR-0025 forbids a
+ * blind `{ok:true}`); a network cut is a thrown 502 naming the source.
+ */
+export interface SyncCostPricesReport {
+  ok: boolean;
+  noop?: boolean;
+  reason?: string | null;
+  source: string;
+  fetched_at: string | null;
+  /** Rows retained in the fetched tier. */
+  rows: number;
+  /** Keys no tier priced before — the repair. */
+  added: string[];
+  /** Keys whose effective price changes. */
+  updated: string[];
+  unchanged: number;
+  /** Source rows refused, with the motive. */
+  rejected: string[];
+  /** Fetched, but the manual tier still wins — said, never hidden. */
+  shadowed_by_manual: string[];
 }
 
 /**

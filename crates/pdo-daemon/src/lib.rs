@@ -28,6 +28,7 @@ mod pipeline;
 pub mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
+pub mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
 mod run_advance;
@@ -309,6 +310,22 @@ struct AppState {
     /// docker round-trip). The refresh runs under `spawn_blocking` + a short
     /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
     docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
+    /// Serializes price syncs (#427). Unlike `trigger_tick_lock`, which *serializes*
+    /// because both triggers (cron and manual) are legitimate and must both land, a
+    /// second concurrent price sync brings nothing — so this is taken with
+    /// `try_lock` and a failure answers **409**, the `admission_lock` posture
+    /// (`lib.rs` `admission_lock` + 409). The boot refresh takes the same lock and,
+    /// failing to get it, gives up silently: a manual sync is in flight and does
+    /// strictly better.
+    price_sync_lock: tokio::sync::Mutex<()>,
+    /// Price-source URL override (#427). `None` in production →
+    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. Seeded per-daemon via
+    /// [`DaemonConfig`] so a layer-3 test points the fetch at its own fixture
+    /// server, never at models.dev and never through a process-global env.
+    price_source_url: Option<String>,
+    /// Whether the boot pass may refresh the fetched tier (#427). See
+    /// [`DaemonConfig::price_refresh_at_boot`].
+    price_refresh_at_boot: bool,
 }
 
 impl AppState {
@@ -1223,6 +1240,15 @@ impl DaemonHandle {
         boot_recovery::run_boot_recovery(&self.state).await;
     }
 
+    /// Run the boot price-table refresh synchronously (#427). Sibling of
+    /// [`Self::run_boot_recovery_tick`]: production spawns this DETACHED at
+    /// startup, and a test must never race a detached task. Honours all three
+    /// gates (config flag, cache must already exist, 24 h staleness), so a test
+    /// can prove "absent cache → zero request" with the same code production runs.
+    pub async fn run_price_refresh_tick(&self) {
+        refresh_prices_at_boot(&self.state).await;
+    }
+
     /// Run a single orphan-sweep (reaper) pass synchronously. Lets integration
     /// tests drive session reaping deterministically instead of racing the
     /// ~60 s background interval + process-global TTL env (#316). Resolves the
@@ -1541,6 +1567,19 @@ pub struct DaemonConfig {
     /// test stages under its own tempdir and never touches the real home. Read
     /// once at boot from `PDO_SANDBOX_HOME_OVERRIDE`.
     pub sandbox_home_override: Option<PathBuf>,
+    /// Price-source URL (#427, ADR-0034). `None` in production →
+    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. `Some(url)` points the fetch at a
+    /// local server: the seam that makes the sync testable at layer 3 and playable
+    /// at layer 5 without depending on models.dev. Read once at boot from
+    /// `PDO_PRICE_SOURCE_URL`. Same charter as `docker_cmd_override` (#407) and
+    /// `PDO_TMUX_CMD_OVERRIDE` (#181) — never a process-global env read.
+    pub price_source_url: Option<String>,
+    /// Refresh the fetched price tier at startup (#427). `true` in production,
+    /// `false` in the five `tests/common/mod.rs` literals. Even armed it fetches
+    /// ONLY if `fetched.json` already exists and is over 24 h old: no egress before
+    /// the user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
+    /// `PDO_PRICE_SYNC=off|0|""` disarms it.
+    pub price_refresh_at_boot: bool,
 }
 
 impl DaemonConfig {
@@ -1578,6 +1617,17 @@ impl DaemonConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from),
+            // Price-source seam (#427), sibling of PDO_DOCKER_CMD_OVERRIDE.
+            price_source_url: std::env::var("PDO_PRICE_SOURCE_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            // The crate's ONE opt-OUT env, and deliberately so: a feature that must
+            // work out of the box cannot be armed by an env var, and the real opt-in
+            // is the first click (ADR-0034 — the boot pass only ever REFRESHES an
+            // existing cache, it never creates one).
+            price_refresh_at_boot: std::env::var("PDO_PRICE_SYNC")
+                .map(|v| !v.is_empty() && v != "0" && v != "off")
+                .unwrap_or(true),
         }
     }
 }
@@ -1688,6 +1738,9 @@ pub async fn serve_with_config(
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
         docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        price_sync_lock: tokio::sync::Mutex::new(()),
+        price_source_url: config.price_source_url,
+        price_refresh_at_boot: config.price_refresh_at_boot,
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -1821,6 +1874,22 @@ pub async fn serve_with_config(
         axum::serve(listener, app).await.context("server error")?;
         Ok(())
     });
+
+    // Price-table refresh (#427, ADR-0034). DETACHED and posted AFTER
+    // `tokio::spawn(axum::serve(...))`, never `.await`ed before `build_router` —
+    // unlike `boot_recovery`. A `.await` here would delay the first `accept()`
+    // behind a DNS timeout, and `tests/smoke.sh` polls `/runs` for up to 30 s so it
+    // would go green while masking exactly that. Wrapped in `run_isolated`, the
+    // shared spine of the daemon's otherwise-unsupervised sweeps.
+    {
+        let price_state = state.clone();
+        tokio::spawn(async move {
+            run_isolated("price refresh", async move {
+                refresh_prices_at_boot(&price_state).await;
+            })
+            .await;
+        });
+    }
 
     Ok(DaemonHandle {
         addr: bound_addr,
@@ -3221,6 +3290,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         // The shared prefix is a **routing** decision, NOT a claim about the schema:
         // profiles are ROWS, not a `{effective, source, stored, env, default}` knob, and
         // they must NOT be folded into `build_settings_view` beyond the name list.
+        // Price sync (#427, ADR-0034). Under `/settings` for exactly the reason
+        // above — the vite proxy key is a prefix, so no proxy edit — and a static
+        // verb segment under a named sub-resource is the router's most frequent
+        // gesture (`/triggers/{id}/fire`, `/triggers/pause`, `/pipelines/{id}/promote`).
+        // The ONLY route in the crate that reaches the network.
+        .route("/settings/cost-prices/sync", post(sync_cost_prices))
         .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
         .route(
             "/settings/sandbox-profiles/{name}",
@@ -6947,9 +7022,50 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         .iter()
         .map(|(name, is_virtual)| serde_json::json!({ "name": name, "virtual": is_virtual }))
         .collect();
-    let host_home = sandbox_run::sandbox_home_roots(state)
-        .ok()
-        .map(|(home, _)| home.to_string_lossy().into_owned());
+    let host_home_path = sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h);
+    let host_home = host_home_path
+        .as_ref()
+        .map(|h| h.to_string_lossy().into_owned());
+
+    // --- price table: an observed STATE, not a settings knob (#427) ---
+    // NOT a `settings_field`: there is no stored / env / default tier here, only
+    // which of the three price tiers won. Shape of `sandbox_docker` (#410) and
+    // motive of #432: a hand-edited file passes through NO validator by
+    // construction, so the only honest place to surface a refused row is here, as
+    // an advisory `reason` beside the facts. `journalctl` alone is this product's
+    // recurring failure mode (#497, #485).
+    //
+    // Both paths are ALWAYS reported, even when neither file exists — nothing is
+    // ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming the paths
+    // IS the entire discoverability story.
+    let price_table_view = match &host_home_path {
+        Some(home) => {
+            let table = price_table::PriceTable::load(home);
+            let (manual_path, fetched_path) = price_table::PriceTable::paths(home);
+            serde_json::json!({
+                "manual_path": manual_path.to_string_lossy(),
+                "fetched_path": fetched_path.to_string_lossy(),
+                "source": table.source(),
+                "fetched_at": table.fetched_at(),
+                "fetched_rows": table.fetched_rows(),
+                "manual_keys": table.manual_keys(),
+                // The SAME string the loader logs — one pure constructor, so the page
+                // and the journal can never disagree.
+                "reason": table.diagnostic(),
+            })
+        }
+        // HOME unset: the paths are unknowable, and saying so beats inventing one.
+        None => serde_json::json!({
+            "manual_path": null,
+            "fetched_path": null,
+            "source": null,
+            "fetched_at": null,
+            "fetched_rows": 0,
+            "manual_keys": [],
+            "reason": "HOME is unset, so the price files have no resolvable path — \
+                       only the prices compiled into the binary apply",
+        }),
+    };
 
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
@@ -6970,6 +7086,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         // #432: names only (see the note above), and the host `$HOME` as an observed fact.
         "sandbox_profiles": sandbox_profiles,
         "home": host_home,
+        // #427, ADR-0034: which price tiers are in force, and what is inert.
+        "price_table": price_table_view,
         "sandbox_docker": {
             "available": docker_probe.available,
             "reason": docker_probe.reason,
@@ -6984,6 +7102,288 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         ),
         "updated_at": cfg.updated_at,
     }))
+}
+
+/// Resolve the price-source URL for this daemon: the per-daemon override (the
+/// layer-3/5 seam) else the shipped default.
+fn price_source_url(state: &AppState) -> String {
+    state
+        .price_source_url
+        .clone()
+        .unwrap_or_else(|| price_table::PRICE_SOURCE_URL_DEFAULT.to_string())
+}
+
+/// The host home the price files live under, or a message explaining why there is
+/// none. Prices are an **instance** concept: even for a sandboxed Run this is the
+/// HOST home (the #408 seam moves the transcript root, not this one).
+///
+/// Returns the *message*, not a `Response`: `Result<_, Response>` trips
+/// `clippy::result_large_err` (a `Response` is 128 bytes, exactly the threshold)
+/// and the CI is `-D warnings`. House convention is `Option<Response>`, or a small
+/// error the caller renders — which is what this does.
+fn price_home_root(state: &AppState) -> Result<PathBuf, String> {
+    sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .map_err(|e| format!("cannot resolve the home root for the price files: {e}"))
+}
+
+/// Outcome of one price sync, for the report. Split out so the pure diff is
+/// testable without an HTTP round-trip.
+struct PriceSyncOutcome {
+    rows: usize,
+    added: Vec<String>,
+    updated: Vec<String>,
+    unchanged: usize,
+    shadowed_by_manual: Vec<String>,
+    changed: bool,
+}
+
+/// Diff a freshly normalised fetched tier against the table currently in force.
+/// PURE. `changed` is keyed on the RAW fetched rows, not on effective prices: a
+/// shadowed key whose source price moved is a real change to the fetched tier even
+/// though nothing a user sees moves.
+fn diff_price_sync(
+    before: &price_table::PriceTable,
+    fresh: &std::collections::BTreeMap<String, price_table::Price>,
+) -> PriceSyncOutcome {
+    let mut out = PriceSyncOutcome {
+        rows: fresh.len(),
+        added: Vec::new(),
+        updated: Vec::new(),
+        unchanged: 0,
+        shadowed_by_manual: Vec::new(),
+        changed: fresh != before.fetched_prices(),
+    };
+    for (key, fresh_price) in fresh {
+        let shadowed = before.tier_of(key) == Some(price_table::PriceTier::Manual);
+        if shadowed {
+            // Said, never hidden: a sync cannot silently erase a hand correction.
+            out.shadowed_by_manual.push(key.clone());
+        }
+        let effective_before = before.price_for(key);
+        // What this key will resolve to once written: manual still wins.
+        let effective_after = if shadowed {
+            effective_before
+        } else {
+            Some(*fresh_price)
+        };
+        match effective_before {
+            None => out.added.push(key.clone()),
+            Some(_) if effective_before != effective_after => out.updated.push(key.clone()),
+            Some(_) => out.unchanged += 1,
+        }
+    }
+    out
+}
+
+/// `POST /settings/cost-prices/sync` — fetch the remote price source and rewrite
+/// the fetched tier (#427, ADR-0034).
+///
+/// Deliberately UNDER `/settings` rather than a new top-level prefix: the vite
+/// proxy key is a PREFIX, so this needs no `vite.config.ts` edit and avoids the
+/// trap `/nodes` (#345), `/stats` (#377) and `/fs` (#431) each paid. NOT a
+/// `POST /runs/:id/commands` kind — that dispatcher is run-scoped, and a price sync
+/// touches neither the event log nor a Run projection (the `CONTEXT.md:794`
+/// criterion). NOT under `/stats` either: ADR-0029 makes that a read-derivation
+/// surface.
+///
+/// Codes: **409** a sync is already in flight · **502** source unreachable /
+/// timeout / broken JSON / empty harvest, and **nothing is written** · **500** a
+/// disk write failed · **200** otherwise, with `noop: true` + `reason` when the
+/// table did not move (ADR-0025 forbids a blind `{ok:true}`).
+///
+/// The 502 is the crate's first, and on purpose: classing a network cut as a 500
+/// would file it as a daemon defect, contradicting ADR-0022's honest-labelling
+/// posture. ADR-0030:107-112 settles the shape — an explicitly requested effect
+/// that fails is a HARD error that NAMES the source, never a silent fallback.
+async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
+    let home_root = match price_home_root(&state) {
+        Ok(h) => h,
+        Err(msg) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+    // `try_lock`, not `.lock()`: a second click brings nothing, and ADR-0025 wants
+    // us to say so rather than queue silently.
+    let Ok(_guard) = state.price_sync_lock.try_lock() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "a price sync is already in flight" })),
+        )
+            .into_response();
+    };
+
+    let url = price_source_url(&state);
+    // The table BEFORE, so the report can name what actually moves.
+    let before = price_table::PriceTable::load(&home_root);
+
+    let body = match price_table::fetch_source(&url).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("price source unreachable: {url}: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    let (fresh, rejected) = match price_table::normalize_models_dev(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            // Includes the empty-harvest guard: an upstream schema drift must NOT be
+            // able to write an empty file over the last known table.
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("price source unusable: {url}: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let outcome = diff_price_sync(&before, &fresh);
+    let (_, fetched_path) = price_table::PriceTable::paths(&home_root);
+    let rejected_msgs: Vec<String> = rejected
+        .iter()
+        .map(|r| format!("{}: {}", r.key, r.why))
+        .collect();
+
+    if !outcome.changed {
+        // Nothing to write, so nothing is written — which also leaves the table's
+        // fingerprint alone and keeps `COST_MEMO` warm for every Run.
+        return Json(serde_json::json!({
+            "ok": true,
+            "noop": true,
+            "reason": format!(
+                "table already up to date — {} row(s) from the source, none changed",
+                outcome.rows
+            ),
+            "source": url,
+            "fetched_at": before.fetched_at(),
+            "rows": outcome.rows,
+            "added": Vec::<String>::new(),
+            "updated": Vec::<String>::new(),
+            "unchanged": outcome.unchanged,
+            "rejected": rejected_msgs,
+            "shadowed_by_manual": outcome.shadowed_by_manual,
+        }))
+        .into_response();
+    }
+
+    let fetched_at = event_log::now_iso();
+    if let Err(e) = price_table::write_fetched(&fetched_path, &url, &fetched_at, &fresh) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("cannot write {}: {e}", fetched_path.display())
+            })),
+        )
+            .into_response();
+    }
+
+    // Same shape as `pause_triggers`: tell every connected client the table moved,
+    // so an open Stats modal is not the only thing that knows.
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "cost_prices_synced",
+        "rows": outcome.rows,
+    }));
+
+    Json(serde_json::json!({
+        "ok": true,
+        "source": url,
+        "fetched_at": fetched_at,
+        "rows": outcome.rows,
+        "added": outcome.added,
+        "updated": outcome.updated,
+        "unchanged": outcome.unchanged,
+        "rejected": rejected_msgs,
+        "shadowed_by_manual": outcome.shadowed_by_manual,
+    }))
+    .into_response()
+}
+
+/// Refresh the fetched price tier if — and only if — it already exists and is
+/// stale (#427, ADR-0034). Driven at boot as a DETACHED task and by the
+/// [`DaemonHandle::run_price_refresh_tick`] test seam, so production and the
+/// synchronous test path are the same code.
+///
+/// Three gates, in this order, and each is load-bearing:
+/// 1. the config flag (`PDO_PRICE_SYNC` in production, `false` in the test literals);
+/// 2. **`fetched.json` must already exist** — the boot pass REFRESHES, it never
+///    seeds, so there is no egress before the user's first explicit click. Happy
+///    side effect: the 240 integration daemons boot from a fresh `HOME`, hence no
+///    cache, hence no network even when the flag is armed;
+/// 3. it must be older than [`price_table::PRICE_REFRESH_MAX_AGE`].
+///
+/// Failure regime is `boot_recovery.rs:161-168`'s: a `warn!`, never fatal. A daemon
+/// restarted by systemd can legitimately come up before the network is ready
+/// (`service_unit.rs` emits `After=network-online.target` but nothing guarantees
+/// DNS), and a boot must not fail on that.
+async fn refresh_prices_at_boot(state: &Arc<AppState>) {
+    if !state.price_refresh_at_boot {
+        return;
+    }
+    let Ok(home_root) = sandbox_run::sandbox_home_roots(state).map(|(h, _)| h) else {
+        return; // no HOME → no path → nothing to refresh, silently
+    };
+    let (_, fetched_path) = price_table::PriceTable::paths(&home_root);
+    if !fetched_path.exists() {
+        // Gate 2. The user has never synced; asking the network now would be an
+        // egress they did not consent to.
+        return;
+    }
+    let table = price_table::PriceTable::load(&home_root);
+    if let Some(fetched_at) = table.fetched_at() {
+        if let Ok(then) = chrono::DateTime::parse_from_rfc3339(fetched_at) {
+            let age = chrono::Utc::now().signed_duration_since(then.with_timezone(&chrono::Utc));
+            if age
+                < chrono::Duration::from_std(price_table::PRICE_REFRESH_MAX_AGE)
+                    .unwrap_or_else(|_| chrono::Duration::hours(24))
+            {
+                return; // fresh → noop
+            }
+        }
+        // An unparseable `fetched_at` falls through and refreshes: a cache whose
+        // vintage we cannot read is exactly one worth re-fetching.
+    }
+
+    // Same lock as the button. Losing the race means a manual sync is running,
+    // which does strictly better — give up without a word.
+    let Ok(_guard) = state.price_sync_lock.try_lock() else {
+        return;
+    };
+    let url = price_source_url(state);
+    let body = match price_table::fetch_source(&url).await {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("price refresh at boot: {url} unreachable ({e}) — keeping the current table");
+            return;
+        }
+    };
+    let fresh = match price_table::normalize_models_dev(&body) {
+        Ok((rows, _)) => rows,
+        Err(e) => {
+            warn!("price refresh at boot: {url} unusable ({e}) — keeping the current table");
+            return;
+        }
+    };
+    if fresh == *table.fetched_prices() {
+        return; // nothing moved: leave the file, and the memo, alone
+    }
+    match price_table::write_fetched(&fetched_path, &url, &event_log::now_iso(), &fresh) {
+        Ok(()) => info!("price refresh at boot: {} row(s) from {url}", fresh.len()),
+        Err(e) => warn!(
+            "price refresh at boot: cannot write {}: {e}",
+            fetched_path.display()
+        ),
+    }
 }
 
 /// `GET /settings` — the instance-wide config, per knob, as
@@ -7951,7 +8351,15 @@ async fn get_run(
                 &home_root,
                 &sandbox_root,
             );
-            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root);
+            // #427: resolve the three price tiers ONCE, here at the edge, next to
+            // the roots this request already resolved. Two `fs::read` of a few KB —
+            // deliberately not an `AppState` cache and never a `OnceLock`, which
+            // would make a daemon restart mandatory to change a price and so annul
+            // ADR-0034. Note the seam asymmetry: prices come from `home_root` (the
+            // HOST home — prices are an instance concept), while transcripts come
+            // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
+            let prices = price_table::PriceTable::load(&home_root);
+            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root, &prices);
             Json(run_state).into_response()
         }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
@@ -11508,6 +11916,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     projects_root: &std::path::Path,
     repo_root: &std::path::Path,
+    prices: &price_table::PriceTable,
 ) {
     // LOC is independent of the run YAML: the run branch lives in `repo_root`,
     // not the run dir, so a missing/unparseable YAML must not suppress an
@@ -11517,7 +11926,8 @@ fn augment_run_state_from_disk(
     // Claude Code transcripts under `projects_root` (the #408 seam — the staged
     // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
     // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
-    run_state.cost = run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id);
+    run_state.cost =
+        run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id, prices);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -12430,6 +12840,9 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: None,
+            price_refresh_at_boot: false,
         })
     }
 
@@ -12468,6 +12881,9 @@ mod tests {
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: None,
+            price_refresh_at_boot: false,
         })
     }
 
@@ -16275,6 +16691,9 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: None,
+            price_refresh_at_boot: false,
         })
     }
 
@@ -21772,6 +22191,9 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: None,
+            price_refresh_at_boot: false,
         });
         let app = build_router(state);
 
@@ -21962,6 +22384,9 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: None,
+            price_refresh_at_boot: false,
         });
         let app = build_router(state);
 

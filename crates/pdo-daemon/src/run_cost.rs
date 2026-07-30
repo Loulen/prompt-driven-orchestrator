@@ -1,6 +1,12 @@
 //! Estimated USD cost of a Run (#272), derived on read from the per-message
 //! token `usage` recorded in each session's Claude Code transcript
-//! (`<projects_root>/<encoded-cwd>/*.jsonl`) × a hardcoded public price table.
+//! (`<projects_root>/<encoded-cwd>/*.jsonl`) × a public price table.
+//!
+//! Since #427 that table is **injected** too, as a [`crate::price_table::PriceTable`]
+//! resolved by the caller at the request edge (`manual → fetched → embedded`, see
+//! ADR-0034). There is deliberately NO N-1-argument wrapper meaning "the embedded
+//! prices": the next call site added would silently ignore both disk tiers and no
+//! test could catch it.
 //!
 //! The `projects_root` is injected by the caller (the #408 observability seam,
 //! [`crate::sandbox_run::transcripts_root`]): `~/.claude/projects/` for an
@@ -34,59 +40,11 @@
 //!   was observed) are skipped line-by-line, never `?`-propagated.
 
 use crate::event_log::CostStat;
+use crate::price_table::PriceTable;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
-
-// Source: https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-07-06).
-// Per-MTok list prices `(family_key, input, output)`. UPDATE when Anthropic
-// changes pricing or ships a model. Cache prices are DERIVED (write_5m = 1.25×in,
-// write_1h = 2×in, read = 0.1×in) — verified universal across every current row.
-// Match on the FULL family key: Opus 4.5–4.8 are $5/$25 but Opus 4.1/4.0 are
-// $15/$75 — never a `starts_with("opus-4")` shortcut.
-const PRICES: &[(&str, f64, f64)] = &[
-    ("claude-opus-4-8", 5.0, 25.0),
-    ("claude-opus-4-7", 5.0, 25.0),
-    ("claude-opus-4-6", 5.0, 25.0),
-    ("claude-opus-4-5", 5.0, 25.0),
-    ("claude-opus-4-1", 15.0, 75.0),
-    ("claude-opus-4-0", 15.0, 75.0),
-    ("claude-sonnet-4-6", 3.0, 15.0),
-    ("claude-sonnet-4-5", 3.0, 15.0),
-    ("claude-sonnet-4-0", 3.0, 15.0),
-    ("claude-haiku-4-5", 1.0, 5.0),
-    ("claude-3-5-haiku", 0.80, 4.0),
-    // NOTE: `claude-sonnet-5` intro price ($2/$10) expires 2026-08-31 → $3/$15.
-    // PDO runs opus-4-8 today; add sonnet-5 (date-gated) only if it starts appearing.
-];
-
-/// Drop a trailing 8-digit date segment so a dated id resolves to its family
-/// key: `claude-sonnet-4-5-20250929` → `claude-sonnet-4-5`. A version-only id is
-/// returned unchanged.
-fn strip_date_suffix(model: &str) -> &str {
-    if let Some((head, tail)) = model.rsplit_once('-') {
-        if tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit()) {
-            return head;
-        }
-    }
-    model
-}
-
-/// Per-MTok `(input, output)` price for a model, or `None` for an unknown real
-/// model (the caller then flags `partial` and the model contributes $0).
-/// `<synthetic>` — CC's local/no-cost sentinel — is priced at $0, NOT treated as
-/// unknown (so it never flips `partial`).
-fn price_for(model: &str) -> Option<(f64, f64)> {
-    if model == "<synthetic>" {
-        return Some((0.0, 0.0));
-    }
-    let key = strip_date_suffix(model);
-    PRICES
-        .iter()
-        .find(|(k, ..)| *k == key)
-        .map(|(_, i, o)| (*i, *o))
-}
 
 /// Token counts from one assistant message's `usage`. The four cache buckets are
 /// disjoint from `input`/`output` (CC's `input_tokens` excludes cache tokens).
@@ -177,10 +135,11 @@ fn parse_line(raw: &str) -> Option<Line> {
     })
 }
 
-/// Dedup by `(message.id, requestId)` (keep first), price each surviving line,
-/// and flag `partial` when any line used a model absent from [`PRICES`]. Lines
-/// without a `message.id` are always counted (no key to dedup on).
-fn aggregate(lines: impl Iterator<Item = Line>) -> CostStat {
+/// Dedup by `(message.id, requestId)` (keep first), price each surviving line
+/// against the resolved `prices` table, and flag `partial` when any line used a
+/// model no tier knows. Lines without a `message.id` are always counted (no key
+/// to dedup on).
+fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat {
     let mut seen = std::collections::HashSet::new();
     let mut usd = 0.0;
     let mut partial = false;
@@ -190,8 +149,8 @@ fn aggregate(lines: impl Iterator<Item = Line>) -> CostStat {
                 continue; // duplicate: replay on resume/compaction
             }
         }
-        match price_for(&l.model) {
-            Some((i, o)) => usd += line_cost(&l.usage, i, o),
+        match prices.price_for(&l.model) {
+            Some(p) => usd += line_cost(&l.usage, p.input, p.output),
             None => partial = true, // unknown real model → $0 + lower-bound flag
         }
     }
@@ -246,7 +205,14 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
 /// **effective** repo root (honours `target_repo`) — pass the value the caller
 /// already resolved via `effective_repo_root`; it builds the run-id dir prefix,
 /// NOT the read root.
-pub fn compute_run_cost(projects_root: &Path, repo_root: &Path, run_id: &str) -> Option<CostStat> {
+/// `prices` is the table resolved at the request edge (#427) — mandatory; see the
+/// module header on why there is no defaulting wrapper.
+pub fn compute_run_cost(
+    projects_root: &Path,
+    repo_root: &Path,
+    run_id: &str,
+    prices: &PriceTable,
+) -> Option<CostStat> {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     // Trailing '-' anchors the run_id: a run whose id is a lexical prefix of
     // another can't leak its sessions in (after run_id comes `-nodes`/`-worktree`).
@@ -263,7 +229,7 @@ pub fn compute_run_cost(projects_root: &Path, repo_root: &Path, run_id: &str) ->
     if !found {
         return None;
     }
-    Some(aggregate(lines.into_iter()))
+    Some(aggregate(lines.into_iter(), prices))
 }
 
 // --- Read-side memo for the aggregate cost path (#377 / ADR-0029) ------------
@@ -271,16 +237,30 @@ pub fn compute_run_cost(projects_root: &Path, repo_root: &Path, run_id: &str) ->
 // The Stats modal's `/stats/cost` endpoint fans [`compute_run_cost`] out over
 // every run in the visible period — the exact anti-fan-out ADR-0022 kept off the
 // `/runs` list handler. This memo is ADR-0022's *sanctioned escape hatch*: a
-// derive-on-read RAM cache keyed on `(run_id, max transcript mtime)`, NEVER
-// persisted (no snapshot table, no metric-freezing event). A transcript change
-// bumps the mtime and so invalidates the entry naturally. It is touched ONLY by
-// [`compute_run_cost_cached`] (the aggregate path); `get_run`'s single-run read
-// keeps calling [`compute_run_cost`] directly, so ADR-0022's per-read contract
-// is byte-identical there.
+// derive-on-read RAM cache keyed on `(run_id, max transcript mtime, price-table
+// fingerprint)`, NEVER persisted (no snapshot table, no metric-freezing event). A
+// transcript change bumps the mtime and so invalidates the entry naturally. It is
+// touched ONLY by [`compute_run_cost_cached`] (the aggregate path); `get_run`'s
+// single-run read keeps calling [`compute_run_cost`] directly, so ADR-0022's
+// per-read contract is byte-identical there.
+//
+// The THIRD key component is load-bearing (#427, ADR-0034). A price sync bumps no
+// transcript mtime, so under the old two-part key `/stats/cost` (memoized) would
+// re-serve pre-sync dollars until the daemon restarted while `GET /runs/:id`
+// (not memoized) told the truth — two surfaces contradicting each other on the
+// same Run, and the affected Runs (finished, transcripts frozen) are exactly the
+// ones a sync is meant to repair. A sync deliberately does NOT clear the memo:
+// under the new key a stale entry is simply unreachable, and clearing would also
+// invalidate Runs whose prices did not move.
 
-/// Memo key: `(run_id, max transcript mtime in epoch millis)`. A transcript
-/// change bumps the mtime, so the key changes and the old entry is bypassed.
-type CostMemoKey = (String, i64);
+/// Memo key: `(run_id, max transcript mtime in epoch millis, price-table
+/// fingerprint)`. A transcript change bumps the mtime and a price change bumps the
+/// fingerprint, so either one changes the key and bypasses the old entry.
+///
+/// Consequence to know: [`COST_MEMO_CAP`] now holds several entries per Run across
+/// a table change. Overflow clears the whole map, which stays
+/// correctness-preserving by construction.
+type CostMemoKey = (String, i64, u64);
 /// The memoized value is exactly what [`compute_run_cost`] returns (`None` = no
 /// transcript dir), so a hit is byte-identical to a recompute.
 type CostMemoMap = HashMap<CostMemoKey, Option<CostStat>>;
@@ -343,20 +323,24 @@ pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_i
 }
 
 /// Memoized [`compute_run_cost`]: byte-identical result, cached on
-/// `(run_id, max transcript mtime)` (see the module memo above). Used only by
-/// the `/stats/cost` aggregate (period-bounded fan-out); `get_run`'s single-run
-/// path is deliberately left calling [`compute_run_cost`] directly so ADR-0022's
-/// per-read contract is unchanged.
+/// `(run_id, max transcript mtime, price fingerprint)` (see the module memo
+/// above). Used only by the `/stats/cost` aggregate (period-bounded fan-out);
+/// `get_run`'s single-run path is deliberately left calling [`compute_run_cost`]
+/// directly so ADR-0022's per-read contract is unchanged.
 pub fn compute_run_cost_cached(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,
+    prices: &PriceTable,
 ) -> Option<CostStat> {
-    // Load-bearing: the SAME `projects_root` feeds the key (mtime) AND the value
-    // (aggregate). A mismatched root would desync the memo silently (#408 P1).
+    // Load-bearing twice over: the SAME `projects_root` feeds the key (mtime) AND
+    // the value (aggregate) — a mismatched root would desync the memo silently
+    // (#408 P1) — and the SAME table feeds the fingerprint AND the pricing, so a
+    // hit can never be a table the caller did not ask for (#427).
     let key = (
         run_id.to_string(),
         max_transcript_mtime_millis(projects_root, repo_root, run_id),
+        prices.fingerprint(),
     );
     {
         let guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
@@ -364,7 +348,7 @@ pub fn compute_run_cost_cached(
             return hit.clone();
         }
     }
-    let value = compute_run_cost(projects_root, repo_root, run_id);
+    let value = compute_run_cost(projects_root, repo_root, run_id, prices);
     let mut guard = cost_memo().lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() >= COST_MEMO_CAP {
         guard.clear();
@@ -378,58 +362,13 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    // --- strip_date_suffix ---
-
-    #[test]
-    fn strips_trailing_8_digit_date() {
-        assert_eq!(
-            strip_date_suffix("claude-sonnet-4-5-20250929"),
-            "claude-sonnet-4-5"
-        );
-        assert_eq!(
-            strip_date_suffix("claude-3-5-haiku-20241022"),
-            "claude-3-5-haiku"
-        );
-    }
-
-    #[test]
-    fn leaves_version_only_id_untouched() {
-        assert_eq!(strip_date_suffix("claude-opus-4-8"), "claude-opus-4-8");
-        // A short numeric tail (not 8 digits) is not a date suffix.
-        assert_eq!(strip_date_suffix("claude-opus-4-8"), "claude-opus-4-8");
-    }
-
-    // --- price_for ---
-
-    #[test]
-    fn prices_known_models() {
-        assert_eq!(price_for("claude-opus-4-8"), Some((5.0, 25.0)));
-        assert_eq!(price_for("claude-sonnet-4-5"), Some((3.0, 15.0)));
-        assert_eq!(price_for("claude-haiku-4-5"), Some((1.0, 5.0)));
-    }
-
-    #[test]
-    fn opus_4_1_and_4_0_are_not_collapsed_with_4_5_plus() {
-        // The single most error-prone row: same "opus-4" prefix, different price.
-        assert_eq!(price_for("claude-opus-4-1"), Some((15.0, 75.0)));
-        assert_eq!(price_for("claude-opus-4-0"), Some((15.0, 75.0)));
-        assert_ne!(price_for("claude-opus-4-1"), price_for("claude-opus-4-8"));
-    }
-
-    #[test]
-    fn dated_id_resolves_to_family_price() {
-        assert_eq!(price_for("claude-sonnet-4-5-20250929"), Some((3.0, 15.0)));
-    }
-
-    #[test]
-    fn synthetic_is_zero_not_unknown() {
-        assert_eq!(price_for("<synthetic>"), Some((0.0, 0.0)));
-    }
-
-    #[test]
-    fn unknown_model_is_none() {
-        assert_eq!(price_for("gpt-9"), None);
-        assert_eq!(price_for("claude-opus-9-9"), None);
+    // `strip_date_suffix` and the whole `price_for` family moved to
+    // `price_table.rs` with #427, and their tests moved with them. What stays here
+    // is everything that is about *transcripts*, not about *prices* — every case
+    // below now pins the EMBEDDED tier explicitly via `PriceTable::builtin()`, so a
+    // stray `~/.pdo/prices/` on a dev machine can never turn this module red.
+    fn builtin() -> PriceTable {
+        PriceTable::builtin()
     }
 
     // --- line_cost ---
@@ -541,7 +480,7 @@ mod tests {
             line(Some("m1"), Some("r1"), "claude-opus-4-8", 1_000_000), // dup
             line(Some("m2"), Some("r2"), "claude-opus-4-8", 1_000_000),
         ];
-        let c = aggregate(lines.into_iter());
+        let c = aggregate(lines.into_iter(), &builtin());
         // 2 distinct × (1M input × $5 / 1M) = $5 + $5 = $10 (dup excluded).
         assert!((c.usd - 10.0).abs() < 1e-9, "usd = {}", c.usd);
         assert!(!c.partial);
@@ -553,7 +492,7 @@ mod tests {
             line(None, None, "claude-opus-4-8", 1_000_000),
             line(None, None, "claude-opus-4-8", 1_000_000),
         ];
-        let c = aggregate(lines.into_iter());
+        let c = aggregate(lines.into_iter(), &builtin());
         assert!((c.usd - 10.0).abs() < 1e-9, "usd = {}", c.usd);
     }
 
@@ -563,7 +502,7 @@ mod tests {
             line(Some("m1"), Some("r1"), "claude-opus-4-8", 1_000_000),
             line(Some("m2"), Some("r2"), "some-future-model", 1_000_000),
         ];
-        let c = aggregate(lines.into_iter());
+        let c = aggregate(lines.into_iter(), &builtin());
         // Only the priced line contributes; the unknown one flags partial + $0.
         assert!((c.usd - 5.0).abs() < 1e-9, "usd = {}", c.usd);
         assert!(c.partial);
@@ -572,7 +511,7 @@ mod tests {
     #[test]
     fn aggregate_synthetic_does_not_flip_partial() {
         let lines = vec![line(Some("m1"), Some("r1"), "<synthetic>", 1_000_000)];
-        let c = aggregate(lines.into_iter());
+        let c = aggregate(lines.into_iter(), &builtin());
         assert_eq!(c.usd, 0.0);
         assert!(!c.partial);
     }
@@ -605,7 +544,7 @@ mod tests {
         // l1 replayed (same msg_1, req_1) → deduped.
         std::fs::write(proj.join("s.jsonl"), format!("{l1}\n{l1}\n{l2}\n")).unwrap();
 
-        let cost = compute_run_cost(&projects, repo.path(), run_id).unwrap();
+        let cost = compute_run_cost(&projects, repo.path(), run_id, &builtin()).unwrap();
         // (1000*5 + 500*25)/1e6 + (2000*5 + 1000*25)/1e6 = 0.0175 + 0.035 = 0.0525
         assert!((cost.usd - 0.0525).abs() < 1e-9, "usd = {}", cost.usd);
         assert!(!cost.partial);
@@ -645,7 +584,7 @@ mod tests {
         )
         .unwrap();
 
-        let cost = compute_run_cost(&projects, repo.path(), run_id).unwrap();
+        let cost = compute_run_cost(&projects, repo.path(), run_id, &builtin()).unwrap();
         // 1M input × $5/MTok, twice (main + subagent) = $10.
         assert!((cost.usd - 10.0).abs() < 1e-9, "usd = {}", cost.usd);
     }
@@ -656,7 +595,7 @@ mod tests {
         let projects = home.path().join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let repo = tempfile::tempdir().unwrap();
-        assert!(compute_run_cost(&projects, repo.path(), "no-such-run").is_none());
+        assert!(compute_run_cost(&projects, repo.path(), "no-such-run", &builtin()).is_none());
     }
 
     // --- compute_run_cost_cached / memo (#377) ---
@@ -689,8 +628,8 @@ mod tests {
             run_id,
             &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
         );
-        let direct = compute_run_cost(&projects, repo.path(), run_id);
-        let cached = compute_run_cost_cached(&projects, repo.path(), run_id);
+        let direct = compute_run_cost(&projects, repo.path(), run_id, &builtin());
+        let cached = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin());
         assert_eq!(direct, cached);
         assert!((cached.unwrap().usd - 5.0).abs() < 1e-9);
     }
@@ -711,7 +650,7 @@ mod tests {
             filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
 
         // First call: memoize $5 under (run_id, mtime).
-        let first = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
+        let first = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert!((first.usd - 5.0).abs() < 1e-9);
 
         // Rewrite with a DIFFERENT cost ($10) but force the mtime back — the key
@@ -725,12 +664,69 @@ mod tests {
         )
         .unwrap();
         filetime::set_file_mtime(&file, orig).unwrap();
-        let hit = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
+        let hit = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert!((hit.usd - 5.0).abs() < 1e-9, "memo hit should re-serve $5");
         // But the uncached path sees the new content ($10) — proving the file
         // really changed and the hit above was the cache, not a recompute.
-        let direct = compute_run_cost(&projects, repo.path(), run_id).unwrap();
+        let direct = compute_run_cost(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert!((direct.usd - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cached_recomputes_when_only_the_price_table_changes() {
+        // THE #427 regression test. A price sync bumps NO transcript mtime, so under
+        // the old two-part key `/stats/cost` would re-serve pre-sync dollars until
+        // the daemon restarted while `GET /runs/:id` showed the new ones — two
+        // surfaces contradicting each other on a finished Run, which is exactly the
+        // Run a sync exists to repair. Delete the third key component and this fails.
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "memo-prices";
+        let file = seed_transcript(
+            &projects,
+            repo.path(),
+            run_id,
+            // A model NO tier prices out of the box → $0 + partial, the very symptom.
+            &assistant("m1", "r1", "claude-fable-5", 1_000_000, 0),
+        );
+        let mtime_before =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
+
+        let unpriced = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
+        assert_eq!(unpriced.usd, 0.0);
+        assert!(unpriced.partial, "an unknown model flags partial");
+
+        // Now price it — a DIFFERENT table (different fingerprint), same transcript.
+        let home2 = tempfile::tempdir().unwrap();
+        let (manual, _) = crate::price_table::PriceTable::paths(home2.path());
+        std::fs::create_dir_all(manual.parent().unwrap()).unwrap();
+        std::fs::write(
+            &manual,
+            "models:\n  claude-fable-5: { input: 10.0, output: 50.0 }\n",
+        )
+        .unwrap();
+        let synced = crate::price_table::PriceTable::load(home2.path());
+        assert_ne!(synced.fingerprint(), builtin().fingerprint());
+
+        // The transcript's mtime is untouched — only the table moved.
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap()),
+            mtime_before
+        );
+
+        let repriced = compute_run_cost_cached(&projects, repo.path(), run_id, &synced).unwrap();
+        assert!(
+            (repriced.usd - 10.0).abs() < 1e-9,
+            "the memo must MISS on a new price fingerprint, got ${}",
+            repriced.usd
+        );
+        assert!(!repriced.partial, "the model is priced now");
+
+        // And the old entry is still reachable under its own key — the sync does not
+        // (and need not) clear the memo.
+        let again = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
+        assert_eq!(again.usd, 0.0);
     }
 
     #[test]
@@ -747,7 +743,7 @@ mod tests {
         );
         let orig =
             filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
-        let first = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
+        let first = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert!((first.usd - 5.0).abs() < 1e-9);
 
         // New content AND a bumped mtime → new key → recompute picks up $10.
@@ -761,7 +757,8 @@ mod tests {
         .unwrap();
         let bumped = filetime::FileTime::from_unix_time(orig.unix_seconds() + 10, 0);
         filetime::set_file_mtime(&file, bumped).unwrap();
-        let recomputed = compute_run_cost_cached(&projects, repo.path(), run_id).unwrap();
+        let recomputed =
+            compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert!(
             (recomputed.usd - 10.0).abs() < 1e-9,
             "a bumped mtime must invalidate the memo"
@@ -802,8 +799,9 @@ mod tests {
             &assistant("m2", "r2", "claude-opus-4-8", 2_000_000, 0),
         );
 
-        let host_cost = compute_run_cost_cached(&host, repo.path(), run_id).unwrap();
-        let staging_cost = compute_run_cost_cached(&staging, repo.path(), run_id).unwrap();
+        let host_cost = compute_run_cost_cached(&host, repo.path(), run_id, &builtin()).unwrap();
+        let staging_cost =
+            compute_run_cost_cached(&staging, repo.path(), run_id, &builtin()).unwrap();
         assert!((host_cost.usd - 5.0).abs() < 1e-9, "host root → $5");
         assert!(
             (staging_cost.usd - 10.0).abs() < 1e-9,
@@ -853,6 +851,6 @@ mod tests {
         .unwrap();
 
         // Querying "run-1" must NOT pick up "run-1x"'s transcript.
-        assert!(compute_run_cost(&projects, repo.path(), "run-1").is_none());
+        assert!(compute_run_cost(&projects, repo.path(), "run-1", &builtin()).is_none());
     }
 }

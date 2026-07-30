@@ -34,6 +34,8 @@ vi.mock("../api", () => ({
     home: "/home/user",
     // #469: required on InstanceSettings; this modal does not read it.
     autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #427: required on InstanceSettings; this modal does not read it.
+    price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
     updated_at: "2026-07-01T10:00:00.000Z",
   }),
   // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
@@ -1439,6 +1441,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       home: "/home/user",
       // #469: required on InstanceSettings; this modal does not read it.
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      // #427: required on InstanceSettings; this modal does not read it.
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -1715,6 +1719,8 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       home: "/home/user",
       // #469: required on InstanceSettings; this modal does not read it.
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      // #427: required on InstanceSettings; this modal does not read it.
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -1921,6 +1927,8 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       ],
       home: "/home/user",
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      // #427: required on InstanceSettings; this modal does not read it.
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
     });
   });

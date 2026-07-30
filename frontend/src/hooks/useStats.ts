@@ -16,6 +16,11 @@ import type { StatsOverview, StatsCost } from "../types";
  * from the async callbacks, and — unlike `useSettings` — it *surfaces* an
  * `error`/`costError` rather than swallowing it, so a failed fetch (or a failed
  * lazy chunk on the cost tab) is visible, not a blank tab.
+ *
+ * `reloadKey` (#427) is a **dependency only** — bumping it refetches, and it is
+ * never passed to an API call. Threading it into `fetchStatsCost` would change
+ * that function's arity, which the tests below assert exactly (Vitest compares
+ * arity strictly). Precedent: `refreshKey` in `TriggerDetailPanel`.
  */
 export function useStats(
   open: boolean,
@@ -23,6 +28,7 @@ export function useStats(
   to: string,
   bucket: string,
   costActive: boolean,
+  reloadKey: number = 0,
 ) {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [cost, setCost] = useState<StatsCost | null>(null);
@@ -46,7 +52,7 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, from, to, bucket]);
+  }, [open, from, to, bucket, reloadKey]);
 
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {
@@ -65,7 +71,7 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, costActive, from, to, bucket]);
+  }, [open, costActive, from, to, bucket, reloadKey]);
 
   return { overview, cost, error, costError };
 }

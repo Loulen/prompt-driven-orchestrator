@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import NewRunModal from "./NewRunModal";
 import { useEditStore } from "../stores/editStore";
-import type { InstanceSettings, PipelineListEntry } from "../types";
+import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
 
 const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListEntry => ({
   id: "test-pipe",
@@ -1898,5 +1898,118 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
     );
     expect(Array.from(select.options).find((o) => o.value === "")).not.toHaveTextContent("(full)");
     expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — the target repo is required at the boundary (#470)", () => {
+  // `clearAllMocks` wipes calls but KEEPS implementations, and the sandbox suites
+  // above leave `fetchSettings` on "Docker unavailable + default_sandbox: full" —
+  // which makes `sandboxDoomed` true and Launch permanently disabled here. Restore
+  // the documented default, same reason the global `beforeEach` restores
+  // `listBranches`.
+  beforeEach(() => {
+    vi.mocked(fetchSettings).mockResolvedValue({
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      updated_at: "2026-07-01T10:00:00.000Z",
+    });
+  });
+
+  const nullRepoTrigger: Trigger = {
+    id: "trg-legacy",
+    name: "Legacy nightly",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    // A pre-#470 Trigger: nobody ever named a repo for it (ADR-0033).
+    target_repo: null,
+    source_branch: null,
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: null,
+    overlap_policy: "skip",
+    enabled: true,
+    next_fire_at: null,
+    last_fired_at: null,
+    last_outcome: null,
+  };
+
+  it("resets the repo verdict when editing a Trigger with no target repo", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+
+    // 1. Open New Run and validate a real repo, so `repoValid === true`.
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    await enterValidRepo();
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).not.toBeDisabled();
+    });
+
+    // 2. Close, then reopen on a legacy Trigger whose target repo is null. The
+    //    modal stays MOUNTED (#386), so a `repoValid` left over from step 1 would
+    //    survive next to an emptied repo field — and `canLaunch` would be true
+    //    with no repo, exactly the request the daemon now answers 400 to.
+    rerender(
+      <NewRunModal open={false} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    rerender(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger: nullRepoTrigger }} />,
+    );
+
+    // The field is empty...
+    await waitFor(() => {
+      expect(screen.getByLabelText(/target repository/i)).toHaveValue("");
+    });
+    // ...and so is the verdict: everything gated on `repoValid` is blocked again.
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).toBeDisabled();
+    });
+
+    // Switching back to Run mode must not offer a Launch either.
+    fireEvent.click(screen.getByTestId("mode-run"));
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+  });
+
+  it("surfaces the daemon's refusal inline when createRun rejects", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    vi.mocked(createRun).mockRejectedValueOnce(
+      new Error(
+        "target_repo is required: name the absolute path of the git repository this must work in",
+      ),
+    );
+
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
+    });
+
+    vi.useRealTimers();
+    // Assert enabled first: a silently-disabled Launch would make the assertion
+    // below fail for a reason that has nothing to do with error surfacing.
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    // The 400 must land in front of the user, not in the console: before this
+    // test only `createTrigger` had an inline-error assertion.
+    await waitFor(() => {
+      expect(screen.getByTestId("launch-error")).toHaveTextContent(/target_repo is required/i);
+    });
   });
 });

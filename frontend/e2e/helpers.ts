@@ -1,4 +1,41 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { type Page, expect } from "@playwright/test";
+
+/**
+ * The repository a layer-3b Run or Trigger must name (#470, ADR-0033).
+ *
+ * `target_repo` is **required** at every write boundary: the daemon's own working
+ * directory is no longer an implicit Run target. The e2e daemon runs with
+ * `cwd: ".."` (playwright.config), so naming the workspace root here reproduces
+ * exactly what these specs relied on before — now stated instead of defaulted.
+ *
+ * Use `runBody` / `runMultipart` below rather than pasting this into each spec: a
+ * literal per call site is how the omission crept in in the first place.
+ */
+export const E2E_TARGET_REPO = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+
+/**
+ * A `POST /runs` JSON body with `target_repo` filled in (#470). Pass the fields
+ * the spec actually cares about; override `target_repo` explicitly when the test
+ * is *about* pointing a Run at another repo.
+ */
+export function runBody(fields: Record<string, unknown>): Record<string, unknown> {
+  return { target_repo: E2E_TARGET_REPO, ...fields };
+}
+
+/**
+ * Same as {@link runBody} for the multipart form of `POST /runs` — every value
+ * must be a string there.
+ */
+export function runMultipart(fields: Record<string, string>): Record<string, string> {
+  return { target_repo: E2E_TARGET_REPO, ...fields };
+}
 
 /**
  * Open a repo/user pipeline into the edit canvas via the post-refonte

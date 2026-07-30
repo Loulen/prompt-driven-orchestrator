@@ -78,11 +78,13 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_trigger(daemon: &TestDaemon, name: &str, cron: &str) -> serde_json::Value {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "input_template": "audit the codebase",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -102,11 +104,13 @@ async fn create_trigger_with_guard(
     cron: &str,
     guard_command: &str,
 ) -> serde_json::Value {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "guard_command": guard_command,
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -122,6 +126,26 @@ async fn create_trigger_with_guard(
     resp.json().await.unwrap()
 }
 
+/// Pin the guard timeout in this daemon's **stored** settings.
+///
+/// `guard_timeout_with` ranks `stored → env → default` (#129, ADR-0015), so this
+/// outranks the process-wide `PDO_GUARD_TIMEOUT_MS` seam that other tests in
+/// this binary set — and unlike that seam it is per-daemon state, so it cannot
+/// leak across parallel tests.
+async fn pin_guard_timeout_secs(daemon: &TestDaemon, secs: u64) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "guard_timeout_secs": secs }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "PUT /settings should accept an in-range guard_timeout_secs"
+    );
+}
+
 /// Create a Trigger with an explicit overlap policy and optional concurrency cap
 /// (#239). `max_concurrent: None` posts no cap (unbounded under `allow`).
 async fn create_trigger_with_overlap(
@@ -131,12 +155,14 @@ async fn create_trigger_with_overlap(
     overlap_policy: &str,
     max_concurrent: Option<i64>,
 ) -> reqwest::Response {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let mut body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "input_template": "audit the codebase",
         "overlap_policy": overlap_policy,
+        "target_repo": daemon.target_repo(),
     });
     if let Some(m) = max_concurrent {
         body["max_concurrent"] = serde_json::json!(m);
@@ -422,9 +448,20 @@ async fn concurrent_ticks_fire_a_due_trigger_exactly_once() {
     // loop and the test seam that made `guard_exit_zero_fires_with_stdout_as_input`
     // flake under full-suite load. Ticks must serialize. The yearly cron keeps
     // the recomputed next fire far away, so the second tick can't be
-    // legitimately due again. Keep the sleep under the 200 ms guard-timeout
-    // override that `guard_timeout_records_guard_error_and_skips` sets
-    // process-wide (std::env is shared across parallel tests).
+    // legitimately due again.
+    //
+    // The 150 ms sleep needs a timeout it can't lose a race to.
+    // `guard_timeout_records_guard_error_and_skips` sets the *process-wide*
+    // `PDO_GUARD_TIMEOUT_MS=200` seam, and `std::env` is shared across the
+    // parallel tests of this binary — so under full-suite load `sh -c` spawn
+    // overhead plus 150 ms crossed 200 ms, the guard timed out, and this test
+    // saw 0 fires instead of 1. Pin the timeout in *this daemon's* stored
+    // settings instead: `guard_timeout_with` ranks `stored → env → default`
+    // (ADR-0015), so a stored value outranks that env var, and the store is
+    // per-daemon state rather than a process global. Immune by construction,
+    // not by margin.
+    pin_guard_timeout_secs(&daemon, 60).await;
+
     let trigger = create_trigger_with_guard(
         &daemon,
         "racer",
@@ -615,6 +652,96 @@ async fn dangling_target_repo_reference_yields_error_outcome() {
     assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
 }
 
+/// #470, layer 3a — the test that proves the hole does not reopen through the
+/// *fire* path, and the reason the refusal lives in `trigger_dangling_reason`
+/// rather than at `create_run_inner`.
+///
+/// A 400 at the creation chokepoint would come too late: the guard runs first, so
+/// a Trigger with an unnamed repo would keep executing its `sh -c` in the daemon's
+/// own working directory (5 of the 9 live Triggers guard with `git pull` /
+/// `gh issue list` — real side effects), and would emit one red fire row per tick
+/// forever. Refusing upstream buys all three: no guard execution, a dormant
+/// Trigger, and a 409 on "Run now".
+#[tokio::test]
+async fn trigger_with_null_target_repo_goes_dormant_without_running_its_guard() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A guard whose ONLY job is to leave a witness file behind. Seeded under the
+    // API because `POST /triggers` refuses a null repo now — that is the point.
+    let witness = daemon.repo_root().join("guard-side-effect.txt");
+    let trigger_id = daemon
+        .seed_legacy_trigger_without_target_repo(
+            "legacy-null-repo",
+            PIPELINE_NAME,
+            "* * * * *",
+            Some("touch guard-side-effect.txt"),
+        )
+        .await;
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a Trigger with no target repo must not create a Run"
+    );
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("error"),
+        "the refusal must be visible in the fire history: {:?}",
+        fires[0]
+    );
+    assert!(
+        fires[0]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the reason must name the field verbatim: {:?}",
+        fires[0]
+    );
+
+    // The distinguishing assertion: refusing at the chokepoint would have let the
+    // guard run first. Nothing executed in the daemon's own repository.
+    assert!(
+        !witness.exists(),
+        "the guard command must NOT have executed — no side effect in the unnamed repo"
+    );
+
+    // Dormant, not one red row per tick forever.
+    let trigger = get_trigger(&daemon, &trigger_id).await;
+    assert!(
+        trigger["next_fire_at"].is_null(),
+        "the Dangling transition must NULL next_fire_at: {trigger:?}"
+    );
+
+    // "Run now" answers 409 with a reason, instead of a 200 {fired:false} the
+    // operator would have to go dig out of the fire history.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        409,
+        "Run now on a dangling Trigger must be a loud 409"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the 409 body must carry the reason: {body:?}"
+    );
+    assert!(
+        !witness.exists(),
+        "Run now must not have executed the guard either"
+    );
+}
+
 #[tokio::test]
 async fn create_trigger_rejects_prompt_required_pipeline_without_input() {
     let daemon = TestDaemon::spawn(seed_prompt_required).await.unwrap();
@@ -623,6 +750,8 @@ async fn create_trigger_rejects_prompt_required_pipeline_without_input() {
         "name": "bad",
         "pipeline_id": "needs-prompt",
         "cron": "* * * * *",
+        // #470: name a repo, else the 400 would be for the wrong reason.
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -643,6 +772,8 @@ async fn create_trigger_rejects_invalid_cron() {
         "pipeline_id": PIPELINE_NAME,
         "cron": "not a cron expr",
         "input_template": "x",
+        // #470: name a repo, else the 400 would be for the wrong reason.
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))

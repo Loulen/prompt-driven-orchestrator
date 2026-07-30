@@ -128,7 +128,13 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
 }) => {
   // A real trigger so the Trigger dropdown resolves its id to a name.
   const trigResp = await page.request.post(`${baseURL}/triggers`, {
-    data: { name: `nightly-${TAG}`, pipeline_id: PIPE_A, cron: "0 0 1 1 *" },
+    // #470: a Trigger is a Run template — it must name its target repo (ADR-0033).
+    data: {
+      name: `nightly-${TAG}`,
+      pipeline_id: PIPE_A,
+      cron: "0 0 1 1 *",
+      target_repo: repoA,
+    },
   });
   expect(trigResp.status()).toBe(201);
   triggerId = ((await trigResp.json()) as { id: string }).id;

@@ -379,6 +379,9 @@ struct RunListEntry {
     /// Resolved target repo for "group by project" (#258): the run's `target_repo`,
     /// or the daemon's `repo_root` when unset (`effective_repo_root`). Always
     /// concrete and always emitted; the client groups the Runs list by this key.
+    ///
+    /// #470/ADR-0033: "when unset" now means "for a run recorded before the create
+    /// boundary was hardened" — this is a READ and its fallback stays forever.
     effective_repo: String,
 }
 
@@ -387,6 +390,9 @@ struct RunListEntry {
 /// `trigger.target_repo` stays untouched (it drives the row badge, the detail
 /// panel, and the Run-now pre-fill); `effective_repo` resolves a null target to
 /// the daemon's `repo_root` purely so the client can group by a concrete path.
+///
+/// #470/ADR-0033: only rows predating the hardened write boundary can carry a null
+/// target. The resolution here is read-side and permanent.
 #[derive(Serialize)]
 struct TriggerListEntry {
     #[serde(flatten)]
@@ -1298,6 +1304,66 @@ impl DaemonHandle {
             &self.state.db,
             trigger_id,
             Some("2020-01-01T00:00:00.000Z"),
+        )
+        .await;
+    }
+
+    /// Seed a Trigger row whose `target_repo` is NULL — a **pre-#470 record**.
+    ///
+    /// Test seam only, and it exists because the API can no longer produce one:
+    /// `POST /triggers` refuses an unnamed repo (ADR-0033). Layer-3a tests still
+    /// need such a row, both to prove the read side keeps resolving it and to
+    /// prove the fire path now refuses it *before* running its guard. Bypassing
+    /// the handler is the point, not a shortcut.
+    pub async fn seed_legacy_trigger_without_target_repo(
+        &self,
+        name: &str,
+        pipeline_id: &str,
+        cron: &str,
+        guard_command: Option<&str>,
+    ) -> String {
+        let trigger = trigger_store::create(
+            &self.state.db,
+            trigger_store::NewTrigger {
+                name: name.to_string(),
+                pipeline_id: pipeline_id.to_string(),
+                pipeline_name: pipeline_id.to_string(),
+                target_repo: None,
+                source_branch: None,
+                input_template: "seeded input".to_string(),
+                variables: serde_json::json!({}),
+                cron: cron.to_string(),
+                guard_command: guard_command.map(|g| g.to_string()),
+                overlap_policy: "skip".to_string(),
+                max_concurrent: None,
+                sandbox: None,
+                next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
+            },
+        )
+        .await
+        .expect("seeding a legacy trigger row must succeed");
+        trigger.id
+    }
+
+    /// Seed a `run_started` event whose payload carries **no** `target_repo` — a
+    /// pre-#470 Run record. Same rationale as
+    /// [`Self::seed_legacy_trigger_without_target_repo`]: `POST /runs` refuses
+    /// this shape now, but the read side must keep resolving it forever.
+    pub async fn seed_legacy_run_without_target_repo(&self, run_id: &str, pipeline_name: &str) {
+        let _ = append_event(
+            &self.state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipeline_name,
+                    "input": "seeded input",
+                })),
+            },
         )
         .await;
     }
@@ -2327,7 +2393,7 @@ impl From<fire_decision::GuardResult> for GuardTestResponse {
 /// (maps [`fire_decision::GuardResult`] 1:1); the would-fire / would-skip verdict
 /// is composed client-side from `outcome`.
 ///
-/// Zero-side-effect invariant: this handler calls ONLY `validate_target_repo`,
+/// Zero-side-effect invariant: this handler calls ONLY `required_target_repo`,
 /// `instance_config::get`, `guard_runner::guard_timeout_with`, and
 /// `guard_runner::run_guard`. It must never route through `fire_one_trigger`,
 /// `plan_tick`, `create_run_inner`, `trigger_store::*`, or
@@ -2346,20 +2412,18 @@ async fn guard_test(
             .into_response();
     }
 
-    // Resolve the cwd: a supplied repo is validated (400 on a bad / non-git
-    // path); absent or blank falls back to the daemon's own repo_root.
-    let cwd = match req.target_repo.as_deref().map(str::trim) {
-        Some(repo) if !repo.is_empty() => match validate_target_repo(repo) {
-            Ok(p) => p,
-            Err(msg) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": msg })),
-                )
-                    .into_response();
-            }
-        },
-        _ => state.repo_root.clone(),
+    // #470: same rule as a real fire — a guard must never execute in a
+    // repository nobody named. The dry-run is for an unsaved Trigger, but it
+    // runs the same arbitrary `sh -c`.
+    let cwd = match required_target_repo(req.target_repo.as_deref()) {
+        Ok(p) => p,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
     };
 
     // Guard-faithful timeout: same `stored → env → default` precedence a real
@@ -2467,16 +2531,18 @@ async fn create_trigger(
             .into_response();
     }
 
-    // Validate target repo if provided.
-    if let Some(ref repo) = req.target_repo {
-        if let Err(msg) = validate_target_repo(repo) {
+    // #470: a Trigger is a Run template (ADR-0012(b) — « template de Run = charge
+    // d'un POST /runs »), so it cannot be valid without a target repo.
+    let target_repo = match required_target_repo(req.target_repo.as_deref()) {
+        Ok(p) => p.to_string_lossy().into_owned(),
+        Err(msg) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": msg })),
             )
                 .into_response();
         }
-    }
+    };
 
     // The first fire, via the single recompute seam (#372, invariant #222):
     // `NewTrigger.next_fire_at` is a flat `Option<String>`, so flatten the
@@ -2495,7 +2561,7 @@ async fn create_trigger(
         name: req.name,
         pipeline_id: req.pipeline_id,
         pipeline_name,
-        target_repo: req.target_repo,
+        target_repo: Some(target_repo),
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables,
@@ -2539,6 +2605,11 @@ async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
             // a null `target_repo` resolves to the daemon's own repo_root. The raw
             // `target_repo` is left untouched so the badge / detail / Run-now
             // pre-fill keep showing only what the user actually set.
+            //
+            // #470/ADR-0033: this fallback is READ-side and stays. Historical rows
+            // legitimately carry a null repo (the write boundary now refuses one),
+            // and the "no Unassigned bucket" invariant depends on resolving them
+            // here. Do NOT symmetrise this with `create_trigger`/`patch_trigger`.
             let repo_root = state.repo_root.to_string_lossy().into_owned();
             let entries: Vec<TriggerListEntry> = triggers
                 .into_iter()
@@ -2634,7 +2705,12 @@ struct PatchTriggerRequest {
     input_template: Option<String>,
     #[serde(default)]
     overlap_policy: Option<String>,
-    #[serde(default)]
+    /// #470: double-wrapped AND custom-deserialized, unlike its siblings below.
+    /// The point is to make the explicit CLEAR (`"target_repo": null`) *reachable*
+    /// so it can be REFUSED: with plain `#[serde(default)]` a present-`null`
+    /// collapses to `None` and the clear was a silent no-op — the UI has been
+    /// sending exactly that on every Trigger save (`NewRunModal.tsx`).
+    #[serde(default, deserialize_with = "deserialize_double_option")]
     target_repo: Option<Option<String>>,
     #[serde(default)]
     source_branch: Option<Option<String>>,
@@ -2645,7 +2721,7 @@ struct PatchTriggerRequest {
     /// Bounded-`allow` ceiling (#239), double-wrapped: absent = leave, present
     /// `null` = clear to unbounded, `n` = set. The custom deserializer is what
     /// makes the present-`null` → `Some(None)` distinction reachable from JSON
-    /// (the sibling `Option<Option<_>>` fields above use plain `#[serde(default)]`,
+    /// (`source_branch` / `guard_command` above still use plain `#[serde(default)]`,
     /// where present-`null` collapses to `None` and cannot clear).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     max_concurrent: Option<Option<i64>>,
@@ -2793,14 +2869,23 @@ async fn patch_trigger(
         // leaves next_fire_at untouched: the Trigger stays dormant (correct).
     }
 
-    // Validate a target-repo edit (Some(Some(path)) means set; Some(None) clears).
-    if let Some(Some(ref repo)) = req.target_repo {
-        if let Err(msg) = validate_target_repo(repo) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
+    // #470: PATCH stays a partial merge — an ABSENT `target_repo` leaves the
+    // stored value untouched (that is what makes `{"enabled": true}` from the
+    // list toggle a legal body). What is refused is an explicit CLEAR: `null`
+    // (reachable since the double-option wiring) or a blank string. Before
+    // #470 a `null` here was silently swallowed by serde into a no-op, so
+    // blanking the repo field in the UI appeared to work and did nothing.
+    let mut validated_target_repo: Option<Option<String>> = None;
+    if let Some(ref edit) = req.target_repo {
+        match required_target_repo(edit.as_deref()) {
+            Ok(p) => validated_target_repo = Some(Some(p.to_string_lossy().into_owned())),
+            Err(msg) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": msg })),
+                )
+                    .into_response();
+            }
         }
     }
 
@@ -2860,7 +2945,9 @@ async fn patch_trigger(
         name: req.name,
         pipeline_id: repoint.as_ref().map(|(id, _)| id.clone()),
         pipeline_name: repoint.as_ref().map(|(_, name)| name.clone()),
-        target_repo: req.target_repo,
+        // #470: the trimmed, validated path — never the raw field. `None` here
+        // means "absent from the body", i.e. leave the stored value alone.
+        target_repo: validated_target_repo,
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables: req
@@ -3594,22 +3681,19 @@ fn trigger_dangling_reason(state: &AppState, trigger: &trigger_store::Trigger) -
     if trigger_pipeline_yaml(state, trigger).is_none() {
         return Some(format!("pipeline not found: {}", trigger.pipeline_id));
     }
-    if let Some(ref repo) = trigger.target_repo {
-        if let Err(msg) = validate_target_repo(repo) {
-            return Some(msg);
-        }
+    // #470: a null/blank target repo is a dangling reference, not a fallback.
+    // Refusing HERE rather than at `create_run_inner` buys three things a 400 at
+    // the chokepoint cannot: the guard command never runs (5 of the 9 live
+    // Triggers have guards with real side effects — `git pull`, `gh issue list`
+    // — which would otherwise execute in the unnamed daemon repo), the
+    // `Dangling` transition NULLs `next_fire_at` so the Trigger goes dormant
+    // instead of emitting one red row per tick forever, and `POST
+    // /triggers/:id/fire` answers 409 with a UI banner instead of a
+    // `200 {fired:false}` the operator has to go find in the fire history.
+    if let Err(msg) = required_target_repo(trigger.target_repo.as_deref()) {
+        return Some(msg);
     }
     None
-}
-
-/// Resolve the working directory a guard runs in: the Trigger's target repo when
-/// set, otherwise the daemon's repo root.
-fn trigger_guard_cwd(state: &AppState, trigger: &trigger_store::Trigger) -> PathBuf {
-    trigger
-        .target_repo
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.repo_root.clone())
 }
 
 /// Run one tick of a background sweep under panic isolation. The future is driven
@@ -3848,7 +3932,9 @@ async fn fire_one_trigger(
             .is_some_and(|ceiling| live_count >= ceiling);
     let guard = match (&trigger.guard_command, overlap_skips) {
         (Some(cmd), false) if !cmd.trim().is_empty() => {
-            let cwd = trigger_guard_cwd(state, trigger);
+            // #470: guaranteed present — `trigger_dangling_reason` refused the
+            // fire upstream if it were not. No fallback to the daemon root.
+            let cwd = PathBuf::from(trigger.target_repo.as_deref().unwrap_or_default());
             // Resolve the timeout fresh each tick, `stored → env → default`
             // (#129, ADR-0015): a settings change takes effect on the next
             // tick without a restart. Stored is seconds; the env seam is ms.
@@ -5927,16 +6013,16 @@ async fn create_run_inner(
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Result<String, (StatusCode, serde_json::Value)> {
-    // Validate target_repo if provided
-    let run_repo_root = if let Some(ref target) = req.target_repo {
-        match validate_target_repo(target) {
-            Ok(p) => p,
-            Err(msg) => {
-                return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
-            }
+    // #470: the target repo is a REQUIRED input at the creation boundary. The
+    // daemon's own `repo_root` stays its storage root (pipelines, library,
+    // prompts) but is never again an implicit Run target — a Run must not mutate
+    // code in a repository nobody named. Read-side resolution keeps its fallback
+    // for historical runs (`effective_repo_root`); see ADR-0033.
+    let run_repo_root = match required_target_repo(req.target_repo.as_deref()) {
+        Ok(p) => p,
+        Err(msg) => {
+            return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
-    } else {
-        state.repo_root.clone()
     };
 
     // Validate source_branch if provided
@@ -6159,9 +6245,11 @@ async fn create_run_inner(
     if let Some(vars) = variables_json {
         run_payload["variables"] = vars;
     }
-    if let Some(ref target) = req.target_repo {
-        run_payload["target_repo"] = serde_json::json!(target);
-    }
+    // #470: always present now — the create boundary refuses a blank/absent
+    // target, so we persist the single canonical (trimmed, validated) path
+    // rather than the raw field. Historical events keep their legitimate
+    // `null`; the read side resolves those (ADR-0033).
+    run_payload["target_repo"] = serde_json::json!(run_repo_root.to_string_lossy());
     // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
     // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
     // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
@@ -11225,7 +11313,17 @@ async fn run_command(
                 .and_then(|p| p.get("variables"))
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            let target_repo = run_state.target_repo.clone();
+            // #470: read the RESOLVED repo, not the raw field. A retry of a run
+            // created before the create boundary was hardened carries
+            // `target_repo: null`; forwarding that raw would 400 at the
+            // chokepoint — AFTER `cleanup_run` has already archived the original
+            // (below), i.e. archived with no replacement. Resolving here lands
+            // the retry where the original actually ran, and pins it explicitly.
+            let target_repo = Some(
+                effective_repo_root(&state, &run_state)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
             let source_branch = run_state.source_branch.clone();
 
             // Archive the current run (cleanup disk resources, keep events)
@@ -12332,6 +12430,27 @@ fn unix_timestamp_secs() -> String {
 
 // --- Target repo validation ---
 
+/// The message every write boundary returns when no target repo was named
+/// (#470). Actionable on purpose: the caller must learn *what* to pass, not
+/// merely that something is missing.
+const TARGET_REPO_REQUIRED: &str = "target_repo is required: name the absolute path of the git \
+    repository this must work in — the daemon's own working directory is not a default";
+
+/// Resolve a **required** target repo at a write boundary (#470).
+///
+/// Trims once and uses the trimmed value as the canonical one: absent, empty or
+/// whitespace-only is refused by name, anything else goes through
+/// `validate_target_repo`. This is the single source of the rule for
+/// `create_run_inner`, `create_trigger`, `patch_trigger` and `guard_test` — the
+/// read side (`effective_repo_root`) deliberately does NOT use it and keeps its
+/// fallback for historical runs. See ADR-0033.
+fn required_target_repo(field: Option<&str>) -> Result<PathBuf, String> {
+    match field.map(str::trim) {
+        Some(p) if !p.is_empty() => validate_target_repo(p),
+        _ => Err(TARGET_REPO_REQUIRED.to_string()),
+    }
+}
+
 fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     if !p.is_absolute() {
@@ -12395,6 +12514,18 @@ fn list_branches(repo: &Path) -> Result<Vec<String>, String> {
     }
 }
 
+/// Resolve the repository a Run works in, for a **projected** `RunState`.
+///
+/// The fallback to the daemon's `repo_root` is deliberate and permanent (#470,
+/// ADR-0033): `run_started` events written BEFORE the create boundary was
+/// hardened legitimately carry `target_repo: null` (≈ 46 of 101 dev runs), and
+/// every caller here is a READ — run detail, cost (ADR-0022/0029), archive paths
+/// (ADR-0020), liveness sweeps, worktree teardown. Making this fallible or
+/// removing the fallback would break re-reading the whole history.
+///
+/// Do NOT "restore symmetry" with the create boundary: the asymmetry IS the
+/// design. `target_repo` is required where there is a caller to answer 400 to,
+/// and resolved where there is only a past record to interpret.
 fn effective_repo_root(state: &AppState, run_state: &event_log::RunState) -> PathBuf {
     run_state
         .target_repo
@@ -13341,14 +13472,18 @@ mod tests {
 
     // --- POST /triggers/guard/test (#350): dry-run a guard, zero side effects.
     // Router oneshots prove the route is mounted (the FP's "404 blocking" risk)
-    // and maps the pass / empty-command / bad-repo branches to 200 / 400 / 400.
-    // Deeper pass/skip/cwd + zero-side-effect proofs live in the layer-3a
+    // and maps the pass / empty-command / absent-repo / bad-repo branches to
+    // 200 / 400 / 400 / 400 (#470 added the absent-repo refusal). Deeper
+    // pass/skip/cwd + zero-side-effect proofs live in the layer-3a
     // `guard_dry_run.rs` (real daemon); the timeout path is isolated in its own
     // binary because `PDO_GUARD_TIMEOUT_MS` is process-global. ---
 
     #[tokio::test]
     async fn guard_test_route_is_mounted_and_returns_pass() {
-        let app = build_router(test_state().await);
+        let state = test_state().await;
+        // #470: the dry-run now demands a named repo, like a real fire.
+        let repo = state.repo_root.to_string_lossy().into_owned();
+        let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -13356,8 +13491,11 @@ mod tests {
                     .uri("/triggers/guard/test")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({ "guard_command": "echo hi" }))
-                            .unwrap(),
+                        serde_json::to_string(&serde_json::json!({
+                            "guard_command": "echo hi",
+                            "target_repo": repo,
+                        }))
+                        .unwrap(),
                     ))
                     .unwrap(),
             )
@@ -13416,6 +13554,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn guard_test_without_target_repo_is_400() {
+        // #470: the dry-run executes an arbitrary `sh -c`. Its "zero side effects"
+        // invariant is about not creating a Run — it says nothing about what the
+        // command does. So it must refuse an unnamed repo like a real fire does,
+        // instead of running in the daemon's own working directory.
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers/guard/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "guard_command": "echo hi" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("target_repo"),
+            "got: {json}"
+        );
     }
 
     async fn test_state() -> Arc<AppState> {
@@ -15039,6 +15213,71 @@ mod tests {
             .unwrap();
         let events: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(events.len() >= 5); // run_started + node_started + node_completed + run_completed + run_archived
+    }
+
+    #[tokio::test]
+    async fn archived_run_with_null_target_repo_stays_readable() {
+        // #470/AC6: the write boundary hardens, the READ side does not. An archived
+        // run whose `run_started` legitimately carries `target_repo: null` (≈46 of
+        // 101 dev runs) must stay fully readable forever — detail and list — with
+        // its repo resolved to the daemon root. This is the ADR-0033 asymmetry.
+        let state = test_state().await;
+        let run_id = "legacy-null-archived";
+        seed_completed_run(&state, run_id).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Detail: 200, not a 4xx/5xx from a "required" field that isn't there.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "an archived null-target run must stay readable"
+        );
+
+        // List: present, and grouped under the daemon root — no "Unassigned".
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let runs: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let row = runs
+            .iter()
+            .find(|r| r["run_id"] == run_id)
+            .expect("the archived run must still be listed");
+        assert_eq!(row["status"], "archived");
+        assert_eq!(
+            row["effective_repo"].as_str(),
+            state.repo_root.to_str(),
+            "a null-target archived run resolves to the daemon root, not Unassigned"
+        );
     }
 
     #[tokio::test]
@@ -17418,6 +17657,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_optional_pipeline(tmp.path(), "watch-pipe");
         write_optional_pipeline(tmp.path(), "weekly-pipe");
+        // #470: a Trigger cannot be created without a target repo any more.
+        init_test_repo(tmp.path());
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state.clone());
 
@@ -17434,7 +17675,8 @@ mod tests {
                             "name": "PDO Weekly",
                             "pipeline_id": "watch-pipe",
                             "cron": "0 4 * * 1",
-                            "input_template": "x"
+                            "input_template": "x",
+                            "target_repo": tmp.path().to_string_lossy(),
                         })
                         .to_string(),
                     ))
@@ -17490,6 +17732,8 @@ mod tests {
         let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_optional_pipeline(tmp.path(), "watch-pipe");
+        // #470: a Trigger cannot be created without a target repo any more.
+        init_test_repo(tmp.path());
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state.clone());
 
@@ -17505,7 +17749,8 @@ mod tests {
                             "name": "T",
                             "pipeline_id": "watch-pipe",
                             "cron": "0 4 * * 1",
-                            "input_template": "x"
+                            "input_template": "x",
+                            "target_repo": tmp.path().to_string_lossy(),
                         })
                         .to_string(),
                     ))
@@ -17541,6 +17786,191 @@ mod tests {
         // The trigger is left exactly as it was.
         let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
         assert_eq!(after.pipeline_id, "watch-pipe");
+    }
+
+    // --- A Trigger is a Run template: no target repo, no Trigger (#470) ---
+
+    /// Create a Trigger through the router, returning its id. `extra` is merged
+    /// into the body so callers can vary one axis at a time.
+    async fn create_trigger_ok(state: &Arc<AppState>, repo: &std::path::Path) -> String {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "T",
+                            "pipeline_id": "watch-pipe",
+                            "cron": "0 4 * * 1",
+                            "input_template": "x",
+                            "target_repo": repo.to_string_lossy(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn patch_trigger_resp(
+        state: &Arc<AppState>,
+        id: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/triggers/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_trigger_without_target_repo_is_400() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "T",
+                            "pipeline_id": "watch-pipe",
+                            "cron": "0 4 * * 1",
+                            "input_template": "x"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("target_repo"),
+            "got: {json}"
+        );
+        assert!(
+            trigger_store::list(&state.db).await.unwrap().is_empty(),
+            "no Trigger may be persisted on refusal"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_trigger_clearing_target_repo_is_400() {
+        // An explicit `null` is now REACHABLE (double-option wiring) — precisely
+        // so it can be refused. Before #470 serde swallowed it into a no-op, so
+        // the UI's "blank the repo field" appeared to work and did nothing.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        let (status, json) =
+            patch_trigger_resp(&state, &id, serde_json::json!({ "target_repo": null })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("target_repo"),
+            "got: {json}"
+        );
+
+        // Unchanged in the store — a refused PATCH applies nothing at all.
+        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
+        assert_eq!(after.target_repo.as_deref(), tmp.path().to_str());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_trigger_with_blank_target_repo_is_400() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        for blank in ["", "   "] {
+            let (status, json) =
+                patch_trigger_resp(&state, &id, serde_json::json!({ "target_repo": blank })).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "blank {blank:?}: {json}");
+            let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
+            assert_eq!(after.target_repo.as_deref(), tmp.path().to_str());
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_trigger_without_target_repo_leaves_it_untouched() {
+        // The correct reading of AC4: PATCH is a partial MERGE. An absent
+        // `target_repo` is not a clear — that is what makes `{"enabled": false}`
+        // from the list toggle a legal body. This test exists to stop a future
+        // "fix" from reading AC4 literally and breaking the toggle.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        let (status, json) =
+            patch_trigger_resp(&state, &id, serde_json::json!({ "enabled": false })).await;
+        assert_eq!(status, StatusCode::OK, "body: {json}");
+
+        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
+        assert!(!after.enabled, "the toggle must have applied");
+        assert_eq!(
+            after.target_repo.as_deref(),
+            tmp.path().to_str(),
+            "an absent target_repo leaves the stored value alone"
+        );
     }
 
     #[tokio::test]
@@ -22069,6 +22499,38 @@ edges: []
         assert!(result.is_ok());
     }
 
+    // --- The required-at-the-write-boundary predicate (#470, ADR-0033) ---
+
+    #[test]
+    fn required_target_repo_rejects_absent() {
+        let err = required_target_repo(None).unwrap_err();
+        assert!(err.contains("target_repo"), "message was: {err}");
+        // Actionable on purpose: the caller must learn what to pass.
+        assert!(err.contains("absolute path"), "message was: {err}");
+    }
+
+    #[test]
+    fn required_target_repo_rejects_empty() {
+        let err = required_target_repo(Some("")).unwrap_err();
+        assert!(err.contains("target_repo"), "message was: {err}");
+    }
+
+    #[test]
+    fn required_target_repo_rejects_whitespace() {
+        let err = required_target_repo(Some("   \t ")).unwrap_err();
+        assert!(err.contains("target_repo"), "message was: {err}");
+    }
+
+    #[test]
+    fn required_target_repo_trims_and_accepts() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        let padded = format!("  {}  ", tmp.path().to_str().unwrap());
+        // The trimmed value is the canonical one: what we validate is what the
+        // caller gets back, so nothing downstream can diverge from it.
+        assert_eq!(required_target_repo(Some(&padded)).unwrap(), tmp.path());
+    }
+
     #[test]
     fn validate_source_branch_rejects_nonexistent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -22105,12 +22567,17 @@ edges: []
     }
 
     #[tokio::test]
-    async fn effective_repo_root_uses_target_repo_when_set() {
+    async fn effective_repo_root_falls_back_only_for_legacy_null_target_runs() {
         let state = test_state().await;
 
         let mut run_state = event_log::RunState::new("test".into(), "pipe".into());
 
-        // Without target_repo — falls back to daemon root
+        // #470/AC7: the fallback is READ-side ONLY. A `target_repo: null` here can
+        // only come from a `run_started` recorded before the create boundary was
+        // hardened — `POST /runs` now answers 400 rather than defaulting (see
+        // `create_run_without_target_repo_is_400`). Resolving those old records to
+        // the daemon root is what keeps the archive, the cost axes and the liveness
+        // sweeps readable; do not symmetrise it away.
         let default_root = effective_repo_root(&state, &run_state);
         assert_eq!(default_root, state.repo_root);
 
@@ -22894,6 +23361,86 @@ edges: []
         assert_eq!(new_state.status, event_log::RunStatus::Running);
         assert_eq!(new_state.pipeline_name, "retry-pipe");
         assert_eq!(new_state.input.as_deref(), Some("do the thing"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn retry_all_of_a_legacy_null_target_run_lands_on_the_resolved_repo() {
+        // #470: `retry_all` archives the original BEFORE creating the replacement.
+        // A run recorded before the create boundary was hardened carries
+        // `target_repo: null`; forwarding that raw would 400 at the now-mandatory
+        // chokepoint — after the archive — i.e. archived with no replacement, work
+        // unreachable. So the retry reads the RESOLVED repo and pins it explicitly.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        write_test_pipeline(tmp.path(), "retry-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+
+        for (kind, payload) in [
+            (
+                event_log::EventKind::RunStarted,
+                Some(serde_json::json!({
+                    "pipeline_name": "retry-pipe",
+                    "input": "legacy work",
+                    "edges": [],
+                    "node_defs": [],
+                    // NOTE: no `target_repo` — the whole point.
+                })),
+            ),
+            (event_log::EventKind::RunFailed, None),
+        ] {
+            append_event(
+                &state,
+                &event_log::Event {
+                    id: None,
+                    run_id: "legacy-null-target".into(),
+                    ts: event_log::now_iso(),
+                    kind,
+                    node_id: None,
+                    iter: None,
+                    payload,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/legacy-null-target/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "retry_all" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "the retry must not 400 after archiving; body: {json}"
+        );
+
+        let new_run_id = json["run_id"].as_str().unwrap();
+        let new_state = event_log::project(&load_events(&state.db, new_run_id).await.unwrap())
+            .expect("the replacement run must exist");
+        assert_eq!(
+            new_state.target_repo.as_deref(),
+            state.repo_root.to_str(),
+            "the retry lands where the original actually ran, now recorded explicitly"
+        );
     }
 
     #[tokio::test]
@@ -24755,6 +25302,10 @@ edges:
             "name: dangling-pipe\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    outputs:\n      - name: result\nedges:\n  - source: {{ node: worker, port: resullt }}\n    target: {{ node: end, port: result }}\n"
         );
         std::fs::write(pipelines_dir.join("dangling-pipe.yaml"), yaml).unwrap();
+        // #470: the target repo is now checked FIRST in `create_run_inner`, so this
+        // test must name a valid one — otherwise it would 400 for the wrong reason
+        // and silently stop testing #211.
+        init_test_repo(tmp.path());
 
         let state = test_state_with_dir(tmp.path()).await;
 
@@ -24765,9 +25316,10 @@ edges:
                     .method("POST")
                     .uri("/runs")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"pipeline": "dangling-pipe", "input": "do the thing"}"#,
-                    ))
+                    .body(Body::from(format!(
+                        r#"{{"pipeline": "dangling-pipe", "input": "do the thing", "target_repo": "{}"}}"#,
+                        tmp.path().display()
+                    )))
                     .unwrap(),
             )
             .await
@@ -24806,6 +25358,211 @@ edges:
         )
         .unwrap();
         assert!(runs.is_empty(), "no run must be created on refusal");
+    }
+
+    // --- The daemon cwd is never an implicit Run target (#470, ADR-0033) ---
+
+    /// Assert that a `POST /runs` body was refused *for the target-repo reason*, and
+    /// that the refusal happened before ANY effect: no Run, and — the point of the
+    /// 2026-07-29 incident — no `.pdo/runs/` tree under the daemon's own root.
+    async fn assert_create_run_refused_for_target_repo(state: &Arc<AppState>, body: &str) {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "a Run without a named target repo must be refused; body was: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = json["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("target_repo"),
+            "the error must name the field; got: {error}"
+        );
+        assert!(
+            error.contains("absolute path"),
+            "the error must be actionable — say WHAT to pass; got: {error}"
+        );
+        assert_no_run_and_no_worktree(state).await;
+    }
+
+    /// The AC1 pair: zero Runs listed, and zero worktree scaffolding under the
+    /// daemon's storage root.
+    async fn assert_no_run_and_no_worktree(state: &Arc<AppState>) {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let runs: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(runs.is_empty(), "no run must be created on refusal");
+        // The `.pdo/runs` dir may pre-exist (the pipeline watcher creates it to
+        // watch run-scoped edits), so assert on its CONTENTS: nothing was staged.
+        let runs_dir = state.repo_root.join(".pdo").join("runs");
+        let entries: Vec<_> = std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            entries.is_empty(),
+            "no worktree scaffolding may appear under the daemon's own root: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_without_target_repo_is_400() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        // Everything else about this body is valid — only the target repo is
+        // missing. Before #470 this created a Run in the daemon's own repo.
+        assert_create_run_refused_for_target_repo(
+            &state,
+            r#"{"pipeline": "some-pipe", "input": "do the thing"}"#,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_blank_target_repo_is_400() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        for blank in ["", "   "] {
+            assert_create_run_refused_for_target_repo(
+                &state,
+                &format!(
+                    r#"{{"pipeline": "some-pipe", "input": "do the thing", "target_repo": "{blank}"}}"#
+                ),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_blank_target_repo_multipart_is_400() {
+        // Distinct case: the multipart path NORMALISES an empty field to `None`
+        // (`if !v.is_empty()`), so a blank there is not the same input shape the
+        // JSON path sees. Both must land on the same refusal.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        const BOUNDARY: &str = "----pdoTestBoundary470";
+        let mut body = String::new();
+        for (name, value) in [
+            ("pipeline", "some-pipe"),
+            ("input", "do the thing"),
+            ("target_repo", "   "),
+        ] {
+            body.push_str(&format!("--{BOUNDARY}\r\n"));
+            body.push_str(&format!(
+                "Content-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            ));
+        }
+        body.push_str(&format!("--{BOUNDARY}--\r\n"));
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={BOUNDARY}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "a blank multipart target_repo must be refused"
+        );
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = json["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("target_repo"),
+            "the error must name the field; got: {error}"
+        );
+        assert_no_run_and_no_worktree(&state).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_non_git_target_repo_is_400() {
+        // Non-regression on `validate_target_repo`: naming a directory is not
+        // enough, it must be a git repository (AC3).
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let not_a_repo = tempfile::tempdir().unwrap();
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"pipeline": "some-pipe", "input": "x", "target_repo": "{}"}}"#,
+                        not_a_repo.path().display()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = json["error"].as_str().unwrap_or_default();
+        assert!(error.contains("not a git repository"), "got: {error}");
+        assert_no_run_and_no_worktree(&state).await;
     }
 
     // --- Instance-wide settings routes (#129, ADR-0015) ---

@@ -80,8 +80,13 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: String) -> Option<String> {
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "go" });
+async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "go",
+        "target_repo": target_repo,
+    });
     let resp = reqwest::Client::new()
         .post(format!("{daemon_url}/runs"))
         .json(&body)
@@ -96,7 +101,9 @@ async fn create_run(daemon_url: String) -> Option<String> {
 async fn run_diff_uses_three_dot_and_excludes_pdo_over_real_daemon() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let repo = daemon.repo_root().to_path_buf();
-    let run_id = create_run(daemon.url()).await.expect("run created");
+    let run_id = create_run(daemon.url(), daemon.target_repo())
+        .await
+        .expect("run created");
 
     // Wait for the daemon to create the run branch + pipeline worktree
     // (<repo>/.pdo/runs/<run-id>/worktree/, see CONTEXT.md § worktree).

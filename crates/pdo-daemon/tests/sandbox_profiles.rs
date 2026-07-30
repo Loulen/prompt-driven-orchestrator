@@ -441,7 +441,12 @@ async fn post_run_of(
     pipeline: &str,
     sandbox: Option<&str>,
 ) -> reqwest::Response {
-    let mut body = serde_json::json!({ "pipeline": pipeline, "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let mut body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     if let Some(mode) = sandbox {
         body["sandbox"] = serde_json::json!(mode);
     }
@@ -572,12 +577,14 @@ async fn put_default_sandbox(daemon: &TestDaemon, value: &str) -> reqwest::Respo
 async fn create_trigger(daemon: &TestDaemon, name: &str, sandbox: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
+        // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
         .json(&serde_json::json!({
             "name": name,
             "pipeline_id": "sbx-cycle",
             "cron": "0 4 * * *",
             "input_template": "from the trigger",
             "sandbox": sandbox,
+            "target_repo": daemon.target_repo(),
         }))
         .send()
         .await

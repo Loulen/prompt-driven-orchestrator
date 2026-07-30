@@ -104,9 +104,11 @@ async fn create_run(daemon: &TestDaemon) -> String {
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .post(format!("{}/runs", daemon.url()))
+        // #470: the target repo is required at the create boundary (ADR-0033).
         .json(&serde_json::json!({
             "pipeline": PIPELINE_NAME,
             "input": "test input",
+            "target_repo": daemon.target_repo(),
         }))
         .send()
         .await

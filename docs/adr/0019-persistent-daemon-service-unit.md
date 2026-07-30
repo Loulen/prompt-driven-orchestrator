@@ -38,7 +38,12 @@ runtime.
     L'analogue macOS (`AbandonProcessGroup=true`) et `EnvironmentVariables/PATH` jouent le
     même rôle.
   - `WorkingDirectory=` — le daemon dérive `repo_root` du cwd (pas d'un flag) ; une unité
-    sans lui tournerait depuis `/` et résoudrait le mauvais repo.
+    sans lui tournerait depuis `/` et résoudrait le mauvais repo. **Portée qualifiée depuis
+    #470 (ADR-0033)** : « le repo » ici est la racine de **stockage** (pipelines,
+    bibliothèque, prompts, `pdo.db`), **plus jamais** le dépôt qu'un Run mute — celui-là est
+    un champ requis de chaque Run, et le cwd du daemon n'en est plus le défaut implicite.
+    Sans ce qualificatif, la phrase décrit exactement la panne reproduite le 2026-07-29 : deux
+    Runs ayant écrit du code dans `~/.pdo/app` parce que personne n'avait nommé de dépôt.
 
 - **Effets de bord injectables et redirigeables ; le vrai `systemctl` ne tourne jamais dans
   la suite automatisée** (ADR-0004, l'adversité-hôte reste hors de la suite). Le runner de

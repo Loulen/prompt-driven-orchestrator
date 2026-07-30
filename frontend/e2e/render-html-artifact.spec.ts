@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runBody } from "./helpers";
 
 // Layer 3b — html output port rendering in MarkdownArtifactModal (#333,
 // ADR-0028). This is the PERMANENT home of the "the script never runs"
@@ -100,7 +101,7 @@ async function createRunAndSeedArtifact(baseURL: string) {
   const resp = await fetch(`${baseURL}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pipeline: PIPELINE_NAME, input: "html layer3b" }),
+    body: JSON.stringify(runBody({ pipeline: PIPELINE_NAME, input: "html layer3b" })),
   });
   expect(resp.status).toBe(201);
   const json = await resp.json();

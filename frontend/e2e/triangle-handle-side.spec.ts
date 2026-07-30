@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMultipart } from "./helpers";
 
 // Layer 4 — Output port handle renders on the side named by its `side` field (#40).
 //
@@ -95,10 +96,10 @@ test("output port with side:top renders its dot handle on the top edge", async (
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "triangle side test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const json = await resp.json();

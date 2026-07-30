@@ -68,14 +68,16 @@ fn git_init(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
-        "variables": {}
+        "variables": {},
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -88,7 +90,7 @@ async fn create_run(daemon_url: &str) -> String {
 #[tokio::test]
 async fn delete_running_node_returns_409() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // Worker should be running (started by scheduler).
     // Try to save a pipeline YAML that deletes the worker node.
@@ -133,7 +135,7 @@ edges: []
 #[tokio::test]
 async fn add_node_succeeds_and_syncs_to_template() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let yaml_with_new_node = r#"name: mutation-test
 nodes:
@@ -196,7 +198,7 @@ edges:
 #[tokio::test]
 async fn delete_pending_node_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // Add a new pending node first
     let yaml_with_extra = r#"name: mutation-test

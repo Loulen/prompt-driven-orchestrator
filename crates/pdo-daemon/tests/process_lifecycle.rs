@@ -95,10 +95,16 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "test input" });
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: name the daemon's own repo explicitly — it is no longer an implicit
+    // Run target (ADR-0033). Same semantics as before, now stated.
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "test input",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -185,7 +191,7 @@ async fn dead_session_marks_node_failed_with_session_cause() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -232,7 +238,7 @@ async fn live_session_node_is_not_failed_by_detector() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -281,7 +287,7 @@ async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() 
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -333,7 +339,7 @@ async fn boot_recovery_reconciles_a_run_level_stall() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -377,7 +383,7 @@ async fn boot_recovery_fails_orphaned_running_node() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -420,7 +426,7 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -499,7 +505,7 @@ async fn a_panicking_stale_sweep_is_isolated_and_the_next_sweep_recovers() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -645,7 +651,7 @@ async fn usage_limit_menu_is_flagged_and_node_stays_running() {
     .await
     .unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
@@ -725,7 +731,7 @@ async fn usage_limit_detector_does_not_flag_a_normal_running_node() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(

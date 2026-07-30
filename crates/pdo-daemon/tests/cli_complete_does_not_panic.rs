@@ -87,7 +87,12 @@ async fn pdo_complete_does_not_panic_and_marks_node_done() {
         .await
         .unwrap();
 
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)
@@ -173,7 +178,12 @@ async fn pdo_fail_does_not_panic() {
         .await
         .unwrap();
 
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "x" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "x",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)

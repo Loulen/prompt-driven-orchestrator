@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { useStats } from "../hooks/useStats";
+import { syncCostPrices } from "../api";
+import type { SyncCostPricesReport } from "../types";
 import type { StatsTab } from "./StatsCharts";
 
 // First `React.lazy` in the repo (#377): recharts is heavy, so StatsCharts (its
@@ -81,13 +83,43 @@ export default function StatsModal({ open, onClose }: Props) {
   const [tab, setTab] = useState<StatsTab>("runs");
   const period = useMemo(() => presetPeriod(preset), [preset]);
 
+  // Price sync (#427, ADR-0034). The triplet mirrors
+  // `guardTest`/`guardTesting`/`guardTestError` in TriggerDetailPanel — there is no
+  // global toast system in this app (the one mention of the word is a "no toast"
+  // comment), so every component renders its own message inline.
+  const [syncReport, setSyncReport] = useState<SyncCostPricesReport | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  // Bumped after a successful sync so `useStats` refetches `/stats/cost`. Without
+  // it the numbers would not move until the period changed: the button would have
+  // repaired the table and lied about it.
+  const [reloadKey, setReloadKey] = useState(0);
+
   const { overview, cost, error, costError } = useStats(
     open,
     period.from,
     period.to,
     period.bucket,
     tab === "cost",
+    reloadKey,
   );
+
+  const onSyncPrices = async () => {
+    setSyncing(true);
+    setSyncError(null);
+    setSyncReport(null);
+    try {
+      const report = await syncCostPrices();
+      setSyncReport(report);
+      // Even a noop bumps: the user asked, and a refetch is the honest confirmation
+      // that what they see is current.
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Escape-to-close (grafted from MarkdownArtifactModal — SettingsModal lacks it).
   useEffect(() => {
@@ -163,6 +195,24 @@ export default function StatsModal({ open, onClose }: Props) {
                 {t.label}
               </button>
             ))}
+            {/* Price sync (#427). Only on the Cost tab — the one place the table's
+                staleness is visible — and pushed right with `ml-auto`. It lives here
+                rather than in StatsCharts because that component is lazy and strictly
+                presentational, with no access to the refetch; StatsModal owns
+                `useStats`. Style copied from TriggerDetailPanel's "Test guard". */}
+            {tab === "cost" && (
+              <button
+                type="button"
+                onClick={onSyncPrices}
+                disabled={syncing}
+                data-testid="stats-sync-prices"
+                title="Fetch public model prices and refresh the local price table"
+                className="ml-auto flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
+                style={{ fontSize: "10.5px" }}
+              >
+                {syncing ? "Syncing…" : "Sync costs"}
+              </button>
+            )}
           </div>
         </div>
 
@@ -175,6 +225,59 @@ export default function StatsModal({ open, onClose }: Props) {
               data-testid="stats-error"
             >
               {error}
+            </div>
+          )}
+          {/* #427: a failed sync NAMES the source (the daemon answers 502 with the
+              URL) — ADR-0030's rule that an explicitly requested effect which fails
+              is a hard error, never a silent fallback. */}
+          {syncError && (
+            <div
+              className="mb-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+              style={{ fontSize: "11.5px" }}
+              data-testid="stats-sync-error"
+            >
+              {syncError}
+            </div>
+          )}
+          {syncReport?.noop && (
+            <div
+              className="mb-3 text-fg-4"
+              style={{ fontSize: "10.5px" }}
+              data-testid="stats-sync-noop"
+            >
+              {syncReport.reason ?? "Price table already up to date."}
+            </div>
+          )}
+          {syncReport && !syncReport.noop && (
+            <div
+              className="mb-3 rounded-md border border-st-await/40 bg-st-await/10 px-3 py-2 text-fg-2"
+              style={{ fontSize: "10.5px" }}
+              data-testid="stats-sync-report"
+            >
+              <div>
+                {syncReport.rows} price row(s) from{" "}
+                <span className="font-mono">{syncReport.source}</span>
+                {syncReport.fetched_at ? ` at ${syncReport.fetched_at}` : ""}.
+              </div>
+              <ul className="list-disc pl-4">
+                {syncReport.added.length > 0 && (
+                  <li>Newly priced: {syncReport.added.join(", ")}</li>
+                )}
+                {syncReport.updated.length > 0 && (
+                  <li>Price changed: {syncReport.updated.join(", ")}</li>
+                )}
+                {/* Said, never hidden: a sync cannot silently erase a hand edit. */}
+                {syncReport.shadowed_by_manual.length > 0 && (
+                  <li>
+                    Kept from your <span className="font-mono">models.yaml</span>{" "}
+                    (overrides the fetched price):{" "}
+                    {syncReport.shadowed_by_manual.join(", ")}
+                  </li>
+                )}
+                {syncReport.rejected.length > 0 && (
+                  <li>Refused by the source: {syncReport.rejected.join("; ")}</li>
+                )}
+              </ul>
             </div>
           )}
           <Suspense

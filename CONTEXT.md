@@ -502,12 +502,29 @@ _Éviter_ : nom final, nom auto, rename automatique.
 
 ### Statistiques de Run
 
-Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100, #272). **Quatre métriques** ; le **coût** est une **estimation** — pas une facture — dérivée des transcripts Claude Code locaux (`~/.claude/projects/<cwd-encodé>/*.jsonl`) : somme des `usage` par message (dédupliqués par `(message.id, requestId)`) × table de prix publics par modèle (cache dérivé 1.25×/2×/0.1× de l'input). Reversé #272 (2026-07-06, ratifié par le propriétaire) : le blocage historique (« aucune télémétrie fiable ») était faux — la télémétrie n'est pas requise, les transcripts portent l'usage. Modèle inconnu → $0 + drapeau « borne basse » ; aucun `costUSD` dans les transcripts (mode *calculate*). Voir ADR-0022.
+Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100, #272). **Quatre métriques** ; le **coût** est une **estimation** — pas une facture — dérivée des transcripts Claude Code locaux (`~/.claude/projects/<cwd-encodé>/*.jsonl`) : somme des `usage` par message (dédupliqués par `(message.id, requestId)`) × table de prix publics par modèle (cache dérivé 1.25×/2×/0.1× de l'input). La table se résout **`manuel → fetché → embarquée`**, **par clé de famille** : `~/.pdo/prices/models.yaml` (édité à la main) gagne sur `~/.pdo/prices/fetched.json` (écrit par le daemon depuis models.dev, hors du chemin de lecture), qui gagne sur la table compilée — laquelle reste le **plancher** et le seul tarificateur de trois familles retirées de toute source distante. Les deux fichiers sont absents par défaut et rien n'est jamais seedé (cf. #427, ADR-0034). Reversé #272 (2026-07-06, ratifié par le propriétaire) : le blocage historique (« aucune télémétrie fiable ») était faux — la télémétrie n'est pas requise, les transcripts portent l'usage. Modèle inconnu → $0 + drapeau « borne basse » ; aucun `costUSD` dans les transcripts (mode *calculate*). Voir ADR-0022.
 
 - **Durée** : temps écoulé entre `started_at` et `completed_at`. **Dérivée à l'affichage** (frontend) à partir des deux timestamps déjà projetés depuis l'event log — pas de `duration_ms` backend (qui figerait un Run vivant). Horloge **live** (tick) tant que le Run est vivant (`Running`/`AwaitingUser`/`Paused`) ; figée à `completed_at` à l'entrée terminale. La durée est du **wall-clock** : un Run `Paused` continue de compter (le temps de pause est inclus).
 - **Sessions de nœud lancées** (*node sessions started*) : **compte cumulatif** des événements `NodeStarted` sur tout le Run. Mesure les sessions tmux NodeRun réellement spawnées — **y compris** les re-spawns au **même** `(node, iter)` (restart/recovery), donc ≥ le nombre de `(node, iter)` distincts (une projection dédupliquée par `(node, iter)` *sous-compterait*). Le **Pipeline Manager** n'émet pas `NodeStarted` → exclu par construction (« exclure le manager » est un no-op). Distinct de la gauge « sessions vivantes » du cap (cf. *Cap de sessions concurrentes*).
 - **LOC** (lignes changées par le Run) : `git diff --numstat` en **trois-points** (`HEAD...pdo/run-<run-id>`) — la base est le **point de fork** (merge-base), donc stable même si `main` avance (un diff deux-points dériverait). **Exclut `.pdo/`** (artefacts/prompts générés ne sont pas du code produit ; protégé par `.gitignore` mais un pathspec `:(exclude).pdo/` défensif couvre les repos cibles externes). **Dérivé du git, live-only** : la branche `pdo/run-<run-id>` est supprimée au cleanup → la stat affiche **« — »** pour un Run archivé/nettoyé (branche absente = `None`), à distinguer de **« 0 »** (diff réellement vide). Même schéma que le snapshot de pane qui survit au reap.
-- **Coût (est.)** : `Some { usd, partial }` **dérivé à la lecture**, jamais persisté (comme LOC), dans `run_cost::compute_run_cost`. Agrège TOUTES les sessions du Run (nœuds, manager, merge-resolver, subagents) via prefix-glob sur `~/.claude/projects/`. `None` → « — » quand aucun transcript n'est trouvé. **Plus durable que LOC** : le cleanup supprime la branche (LOC → « — ») mais **pas** `~/.claude/projects/`, donc un Run archivé garde son coût. `partial: true` (un modèle non tarifé a contribué, donc exclu) → borne basse, signalée par un « † » dans l'UI. Encodeur de chemin **propre** (`cc_project_dirname`), volontairement distinct de `stale_detector::encode_working_dir` (bogué, à corriger séparément — cf. ADR-0022 et le doc-comment).
+- **Coût (est.)** : `Some { usd, partial }` **dérivé à la lecture**, jamais persisté (comme LOC), dans `run_cost::compute_run_cost`. Agrège TOUTES les sessions du Run (nœuds, manager, merge-resolver, subagents) via prefix-glob sur `~/.claude/projects/`. `None` → « — » quand aucun transcript n'est trouvé. **Plus durable que LOC** : le cleanup supprime la branche (LOC → « — ») mais **pas** `~/.claude/projects/`, donc un Run archivé garde son coût. `partial: true` (un modèle non tarifé a contribué, donc exclu) → borne basse, signalée par un « † » dans l'UI. Le chargeur de la table est **tolérant mais pas muet** : fichier absent → silencieux ; ligne rejetée (clé datée, sentinelle, prix négatif ou non fini) → inerte, la clé retombe sur le tier suivant, et le rejet est nommé **une fois** dans le journal et en `reason` sur `GET /settings`. Un `fetched.json` dont le `schema` n'est pas `prices-v1` est **entièrement** inerte. Encodeur de chemin **propre** (`cc_project_dirname`), volontairement distinct de `stale_detector::encode_working_dir` (bogué, à corriger séparément — cf. ADR-0022 et le doc-comment).
+
+**Table de prix embarquée / fetchée / manuelle / résolue** *(termes, #427)* :
+Quatre choses distinctes. L'**embarquée** est le `const` livré dans le binaire — le **plancher**, et
+le seul tarificateur de `claude-opus-4-0`, `claude-sonnet-4-0` et `claude-3-5-haiku`, absentes de
+toute source distante. La **fetchée** est `~/.pdo/prices/fetched.json`, écrite par le daemon **seul**
+depuis `models.dev/api.json` hors du chemin de lecture (`POST /settings/cost-prices/sync`, plus un
+rafraîchissement au démarrage qui ne fetche **que** si le fichier existe déjà et a plus de 24 h —
+aucun egress avant le premier clic). La **manuelle** est `~/.pdo/prices/models.yaml`, écrite par
+l'**humain seul** et jamais touchée par PDO. La **résolue** est celle avec laquelle
+`compute_run_cost` chiffre : précédence **`manuel → fetché → embarquée`**, **par clé de famille**,
+jamais un remplacement. Un écrivain par fichier, et une empreinte de la table résolue entre dans la
+clé du memo de `/stats/cost`.
+_Éviter_ : « surcharge de prix » (dans ce domaine « surcharge » désigne déjà un supplément tarifaire,
+cf. ADR-0022 *Hors-scope* « surcharge input Sonnet-4.5 ») ; « override de prix » (dans PDO un
+override est un **tier de précédence**, pas un contournement) ; « merge » / « fusion des tables » ;
+« prix seedés » (rien n'est copié du binaire vers le disque, et c'est délibéré — cf. ADR-0031 §2) ;
+« prix live » (la lecture est **toujours** locale).
 
 ### Statistiques d'instance (cockpit, #377)
 
@@ -516,7 +533,10 @@ par période, à distinguer des **Statistiques de Run** (par-run, panneau d'info
 **jamais matérialisés** (ADR-0029, préserve ADR-0022) :
 
 - **Deux endpoints** : `GET /stats/overview` (SQL bon marché, index `events(kind,ts)` +
-  `trigger_fires(ts)`) et `GET /stats/cost` (lourd, lazy, memo RAM `(run_id, mtime-max)`).
+  `trigger_fires(ts)`) et `GET /stats/cost` (lourd, lazy, memo RAM `(run_id, mtime-max, empreinte de
+  la table de prix)` — sans le troisième composant, un sync de prix ne serait jamais visible sur un
+  Run terminé, dont les transcripts sont figés, alors que `GET /runs/:id` afficherait le nouveau
+  montant : deux surfaces qui se contredisent, cf. #427).
 - **Runs/erreurs/sessions par période** : `GROUP BY strftime` sur `events` — erreurs = `run_failed`
   (`run_skipped` **exclu**), sessions = `node_started` (démarrages, re-spawns inclus, manager exclu).
 - **Fires par pipeline** : `LEFT JOIN triggers` sur `pipeline_id` — un fire orphelin (trigger
@@ -1570,7 +1590,9 @@ Cf. ADR-0003.
 
 ### Mono-user, local
 
-Le daemon écoute sur `127.0.0.1:<port>` uniquement. Pas d'auth, pas de TLS, pas de multi-user. Single-user local par design. Tout ce qu'il faut pour ça : SQLite locale, FS local, tmux local, git local. Pas de dépendance réseau.
+Le daemon bind **`0.0.0.0:<port>`**, pas `127.0.0.1` — il est donc joignable depuis le LAN, c'est **délibéré** (accès depuis un autre appareil du réseau local) et #260 est **CLOSED**, pas différée (cf. `lib.rs:1902` et le commentaire `lib.rs:1990`). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance. Tout ce qu'il faut pour ça : SQLite locale, FS local, tmux local, git local.
+
+Aucun service distant ne détient l'état ni ne conditionne le fonctionnement ; **le chemin de lecture ne dépend jamais d'Internet**. Les egress du produit sont tous **opt-in et tolérants à l'échec** : `docker pull` (ADR-0030), les guards de Trigger shellés (`gh`), et le sync de la table de prix (#427, ADR-0034). Chaque nœud est par ailleurs une session `claude`, donc le produit ne fonctionne pas hors ligne (ADR-0004 l'assume) — « pas de dépendance réseau » n'a jamais été littéral.
 
 ### Persistance et hot-reload
 

@@ -71,6 +71,8 @@ impl TestDaemon {
                 service_health_override: None,
                 docker_cmd_override: None,
                 sandbox_home_override: None,
+                price_source_url: None,
+                price_refresh_at_boot: false,
             },
         )
         .await?;
@@ -113,6 +115,8 @@ impl TestDaemon {
                 // #407: stage the sandbox home UNDER the tempdir so the test never
                 // touches the real `$HOME` (`~/.pdo/sandbox`, `~/.claude`).
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
             },
         )
         .await?;
@@ -157,6 +161,8 @@ impl TestDaemon {
                 service_health_override: None,
                 docker_cmd_override: None,
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
             },
         )
         .await?;
@@ -204,6 +210,8 @@ impl TestDaemon {
                 service_health_override: None,
                 docker_cmd_override: Some(docker_cmd),
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
             },
         )
         .await?;
@@ -240,6 +248,55 @@ impl TestDaemon {
                 service_health_override: None,
                 docker_cmd_override: None,
                 sandbox_home_override: None,
+                price_source_url: None,
+                price_refresh_at_boot: false,
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon whose price source is `price_source_url` and whose boot
+    /// refresh is ARMED (#427).
+    ///
+    /// `sandbox_home_override` is the tempdir, so `~/.pdo/prices/` resolves under
+    /// the test's own dir — the price files are read from the HOST home root, so
+    /// without this the test would read (and the sync would WRITE) the real
+    /// `~/.pdo/prices/`.
+    ///
+    /// `price_refresh_at_boot: true` is deliberate and safe: the boot pass only
+    /// refreshes an EXISTING `fetched.json`, and a fresh tempdir has none — so a
+    /// test that plants no cache proves "zero request" against production's own
+    /// gate, and one that plants a stale cache drives the refresh through
+    /// [`pdo_daemon::DaemonHandle::run_price_refresh_tick`] rather than racing the
+    /// detached boot task.
+    pub async fn spawn_with_price_source<F>(setup: F, price_source_url: String) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        std::env::remove_var("PDO_NODE_ID");
+
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override: Some("exec true".to_string()),
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
+                price_source_url: Some(price_source_url),
+                price_refresh_at_boot: true,
             },
         )
         .await?;
@@ -295,6 +352,14 @@ impl TestDaemon {
     pub async fn run_boot_recovery_tick(&self) {
         if let Some(handle) = self.handle.as_ref() {
             handle.run_boot_recovery_tick().await;
+        }
+    }
+
+    /// Run the boot price-table refresh synchronously (test seam, #427). Production
+    /// spawns this DETACHED at startup; a test must drive it rather than race it.
+    pub async fn run_price_refresh_tick(&self) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.run_price_refresh_tick().await;
         }
     }
 

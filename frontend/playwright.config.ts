@@ -70,6 +70,10 @@ export default defineConfig({
       // handful of runs a single spec holds open at once without lifting the
       // tmux-protecting cap so high that a missed cleanup could pile up.
       PDO_SESSION_CAP: "64",
+      // #427: the e2e daemon is the REAL binary, so it reads `PDO_PRICE_SYNC` from
+      // the environment (armed by default). Disarm it: the suite must never depend
+      // on models.dev being reachable, and CI must never egress for a UI test.
+      PDO_PRICE_SYNC: "off",
       PDO_TMUX_CMD_OVERRIDE:
         'case "$PDO_NODE_ID" in ' +
         "scroller) " +

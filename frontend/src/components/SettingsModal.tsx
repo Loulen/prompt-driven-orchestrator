@@ -540,6 +540,74 @@ function SettingsForm({
           </div>
         </div>
 
+        {/* Price table (#427, ADR-0034) — READ ONLY. Not a knob: this is which of
+            the three price tiers is in force, so there is nothing to PUT. The paths
+            are shown even when the files are absent, because nothing is ever seeded
+            and naming them is the only way a user learns where to write.
+
+            The presence check is not dead code despite the non-optional type: in the
+            `vite dev` workflow the SPA is served from source against a separately
+            built daemon, which may predate this field. In production the SPA is
+            embedded in the binary, so the two can never disagree. */}
+        {settings.price_table && (
+          <div className="flex flex-col gap-1.5" data-testid="setting-price-table">
+            <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+              Cost price table
+            </label>
+            <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+              Costs resolve <span className="font-mono">manual → fetched → built-in</span>,
+              per model family. Neither file exists until you create one (or press
+              “Sync costs” in Stats); the built-in table is the floor.
+            </div>
+            <div
+              className="text-fg-3"
+              style={{ fontSize: "10.5px" }}
+              data-testid="setting-price-table-manual-path"
+            >
+              Yours (wins):{" "}
+              <span className="font-mono">
+                {settings.price_table.manual_path ?? "— (HOME unset)"}
+              </span>
+              {settings.price_table.manual_keys.length > 0 &&
+                ` — ${settings.price_table.manual_keys.length} model(s): ${settings.price_table.manual_keys.join(", ")}`}
+            </div>
+            <div
+              className="text-fg-3"
+              style={{ fontSize: "10.5px" }}
+              data-testid="setting-price-table-fetched-path"
+            >
+              Synced (PDO writes this):{" "}
+              <span className="font-mono">
+                {settings.price_table.fetched_path ?? "— (HOME unset)"}
+              </span>
+              {` — ${settings.price_table.fetched_rows} model(s)`}
+            </div>
+            {/* The table's vintage, readable rather than guessed: a third-party
+                source is now a correctness dependency of the numbers shown. */}
+            <div
+              className="text-fg-4"
+              style={{ fontSize: "10.5px" }}
+              data-testid="setting-price-table-fetched-at"
+            >
+              {settings.price_table.fetched_at
+                ? `Last synced ${settings.price_table.fetched_at}${settings.price_table.source ? ` from ${settings.price_table.source}` : ""}`
+                : "Never synced — only the built-in prices apply."}
+            </div>
+            {/* Server-supplied, because a hand-edited file passes through no
+                validator at all: an inert file or refused row is only visible here
+                (and in journalctl, which is this product's recurring blind spot). */}
+            {settings.price_table.reason && (
+              <div
+                className="text-st-failed"
+                style={{ fontSize: "10.5px" }}
+                data-testid="setting-price-table-reason"
+              >
+                {settings.price_table.reason}
+              </div>
+            )}
+          </div>
+        )}
+
         {error && (
           <div
             className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"

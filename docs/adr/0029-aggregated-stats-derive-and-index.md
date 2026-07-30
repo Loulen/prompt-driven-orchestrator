@@ -33,10 +33,15 @@ runs » est exactement ce fan-out interdit : mesuré à 2 502 transcripts / 1,1 
 
 ## Conséquences
 
-- **Positif.** Réactif (SQL indexé + memo), zéro dépendance réseau, aucune divergence possible avec
-  l'event log (source de vérité unique), le coût reste consultable pour un run archivé.
-- **Négatif / assumé.** Le memo vit en RAM (perdu au restart, reconstruit à la demande). La table de
-  prix reste à maintenir à la main (ADR-0022). « Sessions/période » compte les *démarrages* de
+- **Positif.** Réactif (SQL indexé + memo), **zéro dépendance réseau sur le chemin de lecture**
+  (#427 : le remplissage de la table de prix est out-of-band, la lecture reste deux `fs::read` et un
+  `const`), aucune divergence possible avec l'event log (source de vérité unique), le coût reste
+  consultable pour un run archivé.
+- **Négatif / assumé.** Le memo vit en RAM (perdu au restart, reconstruit à la demande) et sa clé est
+  `(run_id, mtime-max, empreinte de la table de prix)` — le troisième composant est arrivé avec #427,
+  sans lui un sync resterait invisible ici jusqu'au redémarrage alors que `GET /runs/:id` dirait vrai.
+  La table de prix se résout **`manuel → fetché → embarquée`**, le tier fetché étant alimenté hors du
+  chemin de lecture (ADR-0022 amendement #427, ADR-0034). « Sessions/période » compte les *démarrages* de
   session (`node_started`), re-spawns et laps de boucle inclus (cohérent avec la stat par-run).
 
 ## Alternatives rejetées

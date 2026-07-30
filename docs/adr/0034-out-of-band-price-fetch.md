@@ -127,6 +127,21 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
   collision, le garder produit une clé qui ne matche aucun transcript — coût nul, aucune fausse
   déflation.
 
+- **Un sync qui ne change rien n'écrit rien.** Si les lignes normalisées sont identiques à celles déjà
+  dans `fetched.json`, le fichier n'est pas réécrit : la réponse est un `noop: true` + `reason`
+  (ADR-0025) et l'**empreinte de la table ne bouge pas**, donc `COST_MEMO` reste chaud pour tous les
+  Runs. Le prix payé est que `fetched_at` n'avance pas sur un noop, donc le rafraîchissement au
+  démarrage re-demandera la source après 24 h pour ne rien écrire — un `GET` par démarrage au pire,
+  contre une invalidation complète du memo à chaque sync. L'arbitrage penche du côté du memo :
+  l'égalité des lignes est la preuve que rien n'avait à changer.
+
+- **Le garde numérique s'applique aux DEUX tiers disque.** Le tier fetché est écrit par le daemon, qui
+  a validé à l'écriture — mais le nom du fichier est la seule chose qui en interdit l'édition à la
+  main. Un prix négatif ou non fini y est donc refusé exactement comme dans le tier manuel (ligne
+  inerte, clé retombant sur le tier suivant), parce qu'un `NaN` empoisonne `usd` **et** sérialise en
+  JSON `null` vers un frontend qui le type `number`. Les règles de **clé** (dé-datage, sentinelle),
+  elles, restent asymétriques comme décrit ci-dessus.
+
 - **Une moisson vide est un échec, pas un résultat.** Une dérive de schéma chez models.dev écrirait
   sinon un `fetched.json` vide qui **détruirait la dernière table connue**. Le garde « zéro ligne
   Anthropic → on n'écrit rien » est principiel ; tout autre plancher serait un nombre magique. C'est le
@@ -208,7 +223,12 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
   (`PDO_PRICE_SOURCE_URL`), lu une fois au boot et porté dans `DaemonConfig` — l'idiome de
   `PDO_TMUX_CMD_OVERRIDE` (#181) et `PDO_DOCKER_CMD_OVERRIDE` (#407), dont le commentaire est la charte
   (`lib.rs:1531`) : « so no test needs a real daemon or a global `std::env::set_var` race ». Le
-  rafraîchissement de boot est un second champ de `DaemonConfig`. C'est le **seul** point qui sépare
+  rafraîchissement de boot est un second champ de `DaemonConfig`, désarmable par
+  **`PDO_PRICE_SYNC=off|0|""`** — le seul env d'**opt-out** du crate, et assumé comme tel : une feature
+  qui doit marcher d'emblée ne peut pas être armée par variable d'environnement, et l'opt-in réel est
+  le premier clic. Les trois harnais qui lancent le **vrai binaire** le posent
+  (`tests/log_level_default.rs`, `frontend/playwright.config.ts`, `tests/smoke.sh`).
+  C'est le **seul** point qui sépare
   production et tests : `from_env()` (`lib.rs:1552`) n'est appelé que par `serve` (`:1586`), tandis que
   les 240 `TestDaemon` construisent `DaemonConfig` par littéral exhaustif — ajouter un champ **casse la
   compilation** des cinq constructeurs de `tests/common/mod.rs`, ce qui force une décision explicite

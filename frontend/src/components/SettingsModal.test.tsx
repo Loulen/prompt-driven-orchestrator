@@ -67,6 +67,17 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: false,
     },
+    // Price table (#427): the default state of every instance — neither file exists,
+    // never synced, nothing inert. The paths are reported all the same.
+    price_table: {
+      manual_path: "/home/user/.pdo/prices/models.yaml",
+      fetched_path: "/home/user/.pdo/prices/fetched.json",
+      source: null,
+      fetched_at: null,
+      fetched_rows: 0,
+      manual_keys: [],
+      reason: null,
+    },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -221,6 +232,59 @@ describe("SettingsModal", () => {
     expect(cap.value).toBe("9");
     expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("3600");
     expect((screen.getByTestId("setting-guard-timeout") as HTMLInputElement).value).toBe("60");
+  });
+
+  // --- price table (#427, ADR-0034) ---
+
+  it("names both price paths even though neither file exists", async () => {
+    // Nothing is ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming
+    // the paths IS the whole discoverability story.
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    expect(await screen.findByTestId("setting-price-table")).toBeInTheDocument();
+    expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
+      "/home/user/.pdo/prices/models.yaml",
+    );
+    expect(screen.getByTestId("setting-price-table-fetched-path")).toHaveTextContent(
+      "/home/user/.pdo/prices/fetched.json",
+    );
+    expect(screen.getByTestId("setting-price-table-fetched-at")).toHaveTextContent(
+      /never synced/i,
+    );
+    // Absent is SILENT: no advisory when nothing is wrong.
+    expect(screen.queryByTestId("setting-price-table-reason")).not.toBeInTheDocument();
+  });
+
+  it("surfaces the daemon's reason when a price row went inert", async () => {
+    // A hand-edited file passes through NO validator, so this is the only place a
+    // refused row is visible (the #432 argument). journalctl alone is this product's
+    // recurring blind spot.
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        price_table: {
+          manual_path: "/home/user/.pdo/prices/models.yaml",
+          fetched_path: "/home/user/.pdo/prices/fetched.json",
+          source: "https://models.dev/api.json",
+          fetched_at: "2026-07-30T14:12:03Z",
+          fetched_rows: 15,
+          manual_keys: ["claude-opus-4-8"],
+          reason:
+            "price table (#427) — manual price tier refused 1 row(s): `claude-opus-5-20260501` (write `claude-opus-5` instead)",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const reason = await screen.findByTestId("setting-price-table-reason");
+    expect(reason).toHaveTextContent("claude-opus-5");
+    // The vintage is readable, not guessed — a third-party source is now a
+    // correctness dependency of the numbers shown.
+    expect(screen.getByTestId("setting-price-table-fetched-at")).toHaveTextContent(
+      "2026-07-30T14:12:03Z",
+    );
+    // And what the manual tier shadows is visible.
+    expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
+      "claude-opus-4-8",
+    );
   });
 
   it("discloses a shadowed env source for the cap", async () => {

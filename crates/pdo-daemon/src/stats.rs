@@ -409,6 +409,13 @@ pub async fn stats_cost(
             (home, sandbox)
         });
 
+    // #427: the three price tiers, resolved ONCE for the whole fold — never inside
+    // the per-Run loop. `home_root` is the HOST home even for a sandboxed Run:
+    // prices are an instance concept, and the #408 seam moves the TRANSCRIPT root,
+    // not this one. The table's fingerprint is the memo's third key component, so a
+    // sync is visible here without a daemon restart.
+    let prices = crate::price_table::PriceTable::load(&home_root);
+
     let mut cost_rows: Vec<CostRow> = Vec::with_capacity(rows.len());
     for (run_id, bucket, payload) in rows {
         let payload: serde_json::Value = payload
@@ -447,7 +454,8 @@ pub async fn stats_cost(
         let projects_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
 
-        let cost = crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id);
+        let cost =
+            crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id, &prices);
         cost_rows.push(CostRow {
             bucket,
             pipeline,

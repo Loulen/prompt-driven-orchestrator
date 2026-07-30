@@ -71,7 +71,9 @@ persisté, et l'UI l'étiquette explicitement « est. ».
 
 ## Conséquences
 
-- **Positif.** Le coût est visible sans dépendance réseau ni binaire, byte-identique quand aucun
+- **Positif.** Le coût est visible sans dépendance binaire, et **son chemin de lecture est sans
+  dépendance réseau** (amendement #427 : le *remplissage* de la table peut sortir sur Internet, la
+  lecture jamais) ; byte-identique quand aucun
   transcript n'est trouvé (`None` → « — »). Il est **plus durable que LOC** : le cleanup supprime
   la branche (LOC → « — ») mais **pas** `~/.claude/projects/`, donc un Run **archivé** garde son
   coût — cohérent avec l'esprit d'ADR-0020.
@@ -97,11 +99,59 @@ redevient le défaut hôte. Un Run `off` lit **toujours** `~/.claude/projects/` 
 Le memo garde la **même** racine pour la clé (`max mtime`) et la valeur (agrégat), donc pas de désync.
 La dédup `(message.id, requestId)` reste la garantie anti-double-comptage, quelle que soit la racine.
 
+## Amendement — La table de prix a trois tiers et une source distante ; le `const` devient le plancher (#427)
+
+Voir **ADR-0034** pour le contrat d'egress complet et le recensement des sources. Ce qui est amendé
+ici, c'est la **puce 1** : « table de prix codée en dur (Rust `const`), pas de réseau » n'est plus
+la description du système. Ce qui **survit** intact : le coût reste une **estimation** (prix de
+liste, pas de facture), il reste **dérivé à la lecture**, et « à maintenir à la main » devient le
+**tier manuel** — plus littéralement maintenu à la main qu'un `const`, puisqu'il ne demande plus
+d'éditer du Rust, de bumper, de releaser et de lancer `make update`.
+
+- **Trois tiers, résolus par clé de famille** : `manuel → fetché → embarquée`.
+  `~/.pdo/prices/models.yaml` (écrit par l'humain seul) gagne sur `~/.pdo/prices/fetched.json`
+  (écrit par le daemon seul depuis `models.dev/api.json`, **hors du chemin de lecture**), qui gagne
+  sur `PRICES`. Les deux fichiers sont **absents par défaut** et rien n'est jamais seedé.
+- **Fusion par clé, jamais remplacement.** Une clé absente d'un tier garde ce que le tier suivant en
+  dit. Sous remplacement global, oublier `claude-opus-4-8` effacerait **79 941** lignes de
+  transcript sur ~116 200 — un bug de prix faux converti en blackout — et **gèlerait** la table
+  contre les releases futures.
+- **Le `const` est un plancher, pas une amorce.** `claude-opus-4-0`, `claude-sonnet-4-0` et
+  `claude-3-5-haiku` sont absentes de **toute** source distante examinée : le `const` en est le
+  **seul** tarificateur. Un test l'épingle.
+- **La clé du memo gagne un troisième composant** : `(run_id, mtime-max, empreinte de la table)`.
+  Sans lui, un sync ne bougeant aucun mtime de transcript, `GET /stats/cost` (mémoïsé) servirait
+  les anciens dollars **jusqu'au redémarrage** pendant que `GET /runs/:id` (non mémoïsé) dirait
+  vrai — deux surfaces qui se contredisent sur les Runs terminés, c'est-à-dire précisément ceux
+  qu'un sync existe pour réparer.
+- **Absent : silencieux ; présent mais rejeté : dit une fois.** Un fichier absent est l'état normal
+  de toute instance. Un fichier illisible, ou une ligne refusée (clé datée, sentinelle, prix négatif
+  ou non fini), devient **inerte** — la clé retombe sur le tier suivant, elle ne détruit pas
+  l'estimation — et le rejet est nommé **une fois** dans le journal et en `reason` sur
+  `GET /settings`. Un `fetched.json` dont le `schema` n'est pas `prices-v1` est **entièrement**
+  inerte.
+- **Le seam #408 déplace la racine des transcripts, pas celle des prix.** Les prix sont un concept
+  d'**instance** : même pour un Run sandboxé, la table se lit sous le home **hôte**.
+- **Deux limites assumées.** (1) Le **mode fast** est invisible : `claude-opus-5` et
+  `claude-opus-5-fast` s'écrivent du même id dans `message.model`, donc un nœud en mode fast est
+  sous-facturé ×2 et aucune normalisation ne peut le rattraper. (2) Éditer la table **retarife tous
+  les Runs historiques, archivés inclus** — conséquence directe du « dérivé à la lecture » ci-dessus.
+  Cela satisfait la contrainte « un Run archivé s'ouvre et se chiffre », mais le chiffre d'un Run
+  clos devient fonction d'un fichier modifiable, à assumer au titre de l'« Étiquetage honnête
+  (load-bearing) » ci-dessus.
+
 ## Alternatives rejetées
 
 - **Embarquer / shell-out `ccusage`** — dépendance binaire/Node + réseau ; daemon network-free.
+  *(re-motivé par #427 — le rejet **tient**, mais « réseau » n'y est plus discriminant. Le motif
+  survivant est la dépendance **binaire + Node**, et le fait que ccusage imposerait **sa** table
+  plutôt que la nôtre.)*
 - **Fetcher LiteLLM `model_prices_and_context_window.json`** (ce que fait ccusage) — réseau au
   build + retard amont sur les ids récents.
+  *(toujours rejeté après #427, et la distinction est load-bearing : fetcher **au build** fige la
+  table dans le binaire et **ramène** le couplage à la release qu'ADR-0034 supprime ; fetcher
+  **out-of-band vers un cache disque** ne le fait pas. LiteLLM reste l'adaptateur de repli
+  documenté si models.dev disparaît.)*
 - **Snapshot à la complétion (Shape B)** — aucun précédent, fige un Run vivant, sous-compte au
   `resume_run`.
 - **Figure autoritative / facture** — non atteignable localement (pas de `costUSD`, prix de liste
@@ -114,4 +164,12 @@ La dédup `(message.id, requestId)` reste la garantie anti-double-comptage, quel
   seulement sur une requête isolée > 200K input ; PDO tourne opus-4-8 (pas de surcharge).
 - **Prix d'intro daté de `claude-sonnet-5`** ($2/$10 jusqu'au 2026-08-31) — seulement si
   sonnet-5 commence à apparaître.
+  *(depuis #427, c'est **l'édition d'une ligne** dans `~/.pdo/prices/models.yaml` au 2026-08-31 —
+  ou rien du tout si un sync a tourné d'ici là. Aucune source ne porte de date d'effet, et la
+  dimension de date par ligne reste hors-scope : voir ADR-0034.)*
 - **Rafraîchissement de prix live (LiteLLM / models.dev)** — rejeté (daemon network-free).
+  *(levé par #427 — voir **ADR-0034** : le fetch est **out-of-band** et le chemin de lecture reste
+  strictement local. Le motif « daemon network-free » était déjà faux à l'écriture :
+  `service_unit.rs:49-50` déclare `After=network-online.target`, le daemon shelle les guards de
+  Trigger — `gh issue list` à chaque tick — et ADR-0030 fait un `docker pull`. Ce qui est vrai et
+  reste protégé est plus étroit : **un `GET /runs/:id` ne dépend pas d'Internet**.)*

@@ -62,6 +62,217 @@ pub(crate) struct RunCommandRequest {
     name: Option<String>,
 }
 
+/// A command from the Pipeline Manager, already validated (#236). The only way
+/// to build one is [`parse_run_command`], so every field below is checked
+/// before an arm ever sees it: no arm re-validates presence, applies a default,
+/// or re-inspects a path.
+///
+/// Thirteen accepted `kind`s, twelve variants — `bump_region` and `end_region`
+/// share one, because they share their whole I/O tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunCommand {
+    MarkNodeDone {
+        node_id: String,
+        iter: i64,
+    },
+    ExtendCycle {
+        node_id: String,
+        additional_iter: i64,
+    },
+    /// `bump_region` / `end_region`. They differ only in payload and required
+    /// fields — everything after that (region lookup in the snapshot, the
+    /// `CommandIssued` append, the Halt lift, the re-evaluation) is shared. The
+    /// difference lives in [`RegionAction`], which is why `end_region` cannot
+    /// carry an `additional_iter` IN THE TYPE.
+    Region {
+        region_id: String,
+        action: RegionAction,
+    },
+    PauseRun,
+    ResumeRun,
+    KillNode {
+        node_id: String,
+        iter: i64,
+    },
+    RestartNode {
+        node_id: String,
+        iter: i64,
+    },
+    /// `req.iter` is dropped at parse time — `force_spawn_node` derives the
+    /// iteration itself (#204), and letting the manager pin one would fight
+    /// that derivation.
+    StartNode {
+        node_id: String,
+    },
+    /// `path` stays a `String`, not a `PathBuf`: it is echoed verbatim into the
+    /// `CommandIssued` payload and the `info!`. Already proven relative and
+    /// free of `..` components.
+    InjectArtifact {
+        path: String,
+        content: String,
+    },
+    /// A missing `name` is LEGAL and means the empty string. Do not "fix" it
+    /// into a rejection — renaming to `""` clears the name, and the projection
+    /// reads it that way.
+    RenameRun {
+        name: String,
+    },
+    CleanupRun,
+    RetryAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RegionAction {
+    Bump { additional_iter: i64 },
+    End,
+}
+
+/// Rejected at parse time. Every one of the fourteen current rejection sites
+/// answers `400` + `Json({"error": …})`, so the status is not carried here —
+/// add it the day one of them stops being a 400.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandParseError(String);
+
+impl IntoResponse for CommandParseError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": self.0 })),
+        )
+            .into_response()
+    }
+}
+
+impl RunCommand {
+    /// The wire `kind` this command came from. Load-bearing, not cosmetic: the
+    /// region arm interpolates it into a `warn!` and an `info!` that both sit
+    /// AFTER an `.await` (so the request is long gone), and every
+    /// `CommandIssued` payload carries it as `"command"`.
+    fn kind_str(&self) -> &'static str {
+        match self {
+            RunCommand::MarkNodeDone { .. } => "mark_node_done",
+            RunCommand::ExtendCycle { .. } => "extend_cycle",
+            RunCommand::Region {
+                action: RegionAction::Bump { .. },
+                ..
+            } => "bump_region",
+            RunCommand::Region {
+                action: RegionAction::End,
+                ..
+            } => "end_region",
+            RunCommand::PauseRun => "pause_run",
+            RunCommand::ResumeRun => "resume_run",
+            RunCommand::KillNode { .. } => "kill_node",
+            RunCommand::RestartNode { .. } => "restart_node",
+            RunCommand::StartNode { .. } => "start_node",
+            RunCommand::InjectArtifact { .. } => "inject_artifact",
+            RunCommand::RenameRun { .. } => "rename_run",
+            RunCommand::CleanupRun => "cleanup_run",
+            RunCommand::RetryAll => "retry_all",
+        }
+    }
+}
+
+/// Turn the wire shape into a validated command. **Pure** — no DB, no
+/// filesystem, no clock — which is the whole point: every one of the fourteen
+/// rejections below used to be reachable only through a live daemon.
+///
+/// Two orderings are behaviour, not style, and both are pinned by tests:
+/// `bump_region` reports a missing `region_id` BEFORE a missing
+/// `additional_iter`, and `inject_artifact` reports a missing `content` BEFORE
+/// it looks at the path. Swap either and a malformed request changes its
+/// answer.
+///
+/// The `kind` match comes first, so an unknown `kind` with missing fields still
+/// answers `"unknown command"` rather than a field complaint.
+///
+/// Deliberately NOT derived from the wire with `#[serde(tag = "kind")]`: that
+/// would turn these fourteen messages into axum's `422` + serde prose in
+/// text/plain.
+fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseError> {
+    fn required(
+        value: Option<String>,
+        field: &str,
+        kind: &str,
+    ) -> Result<String, CommandParseError> {
+        value.ok_or_else(|| CommandParseError(format!("{field} required for {kind}")))
+    }
+    fn positive_iter(value: Option<i64>, kind: &str) -> Result<i64, CommandParseError> {
+        let n = value
+            .ok_or_else(|| CommandParseError(format!("additional_iter required for {kind}")))?;
+        if n <= 0 {
+            return Err(CommandParseError(
+                "additional_iter must be positive".to_string(),
+            ));
+        }
+        Ok(n)
+    }
+
+    match req.kind.as_str() {
+        "mark_node_done" => Ok(RunCommand::MarkNodeDone {
+            node_id: required(req.node_id, "node_id", "mark_node_done")?,
+            // Omitted `iter` means 1 — three arms share this default.
+            iter: req.iter.unwrap_or(1),
+        }),
+        "extend_cycle" => {
+            let node_id = required(req.node_id, "node_id", "extend_cycle")?;
+            Ok(RunCommand::ExtendCycle {
+                node_id,
+                additional_iter: positive_iter(req.additional_iter, "extend_cycle")?,
+            })
+        }
+        kind @ ("bump_region" | "end_region") => {
+            // `region_id` first, for BOTH kinds: `{"kind":"bump_region"}` alone
+            // must complain about the region, not the count.
+            let region_id = required(req.region_id, "region_id", kind)?;
+            let action = if kind == "bump_region" {
+                RegionAction::Bump {
+                    additional_iter: positive_iter(req.additional_iter, "bump_region")?,
+                }
+            } else {
+                // A stray `additional_iter` on `end_region` is accepted and
+                // dropped. Rejecting it would be a regression.
+                RegionAction::End
+            };
+            Ok(RunCommand::Region { region_id, action })
+        }
+        "pause_run" => Ok(RunCommand::PauseRun),
+        "resume_run" => Ok(RunCommand::ResumeRun),
+        "kill_node" => Ok(RunCommand::KillNode {
+            node_id: required(req.node_id, "node_id", "kill_node")?,
+            iter: req.iter.unwrap_or(1),
+        }),
+        "restart_node" => Ok(RunCommand::RestartNode {
+            node_id: required(req.node_id, "node_id", "restart_node")?,
+            iter: req.iter.unwrap_or(1),
+        }),
+        "start_node" => Ok(RunCommand::StartNode {
+            node_id: required(req.node_id, "node_id", "start_node")?,
+        }),
+        "inject_artifact" => {
+            let path = required(req.path, "path", "inject_artifact")?;
+            // BEFORE the traversal check: a request with a hostile path and no
+            // content answers "content required", not "path traversal".
+            let content = required(req.content, "content", "inject_artifact")?;
+            let requested = std::path::Path::new(&path);
+            if requested.is_absolute()
+                || requested
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(CommandParseError("path traversal not allowed".to_string()));
+            }
+            Ok(RunCommand::InjectArtifact { path, content })
+        }
+        "rename_run" => Ok(RunCommand::RenameRun {
+            name: req.name.unwrap_or_default(),
+        }),
+        "cleanup_run" => Ok(RunCommand::CleanupRun),
+        "retry_all" => Ok(RunCommand::RetryAll),
+        other => Err(CommandParseError(format!("unknown command: {other}"))),
+    }
+}
+
 pub(crate) async fn run_command(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -84,17 +295,21 @@ pub(crate) async fn run_command(
         }
     }
 
-    match req.kind.as_str() {
-        "mark_node_done" => {
-            let Some(node_id) = req.node_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "node_id required for mark_node_done" })),
-                )
-                    .into_response();
-            };
-            let iter = req.iter.unwrap_or(1);
+    // #236: all presence / default / path-shape validation is pure and lives in
+    // `parse_run_command` — AFTER the 410 gate, which must stay first
+    // (ADR-0024 / #328). A malformed command against a forgotten run answers
+    // 410 today, not 400, and that precedence belongs to ADR-0024.
+    let cmd = match parse_run_command(req) {
+        Ok(cmd) => cmd,
+        Err(e) => return e.into_response(),
+    };
 
+    // Read before the match consumes `cmd`: the region arm logs its wire kind
+    // after two `.await`s, and `&'static str` costs nothing to carry.
+    let kind_str = cmd.kind_str();
+
+    match cmd {
+        RunCommand::MarkNodeDone { node_id, iter } => {
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -194,31 +409,10 @@ pub(crate) async fn run_command(
             info!("mark_node_done: node {node_id} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "extend_cycle" => {
-            let Some(node_id) = req.node_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "node_id required for extend_cycle" })),
-                )
-                    .into_response();
-            };
-            let Some(additional_iter) = req.additional_iter else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::json!({ "error": "additional_iter required for extend_cycle" }),
-                    ),
-                )
-                    .into_response();
-            };
-            if additional_iter <= 0 {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "additional_iter must be positive" })),
-                )
-                    .into_response();
-            }
-
+        RunCommand::ExtendCycle {
+            node_id,
+            additional_iter,
+        } => {
             // ADR-0025 / #327: validate the target against the run's pipeline
             // SNAPSHOT before any event is appended — a rejected command must
             // leave no trace in the log. Snapshot-first (`resolve_run_pipeline_path`)
@@ -317,44 +511,17 @@ pub(crate) async fn run_command(
         // completion. Both append a control-flow `CommandIssued` event and then
         // continue the run (lift an exhausted-unrouted Halt and re-evaluate),
         // so a stalled region is unstuck without restarting the daemon.
-        "bump_region" | "end_region" => {
-            let Some(region_id) = req.region_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("region_id required for {}", req.kind)
-                    })),
-                )
-                    .into_response();
-            };
-
-            let payload = if req.kind == "bump_region" {
-                let Some(additional_iter) = req.additional_iter else {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": "additional_iter required for bump_region"
-                        })),
-                    )
-                        .into_response();
-                };
-                if additional_iter <= 0 {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "additional_iter must be positive" })),
-                    )
-                        .into_response();
-                }
-                serde_json::json!({
+        RunCommand::Region { region_id, action } => {
+            let payload = match &action {
+                RegionAction::Bump { additional_iter } => serde_json::json!({
                     "command": "bump_region",
                     "region_id": region_id,
                     "additional_iter": additional_iter,
-                })
-            } else {
-                serde_json::json!({
+                }),
+                RegionAction::End => serde_json::json!({
                     "command": "end_region",
                     "region_id": region_id,
-                })
+                }),
             };
 
             // ADR-0025 / #327: validate the region against the run's pipeline
@@ -392,8 +559,7 @@ pub(crate) async fn run_command(
                 }
             } else {
                 warn!(
-                    "{}: pipeline snapshot unreadable for run {run_id}; skipping region validation",
-                    req.kind
+                    "{kind_str}: pipeline snapshot unreadable for run {run_id}; skipping region validation"
                 );
             }
 
@@ -431,10 +597,10 @@ pub(crate) async fn run_command(
 
             let summary = re_evaluate_after_command(&state, &run_id).await;
 
-            info!("{}: region {region_id} in run {run_id}", req.kind);
+            info!("{kind_str}: region {region_id} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        "pause_run" => {
+        RunCommand::PauseRun => {
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -478,7 +644,7 @@ pub(crate) async fn run_command(
             info!("pause_run: run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "resume_run" => {
+        RunCommand::ResumeRun => {
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -579,16 +745,7 @@ pub(crate) async fn run_command(
             info!("resume_run: run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        "kill_node" => {
-            let Some(node_id) = req.node_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "node_id required for kill_node" })),
-                )
-                    .into_response();
-            };
-            let iter = req.iter.unwrap_or(1);
-
+        RunCommand::KillNode { node_id, iter } => {
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
             // #407: also kill the process tree inside the container (best-effort,
@@ -640,16 +797,7 @@ pub(crate) async fn run_command(
             info!("kill_node: node {node_id} iter {iter} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "restart_node" => {
-            let Some(node_id) = req.node_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "node_id required for restart_node" })),
-                )
-                    .into_response();
-            };
-            let iter = req.iter.unwrap_or(1);
-
+        RunCommand::RestartNode { node_id, iter } => {
             // Transition guard (#212 / #196): restart_node is mutually
             // exclusive with the scheduler's own re-fire — validate against
             // the projected state BEFORE killing anything, so a stale-view
@@ -771,19 +919,13 @@ pub(crate) async fn run_command(
             info!("restart_node: node {node_id} iter {iter} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "start_node" => {
+        RunCommand::StartNode { node_id } => {
             // Force-spawn a node out of dependency order (#204). The manager
             // twin of the UI Start button: both funnel through `force_spawn_node`,
             // which derives the iteration and owns the run-status (D4) and
-            // admission-cap (D5) guards. `req.iter` is deliberately ignored —
-            // letting the manager pin an iter would fight that derivation.
-            let Some(node_id) = req.node_id else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "node_id required for start_node" })),
-                )
-                    .into_response();
-            };
+            // admission-cap (D5) guards. The wire `iter` is deliberately dropped
+            // at parse time — letting the manager pin an iter would fight that
+            // derivation.
 
             // Audit the manager's intent before acting, mirroring the other
             // command arms' `CommandIssued` parity event.
@@ -805,34 +947,9 @@ pub(crate) async fn run_command(
 
             force_spawn_node(&state, &run_id, &node_id).await
         }
-        "inject_artifact" => {
-            let Some(path) = req.path else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "path required for inject_artifact" })),
-                )
-                    .into_response();
-            };
-            let Some(content) = req.content else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "content required for inject_artifact" })),
-                )
-                    .into_response();
-            };
-
+        RunCommand::InjectArtifact { path, content } => {
+            // `path` is already proven relative and `..`-free by the parse.
             let requested = std::path::Path::new(&path);
-            if requested.is_absolute()
-                || requested
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir))
-            {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "path traversal not allowed" })),
-                )
-                    .into_response();
-            }
 
             let repo_root = match load_events(&state.db, &run_id).await {
                 Ok(events) => match event_log::project(&events) {
@@ -881,8 +998,7 @@ pub(crate) async fn run_command(
             info!("inject_artifact: {path} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "rename_run" => {
-            let new_name = req.name.unwrap_or_default();
+        RunCommand::RenameRun { name: new_name } => {
             let rename_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -899,8 +1015,8 @@ pub(crate) async fn run_command(
             info!("rename_run: run {run_id} renamed to {:?}", new_name);
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        "cleanup_run" => cleanup_run(&state, &run_id).await,
-        "retry_all" => {
+        RunCommand::CleanupRun => cleanup_run(&state, &run_id).await,
+        RunCommand::RetryAll => {
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -1002,11 +1118,6 @@ pub(crate) async fn run_command(
             info!("retry_all: archived run {run_id}, created new run");
             new_run_resp
         }
-        other => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("unknown command: {other}") })),
-        )
-            .into_response(),
     }
 }
 
@@ -1410,6 +1521,304 @@ fn collect_yaml_var_refs(val: &serde_yaml::Value, refs: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- #236: the pure parse ---
+    //
+    // Fourteen wire shapes in, fourteen verdicts out, no HTTP and no daemon.
+    // Before this slice none of these messages was reachable from a test at
+    // all — which is precisely the argument #236 makes. `#[test]`, not
+    // `#[tokio::test]`: `CommandParseError` is `PartialEq`, so no response body
+    // has to be read back asynchronously to see what was rejected.
+
+    /// Build a wire request from its JSON, exactly as axum's extractor would.
+    fn wire(json: serde_json::Value) -> RunCommandRequest {
+        serde_json::from_value(json).expect("test fixture must deserialise")
+    }
+
+    fn parse(json: serde_json::Value) -> Result<RunCommand, CommandParseError> {
+        parse_run_command(wire(json))
+    }
+
+    fn reject(json: serde_json::Value) -> String {
+        parse(json).expect_err("expected a rejection").0
+    }
+
+    #[test]
+    fn parse_accepts_the_thirteen_kinds() {
+        let cases: [(serde_json::Value, RunCommand); 13] = [
+            (
+                serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
+                RunCommand::MarkNodeDone {
+                    node_id: "n1".into(),
+                    iter: 3,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "extend_cycle", "node_id": "n1", "additional_iter": 2 }),
+                RunCommand::ExtendCycle {
+                    node_id: "n1".into(),
+                    additional_iter: 2,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "bump_region", "region_id": "r1", "additional_iter": 2 }),
+                RunCommand::Region {
+                    region_id: "r1".into(),
+                    action: RegionAction::Bump { additional_iter: 2 },
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "end_region", "region_id": "r1" }),
+                RunCommand::Region {
+                    region_id: "r1".into(),
+                    action: RegionAction::End,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "pause_run" }),
+                RunCommand::PauseRun,
+            ),
+            (
+                serde_json::json!({ "kind": "resume_run" }),
+                RunCommand::ResumeRun,
+            ),
+            (
+                serde_json::json!({ "kind": "kill_node", "node_id": "n1", "iter": 7 }),
+                RunCommand::KillNode {
+                    node_id: "n1".into(),
+                    iter: 7,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "restart_node", "node_id": "n1", "iter": 7 }),
+                RunCommand::RestartNode {
+                    node_id: "n1".into(),
+                    iter: 7,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "start_node", "node_id": "n1" }),
+                RunCommand::StartNode {
+                    node_id: "n1".into(),
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "inject_artifact", "path": "a/b.md", "content": "x" }),
+                RunCommand::InjectArtifact {
+                    path: "a/b.md".into(),
+                    content: "x".into(),
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "rename_run", "name": "hello" }),
+                RunCommand::RenameRun {
+                    name: "hello".into(),
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "cleanup_run" }),
+                RunCommand::CleanupRun,
+            ),
+            (
+                serde_json::json!({ "kind": "retry_all" }),
+                RunCommand::RetryAll,
+            ),
+        ];
+
+        for (json, want) in cases {
+            let label = json.to_string();
+            assert_eq!(parse(json), Ok(want), "{label}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_carry_the_exact_wire_message() {
+        for (json, want) in [
+            (
+                serde_json::json!({ "kind": "mark_node_done" }),
+                "node_id required for mark_node_done",
+            ),
+            (
+                serde_json::json!({ "kind": "extend_cycle" }),
+                "node_id required for extend_cycle",
+            ),
+            (
+                serde_json::json!({ "kind": "extend_cycle", "node_id": "n1" }),
+                "additional_iter required for extend_cycle",
+            ),
+            (
+                serde_json::json!({ "kind": "extend_cycle", "node_id": "n1", "additional_iter": 0 }),
+                "additional_iter must be positive",
+            ),
+            (
+                serde_json::json!({ "kind": "bump_region" }),
+                "region_id required for bump_region",
+            ),
+            (
+                serde_json::json!({ "kind": "end_region" }),
+                "region_id required for end_region",
+            ),
+            (
+                serde_json::json!({ "kind": "bump_region", "region_id": "r1" }),
+                "additional_iter required for bump_region",
+            ),
+            (
+                serde_json::json!({ "kind": "bump_region", "region_id": "r1", "additional_iter": -1 }),
+                "additional_iter must be positive",
+            ),
+            (
+                serde_json::json!({ "kind": "kill_node" }),
+                "node_id required for kill_node",
+            ),
+            (
+                serde_json::json!({ "kind": "restart_node" }),
+                "node_id required for restart_node",
+            ),
+            (
+                serde_json::json!({ "kind": "start_node" }),
+                "node_id required for start_node",
+            ),
+            (
+                serde_json::json!({ "kind": "inject_artifact" }),
+                "path required for inject_artifact",
+            ),
+            (
+                serde_json::json!({ "kind": "inject_artifact", "path": "a.md" }),
+                "content required for inject_artifact",
+            ),
+            (
+                serde_json::json!({ "kind": "inject_artifact", "path": "../x", "content": "x" }),
+                "path traversal not allowed",
+            ),
+            (
+                serde_json::json!({ "kind": "bogus_command" }),
+                "unknown command: bogus_command",
+            ),
+        ] {
+            let label = json.to_string();
+            assert_eq!(reject(json), want, "{label}");
+        }
+    }
+
+    #[test]
+    fn parse_checks_fields_in_the_order_the_wire_expects() {
+        // Two orderings that a rewrite silently inverts. Both are observable:
+        // the same malformed request answers a different message.
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "bump_region" })),
+            "region_id required for bump_region",
+            "the region comes before the count"
+        );
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "inject_artifact", "path": "../escape" })),
+            "content required for inject_artifact",
+            "a missing body outranks a hostile path"
+        );
+        // And the kind match outranks every field check: an unknown kind with
+        // nothing else in the body still reports the kind.
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "ghost" })),
+            "unknown command: ghost"
+        );
+    }
+
+    #[test]
+    fn parse_keeps_the_lenient_defaults() {
+        // Three leniencies that look like bugs and are not.
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "mark_node_done", "node_id": "n1" })),
+            Ok(RunCommand::MarkNodeDone {
+                node_id: "n1".into(),
+                iter: 1
+            }),
+            "an omitted iter means 1, not 'current'"
+        );
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "rename_run" })),
+            Ok(RunCommand::RenameRun {
+                name: String::new()
+            }),
+            "an omitted name renames to the empty string"
+        );
+        assert_eq!(
+            parse(
+                serde_json::json!({ "kind": "end_region", "region_id": "r1", "additional_iter": 5 })
+            ),
+            Ok(RunCommand::Region {
+                region_id: "r1".into(),
+                action: RegionAction::End
+            }),
+            "a stray additional_iter on end_region is accepted and dropped"
+        );
+        // `start_node` drops the wire `iter` — the server derives it (#204).
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "start_node", "node_id": "n1", "iter": 99 })),
+            Ok(RunCommand::StartNode {
+                node_id: "n1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_rejects_every_traversal_shape() {
+        for bad in [
+            "../../etc/passwd",
+            "/absolute/path.md",
+            "ok/../../../escape",
+        ] {
+            assert_eq!(
+                reject(serde_json::json!({
+                    "kind": "inject_artifact", "path": bad, "content": "x"
+                })),
+                "path traversal not allowed",
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn kind_str_round_trips_every_variant() {
+        // `kind_str` feeds two log lines and is total over `RegionAction`
+        // precisely because Bump and End are distinguished in the type.
+        for kind in [
+            "mark_node_done",
+            "extend_cycle",
+            "bump_region",
+            "end_region",
+            "pause_run",
+            "resume_run",
+            "kill_node",
+            "restart_node",
+            "start_node",
+            "inject_artifact",
+            "rename_run",
+            "cleanup_run",
+            "retry_all",
+        ] {
+            let cmd = parse(serde_json::json!({
+                "kind": kind,
+                "node_id": "n1",
+                "region_id": "r1",
+                "additional_iter": 1,
+                "path": "a.md",
+                "content": "x",
+            }))
+            .unwrap_or_else(|e| panic!("{kind} must parse: {}", e.0));
+            assert_eq!(cmd.kind_str(), kind);
+        }
+    }
+
+    #[test]
+    fn parse_error_renders_as_400_json() {
+        let resp = CommandParseError("boom".to_string()).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+    }
 
     #[test]
     fn extract_var_refs_finds_dollar_variables_in_switch_outputs() {

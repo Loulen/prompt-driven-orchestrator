@@ -248,7 +248,22 @@ pub mod pipelines {
         pub repo: String,
         pub path: String,
         pub content_hash: String,
+        /// Which digest `content_hash` holds (#395). `Some(HASH_ALGO_SEMANTIC)` on
+        /// everything written since the semantic projection landed; **absent** on
+        /// pre-#395 `meta.json` files, whose hash is a raw-byte digest. Changing the
+        /// algorithm without this marker would flip every promoted pipeline to ⚠ —
+        /// the exact symptom being fixed. See `compute_drift` for the legacy path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub hash_algo: Option<String>,
     }
+
+    /// Marker for the semantic-projection digest (#395).
+    pub const HASH_ALGO_SEMANTIC: &str = "semantic-v1";
+
+    /// Domain tags keeping the two digest shapes in disjoint spaces, so a pipeline
+    /// that stops parsing can never accidentally hash equal to its own projection.
+    const DOMAIN_SEMANTIC: &str = "pdo/pipeline-semantic/v1";
+    const DOMAIN_UNPARSABLE: &str = "pdo/pipeline-bytes/v1";
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default)]
     pub struct PipelineMeta {
@@ -256,7 +271,61 @@ pub mod pipelines {
         pub promoted_from: Option<PromotedFrom>,
     }
 
+    /// Digest of a pipeline's **semantics** plus its prompt files (#395).
+    ///
+    /// Hashing the file's bytes made a node move — pure layout — read as library
+    /// drift, contradicting the canvas star, which has ignored layout since #355.
+    /// So the YAML is parsed and projected first (`pipeline_semantics`): layout
+    /// dropped, key order and parser defaults normalized away. That also absorbs
+    /// the wholesale reformatting a canvas save performs on a hand-written file,
+    /// which a textual strip of `view:` would still have flagged.
+    ///
+    /// A source that no longer parses cannot be projected. Rather than silently
+    /// reporting it synced, its bytes are hashed under a separate domain tag: the
+    /// digest still moves when the file moves, and a pipeline that breaks after a
+    /// promote reads as drifted (which it is).
     pub fn content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
+        match crate::pipeline::parse_pipeline(yaml)
+            .ok()
+            .and_then(|parsed| crate::pipeline_semantics::canonical_form(&parsed.pipeline).ok())
+        {
+            Some(canonical) => digest(DOMAIN_SEMANTIC, canonical.as_bytes(), prompts),
+            None => digest(DOMAIN_UNPARSABLE, yaml.as_bytes(), prompts),
+        }
+    }
+
+    /// `domain || body || prompts`, every part length-framed so no two different
+    /// inputs can be concatenated into the same byte stream (the old digest fed
+    /// `key` and `value` back to back, making `("a", "bc")` and `("ab", "c")`
+    /// collide). An empty prompt counts as absent, matching the frontend's
+    /// `promptsEqual`, so a freshly-created empty `<node>.md` is not drift.
+    fn digest(domain: &str, body: &[u8], prompts: &HashMap<String, String>) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(domain.as_bytes());
+        hasher.update((body.len() as u64).to_le_bytes());
+        hasher.update(body);
+        let mut keys: Vec<&String> = prompts
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(key, _)| key)
+            .collect();
+        keys.sort();
+        hasher.update((keys.len() as u64).to_le_bytes());
+        for key in keys {
+            let value = &prompts[key];
+            hasher.update((key.len() as u64).to_le_bytes());
+            hasher.update(key.as_bytes());
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// The pre-#395 digest — raw YAML bytes, then unframed key/value pairs. Kept
+    /// verbatim (bugs included) because `meta.json` files written before the
+    /// semantic projection still hold it, and `compute_drift` has to be able to
+    /// recognize one.
+    fn legacy_content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(yaml.as_bytes());
         let mut keys: Vec<&String> = prompts.keys().collect();
@@ -283,12 +352,43 @@ pub mod pipelines {
         std::fs::write(&meta_path, json).map_err(|e| format!("meta write error: {e}"))
     }
 
-    fn compute_drift(promoted_from: &PromotedFrom) -> Option<bool> {
+    /// Has the promote *source* diverged from what was promoted? `None` when the
+    /// source file is unreadable (moved or deleted) — the caller renders that as no
+    /// verdict at all.
+    ///
+    /// `lib_path` is the library copy, needed only to migrate a pre-#395 `meta.json`
+    /// (see below); the fresh path never touches it.
+    fn compute_drift(lib_path: &Path, promoted_from: &PromotedFrom) -> Option<bool> {
         let source = Path::new(&promoted_from.path);
         let yaml = std::fs::read_to_string(source).ok()?;
         let prompts = read_prompts_dir(&source.with_extension("prompts"));
-        let current = content_hash(&yaml, &prompts);
-        Some(current != promoted_from.content_hash)
+
+        if promoted_from.hash_algo.as_deref() == Some(HASH_ALGO_SEMANTIC) {
+            return Some(content_hash(&yaml, &prompts) != promoted_from.content_hash);
+        }
+
+        // ── Pre-#395 `meta.json`: `content_hash` holds a raw-byte digest ─────────
+        // Re-hashing the source under the new algorithm would never match it, so
+        // every already-promoted pipeline would light up ⚠ on upgrade. Read it in
+        // its own algebra instead. No lazy rewrite: `list`/`check_drift` are read
+        // paths, and a GET that rewrites metadata is a surprise nobody asked for.
+        // The marker appears on the next `promote`, which is also the gesture that
+        // legitimately refreshes the hash.
+        if legacy_content_hash(&yaml, &prompts) == promoted_from.content_hash {
+            return Some(false); // bytes untouched — nothing to decide
+        }
+        // Bytes moved, but only the promote-time *semantics* answer the question.
+        // `promote` copies the source verbatim into the library, so the library copy
+        // IS the promoted snapshot — as long as it hasn't itself been edited since,
+        // which its legacy hash tells us.
+        let lib_yaml = std::fs::read_to_string(lib_path).ok()?;
+        let lib_prompts = read_prompts_dir(&lib_path.with_extension("prompts"));
+        if legacy_content_hash(&lib_yaml, &lib_prompts) == promoted_from.content_hash {
+            return Some(content_hash(&yaml, &prompts) != content_hash(&lib_yaml, &lib_prompts));
+        }
+        // The library copy was edited too, so the promoted snapshot is gone: the
+        // byte verdict is all that is left. Reports drift, never a false "synced".
+        Some(true)
     }
 
     pub fn user_pipelines_dir() -> Option<PathBuf> {
@@ -399,7 +499,10 @@ pub mod pipelines {
             let prompts = read_prompts_dir(&path.with_extension("prompts"));
 
             let meta = read_meta(&path);
-            let drifted = meta.promoted_from.as_ref().and_then(compute_drift);
+            let drifted = meta
+                .promoted_from
+                .as_ref()
+                .and_then(|pf| compute_drift(&path, pf));
 
             entries.push(PipelineLibraryEntry {
                 id,
@@ -580,6 +683,7 @@ pub mod pipelines {
                 repo: repo_root.to_string_lossy().to_string(),
                 path: source_path.to_string_lossy().to_string(),
                 content_hash: hash,
+                hash_algo: Some(HASH_ALGO_SEMANTIC.to_string()),
             }),
         };
         write_meta(&lib_path, &meta)?;
@@ -725,7 +829,9 @@ pub mod pipelines {
         let lib_dir = user_pipelines_dir()?;
         let lib_path = lib_dir.join(format!("{library_id}.yaml"));
         let meta = read_meta(&lib_path);
-        meta.promoted_from.as_ref().and_then(compute_drift)
+        meta.promoted_from
+            .as_ref()
+            .and_then(|pf| compute_drift(&lib_path, pf))
     }
 
     pub fn get_meta(library_id: &str) -> Option<PipelineMeta> {
@@ -1952,6 +2058,391 @@ mod tests {
 
             let drifted = pipelines::check_drift(&slug);
             assert_eq!(drifted, None);
+        });
+    }
+
+    // --- #395: drift is a semantic verdict, not a byte comparison ---
+
+    /// start → planner → end **with layout**, so a test can rewrite the layout and
+    /// nothing else. Mirrors the reproducer's `drift-demo`.
+    fn laid_out_pipeline(name: &str, planner_x: u32, extras: &str) -> String {
+        format!(
+            "name: {name}\nversion: '1.0'\nnodes:\n\
+             - id: start\n  name: Start\n  type: start\n  outputs:\n  - name: user_prompt\n  view: {{x: 300, y: 60}}\n\
+             - id: planner\n  name: Planner\n  type: doc-only\n  outputs:\n  - name: plan\n  view: {{x: {planner_x}, y: 260}}\n\
+             - id: end\n  name: End\n  type: end\n  inputs:\n  - name: result\n  view: {{x: 300, y: 460}}\n\
+             edges:\n\
+             - source: {{node: start, port: user_prompt}}\n  target: {{node: planner, port: in}}\n\
+             - source: {{node: planner, port: plan}}\n  target: {{node: end, port: result}}\n{extras}"
+        )
+    }
+
+    fn write_repo_pipeline(repo: &std::path::Path, slug: &str, yaml: &str) {
+        let dir = repo.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{slug}.yaml")), yaml).unwrap();
+    }
+
+    fn source_path(repo: &std::path::Path, slug: &str) -> PathBuf {
+        repo.join(".pdo")
+            .join("pipelines")
+            .join(format!("{slug}.yaml"))
+    }
+
+    #[test]
+    fn content_hash_ignores_layout_only_edits() {
+        // Acceptance criterion 4, layout half: node position, pinned route, arrow
+        // side and notes are presentation — the digest must not move.
+        let prompts = HashMap::new();
+        let plain = laid_out_pipeline("Demo", 300, "");
+        let moved = laid_out_pipeline("Demo", 540, "");
+        let annotated = laid_out_pipeline(
+            "Demo",
+            300,
+            "notes:\n- id: n1\n  content: reminder\n  view: {x: 9, y: 9}\n",
+        );
+        let pinned = laid_out_pipeline("Demo", 300, "").replace(
+            "  target: {node: end, port: result}\n",
+            "  target: {node: end, port: result}\n  mode: manual\n  waypoints: [{x: 1, y: 2}]\n  target_side: top\n",
+        );
+        let baseline = pipelines::content_hash(&plain, &prompts);
+        for (label, variant) in [
+            ("node moved", moved),
+            ("note added", annotated),
+            ("route pinned + arrow re-anchored", pinned),
+        ] {
+            assert_eq!(
+                baseline,
+                pipelines::content_hash(&variant, &prompts),
+                "{label} must not change the hash"
+            );
+        }
+    }
+
+    #[test]
+    fn content_hash_ignores_serializer_reformatting() {
+        // The amplifier from the reproduction: a canvas save rewrites the *whole*
+        // file in the serializer's style, so on a hand-written pipeline the first
+        // trivial edit changes far more bytes than the node that moved.
+        // Same document as `laid_out_pipeline("Demo", 300, "")`: indented block
+        // sequences, double-quoted version, block-style `view`, keys reordered, and
+        // port defaults spelled out instead of left to the parser.
+        let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: doc-only\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
+        let prompts = HashMap::new();
+        let handwritten = laid_out_pipeline("Demo", 300, "");
+        assert_ne!(
+            handwritten, reserialized,
+            "the two fixtures must differ in bytes"
+        );
+        assert_eq!(
+            pipelines::content_hash(&handwritten, &prompts),
+            pipelines::content_hash(reserialized, &prompts),
+        );
+    }
+
+    #[test]
+    fn content_hash_detects_semantic_edits() {
+        // Acceptance criterion 4, semantic half.
+        let prompts = HashMap::new();
+        let base = laid_out_pipeline("Demo", 300, "");
+        let cases = [
+            (
+                "pipeline rename",
+                base.replace("name: Demo", "name: Renamed"),
+            ),
+            (
+                "node rename",
+                base.replace("name: Planner", "name: Architect"),
+            ),
+            (
+                "port rename",
+                base.replace("- name: plan", "- name: design")
+                    .replace("port: plan", "port: design"),
+            ),
+            (
+                "edge retarget",
+                base.replace(
+                    "target: {node: planner, port: in}",
+                    "target: {node: planner, port: task}",
+                ),
+            ),
+            (
+                "per-node model",
+                base.replace("  type: doc-only", "  type: doc-only\n  model: opus"),
+            ),
+            (
+                "edge condition",
+                base.replace(
+                    "  target: {node: end, port: result}\n",
+                    "  target: {node: end, port: result}\n  when: {verdict: {eq: PASS}}\n",
+                ),
+            ),
+            (
+                "added node",
+                base.replace(
+                    "edges:",
+                    "- id: extra\n  name: Extra\n  type: doc-only\n  outputs:\n  - name: o\nedges:",
+                ),
+            ),
+            (
+                "loop region",
+                laid_out_pipeline(
+                    "Demo",
+                    300,
+                    "loops:\n- id: r\n  kind: bounded\n  members: [planner]\n  max_iter: 3\n",
+                ),
+            ),
+        ];
+        let baseline = pipelines::content_hash(&base, &prompts);
+        for (label, variant) in cases {
+            // A `replace` that matched nothing would assert nothing — catch the
+            // typo in the fixture, not three months later in production.
+            assert_ne!(variant, base, "{label}: fixture edit did not apply");
+            assert_ne!(
+                baseline,
+                pipelines::content_hash(&variant, &prompts),
+                "{label} must change the hash"
+            );
+        }
+    }
+
+    #[test]
+    fn drift_stays_false_after_layout_only_edit() {
+        // The bug itself (#395): one node dragged, saved, and the badge flipped to
+        // "out of sync" while the canvas star still said "synced".
+        with_temp_repo(|repo| {
+            write_repo_pipeline(repo, "demo", &laid_out_pipeline("Demo", 300, ""));
+            pipelines::promote(repo, "demo").unwrap();
+
+            std::fs::write(
+                source_path(repo, "demo"),
+                laid_out_pipeline(
+                    "Demo",
+                    540,
+                    "notes:\n- id: n1\n  content: hi\n  view: {x: 1, y: 2}\n",
+                ),
+            )
+            .unwrap();
+
+            assert_eq!(pipelines::check_drift("demo"), Some(false));
+        });
+    }
+
+    #[test]
+    fn drift_flips_true_on_semantic_edit_at_unchanged_layout() {
+        with_temp_repo(|repo| {
+            write_repo_pipeline(repo, "demo", &laid_out_pipeline("Demo", 300, ""));
+            pipelines::promote(repo, "demo").unwrap();
+
+            std::fs::write(
+                source_path(repo, "demo"),
+                laid_out_pipeline("Demo", 300, "").replace("name: Planner", "name: Architect"),
+            )
+            .unwrap();
+
+            assert_eq!(pipelines::check_drift("demo"), Some(true));
+        });
+    }
+
+    #[test]
+    fn promote_records_the_hash_algorithm() {
+        // Without this marker a pre-#395 meta.json is indistinguishable from a
+        // fresh one, and the migration path in `compute_drift` has nothing to key on.
+        with_temp_repo(|repo| {
+            let slug = create_repo_pipeline(repo, "Marked");
+            pipelines::promote(repo, &slug).unwrap();
+            let pf = pipelines::get_meta(&slug).unwrap().promoted_from.unwrap();
+            assert_eq!(pf.hash_algo.as_deref(), Some(pipelines::HASH_ALGO_SEMANTIC));
+        });
+    }
+
+    #[test]
+    fn empty_prompt_file_is_not_drift() {
+        // An empty `<node>.md` and no file at all mean the same thing — the same
+        // convention the frontend's `promptsEqual` uses.
+        with_temp_repo(|repo| {
+            let slug = create_repo_pipeline(repo, "Promptless");
+            pipelines::promote(repo, &slug).unwrap();
+
+            let prompts_dir = repo.join(".pdo/pipelines").join(format!("{slug}.prompts"));
+            std::fs::create_dir_all(&prompts_dir).unwrap();
+            std::fs::write(prompts_dir.join("planner.md"), "").unwrap();
+
+            assert_eq!(pipelines::check_drift(&slug), Some(false));
+        });
+    }
+
+    #[test]
+    fn unparsable_source_reads_as_drift_not_synced() {
+        // Trap 2 of the report: the semantic projection needs `parse_pipeline`,
+        // which can fail. A source that stopped parsing must never be reported
+        // synced — silence dressed up as confirmation.
+        with_temp_repo(|repo| {
+            let slug = create_repo_pipeline(repo, "Breaker");
+            pipelines::promote(repo, &slug).unwrap();
+
+            std::fs::write(source_path(repo, &slug), "not: valid: yaml: [[[").unwrap();
+            assert_eq!(pipelines::check_drift(&slug), Some(true));
+
+            // Parses as YAML, rejected as a pipeline (no start/end node).
+            std::fs::write(source_path(repo, &slug), "name: Breaker\nnodes: []\n").unwrap();
+            assert_eq!(pipelines::check_drift(&slug), Some(true));
+        });
+    }
+
+    // --- #395 migration: `meta.json` files written before the semantic digest ---
+
+    /// The pre-#395 digest, re-implemented independently of the daemon so the
+    /// migration tests pin the legacy algorithm instead of asserting against
+    /// whatever the code happens to do now.
+    fn legacy_hash_of(yaml: &str, prompts: &HashMap<String, String>) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(yaml.as_bytes());
+        let mut keys: Vec<&String> = prompts.keys().collect();
+        keys.sort();
+        for key in keys {
+            hasher.update(key.as_bytes());
+            hasher.update(prompts[key].as_bytes());
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Rewrite `<slug>.meta.json` the way pre-#395 code did: a raw-byte hash of the
+    /// given YAML and **no** `hash_algo` key.
+    fn downgrade_meta_to_legacy(repo: &std::path::Path, slug: &str, promoted_yaml: &str) {
+        let meta_path = pipelines::user_pipelines_dir()
+            .unwrap()
+            .join(format!("{slug}.meta.json"));
+        let json = serde_json::json!({
+            "promoted_from": {
+                "repo": repo.to_string_lossy(),
+                "path": source_path(repo, slug).to_string_lossy(),
+                "content_hash": legacy_hash_of(promoted_yaml, &HashMap::new()),
+            }
+        });
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_meta_deserializes_without_hash_algo() {
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+
+            let pf = pipelines::get_meta("legacy")
+                .unwrap()
+                .promoted_from
+                .unwrap();
+            assert_eq!(pf.hash_algo, None);
+        });
+    }
+
+    #[test]
+    fn legacy_meta_untouched_source_is_not_drift() {
+        // The cheap case: the bytes never moved, so the legacy hash still matches
+        // and there is nothing to decide. This is the case that would have turned
+        // EVERY promoted pipeline into a ⚠ had the algorithm changed unversioned.
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+
+            assert_eq!(pipelines::check_drift("legacy"), Some(false));
+        });
+    }
+
+    #[test]
+    fn legacy_meta_layout_only_edit_is_not_drift() {
+        // Bytes moved, semantics did not: recovered by comparing against the
+        // library copy, which `promote` wrote verbatim from the source.
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+
+            std::fs::write(
+                source_path(repo, "legacy"),
+                laid_out_pipeline("Legacy", 540, ""),
+            )
+            .unwrap();
+
+            assert_eq!(pipelines::check_drift("legacy"), Some(false));
+        });
+    }
+
+    #[test]
+    fn legacy_meta_semantic_edit_is_drift() {
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+
+            std::fs::write(
+                source_path(repo, "legacy"),
+                yaml.replace("name: Planner", "name: Architect"),
+            )
+            .unwrap();
+
+            assert_eq!(pipelines::check_drift("legacy"), Some(true));
+        });
+    }
+
+    #[test]
+    fn legacy_meta_with_edited_library_copy_falls_back_to_bytes() {
+        // The promoted snapshot is unrecoverable: the library copy is no longer what
+        // was promoted (its legacy hash disagrees) and the meta only holds a byte
+        // digest. Documented outcome — report drift rather than invent a "synced".
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+
+            let lib_path = pipelines::user_pipelines_dir().unwrap().join("legacy.yaml");
+            std::fs::write(&lib_path, laid_out_pipeline("Legacy", 111, "")).unwrap();
+            std::fs::write(
+                source_path(repo, "legacy"),
+                laid_out_pipeline("Legacy", 540, ""),
+            )
+            .unwrap();
+
+            assert_eq!(pipelines::check_drift("legacy"), Some(true));
+        });
+    }
+
+    #[test]
+    fn re_promote_upgrades_a_legacy_meta() {
+        // The escape hatch: the gesture that legitimately refreshes the hash also
+        // writes the marker, so a legacy entry converges on the semantic algorithm
+        // without a GET ever rewriting metadata behind the user's back.
+        with_temp_repo(|repo| {
+            let yaml = laid_out_pipeline("Legacy", 300, "");
+            write_repo_pipeline(repo, "legacy", &yaml);
+            pipelines::promote(repo, "legacy").unwrap();
+            downgrade_meta_to_legacy(repo, "legacy", &yaml);
+            assert_eq!(
+                pipelines::get_meta("legacy")
+                    .unwrap()
+                    .promoted_from
+                    .unwrap()
+                    .hash_algo,
+                None
+            );
+
+            pipelines::promote(repo, "legacy").unwrap();
+
+            let pf = pipelines::get_meta("legacy")
+                .unwrap()
+                .promoted_from
+                .unwrap();
+            assert_eq!(pf.hash_algo.as_deref(), Some(pipelines::HASH_ALGO_SEMANTIC));
+            assert_eq!(pipelines::check_drift("legacy"), Some(false));
         });
     }
 

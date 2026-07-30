@@ -12,7 +12,8 @@
 //!   4. `cleanup_run` removes the container (`rm -f pdo-sbx-<run>`) + purges staging;
 //!   5. `boot_recovery` re-ensures a live sandboxed run's container;
 //!   6. killing a sandboxed node issues a targeted in-container `docker exec` kill
-//!      carrying the session marker;
+//!      carrying the session marker — and **exactly one** of them (#488: the reap
+//!      contains the kill, so keeping the old bare kill alongside would double it);
 //!   7. the **manager preamble text** names the daemon by the hostname reachable from
 //!      the side it will run on — the gateway when sandboxed, `localhost` when `off`
 //!      (#447). The preamble file is written before tmux is invoked, so this is
@@ -502,6 +503,48 @@ async fn kill_node_targets_the_container() {
         wait_until(|| log_text(&log).contains(&marker)).await,
         "kill must issue a targeted in-container exec carrying the session marker \
          `{marker}`; log:\n{}",
+        log_text(&log)
+    );
+}
+
+/// #488: the reap CONTAINS the in-container kill. Keeping the old
+/// `kill_session_best_effort` alongside it would double the `docker exec` without
+/// any test catching it — `kill_node_targets_the_container` looks for a marker the
+/// SPAWN already writes (via its `-e`), so it would pass either way. This test
+/// counts, so it discriminates.
+#[tokio::test]
+async fn kill_node_issues_exactly_one_in_container_kill() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker, log) = write_fake_docker();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    wait_node_status(&daemon, &run_id, "running").await;
+
+    let resp = post_command(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "kind": "kill_node", "node_id": NODE_ID, "iter": 1 }),
+    )
+    .await;
+    assert!(resp.status().is_success(), "kill_node should succeed");
+
+    // The tail of `kill_one_liner` (sandbox_container.rs) — emitted by the kill
+    // path and by it alone, so it counts the `docker exec` kills exactly.
+    const KILL_ONELINER_TAIL: &str = "k TERM; sleep 2; k KILL";
+
+    assert!(
+        wait_until(|| log_text(&log).contains(KILL_ONELINER_TAIL)).await,
+        "kill_node must issue the targeted in-container kill; log:\n{}",
+        log_text(&log)
+    );
+    assert_eq!(
+        log_text(&log).matches(KILL_ONELINER_TAIL).count(),
+        1,
+        "exactly one in-container kill — the reap contains it, do not double it; log:\n{}",
         log_text(&log)
     );
 }

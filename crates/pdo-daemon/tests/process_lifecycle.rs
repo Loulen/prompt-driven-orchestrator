@@ -4,7 +4,8 @@
 //! 1. Liveness sweep: a Running node whose tmux session dies is marked Failed
 //!    with a cause naming the dead session, within one detector cycle.
 //! 2. Reap on terminal state: a completed/failed/stopped node's session is
-//!    killed and a pane snapshot is kept so /pane keeps serving it.
+//!    killed and a pane snapshot is kept so /pane keeps serving it. Since #488
+//!    that includes the `kill_node` command arm, which used to kill bare.
 //! 3. Boot recovery: a Running node orphaned across a daemon restart is marked
 //!    Failed with a cause at boot.
 //! 4. Atomic admission: concurrent spawns never exceed the session cap.
@@ -474,6 +475,244 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
         !tmux_has_session(&socket, &session),
         "serving a snapshot must not resurrect the reaped session"
     );
+}
+
+// --- #488: `kill_node` is a terminal path too — it must reap, not kill bare ---
+
+/// Painted into every node pane by the tmux command override, so a snapshot
+/// taken BEFORE the kill can be told apart from an empty one. The default spawn
+/// (`exec sleep 600`) leaves the pane blank, which would prove nothing.
+const KILL_MARKER: &str = "PDO_MARKER_KILL_NODE_9F3A";
+
+async fn post_command(
+    daemon: &TestDaemon,
+    run_id: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/commands", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn wait_until<F: FnMut() -> bool>(mut pred: F) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if pred() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    pred()
+}
+
+/// Spawn a daemon whose node panes paint [`KILL_MARKER`] and then sleep, start a
+/// run, and return once the marker is genuinely visible in the LIVE pane.
+///
+/// Asserting the paint rather than sleeping on it keeps a rendering race from
+/// disguising itself as a snapshot bug.
+async fn run_with_marked_pane() -> (TestDaemon, String, String) {
+    let daemon = TestDaemon::spawn_with_override(
+        seed,
+        Some(format!("printf '{KILL_MARKER}\\n'; exec sleep 600")),
+    )
+    .await
+    .unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+    assert!(
+        wait_until(|| tmux_session_manager::capture(&socket, &session)
+            .is_some_and(|p| p.contains(KILL_MARKER)))
+        .await,
+        "the marker must be painted in the LIVE pane before the kill"
+    );
+
+    (daemon, run_id, session)
+}
+
+fn snapshot_path_of(daemon: &TestDaemon, run_id: &str) -> std::path::PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join(format!("nodes/{NODE_ID}/pane-iter-1.snapshot"))
+}
+
+async fn kill_node_1(daemon: &TestDaemon, run_id: &str) -> reqwest::Response {
+    post_command(
+        daemon,
+        run_id,
+        serde_json::json!({ "kind": "kill_node", "node_id": NODE_ID, "iter": 1 }),
+    )
+    .await
+}
+
+/// #488: `kill_node` is a terminal path like the others — it must reap, not kill
+/// bare. NEGATIVE CONTROL: this test MUST be red before the fix (`source:
+/// "unavailable"`, no snapshot file at all).
+#[tokio::test]
+async fn killed_node_session_is_reaped_and_pane_serves_snapshot() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let (daemon, run_id, session) = run_with_marked_pane().await;
+    let socket = daemon.tmux_socket();
+
+    let resp = kill_node_1(&daemon, &run_id).await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        wait_for_session_gone(&socket, &session, Duration::from_secs(5)).await,
+        "kill_node must kill the session"
+    );
+
+    let snapshot = snapshot_path_of(&daemon, &run_id);
+    assert!(
+        snapshot.exists(),
+        "kill_node must persist a pane snapshot at {snapshot:?}"
+    );
+    let persisted = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(
+        persisted.contains(KILL_MARKER),
+        "the snapshot must be taken BEFORE the kill — marker missing: {persisted:?}"
+    );
+
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "{}/runs/{run_id}/nodes/{NODE_ID}/pane?iter=1",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        json["source"].as_str(),
+        Some("snapshot"),
+        "the pane endpoint must serve the persisted snapshot, not `unavailable`"
+    );
+    assert!(json["content"].as_str().unwrap().contains(KILL_MARKER));
+    assert!(
+        !tmux_has_session(&socket, &session),
+        "serving a snapshot must not resurrect the killed session"
+    );
+}
+
+/// #488: a second `kill_node` must not rewrite — let alone blank — the first
+/// snapshot. The transition guard no-ops the event (`append_event` returns `Ok`
+/// without persisting) and, the session being dead, `capture` returns `None`.
+#[tokio::test]
+async fn a_second_kill_node_leaves_the_first_snapshot_byte_identical() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let (daemon, run_id, session) = run_with_marked_pane().await;
+    let socket = daemon.tmux_socket();
+
+    assert_eq!(kill_node_1(&daemon, &run_id).await.status(), 200);
+    assert!(
+        wait_for_session_gone(&socket, &session, Duration::from_secs(5)).await,
+        "kill_node must kill the session"
+    );
+
+    let snapshot = snapshot_path_of(&daemon, &run_id);
+    let first = std::fs::read(&snapshot).expect("the first kill_node must have written a snapshot");
+    assert!(!first.is_empty(), "the first snapshot must not be empty");
+
+    let resp = kill_node_1(&daemon, &run_id).await;
+    assert_eq!(resp.status(), 200, "a second kill_node is a 200 no-op");
+
+    let second = std::fs::read(&snapshot).unwrap();
+    assert_eq!(
+        first, second,
+        "the post-mortem pane is written once and frozen"
+    );
+}
+
+/// #488 / #470 (ADR-0033): the snapshot goes under the RUN's repo, not the
+/// daemon's. The rest of the suite can't tell the two apart — its `target_repo`
+/// IS `daemon.repo_root()` — so this test seeds a SECOND repo and asserts across
+/// both: present under the target, absent under the daemon root.
+#[tokio::test]
+async fn kill_node_writes_the_snapshot_under_the_runs_target_repo() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn_with_override(
+        seed,
+        Some(format!("printf '{KILL_MARKER}\\n'; exec sleep 600")),
+    )
+    .await
+    .unwrap();
+    let socket = daemon.tmux_socket();
+
+    // A repo the daemon does NOT live in, seeded with the same pipeline.
+    let other = tempfile::tempdir().unwrap();
+    seed(other.path()).unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "test input",
+            "target_repo": other.path().to_string_lossy(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let run_id = resp.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "node session should appear after POST /runs"
+    );
+    assert!(
+        wait_until(|| tmux_session_manager::capture(&socket, &session)
+            .is_some_and(|p| p.contains(KILL_MARKER)))
+        .await,
+        "the marker must be painted in the LIVE pane before the kill"
+    );
+
+    assert_eq!(kill_node_1(&daemon, &run_id).await.status(), 200);
+    assert!(
+        wait_for_session_gone(&socket, &session, Duration::from_secs(5)).await,
+        "kill_node must kill the session"
+    );
+
+    let rel = format!(".pdo/runs/{run_id}/nodes/{NODE_ID}/pane-iter-1.snapshot");
+    let in_target = other.path().join(&rel);
+    let in_daemon_root = daemon.repo_root().join(&rel);
+    assert!(
+        in_target.exists(),
+        "the snapshot belongs under the Run's target_repo: {in_target:?}"
+    );
+    assert!(
+        !in_daemon_root.exists(),
+        "nothing may be written under the daemon's own repo: {in_daemon_root:?}"
+    );
+    assert!(std::fs::read_to_string(&in_target)
+        .unwrap()
+        .contains(KILL_MARKER));
 }
 
 // --- #251: stale sweep panic isolation + liveness health ---

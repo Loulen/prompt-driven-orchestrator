@@ -21975,6 +21975,63 @@ edges:
     }
 
     #[tokio::test]
+    async fn kill_node_without_a_session_creates_no_directory() {
+        // #488: the reap writes only when the capture succeeded — `create_dir_all`
+        // is INSIDE the `if let Some(content)`. A kill on a node with no session
+        // must leave nothing on disk, only in the event log.
+        //
+        // `test_state_with_dir`, NOT `test_state`: the latter puts `repo_root` at
+        // `current_dir()`, i.e. the real source tree. This test is what keeps
+        // `kill_node_happy_path_event_payloads` (which does use `test_state`) from
+        // ever writing into it.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "kill-no-session";
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "kill-pipe" })),
+            ),
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let (status, _, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"kill_node","node_id":"worker","iter":1}"#,
+        )
+        .await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, r#"{"ok":true}"#));
+
+        let node_dir = tmp
+            .path()
+            .join(".pdo/runs")
+            .join(run_id)
+            .join("nodes/worker");
+        assert!(
+            !node_dir.exists(),
+            "no session means no capture, therefore no directory: {node_dir:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
         // The four judgements a hand-written parser is most likely to reorder or
         // "tidy up". Each is behaviour, not an accident:

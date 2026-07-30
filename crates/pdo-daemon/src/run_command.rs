@@ -30,11 +30,11 @@ use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
     completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
-    load_events, loop_region, mark_sandbox_prep_ready, pipeline, reload_run_state,
-    resolve_completed_frontmatter, resolve_pipeline_path, resolve_run_pipeline_path,
-    resolve_run_variables, resolve_source_frontmatter, run_advance, run_is_forgotten,
-    run_scoped_pipeline_path, sandbox_run, scheduler, scheduler_interpreter, tmux_session_manager,
-    transition_guard, AppState, CreateRunRequest,
+    load_events, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
+    reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
+    resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, run_advance,
+    run_is_forgotten, run_scoped_pipeline_path, sandbox_run, scheduler, scheduler_interpreter,
+    tmux_session_manager, transition_guard, AppState, CreateRunRequest,
 };
 
 /// The wire shape of a command. `pub(crate)` only because `run_command` is —
@@ -804,24 +804,29 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         RunCommand::KillNode { node_id, iter } => {
-            let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
-            tmux_session_manager::kill(&state.tmux_socket(), &session_name);
-            // #407: also kill the process tree inside the container (best-effort,
-            // no-op for `off`). The tmux-side `docker exec` client death leaves the
-            // reparented container process alive.
+            // READ-ONLY, and BEFORE any append: one projection yields both the
+            // `repo_root` the snapshot goes under (#470 / ADR-0033 — a Run may
+            // target a repo other than the daemon's) and the sandbox flag the
+            // in-container kill needs (#407). Both must come from the SAME
+            // projection, as in the `node_fail` tail (lib.rs:10547).
             // `reload_run_state`, not `load_projected`: both of its failure
-            // modes mean the same thing here — no sandbox to kill — so neither
-            // may become a 4xx.
-            let kill_sandbox = reload_run_state(&state, &run_id)
+            // modes mean the same thing here — no overridden repo, no container
+            // to kill — so neither may become a 4xx.
+            let (repo_root, kill_sandbox) = reload_run_state(&state, &run_id)
                 .await
-                .is_some_and(|(_, s)| !s.sandbox.is_off());
-            sandbox_run::kill_session_best_effort(
-                state.docker_cmd_override.as_deref().unwrap_or("docker"),
-                kill_sandbox,
-                &run_id,
-                &session_name,
-            );
+                .map(|(_, s)| (effective_repo_root(&state, &s), !s.sandbox.is_off()))
+                .unwrap_or_else(|| (state.repo_root.clone(), false));
 
+            // #488 — THE TERMINAL EVENT FIRST, THE REAP SECOND.
+            // Reaping first would open a "dead session / projection still
+            // Running" window that `GET …/pane` answers by relaunching
+            // `claude --continue` (the resurrection branch, assumed to be a
+            // feature by `dead_session_respawn_via_pane_endpoint`); and on an
+            // append error the node would stay `Running` forever with its
+            // session already killed, without even the audit event. Appending
+            // first makes a 500 mean "nothing happened, retry".
+            // Accepted risk: a few milliseconds where the node is `Failed` with
+            // a live session. `GET …/pane` answers `live` there, which is true.
             let fail_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -837,6 +842,17 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             if let Err(e) = append_event(&state, &fail_event).await {
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
+
+            // #488 / #205 — replaces the bare `tmux kill` + `kill_session_best_effort`
+            // this arm used to do: the helper CONTAINS both, preceded by the pane
+            // capture. Keeping the old pair alongside would double the `docker exec`.
+            // Called unconditionally, including when the append above was no-op'd by
+            // the transition guard (already-terminal iteration: `append_event` returns
+            // `Ok(())` WITHOUT persisting). That is deliberate — a second `kill_node`
+            // must stay an idempotent cleanup — and it is what makes the first
+            // snapshot immutable: the session being dead, `capture` returns `None`,
+            // so nothing is rewritten. No transition guard here (out of scope, #488).
+            reap_node_session(&state, &repo_root, &run_id, &node_id, iter, kill_sandbox);
 
             let cmd_event = event_log::Event {
                 id: None,

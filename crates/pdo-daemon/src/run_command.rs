@@ -321,6 +321,58 @@ pub(crate) async fn run_command(
 /// the `Response` is lossless by construction: the wire contract cannot see
 /// this refactor. See the #236 addendum to ADR-0009.
 ///
+/// Load a Run's events and project its state, or hand back the `Response` the
+/// caller must return: `500 text/plain` on a DB failure, `404 text/plain` when
+/// the projection is `None`.
+///
+/// `None` means one of two things, both "there is no such Run": an empty log,
+/// or a log carrying no `RunStarted` — an invalid fragment, e.g. an event
+/// appended after a forget (`event_log.rs:986`, #328). Either way `404` is the
+/// right answer; a Run that exists always has its `RunStarted` first.
+///
+/// `Box<Response>` rather than `Response`: `size_of::<Response>()` is 128, which
+/// is exactly the `clippy::result_large_err` threshold, and CI runs
+/// `-D warnings`. There is not one `Result<_, Response>` in this crate — see
+/// the same note on `completion_head_gate` in `lib.rs`.
+///
+/// **Opt-in per arm, never hoisted to the top of `dispatch`.** Four call sites
+/// deliberately do NOT route here, and folding them in would change behaviour
+/// silently:
+///   * `mark_node_done` and the `restart_node` guard probe both want an
+///     `Option<RunState>`, because their guard maps `None -> Allow` on purpose;
+///   * `inject_artifact` degrades to `state.repo_root` and never answers 4xx or
+///     5xx — it is the one arm designed to work BEFORE the Run exists;
+///   * the two `reload_run_state` sandbox probes treat `Err` and `None` alike,
+///     as "no container to kill".
+///
+/// A global preamble would flip `inject_artifact`, `rename_run`, `kill_node`
+/// and `mark_node_done` from `200`-with-side-effects to `404`-with-none, and
+/// turn `start_node`'s `404` from JSON into text — six regressions no test
+/// outside this module's characterization net would catch.
+///
+/// Do NOT absorb the 410 tombstone check either: ADR-0024 §3 places that gate
+/// at exactly two boundaries, and every GET reaching here would silently go
+/// from `404` to `410`.
+async fn load_projected(
+    state: &AppState,
+    run_id: &str,
+) -> Result<(Vec<event_log::Event>, event_log::RunState), Box<Response>> {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return Err(Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+            ))
+        }
+    };
+    match event_log::project(&events) {
+        Some(run_state) => Ok((events, run_state)),
+        None => Err(Box::new(
+            (StatusCode::NOT_FOUND, "run not found").into_response(),
+        )),
+    }
+}
+
 /// `dispatch` is a DRIVER, not a leaf primitive: it reaches twenty-three root
 /// items across five subsystems (sqlite, tmux, docker, worktrees, Run
 /// creation). The house idiom for a driver is the whole `AppState`
@@ -340,6 +392,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
     match cmd {
         RunCommand::MarkNodeDone { node_id, iter } => {
+            // NOT `load_projected`: this arm needs the `Option<RunState>`
+            // itself. An unstarted run projects `None`, the completion guard
+            // maps that to `Allow`, and the arm then falls back on a synthetic
+            // empty `RunState` — so `mark_node_done` answers 200 and appends on
+            // a run with no log. `load_projected` would 404 instead.
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -447,18 +504,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // SNAPSHOT before any event is appended — a rejected command must
             // leave no trace in the log. Snapshot-first (`resolve_run_pipeline_path`)
             // so a library edit after launch can't affect an in-flight run.
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
             let repo_root = effective_repo_root(&state, &run_state);
             let pipeline_path =
@@ -557,18 +605,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // ADR-0025 / #327: validate the region against the run's pipeline
             // SNAPSHOT before any event is appended — an unknown region_id must
             // leave no trace in the log.
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
             let repo_root = effective_repo_root(&state, &run_state);
             let pipeline_path =
@@ -631,18 +670,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         RunCommand::PauseRun => {
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
 
             if !matches!(
@@ -675,18 +705,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         RunCommand::ResumeRun => {
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
 
             match run_state.status {
@@ -781,6 +802,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // #407: also kill the process tree inside the container (best-effort,
             // no-op for `off`). The tmux-side `docker exec` client death leaves the
             // reparented container process alive.
+            // `reload_run_state`, not `load_projected`: both of its failure
+            // modes mean the same thing here — no sandbox to kill — so neither
+            // may become a 4xx.
             let kill_sandbox = reload_run_state(&state, &run_id)
                 .await
                 .is_some_and(|(_, s)| !s.sandbox.is_off());
@@ -833,6 +857,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // the projected state BEFORE killing anything, so a stale-view
             // restart of an old iter never races a newer live iteration.
             {
+                // NOT `load_projected`, same reason as `mark_node_done`:
+                // `validate_transition` takes an `Option<RunState>` and maps
+                // `None -> Allow` deliberately, so an unstarted run must reach
+                // the guard rather than be 404'd here. (The SECOND projection
+                // in this arm, below the kill, does fold — it wants the
+                // `RunState`.)
                 let events = match load_events(&state.db, &run_id).await {
                     Ok(e) => e,
                     Err(e) => {
@@ -868,6 +898,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // #407: also kill the in-container process tree before the re-spawn
             // (best-effort, no-op for `off`) so the old session's container
             // process doesn't linger alongside the new one.
+            // Same as `kill_node`: absent state means "no container", not an
+            // error to report.
             let restart_sandbox = reload_run_state(&state, &run_id)
                 .await
                 .is_some_and(|(_, s)| !s.sandbox.is_off());
@@ -896,18 +928,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             }
 
             // Re-spawn the node
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (events, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
 
             let repo_root = effective_repo_root(&state, &run_state);
@@ -981,6 +1004,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // `path` is already proven relative and `..`-free by the parse.
             let requested = std::path::Path::new(&path);
 
+            // NOT `load_projected`: this arm never answers 4xx or 5xx. It is
+            // designed to write the artifact a Run has not produced yet — a
+            // missing projection and a DB error both degrade to the daemon's
+            // own repo root, and the write proceeds. Routing it through the
+            // helper would turn its 200 into a 404.
             let repo_root = match load_events(&state.db, &run_id).await {
                 Ok(events) => match event_log::project(&events) {
                     Some(run_state) => effective_repo_root(&state, &run_state),
@@ -1047,18 +1075,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
         }
         RunCommand::CleanupRun => cleanup_run(&state, &run_id).await,
         RunCommand::RetryAll => {
-            let events = match load_events(&state.db, &run_id).await {
-                Ok(e) => e,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                        .into_response();
-                }
-            };
-            let run_state = match event_log::project(&events) {
-                Some(s) => s,
-                None => {
-                    return (StatusCode::NOT_FOUND, "run not found").into_response();
-                }
+            let (events, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
             };
 
             // NOTE: deliberately NOT `RunStatus::is_terminal()` — this set omits

@@ -61,6 +61,8 @@ export default function LibraryDropdown({
         interactive: result.spec.interactive,
         // #296/#345: the library is now model-aware — restore the per-node model.
         model: result.spec.model ?? null,
+        // #424: effort-aware too.
+        effort: result.spec.effort ?? null,
         view,
       };
       addNode(node);

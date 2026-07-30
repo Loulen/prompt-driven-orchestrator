@@ -1,6 +1,7 @@
 import { useEditStore } from "../stores/editStore";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import ModelPicker from "./ModelPicker";
+import EffortPicker from "./EffortPicker";
 
 export default function MergeInspector() {
   const openTabs = useEditStore((s) => s.openTabs);
@@ -42,6 +43,18 @@ export default function MergeInspector() {
             value={node.model ?? null}
             onChange={(v) => updateNode(node.id, { model: v })}
             testid="merge-model"
+          />
+        </Field>
+        {/* Effort (#424): a merge node IS a regular NodeDef routed through
+            `spawn_node`, so it launches with the node's effort — no guard, unlike
+            the script case in NodeInspector. Not to be confused with the
+            `__merge_resolver__` infra session, which has no NodeDef and always
+            runs at the account default. */}
+        <Field label="Effort">
+          <EffortPicker
+            value={node.effort ?? null}
+            onChange={(v) => updateNode(node.id, { effort: v })}
+            testid="merge-effort"
           />
         </Field>
 

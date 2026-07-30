@@ -437,6 +437,12 @@ impl Importer {
         let model = opts
             .and_then(|o| object_prop(o, "model"))
             .and_then(string_literal_value);
+        // `agent(prompt, {effort})` exists in the source vocabulary just like
+        // `model`, so it maps straight onto `NodeDef.effort` (#424). Kept as the
+        // raw expression here: the warning below needs `display_name`, which is
+        // computed further down.
+        let effort_expr = opts.and_then(|o| object_prop(o, "effort"));
+        let effort = effort_expr.and_then(string_literal_value);
         let isolation_wt = opts
             .and_then(|o| object_prop(o, "isolation"))
             .and_then(string_literal_value)
@@ -455,6 +461,15 @@ impl Importer {
             .map(clean_name)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| id.clone());
+
+        // A computed effort (`{effort: lvl}`) can't be resolved without executing
+        // the script, so the level is lost. Announce it rather than dropping it in
+        // silence (ADR-0001, clarification #268).
+        if effort_expr.is_some() && effort.is_none() {
+            self.warn(format!(
+                "nœud '{display_name}': `effort` calculé (non littéral) — niveau d'effort non importé, à repositionner dans l'inspecteur (#424)"
+            ));
+        }
 
         // Prompt extraction (N1/N2/N3).
         let prompt_arg = call.arguments.first().and_then(|a| a.as_expression());
@@ -513,6 +528,7 @@ impl Importer {
             max_iter: None,
             over: None,
             model,
+            effort,
         };
         self.nodes.push(node);
         self.prompts.insert(id.clone(), prompt_body);
@@ -908,6 +924,7 @@ fn start_node() -> NodeDef {
         max_iter: None,
         over: None,
         model: None,
+        effort: None,
     }
 }
 
@@ -926,6 +943,7 @@ fn end_node(agent_count: usize) -> NodeDef {
         max_iter: None,
         over: None,
         model: None,
+        effort: None,
     }
 }
 
@@ -1811,6 +1829,55 @@ mod tests {
         assert!(
             !result.warnings.is_empty(),
             "N3 placeholder must raise a warning"
+        );
+    }
+
+    #[test]
+    fn agent_opts_effort_and_model_land_on_the_node() {
+        // #424: `agent(prompt, {effort})` exists in the source vocabulary, exactly
+        // like `model` — so it maps onto `NodeDef.effort` instead of being dropped.
+        let src = r#"agent(`work`, { label: 'w', model: 'opus', effort: 'low' }); agent(`plain`, { label: 'p' })"#;
+        let (result, parsed) = import_and_parse(src, "t");
+        let node = |name: &str| parsed.nodes.iter().find(|n| n.name == name).unwrap();
+        assert_eq!(node("w").effort.as_deref(), Some("low"));
+        assert_eq!(node("w").model.as_deref(), Some("opus"));
+        // An agent with no effort stays unset — no key, no flag.
+        assert_eq!(node("p").effort, None);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains("effort")),
+            "a literal effort must not warn: {:?}",
+            result.warnings
+        );
+        // Structural nodes never carry one.
+        assert_eq!(
+            parsed
+                .nodes
+                .iter()
+                .find(|n| n.node_type == NodeType::Start)
+                .unwrap()
+                .effort,
+            None
+        );
+    }
+
+    #[test]
+    fn computed_agent_effort_warns_instead_of_vanishing() {
+        // A non-literal level can't be resolved without executing the script, so
+        // it IS lost — announce it (ADR-0001, clarification #268) rather than
+        // dropping it in silence.
+        let src = r#"const lvl = 'low'; agent(`work`, { label: 'w', effort: lvl })"#;
+        let (result, parsed) = import_and_parse(src, "t");
+        assert_eq!(
+            parsed.nodes.iter().find(|n| n.name == "w").unwrap().effort,
+            None
+        );
+        assert!(
+            result.warnings.iter().any(|w| w.message.contains("effort")),
+            "a computed effort must raise a warning: {:?}",
+            result.warnings
         );
     }
 

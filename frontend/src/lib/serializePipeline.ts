@@ -94,6 +94,14 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // emitted only when set so an unset node and a library twin with no model
     // both produce objects without the key and stay `synced`, not `diverged`.
     if (n.model) node.model = n.model;
+    // Per-node effort override (#424): semantic (compared in the pipeline diff),
+    // emitted only when set — the truthiness guard folds `undefined`, `null` AND
+    // `""` into "absent", which is what keeps an unset node byte-identical to a
+    // library twin with no effort (`synced`, not `diverged`) and what holds the
+    // launch-command byte-identity gate. This emitter and `exportNodeAsYaml` are
+    // deliberately NOT unified (see the note further down) — a field added here
+    // must be added there too.
+    if (n.effort) node.effort = n.effort;
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
     // `max_iter` that the daemon still requires and validates
     // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the
@@ -255,7 +263,7 @@ function promptToBlockScalar(prompt: string): string {
  * NEVER emits `id` (regenerated on add), `view` (re-centred), edges (they live
  * at pipeline level), or `over` (a region driver, not a node field). Legacy
  * `max_iter` (bounded-loop nodes) is emitted only when present. `model` (#296)
- * is emitted when set so a per-node override round-trips.
+ * and `effort` (#424) are emitted when set so a per-node override round-trips.
  */
 export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   const obj: Record<string, unknown> = {
@@ -264,6 +272,7 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   };
   if (node.interactive) obj.interactive = true;
   if (node.model) obj.model = node.model;
+  if (node.effort) obj.effort = node.effort;
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;

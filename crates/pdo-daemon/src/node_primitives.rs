@@ -197,6 +197,16 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     } else {
         Vec::new()
     };
+    // #347/#424: resolved once, then used by both the tail and the `NodeStarted`
+    // payload — the payload must record what the flags actually carried, because
+    // that is what the resume path reads back to re-pose `--effort`. Unlike
+    // `spawn_node`, this primitive is synchronous and already holds
+    // `params.default_model`, so nothing has to be hoisted.
+    let resolved_model = tmux_session_manager::resolve_node_model(
+        node.model.as_deref(),
+        params.default_model.as_deref(),
+    );
+    let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
     let tail = if is_script {
         tmux_session_manager::SessionTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
@@ -204,10 +214,8 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     } else {
         tmux_session_manager::SessionTail::Agent {
-            model: tmux_session_manager::resolve_node_model(
-                node.model.as_deref(),
-                params.default_model.as_deref(),
-            ),
+            model: resolved_model,
+            effort: resolved_effort,
         }
     };
 
@@ -222,6 +230,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
             "node_type": node_type_str(&node.node_type),
             "input_paths": input_paths,
+            // #424: launch-time model + effort, **resolved**. Mirrors the
+            // `spawn_node` payload; see the comment there for why the model is
+            // recorded even though nothing reads it back yet.
+            "model": resolved_model,
+            "effort": resolved_effort,
         })),
     };
 
@@ -575,6 +588,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -606,6 +620,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 

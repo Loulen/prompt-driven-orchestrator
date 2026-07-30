@@ -666,6 +666,11 @@ export interface NodeDef {
   /** Optional per-node model override (#296): free-text pass-through to
    *  `claude --model <x>`. Absent/null ⇒ account default (no flag). */
   model?: string | null;
+  /** Optional per-node reasoning-effort override (#424): free-text pass-through
+   *  to `claude --effort <level>`. Absent/null ⇒ no flag (account default).
+   *  Orthogonal to `model`, and semantic — it enters the pipeline diff and the
+   *  node-library content hash. */
+  effort?: string | null;
 }
 
 export interface EdgeEndpoint {

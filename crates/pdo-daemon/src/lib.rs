@@ -4446,6 +4446,10 @@ struct SaveToLibraryRequest {
     /// omits it still stars a node (as model-less), rather than 400-ing.
     #[serde(default)]
     model: Option<String>,
+    /// Per-node reasoning-effort override (#424). Optional for the same reason:
+    /// a client that omits it stars the node as effort-less instead of 400-ing.
+    #[serde(default)]
+    effort: Option<String>,
     #[serde(default)]
     prompt: String,
 }
@@ -4461,6 +4465,7 @@ async fn save_to_library(
         outputs: req.outputs,
         interactive: req.interactive,
         model: req.model,
+        effort: req.effort,
         max_iter: None,
         branches: None,
         prompt: req.prompt,
@@ -4503,6 +4508,9 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
                     // #345/#296: carry the per-node model so instantiating a
                     // library node restores its override, not the default.
                     "model": entry.model,
+                    // #424: same for the effort level — without it, instantiating
+                    // drops the level and the fresh node reads `diverged` at once.
+                    "effort": entry.effort,
                 },
                 "prompt": prompt,
             }))
@@ -4530,6 +4538,10 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     "outputs",
     "interactive",
     "model",
+    // #424. Without this entry, a node YAML carrying `effort:` — which parses
+    // perfectly — would be announced as `unknown field 'effort' (ignored)`: the
+    // exact silent loss ADR-0001/#268 forbids, reported where none happened.
+    "effort",
     "max_iter",
     "branches",
     "prompt",
@@ -4626,6 +4638,7 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "outputs": entry.outputs,
             "interactive": entry.interactive,
             "model": entry.model,
+            "effort": entry.effort,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -6631,8 +6644,12 @@ fn spawn_manager_session(
         0,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        // manager has no NodeDef — always an agent at the account default (#296)
-        tmux_session_manager::SessionTail::Agent { model: None },
+        // manager has no NodeDef — always an agent at the account default (#296),
+        // and for the same reason no effort level either (#424)
+        tmux_session_manager::SessionTail::Agent {
+            model: None,
+            effort: None,
+        },
         sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn manager tmux session: {e}");
@@ -8851,6 +8868,10 @@ async fn node_pane(
                     marker: &session_name,
                     workdir: &working_dir,
                 });
+            // #424: `--continue` restores the model but loses the effort level
+            // (measured on claude 2.1.220, and the transcript carries nothing to
+            // read back), so re-pose the level the node was LAUNCHED with.
+            let launch_effort = find_launch_effort(&events, &node_id, iter);
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -8858,6 +8879,7 @@ async fn node_pane(
                 &node_id,
                 iter,
                 state.port,
+                launch_effort.as_deref(),
                 state.tmux_cmd_override.as_deref(),
                 sandbox_wrap.as_ref(),
             ) {
@@ -8898,6 +8920,32 @@ async fn node_pane(
         source: "unavailable",
     })
     .into_response()
+}
+
+/// The effort level a node's iteration was **launched** with (#424), read back
+/// from its `NodeStarted` payload.
+///
+/// The event log is the source of truth here, deliberately **not** the current
+/// YAML: ADR-0007 makes a live node's in-flight iteration immutable to edits, so
+/// re-resolving from the pipeline would make resume the single path that applies a
+/// mid-iteration edit. The payload is schemaless (`Option<serde_json::Value>` in a
+/// `payload JSON` column, parsed best-effort), so a missing key — every historical
+/// row, and every node launched without an effort — simply yields `None`, i.e. a
+/// bare `--continue`, byte-identical to the legacy tail. No migration involved.
+fn find_launch_effort(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(|e| e.payload.as_ref())
+        .and_then(|p| p.get("effort"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }
 
 fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Option<&'a str> {
@@ -9146,8 +9194,14 @@ async fn spawn_merge_resolver(
         1,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        // __merge_resolver__ has no NodeDef — agent at the account default (#296)
-        tmux_session_manager::SessionTail::Agent { model: None },
+        // __merge_resolver__ has no NodeDef — agent at the account default (#296),
+        // hence no effort level either (#424). NOT to be confused with a `merge`
+        // NODE, which is a regular NodeDef routed through `spawn_node` and DOES
+        // carry an effort.
+        tmux_session_manager::SessionTail::Agent {
+            model: None,
+            effort: None,
+        },
         sandbox_wrap.as_ref(),
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
@@ -13415,6 +13469,104 @@ mod tests {
     }
 
     #[test]
+    fn find_launch_effort_reads_the_matching_node_started() {
+        // #424 (slice C): the resume path re-poses the LAUNCH-time level, read from
+        // the `NodeStarted` payload — never re-resolved from the current YAML
+        // (ADR-0007: a live node's in-flight iteration is immutable to edits).
+        let ev = |node: &str, iter: i64, payload: Option<serde_json::Value>| event_log::Event {
+            id: None,
+            run_id: "r1".to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some(node.to_string()),
+            iter: Some(iter),
+            payload,
+        };
+        let events = vec![
+            ev("probe", 1, Some(serde_json::json!({"effort": "low"}))),
+            ev("probe", 2, Some(serde_json::json!({"effort": "xhigh"}))),
+            // No effort recorded → the legacy / account-default path.
+            ev("control", 1, Some(serde_json::json!({"model": "opus"}))),
+            // Historical row: the payload predates #424 entirely.
+            ev(
+                "legacy",
+                1,
+                Some(serde_json::json!({"node_type": "doc-only"})),
+            ),
+            // Guard-probe shape (never appended in production, but harmless here).
+            ev("nopayload", 1, None),
+            // A null effort must read as unset, not as the string "null".
+            ev("nulled", 1, Some(serde_json::json!({"effort": null}))),
+            // An empty string collapses to unset — same rule as everywhere else.
+            ev("blank", 1, Some(serde_json::json!({"effort": ""}))),
+        ];
+
+        // Keyed on (node_id, iter): iter 2 must not leak into iter 1.
+        assert_eq!(
+            find_launch_effort(&events, "probe", 1).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            find_launch_effort(&events, "probe", 2).as_deref(),
+            Some("xhigh")
+        );
+        for (node, iter) in [
+            ("control", 1),
+            ("legacy", 1),
+            ("nopayload", 1),
+            ("nulled", 1),
+            ("blank", 1),
+            ("probe", 3),
+            ("absent", 1),
+        ] {
+            assert_eq!(
+                find_launch_effort(&events, node, iter),
+                None,
+                "{node} iter {iter} must yield None (bare --continue)"
+            );
+        }
+
+        // Only `NodeStarted` counts — a same-node event of another kind must not
+        // be mistaken for a launch record.
+        let mut other = ev("probe", 5, Some(serde_json::json!({"effort": "max"})));
+        other.kind = event_log::EventKind::NodeCompleted;
+        assert_eq!(find_launch_effort(&[other], "probe", 5), None);
+    }
+
+    #[test]
+    fn parse_node_spec_effort_round_trips() {
+        // #424: the only test that catches the `json!` spec in `parse_node_spec`
+        // dropping the effort — the macro compiles perfectly without the key, so
+        // *Add node from YAML…* would silently create an effort-less node.
+        let body =
+            parse_node_spec("name: n\ntype: code-mutating\nmodel: opus\neffort: low\n").unwrap();
+        assert_eq!(body["spec"]["effort"], "low");
+        assert_eq!(body["spec"]["model"], "opus");
+        // …and `effort` is a KNOWN node key: a YAML that parses fine must NOT be
+        // announced as an ignored field (ADR-0001/#268 forbids the silent loss —
+        // and forbids reporting one that did not happen).
+        assert_eq!(
+            body["warnings"].as_array().unwrap().len(),
+            0,
+            "effort must not warn: {:?}",
+            body["warnings"]
+        );
+        // A node on the account default omits `effort:` → null in the spec.
+        let plain = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        assert!(plain["spec"]["effort"].is_null());
+    }
+
+    #[test]
+    fn parse_node_spec_unknown_effort_level_passes_through() {
+        // #424: the wire is free-text. A level the curated UI set does not know
+        // must reach the spec verbatim, not be dropped or coerced (the picker
+        // renders it in a dedicated pass-through segment).
+        let body = parse_node_spec("name: n\ntype: doc-only\neffort: turbo\n").unwrap();
+        assert_eq!(body["spec"]["effort"], "turbo");
+        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
     fn parse_node_spec_prompt_absent_defaults_empty() {
         let body = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
         assert_eq!(body["prompt"], "");
@@ -16533,6 +16685,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -22047,6 +22200,7 @@ edges:
                 max_iter: None,
                 over: None,
                 model: None,
+                effort: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -22099,6 +22253,7 @@ edges:
                 max_iter: None,
                 over: None,
                 model: None,
+                effort: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -23905,6 +24060,7 @@ edges: []
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         };
         let pipeline = pipeline::PipelineDef {
             name: "spawn-unit".into(),

@@ -21,6 +21,12 @@ pub struct LibraryEntry {
     /// on the account default round-trip byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Per-node reasoning-effort override (#424). Carried for the same reason as
+    /// `model`: a starred node whose effort the library did not know would read
+    /// `diverged` forever (the #345 trap). Optional + skip-if-none, so pre-#424
+    /// entries and nodes on the account default round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iter: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,6 +198,8 @@ pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
         // #345/#296: carry the per-node model so a starred node stays synced
         // instead of flipping to `diverged` the moment it has an override.
         model: node.model.clone(),
+        // #424: same reasoning for the effort level.
+        effort: node.effort.clone(),
         max_iter: None,
         branches: None,
         prompt: prompt.to_string(),
@@ -1023,6 +1031,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -1077,6 +1086,7 @@ mod tests {
                 outputs: vec![],
                 interactive: false,
                 model: None,
+                effort: None,
                 max_iter: None,
                 branches: None,
                 prompt: "first".to_string(),
@@ -1142,6 +1152,8 @@ mod tests {
             node_type: pipeline::NodeType::CodeMutating,
             // #345/#296: a per-node model must round-trip losslessly.
             model: Some("opus".to_string()),
+            // #424: and so must a per-node effort.
+            effort: Some("low".to_string()),
             inputs: vec![
                 pipeline::Port {
                     name: "plan".to_string(),
@@ -1205,6 +1217,7 @@ mod tests {
             outputs: vec![],
             interactive: false,
             model: None,
+            effort: None,
             max_iter: None,
             branches: None,
             prompt: "hi".to_string(),
@@ -1227,6 +1240,65 @@ mod tests {
     }
 
     #[test]
+    fn yaml_round_trip_effort_absent_is_omitted() {
+        // #424: a node on the account default (effort: None) must not emit an
+        // `effort:` key, and must round-trip to None (skip_serializing_if). This is
+        // the gate that keeps an unset node byte-identical to a pre-#424 library
+        // entry — the alternative is `diverged` forever (the #345 trap).
+        let entry = LibraryEntry {
+            name: "Plain".to_string(),
+            node_type: pipeline::NodeType::DocOnly,
+            inputs: vec![],
+            outputs: vec![],
+            interactive: false,
+            model: None,
+            effort: None,
+            max_iter: None,
+            branches: None,
+            prompt: "hi".to_string(),
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(
+            !yaml.contains("effort:"),
+            "effort: leaked into yaml:\n{yaml}"
+        );
+        let parsed: LibraryEntry = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed, entry);
+        assert_eq!(parsed.effort, None);
+    }
+
+    #[test]
+    fn entry_from_node_carries_effort() {
+        // #424: a node with a per-node effort must produce an effort-aware library
+        // entry, and the two axes must not interfere.
+        let mut node = make_node("Effortful");
+        node.model = Some("sonnet".to_string());
+        node.effort = Some("xhigh".to_string());
+        let entry = entry_from_node(&node, "prompt");
+        assert_eq!(entry.effort, Some("xhigh".to_string()));
+        assert_eq!(entry.model, Some("sonnet".to_string()));
+    }
+
+    #[test]
+    fn sync_state_diverges_on_effort_change() {
+        // #424: the starred-node verdict must see the effort. A library entry that
+        // did not know the field would read `synced` while the two differ — exactly
+        // bug #345, one field later.
+        with_temp_home(|| {
+            let mut node = make_node("Effortful");
+            node.effort = Some("low".to_string());
+            save(&entry_from_node(&node, "prompt")).unwrap();
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Synced);
+
+            node.effort = Some("high".to_string());
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
+
+            node.effort = None;
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
+        });
+    }
+
+    #[test]
     fn list_is_sorted_alphabetically() {
         with_temp_home(|| {
             let base = LibraryEntry {
@@ -1236,6 +1308,7 @@ mod tests {
                 outputs: vec![],
                 interactive: false,
                 model: None,
+                effort: None,
                 max_iter: None,
                 branches: None,
                 prompt: "p".to_string(),
@@ -1556,6 +1629,7 @@ mod tests {
             name: "Typed Node".to_string(),
             node_type: pipeline::NodeType::DocOnly,
             model: None,
+            effort: None,
             inputs: vec![
                 pipeline::Port {
                     name: "task".to_string(),
@@ -1646,6 +1720,7 @@ mod tests {
                 name: "Schema Node".to_string(),
                 node_type: pipeline::NodeType::CodeMutating,
                 model: None,
+                effort: None,
                 inputs: vec![pipeline::Port {
                     name: "in".to_string(),
                     repeated: false,

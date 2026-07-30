@@ -59,6 +59,14 @@ const NODE: Complete<NodeDef> = {
   max_iter: 5,
   over: "items",
   model: "opus",
+  // #424. Filling this in is what `Complete<NodeDef>` forces (and `tsc` gates it
+  // in CI) — but naming the field here proves NOTHING about emission: the
+  // set-equality below only compares "emitted" against "classified", so a field
+  // that is neither would leave the two sets equal and the suite green. That is
+  // exactly how `EdgeDef.repeated` slipped through. The real proof lives in
+  // `serializePipeline.test.ts` (the key lands in the YAML object) and in
+  // `editStore.test.ts` (edit → spread → serializer → save payload).
+  effort: "low",
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },

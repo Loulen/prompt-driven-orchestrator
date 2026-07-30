@@ -138,6 +138,11 @@ struct NodeProjection<'a> {
     node_type: &'a NodeType,
     interactive: bool,
     model: Option<&'a str>,
+    /// Per-node reasoning-effort override (#424). Semantic for the same reason as
+    /// `model`: it changes how the agent behaves, so a pipeline that differs only
+    /// by an effort level is *not* the same pipeline — the library drift badge and
+    /// the pipeline diff must both see it.
+    effort: Option<&'a str>,
     max_iter: Option<serde_json::Value>,
     /// Legacy per-node collection driver. The frontend serializer no longer emits
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
@@ -160,6 +165,7 @@ impl<'a> NodeProjection<'a> {
             max_iter,
             over,
             model,
+            effort,
         } = node;
         let _layout = view; // LAYOUT_FIELDS["node"]
         Self {
@@ -168,6 +174,7 @@ impl<'a> NodeProjection<'a> {
             node_type,
             interactive: *interactive,
             model: model.as_deref(),
+            effort: effort.as_deref(),
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
             inputs: inputs.iter().map(PortProjection::of).collect(),
@@ -445,6 +452,16 @@ mod tests {
             (
                 "per-node model",
                 base.replace("  type: doc-only", "  type: doc-only\n  model: opus"),
+            ),
+            (
+                // #424. This list is maintained BY HAND — nothing in the build
+                // demands an entry, and the compiler is happy with a
+                // `let _ = effort;` in `NodeProjection::of`. Without this case, a
+                // neutralised field would ship silently and the library's ⚠ drifted
+                // badge would never light up on an effort change: the user would
+                // launch a stale copy believing it current.
+                "per-node effort",
+                base.replace("  type: doc-only", "  type: doc-only\n  effort: low"),
             ),
             (
                 "edge condition",

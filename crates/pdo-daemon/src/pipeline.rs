@@ -145,6 +145,21 @@ pub struct NodeDef {
     /// Semantic, not layout — included in the pipeline diff (ADR-0001).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Optional per-node reasoning-effort override (#424): free-text pass-through
+    /// to `claude --effort <level>` when the node spawns. Absent ⇒ no flag emitted,
+    /// launch command byte-identical to the legacy path.
+    ///
+    /// Orthogonal to `model`: the model says *which* agent runs, the effort says
+    /// *how long it thinks*. Unlike `--model` (an invalid id makes `claude` exit
+    /// non-zero), an invalid `--effort` is only a stderr warning and the session
+    /// starts at the default — a silent wrong value. That is why the UI proposes a
+    /// closed set while the wire stays open (ADR-0001: sharp tool, no closed enum
+    /// that would perish at every model release).
+    ///
+    /// Semantic, not layout — included in the pipeline diff and in the library
+    /// content hash (`pipeline_semantics`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2389,6 +2404,7 @@ nodes:
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
@@ -3591,6 +3607,95 @@ nodes:
         // Absent ⇒ never serialized (clean file, round-trips by absence).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("model:"));
+    }
+
+    #[test]
+    fn parses_node_effort_and_round_trips() {
+        // #424: an agent-spawning node may carry an `effort:` override. It parses
+        // into `NodeDef.effort` and survives a serialize → re-parse round-trip.
+        // Pass-through, deliberately not an enum: a value the wire does not know
+        // must reach `claude` verbatim rather than fail the whole pipeline parse.
+        let yaml = with_start_end(
+            r#"
+name: per-node-effort
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    model: opus
+    effort: low
+    outputs:
+      - name: code
+  - id: ab000002
+    name: exotic
+    type: doc-only
+    effort: turbo
+    outputs:
+      - name: notes
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let find = |p: &PipelineDef, id: &str| {
+            p.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.effort.clone())
+                .unwrap()
+        };
+        assert_eq!(find(&result.pipeline, "ab000001").as_deref(), Some("low"));
+        // Orthogonal to the model — both land, neither clobbers the other.
+        assert_eq!(
+            result
+                .pipeline
+                .nodes
+                .iter()
+                .find(|n| n.id == "ab000001")
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("opus")
+        );
+        // An unknown level parses fine (pass-through, no closed enum).
+        assert_eq!(find(&result.pipeline, "ab000002").as_deref(), Some("turbo"));
+
+        // Round-trips: re-serialize, re-parse — both efforts survive.
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let result2 = parse_pipeline(&serialized).unwrap();
+        assert_eq!(find(&result2.pipeline, "ab000001").as_deref(), Some("low"));
+        assert_eq!(
+            find(&result2.pipeline, "ab000002").as_deref(),
+            Some("turbo")
+        );
+    }
+
+    #[test]
+    fn node_effort_defaults_to_none() {
+        // #424: a node with no `effort:` parses to `None` and is never serialized
+        // — the absence gate that keeps an unset node byte-identical to a library
+        // twin with no effort (the #345 "diverged forever" trap), and that keeps
+        // the launch command byte-identical to the legacy path.
+        let yaml = with_start_end(
+            r#"
+name: no-effort
+nodes:
+  - id: ab000001
+    name: implementer
+    type: code-mutating
+    outputs:
+      - name: code
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert!(node.effort.is_none());
+        // Absent ⇒ never serialized (clean file, round-trips by absence).
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(!serialized.contains("effort:"));
     }
 
     #[test]

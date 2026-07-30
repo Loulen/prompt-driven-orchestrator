@@ -966,6 +966,9 @@ export interface LibraryEntry {
   /** Per-node model override (#296/#345) — the node library is model-aware.
    * Absent/null ⇒ account default. */
   model?: string | null;
+  /** Per-node effort override (#424) — the node library is effort-aware too.
+   * Absent/null ⇒ account default. */
+  effort?: string | null;
   max_iter?: number | null;
   branches?: number | null;
   prompt: string;
@@ -983,6 +986,8 @@ export interface LibrarySaveSpec {
   interactive: boolean;
   /** Per-node model override (#296/#345). Omit/undefined ⇒ account default. */
   model?: string | null;
+  /** Per-node effort override (#424). Omit/undefined ⇒ account default. */
+  effort?: string | null;
   prompt: string;
 }
 
@@ -1007,6 +1012,8 @@ export interface InstantiateResult {
     interactive: boolean;
     /** Per-node model override (#296/#345). Null ⇒ account default. */
     model?: string | null;
+    /** Per-node effort override (#424). Null ⇒ account default. */
+    effort?: string | null;
   };
   prompt: string;
 }
@@ -1033,6 +1040,7 @@ export interface ParseNodeResult {
     outputs: LibraryPort[];
     interactive: boolean;
     model?: string | null;
+    effort?: string | null;
     max_iter?: number | string | null;
     branches?: number | null;
   };

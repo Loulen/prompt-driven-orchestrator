@@ -304,6 +304,36 @@ pub(crate) async fn run_command(
         Err(e) => return e.into_response(),
     };
 
+    dispatch(state, run_id, cmd).await
+}
+
+/// Run one validated command and answer for it.
+///
+/// **Returns an `axum::Response`, deliberately — not a semantic
+/// `CommandOutcome` mapped to HTTP by a central mapper.** That alternative is
+/// provably lossy: this surface emits twenty-two distinct (status,
+/// content-type, body-shape) triplets, including seven `404 text/plain` "run
+/// not found" against one `404` in JSON, a `409 text/plain` against eight in
+/// JSON, five success shapes no verdict enum expresses, and the `201 {run_id}`
+/// of `create_run_core` forwarded verbatim by `retry_all` — which the frontend
+/// reads to navigate to the retried Run. A single mapper must pick one
+/// content-type per verdict, and each pick rewrites the other half. Returning
+/// the `Response` is lossless by construction: the wire contract cannot see
+/// this refactor. See the #236 addendum to ADR-0009.
+///
+/// `dispatch` is a DRIVER, not a leaf primitive: it reaches twenty-three root
+/// items across five subsystems (sqlite, tmux, docker, worktrees, Run
+/// creation). The house idiom for a driver is the whole `AppState`
+/// (`run_advance`, `scheduler_interpreter`); dependency injection à la
+/// `SpawnDeps` is reserved for leaves (`node_spawn`), and a bundle here would
+/// carry all of `AppState` while buying no testability.
+///
+/// Both parameters are taken **by value**, which is what lets every arm move
+/// across byte-for-byte: `Arc` because `force_spawn_node` wants `&Arc<AppState>`
+/// and the arms already say `&state`; `run_id` because every arm builds events
+/// that own it. The handler holds no use for either afterwards, so the moves
+/// cost nothing.
+async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Response {
     // Read before the match consumes `cmd`: the region arm logs its wire kind
     // after two `.await`s, and `&'static str` costs nothing to carry.
     let kind_str = cmd.kind_str();

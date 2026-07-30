@@ -126,6 +126,26 @@ async fn create_trigger_with_guard(
     resp.json().await.unwrap()
 }
 
+/// Pin the guard timeout in this daemon's **stored** settings.
+///
+/// `guard_timeout_with` ranks `stored → env → default` (#129, ADR-0015), so this
+/// outranks the process-wide `PDO_GUARD_TIMEOUT_MS` seam that other tests in
+/// this binary set — and unlike that seam it is per-daemon state, so it cannot
+/// leak across parallel tests.
+async fn pin_guard_timeout_secs(daemon: &TestDaemon, secs: u64) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "guard_timeout_secs": secs }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "PUT /settings should accept an in-range guard_timeout_secs"
+    );
+}
+
 /// Create a Trigger with an explicit overlap policy and optional concurrency cap
 /// (#239). `max_concurrent: None` posts no cap (unbounded under `allow`).
 async fn create_trigger_with_overlap(
@@ -428,9 +448,20 @@ async fn concurrent_ticks_fire_a_due_trigger_exactly_once() {
     // loop and the test seam that made `guard_exit_zero_fires_with_stdout_as_input`
     // flake under full-suite load. Ticks must serialize. The yearly cron keeps
     // the recomputed next fire far away, so the second tick can't be
-    // legitimately due again. Keep the sleep under the 200 ms guard-timeout
-    // override that `guard_timeout_records_guard_error_and_skips` sets
-    // process-wide (std::env is shared across parallel tests).
+    // legitimately due again.
+    //
+    // The 150 ms sleep needs a timeout it can't lose a race to.
+    // `guard_timeout_records_guard_error_and_skips` sets the *process-wide*
+    // `PDO_GUARD_TIMEOUT_MS=200` seam, and `std::env` is shared across the
+    // parallel tests of this binary — so under full-suite load `sh -c` spawn
+    // overhead plus 150 ms crossed 200 ms, the guard timed out, and this test
+    // saw 0 fires instead of 1. Pin the timeout in *this daemon's* stored
+    // settings instead: `guard_timeout_with` ranks `stored → env → default`
+    // (ADR-0015), so a stored value outranks that env var, and the store is
+    // per-daemon state rather than a process global. Immune by construction,
+    // not by margin.
+    pin_guard_timeout_secs(&daemon, 60).await;
+
     let trigger = create_trigger_with_guard(
         &daemon,
         "racer",

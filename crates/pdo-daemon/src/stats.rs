@@ -18,7 +18,7 @@
 //! separately so a bucket is never silently undercounted (ADR-0001 honesty).
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -342,6 +342,27 @@ fn fold_cost(rows: &[CostRow]) -> StatsCost {
     }
 }
 
+/// The "by project" bucket of a cost row: the Run's `target_repo`, else the
+/// daemon repo root. No "Unassigned" bucket (invariant #6, #258).
+///
+/// This reads the raw `run_started` payload rather than projecting a full
+/// `RunState`, so the SQL fold stays cheap — it is a deliberate inline copy of
+/// `effective_repo_root`, named here so it can be tested.
+///
+/// #470/ADR-0033: do NOT symmetrise this with the hardened write boundary.
+/// `run_started` events recorded before #470 legitimately carry
+/// `target_repo: null` (≈ 46 of 101 dev runs), and resolving them here is exactly
+/// what buys the "no Unassigned bucket" invariant. The asymmetry is the design:
+/// required where there is a caller to answer 400 to, resolved where there is
+/// only a past record to interpret.
+fn cost_project_root(payload: &serde_json::Value, daemon_root: &Path) -> PathBuf {
+    payload
+        .get("target_repo")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| daemon_root.to_path_buf())
+}
+
 /// `GET /stats/cost` — Class B, memo + app-side fold. Heavy (fans over the
 /// `~/.claude` corpus); fetched lazily by the client only when the cost tab is
 /// shown.
@@ -404,12 +425,7 @@ pub async fn stats_cost(
             .unwrap_or("(unknown)")
             .to_string();
 
-        // "By project" = `effective_repo_root`: the run's `target_repo`, else the
-        // daemon repo root. No "Unassigned" bucket (invariant #6, #258).
-        let target_repo = payload.get("target_repo").and_then(|v| v.as_str());
-        let repo_root: PathBuf = target_repo
-            .map(PathBuf::from)
-            .unwrap_or_else(|| state.repo_root.clone());
+        let repo_root = cost_project_root(&payload, &state.repo_root);
         let project = repo_root.to_string_lossy().into_owned();
 
         // #408: read the transcripts from the sandboxed Run's staged home while it
@@ -457,18 +473,22 @@ mod tests {
         db
     }
 
-    /// Insert a `run_started` + a terminal event for a run.
+    /// Insert a `run_started` + a terminal event for a run. `target_repo` is an
+    /// `Option` because a Run recorded before #470 legitimately has none, and the
+    /// "by project" bucket must still place it (ADR-0033).
     async fn seed_run(
         db: &sqlx::SqlitePool,
         run_id: &str,
         pipeline_name: &str,
-        target_repo: &str,
+        target_repo: Option<&str>,
         day: &str,
         terminal: &str,
     ) {
-        let payload =
-            serde_json::json!({ "pipeline_name": pipeline_name, "target_repo": target_repo })
-                .to_string();
+        let mut payload_json = serde_json::json!({ "pipeline_name": pipeline_name });
+        if let Some(repo) = target_repo {
+            payload_json["target_repo"] = serde_json::json!(repo);
+        }
+        let payload = payload_json.to_string();
         sqlx::query(
             "INSERT INTO events (run_id, ts, kind, payload) VALUES (?, ?, 'run_started', ?)",
         )
@@ -500,12 +520,60 @@ mod tests {
 
     /// The FP-377 oracle fixture (6 runs across three days).
     async fn seed_oracle(db: &sqlx::SqlitePool) {
-        seed_run(db, "r1", "alpha", "/proj/A", "2026-07-15", "run_completed").await;
-        seed_run(db, "r2", "alpha", "/proj/A", "2026-07-15", "run_failed").await;
-        seed_run(db, "r3", "beta", "/proj/B", "2026-07-16", "run_completed").await;
-        seed_run(db, "r4", "beta", "/proj/B", "2026-07-16", "run_completed").await;
-        seed_run(db, "r5", "alpha", "/proj/A", "2026-07-17", "run_skipped").await;
-        seed_run(db, "r6", "beta", "/proj/B", "2026-07-17", "run_failed").await;
+        seed_run(
+            db,
+            "r1",
+            "alpha",
+            Some("/proj/A"),
+            "2026-07-15",
+            "run_completed",
+        )
+        .await;
+        seed_run(
+            db,
+            "r2",
+            "alpha",
+            Some("/proj/A"),
+            "2026-07-15",
+            "run_failed",
+        )
+        .await;
+        seed_run(
+            db,
+            "r3",
+            "beta",
+            Some("/proj/B"),
+            "2026-07-16",
+            "run_completed",
+        )
+        .await;
+        seed_run(
+            db,
+            "r4",
+            "beta",
+            Some("/proj/B"),
+            "2026-07-16",
+            "run_completed",
+        )
+        .await;
+        seed_run(
+            db,
+            "r5",
+            "alpha",
+            Some("/proj/A"),
+            "2026-07-17",
+            "run_skipped",
+        )
+        .await;
+        seed_run(
+            db,
+            "r6",
+            "beta",
+            Some("/proj/B"),
+            "2026-07-17",
+            "run_failed",
+        )
+        .await;
         seed_session(db, "r1", "2026-07-15").await;
         seed_session(db, "r3", "2026-07-16").await;
         seed_session(db, "r4", "2026-07-16").await;
@@ -695,6 +763,40 @@ mod tests {
         // by_project mirrors the pipeline split here.
         assert_eq!(c.by_project[0].key, "/proj/A");
         assert!((c.by_project[0].usd - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cost_project_root_uses_the_runs_target_repo() {
+        let payload = serde_json::json!({ "target_repo": "/proj/A" });
+        assert_eq!(
+            cost_project_root(&payload, Path::new("/daemon/root")),
+            PathBuf::from("/proj/A")
+        );
+    }
+
+    #[test]
+    fn cost_project_root_buckets_a_legacy_null_target_run_under_the_daemon_root() {
+        // #470/ADR-0033: the write boundary is hardened, this READ is not. A
+        // `run_started` from before the change carries no `target_repo`, and the
+        // "by project" axis must still place it — there is no "Unassigned" bucket
+        // (invariant #6, #258). Removing this fallback would make ~46 of 101 dev
+        // runs vanish from the cost cockpit.
+        let payload = serde_json::json!({ "pipeline_name": "alpha" });
+        assert_eq!(
+            cost_project_root(&payload, Path::new("/daemon/root")),
+            PathBuf::from("/daemon/root")
+        );
+    }
+
+    #[tokio::test]
+    async fn overview_counts_a_legacy_null_target_run() {
+        // Companion to the above at the SQL layer: a null-target Run is an
+        // ordinary Run everywhere on the read side.
+        let db = mem_db().await;
+        seed_run(&db, "legacy", "alpha", None, "2026-07-15", "run_completed").await;
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO).await.unwrap();
+        assert_eq!(ov.runs.len(), 1);
+        assert_eq!(ov.runs[0].count, 1);
     }
 
     #[test]

@@ -169,10 +169,15 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str, pipeline: &str) -> String {
-    let body = serde_json::json!({ "pipeline": pipeline, "input": "test input" });
+async fn create_run(daemon: &TestDaemon, pipeline: &str) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "test input",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -310,7 +315,7 @@ async fn a_long_silent_tool_call_never_kills_the_run() {
 
     set_autocomplete(&daemon.url(), true).await;
 
-    let run_id = create_run(&daemon.url(), DOC_PIPELINE).await;
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -374,7 +379,7 @@ async fn an_idle_transcript_with_incomplete_outputs_is_no_longer_stale() {
     let socket = daemon.tmux_socket();
     let home = daemon.repo_root().to_path_buf();
 
-    let run_id = create_run(&daemon.url(), DOC_PIPELINE).await;
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
@@ -417,7 +422,7 @@ async fn session_death_is_still_detected() {
         .unwrap();
     let socket = daemon.tmux_socket();
 
-    let run_id = create_run(&daemon.url(), DOC_PIPELINE).await;
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
     kill_session(&socket, &session);
@@ -489,7 +494,7 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
         serde_json::json!(false)
     );
 
-    let run_id = create_run(&daemon.url(), DOC_PIPELINE).await;
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
@@ -569,7 +574,7 @@ async fn auto_completing_a_code_mutating_node_merges_its_commit() {
 
     set_autocomplete(&daemon.url(), true).await;
 
-    let run_id = create_run(&daemon.url(), CM_PIPELINE).await;
+    let run_id = create_run(&daemon, CM_PIPELINE).await;
     let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 

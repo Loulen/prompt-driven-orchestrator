@@ -116,14 +116,16 @@ async fn next_pipeline_modified_event(
     result.ok().flatten()
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
-        "variables": {}
+        "variables": {},
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -138,7 +140,7 @@ async fn create_run(daemon_url: &str) -> String {
 #[tokio::test]
 async fn run_creates_pipeline_copy() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // Assert pipeline.yaml was copied to the run dir
     let yaml_path = daemon
@@ -169,7 +171,7 @@ async fn run_creates_pipeline_copy() {
 #[tokio::test]
 async fn external_write_to_run_pipeline_emits_pipeline_modified() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain initial ready + any run events
@@ -203,7 +205,7 @@ async fn external_write_to_run_pipeline_emits_pipeline_modified() {
 #[tokio::test]
 async fn cleanup_run_removes_pipeline_copy() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let run_dir = daemon.repo_root().join(".pdo").join("runs").join(&run_id);
     assert!(run_dir.join("pipeline.yaml").exists());
@@ -229,7 +231,7 @@ async fn external_prompt_edit_in_run_emits_pipeline_modified() {
     // its own watch — registered at run creation. An external edit to a
     // prompt file must still surface as a `pipeline_modified` event.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain ready + any startup events.
@@ -265,7 +267,7 @@ async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
     // `prompts/` dir that no reader looks in. A round-trip: the edit must then be
     // visible to the normal editor via GET /pipelines/:id.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     const EDITED: &str = "You are an EDITED planner via run-scoped save.\n";
     let resp = reqwest::Client::new()
@@ -360,7 +362,7 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
     }
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain initial messages (ready + node_started for planner)
@@ -477,7 +479,7 @@ edges:
 #[tokio::test]
 async fn get_run_returns_augmented_node_defs() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // Modify the run-scoped YAML to add a node
     let yaml_path = daemon
@@ -584,7 +586,7 @@ async fn next_any_pipeline_event(
 #[tokio::test]
 async fn unrelated_md_in_run_worktree_does_not_emit_pipeline_event() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain initial ready + run events
@@ -672,14 +674,16 @@ fn seed_two_node(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_two_node_run(daemon_url: &str) -> String {
+async fn create_two_node_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": TWO_NODE_PIPELINE_NAME,
         "input": "test input",
-        "variables": {}
+        "variables": {},
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -699,7 +703,7 @@ async fn removing_node_from_run_pipeline_prevents_spawn() {
     }
 
     let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
-    let run_id = create_two_node_run(&daemon.url()).await;
+    let run_id = create_two_node_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain initial messages (ready + node_started for planner)

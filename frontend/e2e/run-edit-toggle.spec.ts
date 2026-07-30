@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMultipart } from "./helpers";
 
 // Layer 3b — proves issue #57 unified edit mode. Boots the daemon, creates a
 // run, asserts the editor canvas appears automatically (no "Edit this run"
@@ -57,7 +58,7 @@ async function createRun(
   request: import("@playwright/test").APIRequestContext,
 ): Promise<string> {
   const resp = await request.post("/runs", {
-    multipart: { pipeline: PIPELINE_NAME, input: "test input", variables: "{}" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "test input", variables: "{}" }),
   });
   expect(resp.ok()).toBeTruthy();
   const { run_id } = await resp.json();

@@ -82,8 +82,13 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: String) -> Option<String> {
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "go" });
+async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "go",
+        "target_repo": target_repo,
+    });
     let resp = reqwest::Client::new()
         .post(format!("{daemon_url}/runs"))
         .json(&body)
@@ -123,12 +128,15 @@ async fn concurrent_spawns_never_exceed_the_cap() {
     // admitted node keeps holding its slot (never exits) for the duration.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let url = daemon.url();
+    // #470: every Run must name its target repo — the daemon root, explicitly.
+    let target_repo = daemon.target_repo();
 
     // Fire all run creations concurrently so their entry nodes race to spawn.
     let mut handles = Vec::with_capacity(RUNS);
     for _ in 0..RUNS {
         let url = url.clone();
-        handles.push(tokio::spawn(async move { create_run(url).await }));
+        let repo = target_repo.clone();
+        handles.push(tokio::spawn(async move { create_run(url, repo).await }));
     }
     let mut run_ids = Vec::with_capacity(RUNS);
     for h in handles {

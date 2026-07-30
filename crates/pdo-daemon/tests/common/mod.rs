@@ -259,6 +259,17 @@ impl TestDaemon {
         self.tempdir.path()
     }
 
+    /// The `target_repo` a test Run or Trigger should name (#470, ADR-0033).
+    ///
+    /// `target_repo` is **required** at every write boundary — the daemon's own
+    /// working directory is no longer an implicit Run target. Every test in this
+    /// directory was written against that old implicit default, so naming the
+    /// daemon root here keeps the exact same semantics, now stated explicitly.
+    /// Put this in every `POST /runs` and `POST /triggers` body.
+    pub fn target_repo(&self) -> String {
+        self.repo_root().to_string_lossy().into_owned()
+    }
+
     /// Tmux socket scoped to this daemon (`tmux -L <name>`). Tests that
     /// spawn or inspect tmux sessions out-of-band must use this socket so
     /// they hit the same tmux server the daemon talks to.
@@ -336,6 +347,33 @@ impl TestDaemon {
         if let Some(handle) = self.handle.as_ref() {
             handle.force_trigger_due(trigger_id).await;
         }
+    }
+
+    /// Seed a Trigger row with a NULL `target_repo` — a **pre-#470 record**
+    /// (ADR-0033). `POST /triggers` refuses that shape now, so a test that needs
+    /// one has to go under the API. Returns the new trigger id.
+    pub async fn seed_legacy_trigger_without_target_repo(
+        &self,
+        name: &str,
+        pipeline_id: &str,
+        cron: &str,
+        guard_command: Option<&str>,
+    ) -> String {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_legacy_trigger_without_target_repo(name, pipeline_id, cron, guard_command)
+            .await
+    }
+
+    /// Seed a `run_started` event with no `target_repo` — a pre-#470 Run record
+    /// (ADR-0033). Same reason as the Trigger seam above.
+    pub async fn seed_legacy_run_without_target_repo(&self, run_id: &str, pipeline_name: &str) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_legacy_run_without_target_repo(run_id, pipeline_name)
+            .await;
     }
 
     /// Open a WebSocket connection to `/ws`. Returns the connected stream so the

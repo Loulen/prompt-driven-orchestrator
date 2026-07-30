@@ -85,7 +85,12 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
-    let body = serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "do the thing" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "do the thing",
+        "target_repo": daemon.target_repo(),
+    });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
+import { runMultipart } from "./helpers";
 
 // Layer 3b — Initial prompt section (#26).
 // Verifies: selecting a running node shows the initial prompt containing
@@ -72,10 +73,10 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
 
   // Create a run via the API
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: {
+    multipart: runMultipart({
       pipeline: PIPELINE_NAME,
       input: "e2e initial prompt test",
-    },
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

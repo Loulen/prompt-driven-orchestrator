@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupRuns } from "./helpers";
+import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — force-spawn a pending node via the UI Start button (#204).
 //
@@ -89,7 +89,7 @@ test("Start button force-spawns a pending downstream node", async ({
   // Create a run — worker-a runs (held by the daemon's `sleep` stub),
   // worker-b stays pending behind it.
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "force-start test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "force-start test" }),
   });
   expect(resp.status()).toBe(201);
   ({ run_id: runId } = await resp.json());

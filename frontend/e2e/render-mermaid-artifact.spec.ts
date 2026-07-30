@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
+import { runBody } from "./helpers";
 
 // Layer 3b — mermaid rendering in MarkdownArtifactModal (#240, ADR-0013).
 // jsdom can't execute mermaid (no SVG getBBox), so this is the meaningful
@@ -134,7 +135,7 @@ async function createRunAndSeedArtifacts(baseURL: string) {
   const resp = await fetch(`${baseURL}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pipeline: PIPELINE_NAME, input: "mermaid layer3b" }),
+    body: JSON.stringify(runBody({ pipeline: PIPELINE_NAME, input: "mermaid layer3b" })),
   });
   expect(resp.status).toBe(201);
   const json = await resp.json();
@@ -236,16 +237,26 @@ test("renders, degrades, secures and ignores non-mermaid fences", async ({
   const complexSvg = page.locator('[data-testid="mermaid-diagram"] svg');
   await expect(complexSvg).toBeVisible({ timeout: 10_000 });
   await expectNonZeroBBox(complexSvg);
-  const fills = await complexSvg.evaluate((svg) => {
-    const out: string[] = [];
-    svg
-      .querySelectorAll<SVGElement>("rect, polygon, path, circle")
-      .forEach((el) => {
-        const f = getComputedStyle(el).fill;
-        if (f && f !== "none") out.push(f);
-      });
-    return out;
-  });
+  // Mermaid populates the `<svg>` AFTER it becomes visible and gets a box, so
+  // sampling the shapes on the first tick can read an empty subtree — a
+  // reproducible failure under full-suite load, never in isolation, always on this
+  // step (the one that follows a modal close/reopen). Poll until the diagram
+  // actually carries filled shapes, THEN judge the theme. Nothing is weakened: a
+  // diagram that never paints still fails, just after the timeout.
+  const readFills = () =>
+    complexSvg.evaluate((svg) => {
+      const out: string[] = [];
+      svg
+        .querySelectorAll<SVGElement>("rect, polygon, path, circle")
+        .forEach((el) => {
+          const f = getComputedStyle(el).fill;
+          if (f && f !== "none") out.push(f);
+        });
+      return out;
+    });
+  await expect.poll(async () => (await readFills()).length, { timeout: 10_000 })
+    .toBeGreaterThan(0);
+  const fills = await readFills();
   const toRgb = (s: string) =>
     s.match(/\d+/g)?.slice(0, 3).map(Number) ?? null;
   const isLight = (rgb: number[]) =>

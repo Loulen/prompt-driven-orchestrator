@@ -92,13 +92,15 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input for IO",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -134,7 +136,7 @@ fn seed_artifacts(repo: &std::path::Path, run_id: &str) {
 #[tokio::test]
 async fn io_endpoint_returns_port_paths_and_frontmatter() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     seed_artifacts(daemon.repo_root(), &run_id);
 
@@ -192,7 +194,7 @@ async fn io_endpoint_returns_port_paths_and_frontmatter() {
 #[tokio::test]
 async fn io_endpoint_resolves_cross_iteration_input_to_latest_completed_source() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // The planner produced its only lap at iter-1.
     let planner_dir = daemon
@@ -282,7 +284,7 @@ async fn io_endpoint_returns_404_before_run_creation() {
 #[tokio::test]
 async fn artifact_endpoint_returns_markdown_content() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     seed_artifacts(daemon.repo_root(), &run_id);
 

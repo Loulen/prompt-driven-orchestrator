@@ -96,11 +96,13 @@ async fn create_trigger_with_guard(
     cron: &str,
     guard_command: &str,
 ) -> serde_json::Value {
+    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let body = serde_json::json!({
         "name": name,
         "pipeline_id": PIPELINE_NAME,
         "cron": cron,
         "guard_command": guard_command,
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
@@ -157,7 +159,15 @@ async fn get_trigger(daemon: &TestDaemon, trigger_id: &str) -> serde_json::Value
 async fn pass_returns_stdout_and_creates_no_run() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
-    let resp = guard_test(&daemon, serde_json::json!({ "guard_command": "printf hi" })).await;
+    // #470: every dry-run must name its repo — the daemon's own, explicitly.
+    let resp = guard_test(
+        &daemon,
+        serde_json::json!({
+            "guard_command": "printf hi",
+            "target_repo": daemon.target_repo(),
+        }),
+    )
+    .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["outcome"], "pass");
@@ -177,7 +187,10 @@ async fn skip_returns_streams_and_exit_code() {
 
     let resp = guard_test(
         &daemon,
-        serde_json::json!({ "guard_command": "echo err >&2; printf out; exit 3" }),
+        serde_json::json!({
+            "guard_command": "echo err >&2; printf out; exit 3",
+            "target_repo": daemon.target_repo(),
+        }),
     )
     .await;
     assert_eq!(resp.status(), 200);
@@ -217,24 +230,35 @@ async fn target_repo_is_used_as_cwd() {
     assert_eq!(body["stdout"], "i am here");
 }
 
+/// #470: inverted. The dry-run used to fall back to the daemon's own repo_root,
+/// which meant an arbitrary `sh -c` — reachable from the "Test guard" button —
+/// executed in a repository nobody had named. Its "zero side effects" invariant
+/// is about not creating a Run; it says nothing about what the command does. So
+/// an absent repo is now a 400, exactly like a real fire (ADR-0033).
 #[tokio::test]
-async fn absent_target_repo_runs_in_repo_root() {
+async fn absent_target_repo_is_400() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    // No target_repo → cwd falls back to the daemon's repo_root, where `seed`
-    // committed a `.gitignore`. Reading it by relative name proves the fallback.
+    // `touch` rather than `cat`: if the refusal ever regresses, the witness file
+    // shows the command actually ran in the daemon's repo.
     let resp = guard_test(
         &daemon,
-        serde_json::json!({ "guard_command": "cat .gitignore" }),
+        serde_json::json!({ "guard_command": "touch guard-ran-here.txt" }),
     )
     .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 400);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["outcome"], "pass");
     assert!(
-        body["stdout"].as_str().unwrap().contains(".pdo/runs/"),
-        "guard should run in repo_root, got {:?}",
-        body["stdout"]
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the error must name the field, got {body:?}"
     );
+    assert!(
+        !daemon.repo_root().join("guard-ran-here.txt").exists(),
+        "the guard must NOT have executed in the daemon's own working directory"
+    );
+    assert!(list_runs(&daemon).await.is_empty());
 }
 
 #[tokio::test]
@@ -274,7 +298,14 @@ async fn leaves_no_fire_row_and_does_not_bump_next_fire() {
 
     // Fire off a batch of dry-runs across all three outcomes.
     for cmd in ["printf ok", "exit 4", "echo boom >&2; exit 1"] {
-        let resp = guard_test(&daemon, serde_json::json!({ "guard_command": cmd })).await;
+        let resp = guard_test(
+            &daemon,
+            serde_json::json!({
+                "guard_command": cmd,
+                "target_repo": daemon.target_repo(),
+            }),
+        )
+        .await;
         assert_eq!(resp.status(), 200, "dry-run of {cmd:?} should be 200");
     }
 

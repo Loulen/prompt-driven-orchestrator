@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupRuns } from "./helpers";
+import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — Terminated-node default layout (#346).
 //
@@ -92,7 +92,7 @@ test("a terminated node opens minimized with the Outputs on screen, and the bar 
 
   // 1. Create the run and wait for the worker to spawn.
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "e2e terminated-node test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e terminated-node test" }),
   });
   expect(resp.status()).toBe(201);
   const { run_id: runId } = await resp.json();

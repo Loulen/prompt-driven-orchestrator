@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openPipelineForEdit, cleanupRuns } from "./helpers";
+import { openPipelineForEdit, cleanupRuns, runBody } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,7 +157,7 @@ test("loop run mode: region counter advances 1/5 → 2/5 over one lap", async ({
 
   // Create a run via the API.
   const resp = await page.request.post(`${baseURL}/runs`, {
-    data: { pipeline: PIPELINE_NAME, input: "loop review E2E test" },
+    data: runBody({ pipeline: PIPELINE_NAME, input: "loop review E2E test" }),
   });
   expect(resp.status()).toBe(201);
   const json = await resp.json();

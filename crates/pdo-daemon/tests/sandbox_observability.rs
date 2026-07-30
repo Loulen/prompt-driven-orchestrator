@@ -161,7 +161,12 @@ fn log_text(log: &Path) -> String {
 }
 
 async fn start_run(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
-    let mut body = serde_json::json!({ "pipeline": "sbx-obs", "input": "hello" });
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let mut body = serde_json::json!({
+        "pipeline": "sbx-obs",
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
     if let Some(mode) = sandbox {
         body["sandbox"] = serde_json::json!(mode);
     }

@@ -138,9 +138,11 @@ async fn tmux_session_alive_after_run_spawn() {
     // not the default server — inspect/kill through the same socket.
     let socket = daemon.tmux_socket();
 
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))

@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openRunNodeDetails, cleanupRuns } from "./helpers";
+import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — Inputs/Outputs sections + MarkdownArtifactModal (#27).
 //
@@ -78,7 +78,7 @@ async function waitForReviewerRunning(page: Page, baseURL: string, rid: string) 
 
 async function createRunAndSeedArtifacts(page: Page, baseURL: string) {
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: { pipeline: PIPELINE_NAME, input: "e2e IO modal test" },
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e IO modal test" }),
   });
   expect(resp.status()).toBe(201);
   const json = await resp.json();

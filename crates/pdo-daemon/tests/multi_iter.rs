@@ -80,13 +80,15 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: &str) -> String {
+async fn create_run(daemon: &TestDaemon) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test multi-iter",
+        "target_repo": daemon.target_repo(),
     });
     let resp = reqwest::Client::new()
-        .post(format!("{daemon_url}/runs"))
+        .post(format!("{}/runs", daemon.url()))
         .json(&body)
         .send()
         .await
@@ -108,7 +110,7 @@ async fn create_run(daemon_url: &str) -> String {
 #[tokio::test]
 async fn multi_iter_projection_via_daemon() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon.url()).await;
+    let run_id = create_run(&daemon).await;
 
     // Small delay for the scheduler to process initial events
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

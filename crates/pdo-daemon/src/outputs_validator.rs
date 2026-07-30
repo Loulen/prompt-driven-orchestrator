@@ -249,9 +249,19 @@ fn yaml_value_to_string(v: &serde_yaml::Value) -> String {
     }
 }
 
+/// The corrective nudge sent into the node's tmux session on the first frontmatter
+/// mismatch.
+///
+/// Says **this is the one retry** on purpose (#490): the limit is 1 retry / 2
+/// attempts total, and the previous wording ("please fix and retry") let an agent
+/// believe it could iterate. It also aligns with the `recoverable` vocabulary of the
+/// refusal contract (ADR-0035 §3): the completion was refused, the node is still
+/// running, it is still the agent's turn — which is exactly what `pdo complete`'s
+/// exit code `3` says, so nudge and exit code agree instead of contradicting.
 pub fn corrective_message(violations: &[FieldViolation]) -> String {
     let mut msg = String::from(
-        "Your output frontmatter does not match the declared schema. Please fix the following and retry:\n",
+        "Your output frontmatter does not match the declared schema, so your completion was REFUSED. \
+         The node is still running and nothing has failed: it is still your turn. Fix the following:\n",
     );
     for v in violations {
         msg.push_str(&format!(
@@ -259,7 +269,10 @@ pub fn corrective_message(violations: &[FieldViolation]) -> String {
             v.port, v.field, v.reason
         ));
     }
-    msg.push_str("After correcting, call `pdo complete` again.");
+    msg.push_str(
+        "This is your ONE retry (limit: 1 retry, 2 attempts total) — the next mismatch fails the node. \
+         After correcting, call pdo complete again. Do NOT call pdo fail.",
+    );
     msg
 }
 

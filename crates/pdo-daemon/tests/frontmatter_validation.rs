@@ -2,10 +2,16 @@
 //!
 //! Spawns a real TestDaemon, creates a run with a node that has a frontmatter
 //! schema on its output port. Tests:
-//!   1. Valid frontmatter → NodeCompleted
-//!   2. Invalid frontmatter (1st attempt) → frontmatter_retry_pending, node stays Running
-//!   3. Invalid frontmatter (2nd attempt) → NodeFailed with "output validation failed"
+//!   1. Valid frontmatter → NodeCompleted, `200`
+//!   2. Invalid frontmatter (1st attempt) → `409 frontmatter_retry_pending`
+//!      `recoverable: true`, node stays Running
+//!   3. Invalid frontmatter (2nd attempt) → `409 frontmatter_retry_exhausted`
+//!      `recoverable: false`, NodeFailed with "output validation failed"
 //!   4. Invalid then valid → NodeCompleted on retry
+//!
+//! The two `409`s are #490 / ADR-0035: a refusal is never a `2xx`. Both used to
+//! answer `200`, and the second one did so *after* appending `NodeFailed` +
+//! `RunFailed`. The `200` arms below are the deliberate negative control.
 
 mod common;
 
@@ -190,10 +196,16 @@ async fn invalid_frontmatter_triggers_retry_then_valid_succeeds() {
         "---\nverdict: MAYBE\nscore: 8\n---\nNot sure",
     );
 
+    // #490 / ADR-0035: the completion was NOT granted, so this is a refusal — 409,
+    // not the 200 it used to answer. `recoverable: true` says the node is still
+    // running and it is still the agent's turn, which is exactly what the corrective
+    // nudge in its pane says too.
     let resp = mark_node_done(&daemon, &run_id, "reviewer", 1).await;
-    assert!(resp.status().is_success());
+    assert_eq!(resp.status(), reqwest::StatusCode::CONFLICT);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"], "frontmatter_retry_pending");
+    assert_eq!(body["error"], "frontmatter_retry_pending");
+    assert_eq!(body["recoverable"], true);
+    assert_eq!(body["violations"][0]["field"], "verdict");
 
     // Check node is still running with retries > 0
     let state = get_run_state(&daemon, &run_id).await;
@@ -237,8 +249,10 @@ async fn double_invalid_frontmatter_fails_node() {
     );
 
     let resp1 = mark_node_done(&daemon, &run_id, "reviewer", 1).await;
+    assert_eq!(resp1.status(), reqwest::StatusCode::CONFLICT);
     let body1: serde_json::Value = resp1.json().await.unwrap();
-    assert_eq!(body1["status"], "frontmatter_retry_pending");
+    assert_eq!(body1["error"], "frontmatter_retry_pending");
+    assert_eq!(body1["recoverable"], true);
 
     // Second attempt: still invalid
     write_artifact(
@@ -250,10 +264,13 @@ async fn double_invalid_frontmatter_fails_node() {
         "---\nverdict: MAYBE\nscore: 8\n---\nStill not sure",
     );
 
+    // The retry is spent: `recoverable: false` — `NodeFailed` + `RunFailed` are
+    // already appended, so an agent reading this must NOT chain `pdo fail`.
     let resp2 = mark_node_done(&daemon, &run_id, "reviewer", 1).await;
-    assert!(resp2.status().is_success());
+    assert_eq!(resp2.status(), reqwest::StatusCode::CONFLICT);
     let body2: serde_json::Value = resp2.json().await.unwrap();
-    assert_eq!(body2["status"], "frontmatter_retry_exhausted");
+    assert_eq!(body2["error"], "frontmatter_retry_exhausted");
+    assert_eq!(body2["recoverable"], false);
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let state = get_run_state(&daemon, &run_id).await;

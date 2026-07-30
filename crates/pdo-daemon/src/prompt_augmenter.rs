@@ -529,6 +529,19 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              ```\n\
              pdo complete\n\
              ```\n\n\
+             **`pdo complete` can be REFUSED**, and its exit code tells you what to do \
+             next (#490):\n\
+             - **0** — granted, or a legal duplicate. Nothing more to do.\n\
+             - **3** — refused, *and it is still your turn*: your outputs are missing or \
+             their frontmatter does not match the declared schema. The node is still \
+             running and nothing has failed. Fix what stderr lists, then run \
+             `pdo complete` again. **Do NOT run `pdo fail`.**\n\
+             - **4** — refused, *and the runtime has already ruled*: the failure is \
+             already recorded in the run log. **Do NOT run `pdo fail`** — you would \
+             record it a second time, with a wrong reason. Stop and report what \
+             happened.\n\
+             - **1** — the daemon could not be reached or gave no verdict. This is the \
+             only case where signalling failure yourself is right.\n\n\
              If you cannot complete the task, signal failure:\n\
              ```\n\
              pdo fail --reason \"<description of the problem>\"\n\
@@ -673,6 +686,8 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -H 'Content-Type: application/json' \
   -d '{{"kind":"mark_node_done","node_id":"<node-id>","iter":<N>}}'
 ```
+
+This goes through the same shared completion body as `pdo complete`, so it answers truthfully (#490): `200 {{"ok":true}}` when the node completed, `200 {{"ok":true,"noop":true,"reason":"…"}}` on a legal duplicate, and **`409 {{"error":"<slug>","recoverable":<bool>, …}}`** when the completion is refused — `missing_outputs`, `frontmatter_retry_pending`, `frontmatter_retry_exhausted`, `script_validation_failed`, `completion_rejected`, … Discriminate on `error`, never on the status. `recoverable:false` means the runtime already recorded the terminal event: do not try to record it again.
 
 ### 7. inject_artifact
 

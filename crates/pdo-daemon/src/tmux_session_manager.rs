@@ -302,17 +302,29 @@ fn build_agent_tail(prompt_path: &Path, model: Option<&str>, effort: Option<&str
 /// Build the bash tail for a `script` node (#248 / ADR-0017).
 ///
 /// Runs the author's body under `timeout` then self-signals: exit 0 ⇒
-/// `pdo complete` (with a `pdo fail` fallback so a post-success output-validation
-/// rejection still terminates the node); exit 124 (timeout) or any non-zero ⇒
-/// `pdo fail` with a diagnostic reason. **Not** `exec`-ed: unlike the agent tail
-/// (`exec claude`), the wrapper must run the bash *and then* run `pdo`, so it is
-/// a plain sequence. Ordering `pdo complete` before shell exit makes the node
-/// terminal before the session dies (#304).
+/// `pdo complete`; exit 124 (timeout) or any non-zero ⇒ `pdo fail` with a
+/// diagnostic reason. **Not** `exec`-ed: unlike the agent tail (`exec claude`), the
+/// wrapper must run the bash *and then* run `pdo`, so it is a plain sequence.
+/// Ordering `pdo complete` before shell exit makes the node terminal before the
+/// session dies (#304).
+///
+/// **The `pdo complete` arm branches on exit code `4`** (#490, ADR-0035 §4). Before
+/// #490 it was a bare `pdo complete || pdo fail --reason "…"`, and that `||` was
+/// dead code: every completion refusal answered `200`, so `pdo complete` exited `0`
+/// and the fallback never fired. Making refusals non-2xx woke it up — and a
+/// terminal refusal (`4`) would then append a **second** `NodeFailed` **and** a
+/// second `RunFailed`, the latter unguarded and carrying a false reason ("after
+/// script success", on a script whose output validation had just failed). So the
+/// fallback fires only on a code that is neither `0` (granted or legal duplicate)
+/// nor `4` (already ruled — the daemon recorded the failure itself). A `3`
+/// (refused, still your turn) cannot reach a script node: the fail-fast branch
+/// intercepts before the interactive retry loop.
 fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
     let body = sh_single_quote(&prompt_path.to_string_lossy());
     format!(
         "timeout {timeout_secs}s bash {body} ; ec=$? ; \
-         if [ $ec -eq 0 ]; then pdo complete || pdo fail --reason \"output validation failed after script success\" ; \
+         if [ $ec -eq 0 ]; then pdo complete ; cc=$? ; \
+         if [ $cc -ne 0 ] && [ $cc -ne 4 ]; then pdo fail --reason \"pdo complete refused with exit $cc after script success\" ; fi ; \
          elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after {timeout_secs}s\" ; \
          else pdo fail --reason \"script exited $ec\" ; fi"
     )
@@ -1439,6 +1451,58 @@ mod tests {
         // Base env is still exported.
         assert!(script.contains("PDO_RUN_ID"));
         assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
+    }
+
+    /// #490 / ADR-0035 §4 — the tail must NOT double a failure the daemon already
+    /// recorded.
+    ///
+    /// The pre-#490 tail was `pdo complete || pdo fail --reason "…"`. That `||` was
+    /// dead code (every refusal answered `200`, so `pdo complete` exited `0`) and
+    /// waking it up would have appended a second `NodeFailed` **and** a second
+    /// `RunFailed` — the latter unguarded, carrying "after script success" as the
+    /// reason for a script whose output validation had just failed.
+    ///
+    /// Asserted by SUBSTRING because the sibling test is too: it passes whatever the
+    /// tail does, so it is blind to the very bug it looks like it covers.
+    #[test]
+    fn build_script_tail_does_not_double_fail_on_a_refused_completion() {
+        let script = build_script_tail(Path::new("/tmp/body.md"), 60);
+        assert!(
+            !script.contains("pdo complete || pdo fail"),
+            "the bare `||` doubles a failure the daemon already recorded: {script}"
+        );
+        assert!(
+            script.contains("-ne 4"),
+            "the tail must discriminate exit code 4 (refused, already ruled): {script}"
+        );
+        assert!(
+            !script.contains("output validation failed after script success"),
+            "that reason was false — the daemon's own reason is the truthful one: {script}"
+        );
+    }
+
+    /// The full arm matrix of the tail, so a future edit cannot quietly drop one.
+    /// `ec` is the author's bash exit code, `cc` is `pdo complete`'s.
+    #[test]
+    fn build_script_tail_covers_every_arm() {
+        let script = build_script_tail(Path::new("/tmp/body.md"), 60);
+        for needle in [
+            // ec = 0 → try to complete
+            "if [ $ec -eq 0 ]; then pdo complete",
+            // cc = 0 (granted or legal duplicate) and cc = 4 (already ruled) → do
+            // nothing. Anything else → signal the failure ourselves.
+            "if [ $cc -ne 0 ] && [ $cc -ne 4 ]",
+            "pdo complete refused with exit $cc after script success",
+            // ec = 124 → the `timeout` verdict
+            "elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after 60s\"",
+            // any other ec → the author's own failure
+            "else pdo fail --reason \"script exited $ec\"",
+        ] {
+            assert!(
+                script.contains(needle),
+                "missing arm {needle:?} in: {script}"
+            );
+        }
     }
 
     #[test]

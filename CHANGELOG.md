@@ -10,6 +10,101 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.6.0
+
+Un changement cassant livré sous un bump **mineur**, dans la ligne des précédents posés en 1.2.0 et
+1.3.0 : la surface quotidienne est identique (le bouton *Mark complete* et `pdo complete` sont au même
+endroit et prennent les mêmes arguments), et le comportement retiré était un **mensonge** — huit sorties
+qui décrivaient un refus répondaient `200`, dont quatre après avoir déjà tué le Run. Aucune
+configuration vivante ne peut en dépendre sans être déjà cassée : un client qui lisait « succès » sur
+ces réponses se trompait par construction. **Si le mainteneur préfère la lettre du préambule ci-dessus
+(« la casse se signale ici et par un bump majeur »), c'est `2.0.0` : un mot à changer dans
+`Cargo.toml`.**
+
+### Cassant — un refus de complétion n'est plus jamais un `200` (#490)
+
+Le chemin par lequel **tout** node se termine — `pdo complete` (`POST …/nodes/<id>/done`) et *Mark
+complete* (`POST …/commands` `kind=mark_node_done`) — répondait `200` sur huit corps qui décrivaient un
+refus. Un agent lisait `Node <id> marked complete.`, sortait en `0`, et croyait avoir livré un Run que
+le daemon venait de tuer. Voir **ADR-0035**.
+
+Les sorties qui passent de `200` à **`409`**, avec leur nouveau slug :
+
+| Slug (`error`) | `recoverable` | Événements déjà appendés |
+|---|---|---|
+| `frontmatter_retry_pending` | `true` | `FrontmatterRetryPending` |
+| `frontmatter_retry_exhausted` | `false` | `NodeFailed` + `RunFailed` |
+| `script_validation_failed` | `false` | `NodeFailed` + `RunFailed` |
+| `doc_violated_code_immutability` | `false` | `NodeFailed` + `RunFailed` |
+| `merge_conflict` | `false` | `MergeConflictDetected` + `RunFailed` |
+| `merge_resolution_failed` | `false` | `MergeResolverFailed` + `RunFailed` |
+| `merge_resolver_spawned` / `merge_resolver_failed` | `false` | branches mortes depuis ADR-0006 |
+
+Deux refus **changent de corps sans changer de statut** : `completion_rejected` (le garde de transition,
+déjà en `409`) voit sa prose passer de `error` à **`message`**, `error` portant désormais le slug ; et
+`missing_outputs` gagne simplement `recoverable: true`.
+
+- **Les clients discriminent sur `error`, jamais sur le statut.** Un statut n'a pas assez de bits pour
+  neuf causes, et le client de l'UI en était la démonstration : il relisait *tout* `409` de ce chemin
+  comme `missing_outputs` avec une liste vide, gatée sur `length > 0`, donc le refus le plus fréquent de
+  tous — tout clic sur un node d'un Run déjà en échec — n'affichait **rien**. Un slug inconnu se rend
+  tel quel (ADR-0001).
+- **`recoverable` répond à une seule question** : *est-ce encore ton tour ?* `true` ⇒ le node est
+  toujours `running`, rien de terminal n'est enregistré. `false` ⇒ le daemon a **déjà** enregistré
+  l'issue terminale ; ne jamais enchaîner sur `pdo fail`.
+- **Le détail est verbatim celui d'avant** (`missing`, `violations`, `detail`, `reason`) : ce lot déplace
+  un statut et ajoute deux clés, il ne renomme aucun champ de détail. Le `detail` du fail-fast d'un node
+  `script` reste **imbriqué** — l'aplatir rendrait sa trace d'audit indistinguable d'un échec après
+  retry, et c'est le **projecteur** qui apprend à lire les deux formes.
+
+### Cassant — `pdo complete` a un contrat de codes de sortie
+
+| Code | Sens | Geste attendu |
+|---|---|---|
+| `0` | accordée, ou **doublon légal** (`noop`) | rien |
+| `3` | refusée, **encore ton tour** | corriger, rappeler `pdo complete`. **Pas** `pdo fail` |
+| `4` | refusée, **le runtime a déjà tranché** | s'arrêter et rapporter. **Pas** `pdo fail` |
+| `1` | panne, transport, corps illisible, `5xx` | ici **seulement**, `pdo fail` est le bon conseil |
+
+**Pourquoi un `4` distinct du `1`.** Le tail bash d'un node `script` fait `pdo complete || pdo fail`.
+Ce `||` était du **code mort** tant que son déclencheur répondait `200` ; le passage au `409` le
+réveille. Sans discrimination du `4`, chaque refus terminal d'un node `script` produirait **deux**
+`NodeFailed` et **deux** `RunFailed`, le second avec une raison fausse (`NodeFailed` est absorbé par le
+garde, `RunFailed` ne l'est pas). Le tail teste donc le `4`, et un test de couche 3 en vrai tmux + vrai
+bash compte exactement un `run_failed`.
+
+**Le `0` sur un doublon légal est non négociable** : un agent perplexe qui rappelle `pdo complete` ne
+doit pas lire « refusé » puis enchaîner `pdo fail` — il tuerait un Run qui vient de réussir, et sur un
+node `script` le tail le ferait sans demander.
+
+### Ce qui ne change pas
+
+- **La sémantique du `2xx`** (ADR-0023) : « ton événement terminal est durablement enregistré et
+  l'avance est planifiée ». Elle gagne seulement un corollaire — « et ta complétion n'a pas été
+  refusée ».
+- **La queue d'avance détachée** (#304) et le **fail-fast** d'un node `script` (ADR-0017) : intacts.
+- **`410`, `404`, `500`** : « jamais `2xx` » n'est **pas** « toujours `409` ». Le tombstone d'un Run
+  oublié garde son `410` (ADR-0024), une cible inconnue son `404`, une panne son `500`. Sur la route
+  `POST …/nodes/<id>/done`, ces trois-là portent désormais le corps JSON du contrat
+  (`{error, recoverable, message}`) au lieu d'un texte brut ; leur statut est inchangé.
+- **Le corps de succès de `POST …/done` reste le texte brut `ok`**, asymétrique avec le
+  `{"ok":true}` de `POST …/commands`. Symétriser appartient à **#491**.
+- **La veille de vivacité** (#469 / ADR-0032) : indemne par construction — elle lit la variante du
+  résultat, jamais le statut HTTP.
+
+### Migration
+
+- **Appelants directs** (`curl`, scripts, harnais de test) : remplacer tout test de la forme
+  `if resp.ok` ou `if body.status == "..."` sur ce chemin par une lecture de `body.error` +
+  `body.recoverable`. Un `409` n'est plus une anomalie de transport, c'est un **verdict**.
+- **Bash d'un node `script` écrit à la main** : si le corps enchaîne `pdo complete || pdo fail`, ajouter
+  la garde sur le code `4` — sinon chaque refus terminal produit un second `RunFailed` à raison fausse.
+  Le tail généré par PDO le fait déjà.
+- **Rien à faire côté données** : aucun payload d'événement ne change, `NodeState` gagne un
+  `missing_outputs` omis quand vide, et les Runs archivés se projettent à l'identique à l'octet — à une
+  correction près, un bug préexistant : un node redevenu vert ne traîne plus les violations de la
+  tentative dont il s'est remis.
+
 ## 1.3.0
 
 Un changement cassant livré sous un bump **mineur**, dans la ligne du précédent posé en 1.2.0 : la

@@ -449,6 +449,17 @@ export interface IterationInfo {
   completed_at: string | null;
 }
 
+/**
+ * One frontmatter field the validator rejected. Named since #490 because the shape
+ * now travels on two paths: the projection (`NodeState`) *and* the refusal body of
+ * `mark_node_done`.
+ */
+export interface FrontmatterViolation {
+  port: string;
+  field: string;
+  reason: string;
+}
+
 export interface NodeState {
   node_id: string;
   status: NodeStatus;
@@ -458,7 +469,13 @@ export interface NodeState {
   failure_reason: string | null;
   iterations: IterationInfo[];
   frontmatter_retries?: number;
-  frontmatter_violations?: Array<{ port: string; field: string; reason: string }>;
+  frontmatter_violations?: FrontmatterViolation[];
+  /**
+   * #490: declared output ports the validator found empty. Optional because the
+   * daemon omits it when empty (`skip_serializing_if`) — and because a synthetic
+   * `NodeState` literal in `App.tsx` would otherwise stop compiling.
+   */
+  missing_outputs?: string[];
 }
 
 export interface EdgeInfo {

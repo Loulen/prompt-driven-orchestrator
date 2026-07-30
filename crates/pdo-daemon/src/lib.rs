@@ -1,6 +1,7 @@
 pub mod admission;
 mod blackboard;
 mod boot_recovery;
+pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
 #[allow(dead_code)]
@@ -495,28 +496,232 @@ fn cli_node_iter() -> i64 {
         .unwrap_or(1)
 }
 
-pub fn run_complete() -> Result<()> {
+/// Exit code of `pdo complete` when the completion was **refused and the node is
+/// still yours** (#490, ADR-0035 §4): fix the artefacts and call it again. Nothing
+/// terminal is recorded, so `pdo fail` would be wrong.
+pub const EXIT_REFUSED_RECOVERABLE: u8 = 3;
+/// Exit code of `pdo complete` when the completion was **refused and the runtime has
+/// already ruled** (#490, ADR-0035 §4). The daemon appended the terminal event
+/// itself; `pdo fail` would double it — and `RunFailed` is not guarded, so the
+/// second one lands with a false reason.
+///
+/// This code exists for a `||` in a `script` node's bash tail (see
+/// `tmux_session_manager::build_script_tail`), which was dead code while every
+/// refusal answered `200`. The code is only worth anything because the tail tests
+/// it.
+pub const EXIT_REFUSED_TERMINAL: u8 = 4;
+
+/// `pdo complete` — signal that this node iteration is done.
+///
+/// Returns an [`ExitCode`](std::process::ExitCode) rather than a `Result` because it
+/// is the one subcommand with a **public exit-code contract** (#490, ADR-0035 §4):
+/// `0` granted or legal duplicate · `3` refused, still your turn · `4` refused, the
+/// runtime already ruled · `1` breakdown. Those codes live in pipeline authors' bash
+/// (ADR-0001, sharp tool), so they are as much an API as the wire shape.
+///
+/// Deliberately **not** `std::process::exit`: that skips the `reqwest` client's
+/// destructors and breaks the symmetry with the other subcommands. Returning the
+/// code lets `main` stay a dispatcher.
+pub fn run_complete() -> std::process::ExitCode {
+    let rid = match cli_run_id() {
+        Ok(v) => v,
+        Err(e) => return complete_breakdown(&format!("{e:#}")),
+    };
+    let nid = match cli_node_id() {
+        Ok(v) => v,
+        Err(e) => return complete_breakdown(&format!("{e:#}")),
+    };
     let url = cli_daemon_url();
-    let rid = cli_run_id()?;
-    let nid = cli_node_id()?;
     let iter = cli_node_iter();
 
     let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/done");
     let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = match client
         .post(&endpoint)
         .json(&serde_json::json!({ "iter": iter }))
         .send()
-        .context("failed to reach daemon")?;
+    {
+        Ok(r) => r,
+        Err(e) => return complete_breakdown(&format!("failed to reach daemon: {e}")),
+    };
 
-    if resp.status().is_success() {
-        eprintln!("Node {nid} marked complete.");
-    } else {
-        let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        anyhow::bail!("daemon returned {status}: {body}");
+    let status = resp.status();
+    let raw = resp.text().unwrap_or_default();
+    // The success body of `POST …/done` is the bare text `ok`, so a parse failure is
+    // expected there and must not be treated as a breakdown (#491 owns the
+    // asymmetry). `Value::Null` stands in for "no readable body".
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+
+    if status.is_success() {
+        if body.get("noop").and_then(|v| v.as_bool()) == Some(true) {
+            let reason = body
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("the node iteration was already terminal");
+            eprintln!(
+                "Node {nid} was already complete — nothing to do ({reason}).\n\
+                 This is a legal duplicate, not a failure. Do NOT run `pdo fail`."
+            );
+        } else {
+            eprintln!("Node {nid} marked complete.");
+        }
+        return std::process::ExitCode::SUCCESS;
     }
-    Ok(())
+
+    // A 5xx is a breakdown, not a verdict: the daemon could not decide, so nothing
+    // was ruled and `pdo fail` is the right escalation.
+    if status.is_server_error() {
+        return complete_breakdown(&format!("daemon returned {status}: {raw}"));
+    }
+    // A body we cannot read cannot be discriminated, so it is a breakdown too —
+    // never a silent success.
+    let Some(slug) = body.get("error").and_then(|v| v.as_str()) else {
+        return complete_breakdown(&format!(
+            "daemon returned {status} with an unreadable body: {raw}"
+        ));
+    };
+    let recoverable = body.get("recoverable").and_then(|v| v.as_bool());
+
+    let mut out = String::new();
+    match recoverable {
+        Some(true) => out.push_str(&format!(
+            "pdo complete REFUSED — {}. The node is still running; it is still your turn.\n",
+            refusal_headline(slug, &body)
+        )),
+        Some(false) => out.push_str(&format!(
+            "pdo complete REFUSED and the node is now FAILED — {}.\n\
+             The daemon has already recorded the terminal event. `resume_run` is the only lever.\n",
+            refusal_headline(slug, &body)
+        )),
+        // No `recoverable` key: an older daemon, or a refusal that predates the
+        // contract. Say so instead of guessing which side of the fence we are on.
+        None => out.push_str(&format!(
+            "pdo complete REFUSED — {} (daemon returned {status} without a `recoverable` \
+             flag, so whether the node is still yours is unknown).\n",
+            refusal_headline(slug, &body)
+        )),
+    }
+    out.push_str(&refusal_detail_lines(slug, &body));
+    out.push_str(match recoverable {
+        Some(true) => {
+            "Fix what is listed above, then run `pdo complete` again.\nDo NOT run `pdo fail`."
+        }
+        Some(false) => {
+            "Do NOT run `pdo fail` — the failure is already recorded. Stop here and report it."
+        }
+        None => "Re-read the run state before acting. Do NOT run `pdo fail` blindly.",
+    });
+    eprintln!("{out}");
+
+    match recoverable {
+        Some(true) => std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE),
+        // Unknown recoverability is treated as terminal: the expensive mistake is
+        // appending a second failure, not skipping a retry.
+        Some(false) | None => std::process::ExitCode::from(EXIT_REFUSED_TERMINAL),
+    }
+}
+
+/// The `1` arm of `pdo complete`: transport, missing env, unreadable body, `5xx`.
+/// The **only** arm where `pdo fail` is the right advice.
+fn complete_breakdown(detail: &str) -> std::process::ExitCode {
+    eprintln!(
+        "pdo complete FAILED to get a verdict — {detail}\n\
+         Nothing was decided about this node. Retry, or signal the problem with \
+         `pdo fail --reason \"…\"`."
+    );
+    std::process::ExitCode::FAILURE
+}
+
+/// One human sentence per refusal slug. An unknown slug is rendered **verbatim**
+/// (ADR-0001): a client that does not recognise a cause must not hide it.
+fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
+    match slug {
+        "missing_outputs" => "your declared outputs are incomplete".into(),
+        "frontmatter_retry_pending" => {
+            "your output frontmatter does not match the declared schema (this was the ONE retry \
+             you get)"
+                .into()
+        }
+        "frontmatter_retry_exhausted" => {
+            "your output frontmatter still did not match after the retry".into()
+        }
+        "script_validation_failed" => "this script node's declared outputs did not validate".into(),
+        "doc_violated_code_immutability" => {
+            "this node may not modify tracked files, and the worktree is dirty".into()
+        }
+        "merge_conflict" => "merging your sub-worktree into the pipeline branch conflicted".into(),
+        "merge_resolution_failed" | "merge_resolver_failed" | "merge_resolver_spawned" => {
+            "the merge resolver did not settle the conflict".into()
+        }
+        "completion_rejected" => body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("the run does not accept this completion")
+            .to_string(),
+        "run_forgotten" => "this run has been forgotten (archived); it accepts nothing".into(),
+        // Unknown slug: hand it over as-is, plus whatever prose came with it.
+        other => match body.get("message").and_then(|v| v.as_str()) {
+            Some(m) => format!("{other}: {m}"),
+            None => other.to_string(),
+        },
+    }
+}
+
+/// The actionable middle of the message: what exactly is wrong, one item per line.
+/// Reads both shapes of the validation detail — flat (`violations`/`missing`) and
+/// the `script` fail-fast's nested `detail` (ADR-0035 §5) — so the agent gets the
+/// list either way.
+fn refusal_detail_lines(slug: &str, body: &serde_json::Value) -> String {
+    let mut out = String::new();
+
+    let nested = body.get("detail");
+    let missing = body
+        .get("missing")
+        .or_else(|| nested.and_then(|d| d.get("missing")))
+        .and_then(|v| v.as_array());
+    if let Some(missing) = missing {
+        if !missing.is_empty() {
+            out.push_str("Missing declared outputs:\n");
+            for m in missing {
+                if let Some(m) = m.as_str() {
+                    out.push_str(&format!("  - {m}\n"));
+                }
+            }
+            out.push_str(
+                "Write each missing artefact to the path listed in your prompt preamble.\n",
+            );
+        }
+    }
+
+    let violations = body
+        .get("violations")
+        .or_else(|| nested.and_then(|d| d.get("violations")))
+        .and_then(|v| v.as_array());
+    if let Some(violations) = violations {
+        if !violations.is_empty() {
+            out.push_str("Frontmatter violations:\n");
+            for v in violations {
+                let port = v.get("port").and_then(|x| x.as_str()).unwrap_or("?");
+                let field = v.get("field").and_then(|x| x.as_str()).unwrap_or("?");
+                let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("?");
+                out.push_str(&format!("  - {port}.{field}: {reason}\n"));
+            }
+        }
+    }
+
+    if let Some(reason) = body.get("reason").and_then(|v| v.as_str()) {
+        out.push_str(&format!("Reason: {reason}\n"));
+    }
+    // The guard's prose is already the headline; anything else's `message` is extra
+    // context worth printing once.
+    if slug != "completion_rejected" {
+        if let Some(msg) = body.get("message").and_then(|v| v.as_str()) {
+            if !msg.is_empty() && !slug.starts_with("run_") {
+                out.push_str(&format!("Detail: {msg}\n"));
+            }
+        }
+    }
+    out
 }
 
 pub fn run_fail(reason: String) -> Result<()> {
@@ -9034,13 +9239,22 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                     )
                     .await
                     {
+                        // Reads the VARIANT, never the status — which is exactly
+                        // why #469 is indemn to #490's status change. The response
+                        // is still dropped; only the log line differs.
                         CompletionAttempt::Completed => info!(
                             "Stale detector: node {node_id} in run {run_id} — agent finished its \
                              turn without signalling; auto-completed (#469)"
                         ),
-                        CompletionAttempt::Aborted { reason, .. } => info!(
+                        noop @ CompletionAttempt::NoOp { .. } => info!(
                             "Stale detector: node {node_id} in run {run_id} — turn ended but \
-                             auto-completion did not apply: {reason}"
+                             auto-completion was a legal no-op: {}",
+                            noop.reason()
+                        ),
+                        refused @ CompletionAttempt::Refused { .. } => warn!(
+                            "Stale detector: node {node_id} in run {run_id} — turn ended but \
+                             auto-completion was refused: {}",
+                            refused.reason()
                         ),
                     }
                 }
@@ -9544,13 +9758,20 @@ async fn artifact(
     }
 }
 
+/// Spawn the automatic merge resolver. **DEAD in production** since ADR-0006:
+/// reached only from `MergeResult::ConflictPendingResolution`, which is built only
+/// under `keep_conflict == true`, which no production caller passes.
+///
+/// Returns a typed refusal rather than a `Response` (#490, ADR-0035 §6): both its
+/// outcomes — spawned, and spawn-failed — describe a completion that was **not**
+/// granted, and both used to answer `200`.
 async fn spawn_merge_resolver(
     state: &AppState,
     run_id: &str,
     conflicting_node_id: &str,
     conflicting_iter: i64,
     worktree_dir: &std::path::Path,
-) -> Response {
+) -> completion_refusal::CompletionRefusal {
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
@@ -9628,19 +9849,15 @@ async fn spawn_merge_resolver(
         };
         let _ = append_event(state, &run_failed).await;
 
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "merge_resolver_failed" })),
-        )
-            .into_response();
+        return completion_refusal::CompletionRefusal::MergeResolverFailed {
+            reason: format!("failed to spawn resolver session: {e}"),
+        };
     }
 
     info!("Spawned merge resolver for run {run_id} (conflict on {conflicting_node_id})");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "status": "merge_resolver_spawned" })),
-    )
-        .into_response()
+    completion_refusal::CompletionRefusal::MergeResolverSpawned {
+        node_id: conflicting_node_id.to_string(),
+    }
 }
 
 async fn handle_merge_resolver_done(
@@ -9684,11 +9901,11 @@ async fn handle_merge_resolver_done(
         let _ = append_event(state, &run_failed).await;
 
         warn!("Merge resolver failed for run {run_id}: {reason}");
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "merge_resolution_failed", "reason": reason })),
-        )
-            .into_response();
+        // #490 / ADR-0035: `409` with the slug, not the historical `200`. The
+        // resolution was refused and `RunFailed` is already appended.
+        return completion_refusal::refusal_response(
+            &completion_refusal::CompletionRefusal::MergeResolutionFailed { reason },
+        );
     }
 
     let completed_event = event_log::Event {
@@ -9740,40 +9957,68 @@ async fn handle_merge_resolver_done(
     (StatusCode::OK, "ok").into_response()
 }
 
-/// Map a completion-head verdict to an early HTTP response, or `None` to
-/// proceed. Shared by the three completion handlers (`node_done`,
-/// `mark_node_done`, `node_skip`) so the 409/200 shape + log line live once.
+/// What the shared completion head decided, in the two shapes an HTTP caller has
+/// to answer differently (#490, ADR-0035).
 ///
-/// Returns `Option<Response>` (not `Result`) to match the sibling
-/// `check_output_validation_with_retry` early-return convention and dodge
-/// `clippy::result_large_err` on the large `Response` type.
+/// The split matters: a **no-op is a legal duplicate and stays a `2xx`**
+/// (`transition_guard`: "do not surface an error"), a **reject is a refusal and is
+/// never a `2xx`**. Collapsing them — which the pre-#490 `Option<Response>` did,
+/// by handing back a pre-projected response the caller could not tell apart — is
+/// exactly what made the invariant inexpressible.
+pub(crate) enum CompletionHeadStop {
+    /// Valid but nothing to do. `200 {"ok":true,"noop":true,"reason":…}`, exit `0`.
+    NoOp { reason: String },
+    /// The completion is not granted. Projected by `refusal_response`, so it
+    /// cannot be a `2xx` by construction.
+    Refused {
+        refusal: completion_refusal::CompletionRefusal,
+    },
+}
+
+impl CompletionHeadStop {
+    /// The HTTP shape. `NoOp` keeps its pre-#490 body byte for byte.
+    fn into_response(self) -> Response {
+        match self {
+            CompletionHeadStop::NoOp { reason } => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+            )
+                .into_response(),
+            CompletionHeadStop::Refused { refusal } => {
+                completion_refusal::refusal_response(&refusal)
+            }
+        }
+    }
+}
+
+/// Map a completion-head verdict to an early stop, or `None` to proceed. Shared by
+/// the three completion handlers (`node_done`, `mark_node_done`, `node_skip`) so
+/// the wire shape + log line live once.
+///
+/// Returns the **typed** stop rather than a `Response`: the reject arm's prose now
+/// travels in `message` under the `completion_rejected` slug (ADR-0035 §3), which
+/// is what lets a client tell "resume the run first" apart from "your outputs are
+/// missing" — it used to read *every* `409` on this path as `missing_outputs` with
+/// an empty list, and therefore displayed nothing at all.
 fn completion_head_gate(
     head: run_advance::CompletionHead,
     caller: &str,
     run_id: &str,
     node_id: &str,
     iter: i64,
-) -> Option<Response> {
+) -> Option<CompletionHeadStop> {
     match head {
         run_advance::CompletionHead::Reject { reason } => {
             warn!("{caller} rejected for {node_id} iter {iter} in run {run_id}: {reason}");
-            Some(
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({ "error": reason })),
-                )
-                    .into_response(),
-            )
+            Some(CompletionHeadStop::Refused {
+                refusal: completion_refusal::CompletionRefusal::CompletionRejected {
+                    message: reason,
+                },
+            })
         }
         run_advance::CompletionHead::NoOp { reason } => {
             info!("{caller} no-op for {node_id} iter {iter} in run {run_id}: {reason}");
-            Some(
-                (
-                    StatusCode::OK,
-                    Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
-                )
-                    .into_response(),
-            )
+            Some(CompletionHeadStop::NoOp { reason })
         }
         run_advance::CompletionHead::Allow => None,
     }
@@ -9815,30 +10060,45 @@ impl CompletionSource {
     }
 }
 
-/// What one pass through [`complete_node_iteration`] did (#469 §3).
+/// What one pass through [`complete_node_iteration`] did (#469 §3, #490 §1).
 ///
-/// Two variants only, deliberately: either the terminal event landed and the
-/// detached tail is scheduled, or the attempt stopped short. Every early return
-/// of the shared body funnels into [`Self::Aborted`], so the HTTP handler and the
-/// sweep cannot disagree about *which* branches abort — the handler returns the
-/// carried `response`, the sweep logs the carried `reason` and drops it.
+/// **Three** variants since #490, and the third one is the point: `Aborted` used to
+/// conflate three different things — a refusal, a legal no-op, and (at the merge
+/// resolver site) an outright *success* wrapped in the failure variant. That
+/// conflation is why "an aborted attempt is never a 2xx" was false by construction.
+/// With `Refused` carrying a [`completion_refusal::CompletionRefusal`] — a type
+/// that owns no status — the invariant is total and enforced by the compiler.
 pub(crate) enum CompletionAttempt {
     /// The terminal event is appended (durable) and the tail is scheduled. The
     /// `2xx` an HTTP caller gets means exactly that, not "advanced" (ADR-0023).
     Completed,
-    /// Nothing was completed. `reason` is the log-friendly cause; `response` is
-    /// the verbatim HTTP shape `POST …/done` has always returned for it.
-    Aborted {
-        reason: String,
-        response: Box<Response>,
+    /// Valid, but nothing to do: a legal duplicate on an already-terminal node.
+    /// The **only** non-`Completed` variant allowed a `2xx` — cf. ADR-0025 §3 and
+    /// `transition_guard`: "legal duplicate […] do not surface an error". A
+    /// puzzled agent that re-runs `pdo complete` must not read "refused" and then
+    /// chain `pdo fail`; on a `script` node its tail would do it unprompted.
+    NoOp { reason: String },
+    /// The completion is not granted. `Refused ⇒ never 2xx`, by construction: the
+    /// carried refusal has no status of its own, and `refusal_response` is the only
+    /// thing that gives it one.
+    Refused {
+        refusal: completion_refusal::CompletionRefusal,
     },
 }
 
 impl CompletionAttempt {
-    fn aborted(reason: impl Into<String>, response: Response) -> Self {
-        CompletionAttempt::Aborted {
-            reason: reason.into(),
-            response: Box::new(response),
+    /// Sugar for the many early returns of the shared body.
+    fn refused(refusal: completion_refusal::CompletionRefusal) -> Self {
+        CompletionAttempt::Refused { refusal }
+    }
+
+    /// The log-friendly cause, for the liveness sweep — which reads the *variant*,
+    /// never the status, and is therefore indemn to #490 (#469 / ADR-0032).
+    fn reason(&self) -> String {
+        match self {
+            CompletionAttempt::Completed => "completed".into(),
+            CompletionAttempt::NoOp { reason } => reason.clone(),
+            CompletionAttempt::Refused { refusal } => refusal.reason(),
         }
     }
 
@@ -9846,7 +10106,14 @@ impl CompletionAttempt {
     fn into_response(self) -> Response {
         match self {
             CompletionAttempt::Completed => (StatusCode::OK, "ok").into_response(),
-            CompletionAttempt::Aborted { response, .. } => *response,
+            CompletionAttempt::NoOp { reason } => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+            )
+                .into_response(),
+            CompletionAttempt::Refused { refusal } => {
+                completion_refusal::refusal_response(&refusal)
+            }
         }
     }
 }
@@ -9865,25 +10132,76 @@ async fn node_done(
     body: Option<Json<NodeDoneRequest>>,
 ) -> Response {
     let iter = body.and_then(|b| b.iter).unwrap_or(1);
+
+    // #490 / ADR-0035 §6: `__merge_resolver__` is handled HERE, hoisted out of the
+    // shared body. It was the one site where the shared body's failure variant
+    // wrapped a complete *success* — the resolver handler appends `NodeCompleted`
+    // and calls `run_advance::complete_node`, and its `200 "ok"` is pinned by
+    // `merge_resolver_done_records_original_node_and_completes_once`. That is what
+    // kept "a stopped-short attempt is never a 2xx" from being a total invariant.
+    // Hoisting also removes the transition-guard bypass the branch performed by
+    // sitting *before* the guard.
+    //
+    // Safe: the liveness sweep is the other caller of the shared body and can never
+    // reach this id — no resolver session is ever spawned, since `keep_conflict` is
+    // never `true` in production and ADR-0006 removed the automatic resolver.
+    if node_id == MERGE_RESOLVER_NODE_ID {
+        return merge_resolver_done(&state, &run_id).await;
+    }
+
     complete_node_iteration(&state, run_id, node_id, iter, CompletionSource::Explicit)
         .await
         .into_response()
+}
+
+/// The `__merge_resolver__` half of `POST …/nodes/:id/done` (#490, ADR-0035 §6).
+///
+/// Keeps the pre-hoist preamble in its original order — forgotten-run tombstone
+/// (#328 / ADR-0024) **before** any side effect, then load + project — and hands off
+/// to [`handle_merge_resolver_done`], whose wire shape (including `200 "ok"` on
+/// success) is preserved verbatim.
+async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
+    match run_is_forgotten(&state.db, run_id).await {
+        Ok(true) => {
+            return completion_refusal::refusal_response(
+                &completion_refusal::CompletionRefusal::RunForgotten {
+                    run_id: run_id.to_string(),
+                },
+            );
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return completion_refusal::refusal_response(
+                &completion_refusal::CompletionRefusal::MergeFailed {
+                    error: format!("forgotten-run check failed: {e}"),
+                },
+            );
+        }
+    }
+
+    let Some((_, pre_run_state)) = reload_run_state(state, run_id).await else {
+        return completion_refusal::refusal_response(
+            &completion_refusal::CompletionRefusal::RunNotFound,
+        );
+    };
+    let repo_root = effective_repo_root(state, &pre_run_state);
+    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
+    handle_merge_resolver_done(state, run_id, &worktree_dir, &pre_run_state).await
 }
 
 /// The shared node-completion body: everything `POST …/done` does, for either
 /// caller (#469 §3).
 ///
 /// Returns [`CompletionAttempt`] rather than a `Response` so the sweep is not
-/// forced to read HTTP status codes to know what happened — while the response
-/// each abort would have produced is carried verbatim, so the handler stays a
-/// two-line adapter and no branch can be answered differently by the two
-/// callers.
+/// forced to read HTTP status codes to know what happened — and, since #490, so
+/// that no branch *can* answer a refusal with a `2xx`: the variant carries a
+/// [`completion_refusal::CompletionRefusal`], which owns no status, and the single
+/// projection gives it one. The handler stays a thin adapter and the two callers
+/// still cannot disagree about which branches stop short.
 ///
-/// `MERGE_RESOLVER_NODE_ID` keeps its own handler
-/// (`handle_merge_resolver_done`): it has no transition-guard head and no
-/// iteration of its own. The sweep never reaches it (a resolver is not a
-/// projected node in `running_nodes`), so the branch is preserved here purely for
-/// the HTTP caller.
+/// `MERGE_RESOLVER_NODE_ID` is **not** handled here any more: #490 (ADR-0035 §6)
+/// hoisted it into [`node_done`], because it was the one branch whose "stopped
+/// short" was in fact a complete success. The sweep never reaches it either way.
 async fn complete_node_iteration(
     state: &Arc<AppState>,
     run_id: String,
@@ -9897,22 +10215,20 @@ async fn complete_node_iteration(
     // effect (sub-worktree merge in particular).
     match run_is_forgotten(&state.db, &run_id).await {
         Ok(true) => {
-            return CompletionAttempt::aborted(
-                format!("run {run_id} has been forgotten"),
-                (
-                    StatusCode::GONE,
-                    Json(
-                        serde_json::json!({ "error": format!("run {run_id} has been forgotten") }),
-                    ),
-                )
-                    .into_response(),
+            // ADR-0024 §3 keeps its `410`: "never a 2xx" does not mean "always a
+            // 409".
+            return CompletionAttempt::refused(
+                completion_refusal::CompletionRefusal::RunForgotten {
+                    run_id: run_id.clone(),
+                },
             );
         }
         Ok(false) => {}
         Err(e) => {
-            return CompletionAttempt::aborted(
-                format!("forgotten-run check failed: {e}"),
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+            return CompletionAttempt::refused(
+                completion_refusal::CompletionRefusal::MergeFailed {
+                    error: format!("forgotten-run check failed: {e}"),
+                },
             );
         }
     }
@@ -9927,34 +10243,21 @@ async fn complete_node_iteration(
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
-            return CompletionAttempt::aborted(
-                format!("failed to load events: {e}"),
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
-            );
+            return CompletionAttempt::refused(completion_refusal::CompletionRefusal::Internal {
+                error: format!("failed to load events: {e}"),
+            });
         }
     };
 
     let pre_run_state = match event_log::project(&events) {
         Some(s) => s,
         None => {
-            return CompletionAttempt::aborted(
-                "run not found",
-                (StatusCode::NOT_FOUND, "run not found").into_response(),
-            );
+            return CompletionAttempt::refused(completion_refusal::CompletionRefusal::RunNotFound);
         }
     };
 
     let repo_root = effective_repo_root(state, &pre_run_state);
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
-
-    if node_id == MERGE_RESOLVER_NODE_ID {
-        // Not a projected node, so not a `CompletionAttempt`: its handler owns
-        // its own response shape end to end.
-        return CompletionAttempt::aborted(
-            "merge resolver: handled by its own path",
-            handle_merge_resolver_done(state, &run_id, &worktree_dir, &pre_run_state).await,
-        );
-    }
 
     // Transition guard (#212, #354): validate the completion against the
     // projected state BEFORE any side effect (sub-worktree merge, doc-only
@@ -9968,13 +10271,15 @@ async fn complete_node_iteration(
     // marks a live node `Stale` any more, so the agent of a long tool call is
     // still `Running` here and its late completion is accepted.
     let head = run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter);
-    let head_reason = match &head {
-        run_advance::CompletionHead::Reject { reason }
-        | run_advance::CompletionHead::NoOp { reason } => reason.clone(),
-        run_advance::CompletionHead::Allow => String::new(),
-    };
-    if let Some(resp) = completion_head_gate(head, caller, &run_id, &node_id, iter) {
-        return CompletionAttempt::aborted(head_reason, resp);
+    // The head's two stops map to the two *different* variants #490 split apart: a
+    // legal duplicate stays a `2xx` no-op, a reject is a refusal. Carrying the typed
+    // stop instead of a pre-projected `Response` also removes the double projection
+    // the pre-#490 code performed here.
+    if let Some(stop) = completion_head_gate(head, caller, &run_id, &node_id, iter) {
+        return match stop {
+            CompletionHeadStop::NoOp { reason } => CompletionAttempt::NoOp { reason },
+            CompletionHeadStop::Refused { refusal } => CompletionAttempt::refused(refusal),
+        };
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -9994,9 +10299,10 @@ async fn complete_node_iteration(
                 Ok(r) => r,
                 Err(e) => {
                     error!("failed to commit/merge sub-worktree for {node_id}: {e}");
-                    return CompletionAttempt::aborted(
-                        format!("commit/merge of the sub-worktree failed: {e}"),
-                        (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+                    return CompletionAttempt::refused(
+                        completion_refusal::CompletionRefusal::MergeFailed {
+                            error: e.to_string(),
+                        },
                     );
                 }
             };
@@ -10031,13 +10337,10 @@ async fn complete_node_iteration(
                     let _ = append_event(state, &run_failed).await;
 
                     warn!("Merge conflict for node {node_id} in run {run_id}");
-                    return CompletionAttempt::aborted(
-                        format!("merge conflict on {node_id}"),
-                        (
-                            StatusCode::OK,
-                            Json(serde_json::json!({ "status": "merge_conflict" })),
-                        )
-                            .into_response(),
+                    return CompletionAttempt::refused(
+                        completion_refusal::CompletionRefusal::MergeConflict {
+                            node_id: node_id.clone(),
+                        },
                     );
                 }
                 MergeResult::ConflictPendingResolution(detail) => {
@@ -10055,8 +10358,12 @@ async fn complete_node_iteration(
                     };
                     let _ = append_event(state, &conflict_event).await;
 
-                    return CompletionAttempt::aborted(
-                        format!("merge conflict on {node_id}: resolver spawned"),
+                    // DEAD in production (ADR-0035 §6): `keep_conflict` is never
+                    // `true`, so `ConflictPendingResolution` is never built. The two
+                    // resolver arms ride the new type at zero test cost; removing
+                    // the whole vestigial subsystem is ADR-0006 fallout, not this
+                    // bug fix.
+                    return CompletionAttempt::refused(
                         spawn_merge_resolver(state, &run_id, &node_id, iter, &worktree_dir).await,
                     );
                 }
@@ -10096,13 +10403,10 @@ async fn complete_node_iteration(
                 let _ = append_event(state, &run_failed).await;
 
                 warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
-                return CompletionAttempt::aborted(
-                    format!("doc-only node {node_id} violated code immutability"),
-                    (
-                        StatusCode::OK,
-                        Json(serde_json::json!({ "status": "doc_violated_code_immutability" })),
-                    )
-                        .into_response(),
+                return CompletionAttempt::refused(
+                    completion_refusal::CompletionRefusal::DocImmutabilityViolated {
+                        node_id: node_id.clone(),
+                    },
                 );
             }
             Ok(false) => {}
@@ -10122,7 +10426,7 @@ async fn complete_node_iteration(
     // it passes — the sweep only proposes `TurnEnded` when validation already
     // succeeded — but if the two ever disagree the answer is `node_done`'s, not a
     // second opinion.
-    if let Some(resp) = check_output_validation_with_retry(
+    if let Some(refusal) = check_output_validation_with_retry(
         state,
         &pipeline_path,
         &node_id,
@@ -10133,7 +10437,7 @@ async fn complete_node_iteration(
     )
     .await
     {
-        return CompletionAttempt::aborted("output validation refused the completion", resp);
+        return CompletionAttempt::refused(refusal);
     }
 
     let event = event_log::Event {
@@ -10151,10 +10455,9 @@ async fn complete_node_iteration(
     };
 
     if let Err(e) = append_event(state, &event).await {
-        return CompletionAttempt::aborted(
-            format!("failed to append the terminal event: {e}"),
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
-        );
+        return CompletionAttempt::refused(completion_refusal::CompletionRefusal::AppendFailed {
+            error: e.to_string(),
+        });
     }
 
     // Detached tail (#304, ADR-0023): the reap below kills the very tmux
@@ -10310,15 +10613,17 @@ async fn node_skip(
     // Same guard as a completion (#212, #354): the skip terminalizes the node as
     // Completed, so a duplicate skip / a skip on a terminal run must be
     // rejected/no-op'd exactly like `node_done`, never double-appended. Shared
-    // head — same pure decision as `node_done` and `mark_node_done`.
-    if let Some(resp) = completion_head_gate(
+    // head — same pure decision as `node_done` and `mark_node_done`, and therefore
+    // the same body shape since #490: a skip refused by the guard now names itself
+    // `completion_rejected` too, which is coherent — it is the same verdict.
+    if let Some(stop) = completion_head_gate(
         run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter),
         "node_skip",
         &run_id,
         &node_id,
         iter,
     ) {
-        return resp;
+        return stop.into_response();
     }
 
     // Terminalize the node as Completed with a no-op marker. A graceful no-op
@@ -12058,6 +12363,16 @@ fn resolve_run_pipeline_path(
     }
 }
 
+/// The **shared chokepoint** of the completion path (#490, ADR-0035): the one
+/// function both `POST …/nodes/:id/done` and the `mark_node_done` command arm
+/// reach. It owns the side effects (`append_event`, `send_keys`) and returns a
+/// **typed refusal**, never a pre-projected `Response` — projection belongs to
+/// `completion_refusal::refusal_response` alone, which is what makes "a refusal is
+/// never a 2xx" a property of the type rather than a list of arms to re-read.
+///
+/// `Option<CompletionRefusal>` (not `Result<_, Response>`): `Response` is 128
+/// bytes, exactly the `clippy::result_large_err` threshold the CI treats as an
+/// error, and the largest refusal variant is ~40 bytes.
 async fn check_output_validation_with_retry(
     state: &AppState,
     pipeline_path: &std::path::Path,
@@ -12066,7 +12381,7 @@ async fn check_output_validation_with_retry(
     artifacts_dir: &std::path::Path,
     run_id: &str,
     run_state: &event_log::RunState,
-) -> Option<Response> {
+) -> Option<completion_refusal::CompletionRefusal> {
     let yaml = std::fs::read_to_string(pipeline_path).ok()?;
     let parse_result = pipeline::parse_pipeline(&yaml).ok()?;
     let Err(validation_error) =
@@ -12128,29 +12443,13 @@ async fn check_output_validation_with_retry(
         let _ = append_event(state, &run_failed).await;
 
         warn!("script node {node_id} failed output validation in run {run_id} — fail-fast");
-        return Some(
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "script_validation_failed",
-                    "detail": detail,
-                })),
-            )
-                .into_response(),
-        );
+        return Some(completion_refusal::CompletionRefusal::ScriptValidationFailed { detail });
     }
 
     match validation_error {
-        outputs_validator::ValidationError::MissingOutputs(missing) => Some(
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "missing_outputs",
-                    "missing": missing,
-                })),
-            )
-                .into_response(),
-        ),
+        outputs_validator::ValidationError::MissingOutputs(missing) => {
+            Some(completion_refusal::CompletionRefusal::MissingOutputs { missing })
+        }
         outputs_validator::ValidationError::FrontmatterMismatch(violations) => {
             let retries = run_state
                 .nodes
@@ -12199,14 +12498,9 @@ async fn check_output_validation_with_retry(
 
                 warn!("Node {node_id} failed output validation after retry in run {run_id}");
                 Some(
-                    (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "status": "frontmatter_retry_exhausted",
-                            "violations": violation_details,
-                        })),
-                    )
-                        .into_response(),
+                    completion_refusal::CompletionRefusal::FrontmatterRetryExhausted {
+                        violations: violation_details,
+                    },
                 )
             } else {
                 let msg = outputs_validator::corrective_message(&violations);
@@ -12228,14 +12522,9 @@ async fn check_output_validation_with_retry(
 
                 info!("Frontmatter mismatch for node {node_id} in run {run_id} — corrective message sent, awaiting retry");
                 Some(
-                    (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "status": "frontmatter_retry_pending",
-                            "violations": violation_details,
-                        })),
-                    )
-                        .into_response(),
+                    completion_refusal::CompletionRefusal::FrontmatterRetryPending {
+                        violations: violation_details,
+                    },
                 )
             }
         }
@@ -15710,6 +15999,7 @@ mod tests {
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
+                missing_outputs: Vec::new(),
             },
         );
         rs
@@ -15921,6 +16211,7 @@ mod tests {
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
+                missing_outputs: Vec::new(),
             },
         );
         // An open loop region (exhausted at max_iter, not done) awaiting a route.
@@ -15973,6 +16264,7 @@ mod tests {
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
+                missing_outputs: Vec::new(),
             },
         );
         // Node `b` is throttled `Waiting`: ready but no admission slot yet. No
@@ -15990,6 +16282,7 @@ mod tests {
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
+                missing_outputs: Vec::new(),
             },
         );
 
@@ -16221,6 +16514,7 @@ mod tests {
                         .collect(),
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
+                    missing_outputs: Vec::new(),
                 },
             );
         }
@@ -19761,8 +20055,13 @@ edges:
                 .unwrap(),
         )
         .unwrap();
+        // #490 / ADR-0035 §3: `error` is the stable slug, the guard's prose moved
+        // to `message`. That split is the whole point — reading `error` as prose is
+        // what let the client mistake every 409 on this path for `missing_outputs`.
+        assert_eq!(body["error"], "completion_rejected");
+        assert_eq!(body["recoverable"], false);
         assert!(
-            body["error"].as_str().unwrap().contains("resume"),
+            body["message"].as_str().unwrap().contains("resume"),
             "rejection should point at resume_run, got {body}"
         );
 
@@ -20060,8 +20359,10 @@ edges:
                 .unwrap(),
         )
         .unwrap();
+        assert_eq!(body["error"], "completion_rejected");
+        assert_eq!(body["recoverable"], false);
         assert!(
-            body["error"].as_str().unwrap().contains("never started"),
+            body["message"].as_str().unwrap().contains("never started"),
             "got {body}"
         );
 
@@ -26000,5 +26301,520 @@ edges:
             sd["checked_at"].is_string(),
             "checked_at must be a string: {sd}"
         );
+    }
+
+    // ======================================================================
+    // #490 / ADR-0035 — a completion refusal is never a 2xx
+    //
+    // The structural invariant lives in `completion_refusal.rs` (the type owns no
+    // status, so a 2xx refusal is unrepresentable). What follows pins the WIRE, on
+    // BOTH surfaces, because the seam is shared and the test has to prove it: the
+    // pre-#490 bug survived precisely because `POST …/done` and
+    // `POST /runs/:id/commands` were only ever tested one at a time.
+    // ======================================================================
+
+    /// `command_triplet`'s sibling for `POST …/nodes/:id/done` (#490). Status **and**
+    /// content-type, so the two surfaces are pinned by the same shape of assertion
+    /// (net of #236).
+    async fn done_triplet(
+        state: &Arc<AppState>,
+        run_id: &str,
+        node_id: &str,
+        body: &str,
+    ) -> (StatusCode, String, String) {
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/{node_id}/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = String::from_utf8_lossy(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .into_owned();
+        (status, content_type, body)
+    }
+
+    /// `mark_node_done` through the command surface, as a triplet.
+    async fn mark_done_triplet(
+        state: &Arc<AppState>,
+        run_id: &str,
+        node_id: &str,
+    ) -> (StatusCode, String, String) {
+        command_triplet(
+            state,
+            run_id,
+            &serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": 1 })
+                .to_string(),
+        )
+        .await
+    }
+
+    /// The three `CompletionAttempt` variants, behind a `match` with **no wildcard**:
+    /// a fourth variant does not compile until its status side is decided.
+    ///
+    /// This is the half of the invariant that lives outside `completion_refusal.rs`:
+    /// `NoOp` is the ONE non-`Completed` outcome allowed a `2xx`, because a legal
+    /// duplicate grants nothing and must not read as an error (ADR-0025 §3).
+    #[test]
+    fn noop_is_the_only_2xx_that_grants_nothing() {
+        for attempt in [
+            CompletionAttempt::Completed,
+            CompletionAttempt::NoOp {
+                reason: "already terminal".into(),
+            },
+            CompletionAttempt::refused(completion_refusal::CompletionRefusal::MissingOutputs {
+                missing: vec!["review".into()],
+            }),
+        ] {
+            let expect_2xx = match &attempt {
+                CompletionAttempt::Completed | CompletionAttempt::NoOp { .. } => true,
+                CompletionAttempt::Refused { .. } => false,
+            };
+            let status = attempt.into_response().status();
+            assert_eq!(
+                status.is_success(),
+                expect_2xx,
+                "wrong status class: {status}"
+            );
+        }
+    }
+
+    fn write_script_pipeline_with_outputs(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: script\n    inputs:\n      - name: task\n    outputs:\n      - name: out\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    fn write_pipeline_with_frontmatter(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: review\n        frontmatter:\n          verdict:\n            type: enum\n            allowed: [PASS, FAIL]\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    fn write_artifact_for(
+        repo_root: &std::path::Path,
+        run_id: &str,
+        node_id: &str,
+        port: &str,
+        content: &str,
+    ) {
+        let dir = worktree_dir_for_run(repo_root, run_id)
+            .join(".pdo")
+            .join("artifacts")
+            .join(node_id)
+            .join("iter-1")
+            .join(port);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("output.md"), content).unwrap();
+    }
+
+    /// A `script` node whose declared output never landed. The whole point of #490:
+    /// this used to answer `200` **after** appending `NodeFailed` + `RunFailed`, so
+    /// `pdo complete` printed "marked complete." and exited `0` on a dead run.
+    #[tokio::test]
+    async fn script_validation_failed_is_409_not_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe = "script-refusal";
+        write_script_pipeline_with_outputs(tmp.path(), pipe);
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "script-refusal-run";
+        seed_awaiting_run(&state, run_id, pipe).await;
+
+        let (status, ct, body) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "script_validation_failed");
+        assert_eq!(body["recoverable"], false);
+        // The detail stays NESTED (ADR-0035 §5) so a fail-fast audit trail is
+        // distinguishable from an after-retry one.
+        assert_eq!(body["detail"]["kind"], "missing_outputs");
+        assert_eq!(body["detail"]["missing"], serde_json::json!(["out"]));
+
+        // And the terminal events really are already recorded — which is what makes
+        // `recoverable: false` and exit code `4` true rather than decorative.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::RunFailed)
+                .count(),
+            1
+        );
+
+        // The projection now carries the missing port, so the red banner is no
+        // longer a list of nothing.
+        let projected = event_log::project(&events).unwrap();
+        assert_eq!(projected.nodes["worker"].missing_outputs, vec!["out"]);
+    }
+
+    /// The first frontmatter mismatch, on **both** routes. Nothing terminal is
+    /// appended, the node stays `running`, and `recoverable: true` is what tells the
+    /// caller to fix and retry rather than to signal a failure.
+    #[tokio::test]
+    async fn frontmatter_retry_pending_is_409_and_recoverable_on_both_routes() {
+        for (label, use_done_route) in [("done", true), ("commands", false)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let pipe = "fm-pending";
+            write_pipeline_with_frontmatter(tmp.path(), pipe);
+            let state = test_state_with_dir(tmp.path()).await;
+            let run_id = "fm-pending-run";
+            seed_awaiting_run(&state, run_id, pipe).await;
+            write_artifact_for(
+                tmp.path(),
+                run_id,
+                "worker",
+                "review",
+                "---\nverdict: MAYBE\n---\nnope\n",
+            );
+
+            let (status, ct, raw) = if use_done_route {
+                done_triplet(&state, run_id, "worker", "{}").await
+            } else {
+                mark_done_triplet(&state, run_id, "worker").await
+            };
+            assert_eq!(
+                (status, ct.as_str()),
+                (StatusCode::CONFLICT, JSON_CT),
+                "{label}"
+            );
+            let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(body["error"], "frontmatter_retry_pending", "{label}");
+            assert_eq!(body["recoverable"], true, "{label}");
+            assert_eq!(body["violations"][0]["field"], "verdict", "{label}");
+
+            let events = load_events(&state.db, run_id).await.unwrap();
+            assert!(
+                !events.iter().any(|e| matches!(
+                    e.kind,
+                    event_log::EventKind::NodeFailed | event_log::EventKind::RunFailed
+                )),
+                "{label}: a recoverable refusal must append nothing terminal"
+            );
+            // Still alive — `awaiting_user` here because the seed parks the node
+            // there; what matters is that it is not terminal.
+            let projected = event_log::project(&events).unwrap();
+            assert!(
+                !matches!(
+                    projected.nodes["worker"].status,
+                    event_log::NodeStatus::Failed | event_log::NodeStatus::Completed
+                ),
+                "{label}: a recoverable refusal must leave the node alive"
+            );
+        }
+    }
+
+    /// The retry is spent: `recoverable: false`, and `NodeFailed` + `RunFailed` are
+    /// already in the log. This is the arm that answered `200` on a dead run.
+    #[tokio::test]
+    async fn frontmatter_retry_exhausted_is_409_and_not_recoverable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe = "fm-exhausted";
+        write_pipeline_with_frontmatter(tmp.path(), pipe);
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "fm-exhausted-run";
+        seed_awaiting_run(&state, run_id, pipe).await;
+        write_artifact_for(
+            tmp.path(),
+            run_id,
+            "worker",
+            "review",
+            "---\nverdict: MAYBE\n---\nnope\n",
+        );
+
+        // First attempt spends the retry (`FrontmatterRetryPending`).
+        let (first, _, _) = mark_done_triplet(&state, run_id, "worker").await;
+        assert_eq!(first, StatusCode::CONFLICT);
+
+        let (status, ct, raw) = mark_done_triplet(&state, run_id, "worker").await;
+        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(body["error"], "frontmatter_retry_exhausted");
+        assert_eq!(body["recoverable"], false);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let projected = event_log::project(&events).unwrap();
+        assert_eq!(
+            projected.nodes["worker"].status,
+            event_log::NodeStatus::Failed
+        );
+        assert_eq!(
+            projected.nodes["worker"].failure_reason.as_deref(),
+            Some("output validation failed")
+        );
+    }
+
+    /// New coverage: no test reached the doc-only immutability arm before #490. It
+    /// needs a real git worktree with a dirty **tracked** file (an untracked artefact
+    /// is ignored by the guard).
+    #[tokio::test]
+    async fn doc_only_immutability_violation_is_409_not_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_git_repo_for_refusal_tests(repo);
+        let pipe = "doc-immutability";
+        write_pipeline_with_outputs(repo, pipe);
+
+        let state = test_state_with_dir(repo).await;
+        let run_id = "doc-immutability-run";
+        let wt_dir = worktree_dir_for_run(repo, run_id);
+        create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+        // Dirty a TRACKED file from inside the run's worktree.
+        std::fs::write(wt_dir.join("tracked.txt"), "mutated by a doc-only node\n").unwrap();
+        assert!(worktree_has_tracked_changes(&wt_dir).unwrap());
+
+        // `find_node_type` reads the PROJECTED node defs, not the YAML on disk, so
+        // the cleanliness arm is only reached when `RunStarted` carries them.
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipe,
+                    "node_defs": [
+                        { "id": "worker", "node_type": "doc-only", "inputs": [], "outputs": [] }
+                    ],
+                    "edges": [],
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let (status, ct, raw) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(body["error"], "doc_violated_code_immutability");
+        assert_eq!(body["recoverable"], false);
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("code immutability"));
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::RunFailed)
+                .count(),
+            1
+        );
+
+        // Route asymmetry, asserted rather than assumed (ADR-0035, accepted limit):
+        // the command arm runs neither the merge nor the cleanliness check, so it
+        // cannot reach this refusal — it falls straight through to output validation.
+        let (cmd_status, _, cmd_raw) = mark_done_triplet(&state, run_id, "worker").await;
+        let cmd_body: serde_json::Value = serde_json::from_str(&cmd_raw).unwrap();
+        assert_eq!(cmd_status, StatusCode::CONFLICT);
+        assert_ne!(cmd_body["error"], "doc_violated_code_immutability");
+    }
+
+    /// New coverage: no test reached the merge-conflict arm before #490 either. Two
+    /// sub-worktrees touching the same file, merged in order — the second conflicts.
+    #[tokio::test]
+    async fn merge_conflict_is_409_not_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_git_repo_for_refusal_tests(repo);
+        let pipe = "merge-conflict-refusal";
+        let pipelines_dir = repo.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(
+            pipelines_dir.join(format!("{pipe}.yaml")),
+            format!(
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: impl_a\n    name: impl_a\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n  - id: impl_b\n    name: impl_b\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
+            ),
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(repo).await;
+        let run_id = "merge-conflict-run";
+        let wt_dir = worktree_dir_for_run(repo, run_id);
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        for node in ["impl_a", "impl_b"] {
+            let sub_dir = sub_worktree_path(repo, run_id, node, 1);
+            let sub_branch = sub_worktree_branch(run_id, node, 1);
+            create_sub_worktree(repo, &sub_dir, &sub_branch, &pipeline_branch).unwrap();
+            std::fs::write(sub_dir.join("shared.txt"), format!("from {node}\n")).unwrap();
+            // Both nodes declare a `patch` output; write it so validation is not
+            // what refuses.
+            write_artifact_for(repo, run_id, node, "patch", "done\n");
+        }
+
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipe,
+                    "node_defs": [
+                        { "id": "impl_a", "node_type": "code-mutating", "inputs": [], "outputs": [] },
+                        { "id": "impl_b", "node_type": "code-mutating", "inputs": [], "outputs": [] },
+                    ],
+                    "edges": [],
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("impl_a".into()),
+                iter: Some(1),
+                payload: None,
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("impl_b".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        // First merge lands.
+        let (first, _, _) = done_triplet(&state, run_id, "impl_a", "{}").await;
+        assert!(first.is_success(), "first merge should land, got {first}");
+
+        // Second conflicts — and this is the refusal that used to answer `200`
+        // *after* appending `MergeConflictDetected` + `RunFailed`.
+        let (status, ct, raw) = done_triplet(&state, run_id, "impl_b", "{}").await;
+        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(body["error"], "merge_conflict");
+        assert_eq!(body["recoverable"], false);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::MergeConflictDetected));
+    }
+
+    /// ADR-0024's tombstone keeps its `410` on this route: "never a 2xx" is not
+    /// "always a 409", and flattening these would be the wrong reading of #490.
+    #[tokio::test]
+    async fn a_forgotten_run_still_answers_410_on_the_done_route() {
+        let state = test_state().await;
+        let run_id = "done-forgotten";
+        seed_completed_run(&state, run_id).await;
+        post_cleanup_run(&state, run_id).await;
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let (status, ct, raw) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert_eq!((status, ct.as_str()), (StatusCode::GONE, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(body["error"], "run_forgotten");
+        assert_eq!(body["recoverable"], false);
+    }
+
+    /// A legal duplicate is a **success**: `200`, `noop: true`, exit `0`. Guarded on
+    /// both surfaces because an agent that read "refused" here and chained
+    /// `pdo fail` would kill a run that had just succeeded — and a `script` node's
+    /// tail would do it unprompted.
+    #[tokio::test]
+    async fn a_legal_duplicate_completion_is_still_a_200_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe = "noop-dup";
+        write_test_pipeline(tmp.path(), pipe);
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "noop-dup-run";
+        seed_awaiting_run(&state, run_id, pipe).await;
+        write_artifact_for(tmp.path(), run_id, "worker", "result", "done\n");
+
+        let (first, _, _) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert!(first.is_success(), "first completion should land: {first}");
+
+        for (label, raw) in [
+            ("done", done_triplet(&state, run_id, "worker", "{}").await),
+            (
+                "commands",
+                mark_done_triplet(&state, run_id, "worker").await,
+            ),
+        ] {
+            let (status, ct, raw) = raw;
+            assert_eq!(
+                (status, ct.as_str()),
+                (StatusCode::OK, JSON_CT),
+                "{label}: a legal duplicate must stay a 2xx"
+            );
+            let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(body["noop"], true, "{label}");
+            assert!(body["reason"].is_string(), "{label}");
+        }
+    }
+
+    /// A throwaway git repo with one tracked file, for the two refusals that need a
+    /// real worktree. Same shape as `worktree_ops`' own `init_test_repo`, which is
+    /// private to that module's test tree.
+    fn init_git_repo_for_refusal_tests(repo: &std::path::Path) {
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "refusal@test.local"]);
+        git(&["config", "user.name", "Refusal Test"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join(".gitignore"), ".pdo/runs/\n").unwrap();
+        std::fs::write(repo.join("tracked.txt"), "immutable\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "init"]);
     }
 }

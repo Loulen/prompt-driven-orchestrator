@@ -314,6 +314,7 @@ mod tests {
                 .collect(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
         };
         let mut s = RunState::new("run-1".into(), "test".into());
         s.nodes.insert(node_id.to_string(), node);

@@ -93,7 +93,10 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
         5172,
         prompt_path,
         None,
-        SessionTail::Agent { model: None },
+        SessionTail::Agent {
+            model: None,
+            effort: None,
+        },
         None,
     );
 

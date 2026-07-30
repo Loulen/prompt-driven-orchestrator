@@ -60,6 +60,8 @@ export default function AddNodeFromYamlModal({
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
         model: result.spec.model ?? null,
+        // #424: carry the parsed effort level onto the new node.
+        effort: result.spec.effort ?? null,
         view: getDropPosition(),
       };
       addNode(node);

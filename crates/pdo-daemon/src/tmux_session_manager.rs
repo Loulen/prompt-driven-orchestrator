@@ -69,7 +69,13 @@ pub const SCRIPT_TIMEOUT_SECS: u64 = 60;
 pub enum SessionTail<'a> {
     /// Agent node / manager / merge-resolver. `model` is the per-node model
     /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
-    Agent { model: Option<&'a str> },
+    Agent {
+        model: Option<&'a str>,
+        /// Per-node reasoning-effort override (#424). `None` *or* an empty string
+        /// ⇒ no `--effort`, byte-identical tail. A `Script` tail carries no such
+        /// field, so the type itself guarantees a `script` node never gets one.
+        effort: Option<&'a str>,
+    },
     /// Script node (#248). Runs `timeout <secs>s bash <body>` then completes on
     /// exit 0 / fails otherwise. `env` is the `PDO_INPUT_*`/`PDO_OUTPUT_*`/… I/O
     /// catalogue exported before the body (a script can't read the prose
@@ -262,9 +268,10 @@ fn wrap_with_env(
 }
 
 /// Build the `exec claude …` tail for an agent node. A non-empty `model`
-/// inserts `--model '<m>'`; `None` *or* an empty string reproduces the legacy
-/// command byte-for-byte.
-fn build_agent_tail(prompt_path: &Path, model: Option<&str>) -> String {
+/// inserts `--model '<m>'`, a non-empty `effort` inserts `--effort '<lvl>'`
+/// after it; `None` *or* an empty string on both reproduces the legacy command
+/// byte-for-byte.
+fn build_agent_tail(prompt_path: &Path, model: Option<&str>, effort: Option<&str>) -> String {
     // A non-empty `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing
     // space; `None` OR `Some("")` ⇒ empty string, so the command collapses to
     // the exact legacy literal (one space before the `"$(cat …)"`). The
@@ -275,9 +282,19 @@ fn build_agent_tail(prompt_path: &Path, model: Option<&str>) -> String {
         Some(m) if !m.is_empty() => format!("--model {} ", sh_single_quote(m)),
         _ => String::new(),
     };
+    // #424: same shape as the model flag, and deliberately placed *after* it —
+    // the tail test pins the substring `--dangerously-skip-permissions --model
+    // '<m>' `, so inserting before would break it for nothing. `None` OR
+    // `Some("")` ⇒ empty fragment, so the no-effort command collapses to the exact
+    // legacy literal (one space before the `"$(cat …)"`).
+    let effort_flag = match effort {
+        Some(e) if !e.is_empty() => format!("--effort {} ", sh_single_quote(e)),
+        _ => String::new(),
+    };
     format!(
-        "exec claude --dangerously-skip-permissions {}\"$(cat {})\"",
+        "exec claude --dangerously-skip-permissions {}{}\"$(cat {})\"",
         model_flag,
+        effort_flag,
         sh_single_quote(&prompt_path.to_string_lossy())
     )
 }
@@ -356,10 +373,10 @@ pub fn build_tmux_script(
                 NO_ENV,
             )
         }
-        SessionTail::Agent { model } => {
+        SessionTail::Agent { model, effort } => {
             let cmd = match tmux_cmd_override {
                 Some(cmd) => cmd.to_string(),
-                None => build_agent_tail(prompt_path, model),
+                None => build_agent_tail(prompt_path, model, effort),
             };
             (cmd, NO_ENV)
         }
@@ -390,17 +407,31 @@ pub fn build_tmux_script(
 /// `--continue`, or the `/resume` picker keep the model they were using when
 /// the transcript was saved" (https://code.claude.com/docs/en/model-config).
 /// So `--continue` never silently downgrades the per-node model.
+///
+/// `--effort` IS threaded here (#424), because that guarantee covers the model
+/// and nothing else. Measured on claude 2.1.220: `--effort xhigh` then
+/// `--continue` reports `auto (currently high)` — the level is lost, and the
+/// transcript stores no `effort` field for anything to read back. So the level
+/// is re-posed from the `NodeStarted` payload (launch-time value, not the
+/// current YAML — ADR-0007: an edit has no effect on a live node's current iter).
+/// `None` or an empty string ⇒ a bare `--continue`, byte-identical to the legacy
+/// tail.
 fn build_resume_script(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    effort: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
 ) -> String {
+    let effort_flag = match effort {
+        Some(e) if !e.is_empty() => format!(" --effort {}", sh_single_quote(e)),
+        _ => String::new(),
+    };
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
-        None => "exec claude --dangerously-skip-permissions --continue".to_string(),
+        None => format!("exec claude --dangerously-skip-permissions --continue{effort_flag}"),
     };
 
     // #407: the 6th tail path (`claude --continue`) is wrapped identically — a
@@ -541,6 +572,12 @@ pub fn spawn_shell(
 }
 
 /// Resume a dead session via `claude --continue` in the original working_dir.
+///
+/// `effort` is the level the node was **launched** with, read back from its
+/// `NodeStarted` event (#424) — `--continue` restores the model but not the
+/// effort, so the flag has to be re-posed. Deliberately not re-resolved from the
+/// current YAML: ADR-0007 makes a live node's current iteration immutable to
+/// edits.
 #[allow(clippy::too_many_arguments)]
 pub fn resume(
     session_name: &str,
@@ -549,6 +586,7 @@ pub fn resume(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    effort: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
 ) -> Result<()> {
@@ -557,6 +595,7 @@ pub fn resume(
         node_id,
         iter,
         daemon_port,
+        effort,
         tmux_cmd_override,
         sandbox,
     );
@@ -829,6 +868,19 @@ pub fn resolve_node_model<'a>(
         .or(default_effective.filter(|s| !s.is_empty()))
 }
 
+/// Resolve the effort a work node launches with (#424): the node's own `effort:`,
+/// with an empty string collapsing to `None` — "" means "unset" everywhere, so a
+/// hand-authored `effort: ""` in YAML falls through instead of reaching the tail
+/// as an empty `--effort`.
+///
+/// One tier today, on purpose: there is **no** instance-wide `default_effort`
+/// (that is slice B of #424). This is the seam that gains the second tier when it
+/// lands — keep it as the single precedence point both spawn seams call, exactly
+/// like [`resolve_node_model`].
+pub fn resolve_node_effort(node_effort: Option<&str>) -> Option<&str> {
+    node_effort.filter(|s| !s.is_empty())
+}
+
 /// Read the reaper interval from the env or use the default.
 pub fn reaper_interval() -> Duration {
     std::env::var(REAPER_INTERVAL_SECS_ENV)
@@ -1038,7 +1090,10 @@ mod tests {
             5172,
             prompt_path,
             None,
-            SessionTail::Agent { model: None },
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+            },
             None,
         );
         assert!(script.starts_with("exec bash -c "));
@@ -1055,7 +1110,10 @@ mod tests {
             5172,
             prompt_path,
             Some("exec sleep 60"),
-            SessionTail::Agent { model: None },
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+            },
             None,
         );
         assert!(script.contains("exec sleep 60"));
@@ -1076,7 +1134,10 @@ mod tests {
             5172,
             prompt_path,
             None,
-            SessionTail::Agent { model: None },
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+            },
             None,
         );
         assert!(
@@ -1109,6 +1170,7 @@ mod tests {
             None,
             SessionTail::Agent {
                 model: Some("opus"),
+                effort: None,
             },
             None,
         );
@@ -1144,7 +1206,10 @@ mod tests {
             5172,
             prompt_path,
             None,
-            SessionTail::Agent { model: Some("") },
+            SessionTail::Agent {
+                model: Some(""),
+                effort: None,
+            },
             None,
         );
         assert!(
@@ -1155,6 +1220,111 @@ mod tests {
             script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
             "legacy tail must be byte-identical for an empty model: {script}"
         );
+    }
+
+    /// #424 helper: build an agent tail with an arbitrary model/effort pair.
+    fn agent_script(model: Option<&str>, effort: Option<&str>) -> String {
+        build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            Path::new("/tmp/test-prompt.md"),
+            None,
+            SessionTail::Agent { model, effort },
+            None,
+        )
+    }
+
+    #[test]
+    fn build_script_omits_effort_when_none() {
+        // #424: THE byte-identity gate. A node with no effort must reproduce the
+        // legacy command byte-for-byte — no `--effort`, exactly one space before
+        // `"$(cat …)"`. Adding the flag must not perturb the default launch.
+        let script = agent_script(None, None);
+        assert!(
+            !script.contains("--effort"),
+            "no effort flag when unset: {script}"
+        );
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail must be byte-identical: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_omits_effort_when_empty() {
+        // #424: `Some("")` must behave exactly like `None`. Last-resort guard,
+        // mirroring the model's (#347): every upstream tier already collapses ""
+        // (`resolve_node_effort`), but a missed source would otherwise emit
+        // `--effort ''`, which `claude` answers with a stderr warning and a
+        // *silent* fall back to the default level — the worst failure mode.
+        let script = agent_script(None, Some(""));
+        assert!(
+            !script.contains("--effort"),
+            "empty effort must emit no flag (identical to None): {script}"
+        );
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail must be byte-identical for an empty effort: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_inserts_effort_after_model() {
+        // #424: `--effort` sits AFTER `--model` — the model test above pins the
+        // substring `--dangerously-skip-permissions --model '<m>' `, so inserting
+        // before it would break that assertion for nothing. Single-quoted like the
+        // model value, hence `'\''` once `wrap_with_env` re-wraps the tail in
+        // `bash -c '…'`.
+        let script = agent_script(Some("opus"), Some("low"));
+        assert!(
+            script.contains(r"--model '\''opus'\'' --effort '\''low'\'' "),
+            "effort must follow the model, both single-quoted: {script}"
+        );
+        let model_at = script.find("--model").unwrap();
+        let effort_at = script.find("--effort").unwrap();
+        let cat_at = script.find("$(cat").unwrap();
+        assert!(
+            model_at < effort_at && effort_at < cat_at,
+            "order must be --model, --effort, then the prompt cat: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_effort_without_model_still_hugs_the_base_flag() {
+        // #424: the two fragments are independent — an effort-only node emits the
+        // effort flag directly after `--dangerously-skip-permissions`, with no
+        // double space where the absent model fragment would have been.
+        let script = agent_script(None, Some("xhigh"));
+        assert!(
+            script.contains(r#"--dangerously-skip-permissions --effort '\''xhigh'\'' "$(cat "#),
+            "effort-only tail must leave no gap: {script}"
+        );
+        assert!(!script.contains("--model"), "{script}");
+    }
+
+    #[test]
+    fn resolve_node_effort_collapses_empty() {
+        // #424: pure, single-tier — there is no instance-wide `default_effort`
+        // (slice B). An empty string means "unset" everywhere, so a hand-authored
+        // `effort: ""` falls through to `None` instead of reaching the tail.
+        assert_eq!(
+            resolve_node_effort(Some("low")),
+            Some("low"),
+            "a set level passes through"
+        );
+        assert_eq!(
+            resolve_node_effort(Some("turbo")),
+            Some("turbo"),
+            "an unknown level passes through too — the wire is open (ADR-0001)"
+        );
+        assert_eq!(
+            resolve_node_effort(Some("")),
+            None,
+            "empty string collapses to unset"
+        );
+        assert_eq!(resolve_node_effort(None), None, "nothing set → None");
     }
 
     #[test]
@@ -1485,7 +1655,10 @@ mod tests {
             6172,
             prompt_path,
             None,
-            SessionTail::Agent { model: None },
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+            },
             Some(&wrap),
         );
         // Host wrapper preserved.
@@ -1608,7 +1781,10 @@ mod tests {
             5172,
             prompt_path,
             None,
-            SessionTail::Agent { model: None },
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+            },
             None,
         );
         assert!(
@@ -1627,7 +1803,7 @@ mod tests {
         // #407: the 6th tail path (`claude --continue`) is wrapped identically.
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/solo/iter-1");
         let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
-        let wrapped = build_resume_script("r1", "solo", 1, 6172, None, Some(&wrap));
+        let wrapped = build_resume_script("r1", "solo", 1, 6172, None, None, Some(&wrap));
         assert!(
             wrapped.contains("docker exec -i -t -e PDO_SBX_SESSION=pdo-r1-solo-iter-1"),
             "{wrapped}"
@@ -1635,11 +1811,70 @@ mod tests {
         assert!(wrapped.contains("pdo-sbx-r1 bash -lc"), "{wrapped}");
         assert!(wrapped.contains("--continue"), "{wrapped}");
         // off path unchanged.
-        let off = build_resume_script("r1", "solo", 1, 6172, None, None);
+        let off = build_resume_script("r1", "solo", 1, 6172, None, None, None);
         assert!(!off.contains("docker"), "{off}");
         assert!(
             off.contains("exec claude --dangerously-skip-permissions --continue"),
             "{off}"
         );
+    }
+
+    #[test]
+    fn build_resume_script_omits_effort_when_none_or_empty() {
+        // #424: a node launched without an effort resumes on a BARE `--continue`,
+        // byte-identical to the legacy tail. `Some("")` behaves like `None` — the
+        // same last-resort guard as the spawn tail.
+        for effort in [None, Some("")] {
+            let script = build_resume_script("r1", "solo", 1, 6172, effort, None, None);
+            assert!(
+                !script.contains("--effort"),
+                "no effort flag when unset ({effort:?}): {script}"
+            );
+            // Nothing trails `--continue`: the tail ends there (before the closing
+            // quote of the `bash -c '…'` wrapper).
+            assert!(
+                script.contains(r"exec claude --dangerously-skip-permissions --continue'"),
+                "legacy resume tail must be byte-identical ({effort:?}): {script}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_resume_script_reposes_effort_when_some() {
+        // #424 (slice C): `--continue` restores the MODEL from the transcript
+        // (documented guarantee) but loses the EFFORT — measured on claude 2.1.220:
+        // `--effort xhigh` then `--continue` reports `auto (currently high)`, and
+        // the transcript stores no effort field to read back. So the level is
+        // re-posed here, from the `NodeStarted` payload. Still no `--model`: that
+        // one really is restored.
+        let script = build_resume_script("r1", "solo", 1, 6172, Some("low"), None, None);
+        assert!(
+            script.contains(r"--continue --effort '\''low'\''"),
+            "effort must be re-posed right after --continue: {script}"
+        );
+        assert!(
+            !script.contains("--model"),
+            "the model is restored by --continue and must NOT be re-posed: {script}"
+        );
+    }
+
+    #[test]
+    fn build_resume_script_effort_ignored_under_cmd_override() {
+        // The test seam REPLACES the whole tail — it does not wrap it. Pinned here
+        // so nobody writes a layer-3 assertion on the resumed tail and believes it
+        // (`TestDaemon::spawn` sets the override by default): such a test is
+        // structurally blind to the flag.
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            Some("low"),
+            Some("exec sleep 60"),
+            None,
+        );
+        assert!(script.contains("exec sleep 60"), "{script}");
+        assert!(!script.contains("--effort"), "{script}");
+        assert!(!script.contains("claude"), "{script}");
     }
 }

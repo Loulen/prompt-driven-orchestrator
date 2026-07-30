@@ -939,6 +939,38 @@ describe("serializePipeline (via save) emits structural node fields", () => {
     expect(yaml).toMatch(/max_iter: \$rounds/);
   });
 
+  // #424: the strongest test of the whole registration chain — it drives the real
+  // path (updateNode's generic spread → pipelineToYamlObject → the save payload)
+  // rather than asserting on a fixture. The asymmetry it protects against: reads
+  // are opaque (a generic spread), WRITES are enumerated, so a field appears to
+  // work perfectly in the UI and dies at the serializer boundary. That is exactly
+  // how `EdgeDef.repeated` is lost today.
+  it("round-trips a per-node effort set through updateNode (#424)", async () => {
+    seedTabWithPipeline(makePipeline([makeNode({ id: "impl", name: "implementer" })]));
+
+    useEditStore.getState().updateNode("impl", { effort: "low", model: "opus" });
+    expect(
+      useEditStore.getState().openTabs[0].pipeline.nodes[0].effort,
+    ).toBe("low");
+
+    await useEditStore.getState().save("test-tab");
+
+    const yaml = mockSavePipeline.mock.calls[0][1];
+    expect(yaml).toMatch(/effort: low/);
+    expect(yaml).toMatch(/model: opus/);
+  });
+
+  it("emits no effort key after resetting it to null (#424)", async () => {
+    seedTabWithPipeline(
+      makePipeline([makeNode({ id: "impl", name: "implementer", effort: "high" })]),
+    );
+
+    useEditStore.getState().updateNode("impl", { effort: null });
+    await useEditStore.getState().save("test-tab");
+
+    expect(mockSavePipeline.mock.calls[0][1]).not.toMatch(/effort:/);
+  });
+
   // ForEach-node `over` serialization and `over`-reset-on-edge-delete tests were
   // removed with the ForEach node type (#151): a collection's `over` driver now
   // lives on the `loops:` region, not on any node.

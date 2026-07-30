@@ -353,6 +353,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -381,6 +382,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -534,6 +536,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -562,6 +565,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -720,6 +724,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
                 NodeDef {
                     id: "b".into(),
@@ -740,6 +745,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
                 NodeDef {
                     id: "merger".into(),
@@ -760,6 +766,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
             ],
             edges: vec![
@@ -848,6 +855,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -861,6 +869,7 @@ mod tests {
                     max_iter: None,
                     over: None,
                     model: None,
+                    effort: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -928,6 +937,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         };
         let mk_edge = |src: &str| EdgeDef {
             source: EdgeEndpoint {
@@ -1008,6 +1018,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         };
         let mk_edge = |src: &str, port: &str| EdgeDef {
             source: EdgeEndpoint {
@@ -1091,6 +1102,7 @@ mod tests {
                 max_iter: None,
                 over: None,
                 model: None,
+                effort: None,
             }],
             edges: Vec::new(),
             loops: Vec::new(),

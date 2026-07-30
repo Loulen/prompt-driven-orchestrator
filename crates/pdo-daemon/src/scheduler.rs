@@ -1163,6 +1163,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -1186,6 +1187,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -2345,6 +2347,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -3072,6 +3075,7 @@ mod tests {
             ))),
             over: None,
             model: None,
+            effort: None,
         }
     }
 
@@ -3596,6 +3600,7 @@ mod tests {
             max_iter: None,
             over: None,
             model: None,
+            effort: None,
         }
     }
 

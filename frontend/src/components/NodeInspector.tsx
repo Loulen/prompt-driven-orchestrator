@@ -6,6 +6,7 @@ import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
 import ModelPicker from "./ModelPicker";
+import EffortPicker from "./EffortPicker";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -227,6 +228,21 @@ export default function NodeInspector({
           </Field>
         )}
 
+        {/* Effort (#424): orthogonal to the model — the model says WHICH agent
+            runs, the effort says HOW LONG it thinks. Segmented, not a slider (see
+            EffortPicker). Hidden for a script node for the same reason as the
+            model: it launches no agent. Hidden, not disabled — the house masks
+            controls, it does not grey them out. */}
+        {!isScript && (
+          <Field label="Effort">
+            <EffortPicker
+              value={node.effort ?? null}
+              onChange={(v) => handleField("effort", v)}
+              testid="node-effort"
+            />
+          </Field>
+        )}
+
         {/* Prompt / Script body. For a script node (#248) this textarea holds the
             bash body; its I/O arrives as PDO_* env vars, not a prose preamble. */}
         <SectionHead title={isScript ? "Script (bash)" : "Prompt"} />
@@ -407,6 +423,10 @@ function StarButton({
       // #296/#345: persist the per-node model so the library is model-aware and
       // a modelled node stays synced instead of flipping to diverged.
       model: node.model ?? null,
+      // #424: same for the effort level. NOTE: `librarySpec()` has NO return-type
+      // annotation, so omitting a field here compiles fine — the star would just
+      // read `diverged` forever.
+      effort: node.effort ?? null,
       prompt,
     };
   }
@@ -445,6 +465,8 @@ function StarButton({
         interactive: result.spec.interactive,
         // #296/#345: reset the per-node model from the library entry too.
         model: result.spec.model ?? null,
+        // #424: and the effort level.
+        effort: result.spec.effort ?? null,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

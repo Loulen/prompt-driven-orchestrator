@@ -285,6 +285,21 @@ pub(crate) async fn spawn_node(
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
+    // #347/#424: resolve what the session will actually launch with, BEFORE the
+    // span below. The `NodeStarted` payload appended *inside* the span records the
+    // **resolved** values (what the flags really carried, which is what the resume
+    // path reads back), and `stored_default_model` is async — it cannot be awaited
+    // from the spawn seam further down and still be visible to the append. This is
+    // a move, not an extra read: the same single DB read, earlier.
+    // `__manager__` / `__merge_resolver__` are infra sessions with no NodeDef and
+    // stay at the account default — they don't route through `spawn_node` (#296).
+    let default_effective = stored_default_model(deps.db).await;
+    let resolved_model = tmux_session_manager::resolve_node_model(
+        node.model.as_deref(),
+        default_effective.as_deref(),
+    );
+    let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
+
     // Panic/cancellation-isolated spawn window (#279). Everything from here to
     // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
     // input resolution) or — when this runs in-request inside `node_done` — be
@@ -429,6 +444,18 @@ pub(crate) async fn spawn_node(
                     pipeline::NodeType::Merge => "merge",
                     pipeline::NodeType::Script => "script",
                 },
+                // #424: the launch-time model and effort, **resolved** (post
+                // node → instance precedence, post empty-string collapse) — not
+                // the raw `NodeDef` values. This is what the resume path reads
+                // back to re-pose `--effort`, so it has to be what the flag
+                // actually carried. `None` serializes as JSON `null`; a script
+                // node records both as `null` since it launches no agent.
+                // Recording `model` alongside is deliberate even though nothing
+                // reads it yet: the meaning of an effort level depends on the
+                // model (supported levels and the default both vary per model),
+                // so storing the effort alone would store half a fact.
+                "model": resolved_model,
+                "effort": resolved_effort,
             })),
         };
         // A failed `NodeStarted` append means the reservation was NOT recorded:
@@ -484,22 +511,17 @@ pub(crate) async fn spawn_node(
 
     let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
     let is_script = node.node_type == pipeline::NodeType::Script;
-    // #347: resolve the instance default fresh (stored → env → None), then let
-    // the node's own `model:` override win over it. `__manager__` /
-    // `__merge_resolver__` are infra sessions with no NodeDef and stay at the
-    // account default — they don't route through `spawn_node` (#296).
-    let default_effective = stored_default_model(deps.db).await;
     let tail = if is_script {
         tmux_session_manager::SessionTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
             env: &script_env,
         }
     } else {
+        // Resolved above the panic span so the `NodeStarted` payload could record
+        // the same values the flags carry (#347/#424).
         tmux_session_manager::SessionTail::Agent {
-            model: tmux_session_manager::resolve_node_model(
-                node.model.as_deref(),
-                default_effective.as_deref(),
-            ),
+            model: resolved_model,
+            effort: resolved_effort,
         }
     };
     // A script node executes the RAW bash body (`role_prompt`), never the

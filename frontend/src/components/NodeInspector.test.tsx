@@ -177,6 +177,10 @@ describe("NodeInspector — script node surface (#248)", () => {
     expect(screen.getByTestId("script-help")).toBeInTheDocument();
     // A script launches no agent — the model field must be absent.
     expect(screen.queryByTestId("node-model-trigger")).toBeNull();
+    // #424: and so must the effort field, for the same reason. Absent, not
+    // disabled — the house masks controls rather than greying them out.
+    expect(screen.queryByRole("radiogroup", { name: "Effort" })).toBeNull();
+    expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
   });
 
   it("shows a static script type label, not the doc-only/code-mutating toggle", () => {
@@ -264,6 +268,55 @@ describe("NodeInspector — per-node model field (#296/#324)", () => {
     useEditStore.getState().updateNode("rv1", { model: "claude-opus-4-8" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("claude-opus-4-8");
+  });
+});
+
+describe("NodeInspector — per-node effort field (#424)", () => {
+  it("writes the picked effort onto the node and marks the tab dirty", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    await user.click(screen.getByTestId("node-effort-option-low"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.nodes[0].effort).toBe("low");
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("clears the effort to null via Default (stays unset, never serialized)", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { effort: "high" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("node-effort-option-high")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    await user.click(screen.getByTestId("node-effort-option-default"));
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].effort).toBeNull();
+  });
+
+  it("is orthogonal to the model — setting one leaves the other alone", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "opus" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    await user.click(screen.getByTestId("node-effort-option-max"));
+
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.effort).toBe("max");
+    expect(node.model).toBe("opus");
+  });
+
+  it("renders a seeded unknown level in the pass-through segment (free text survives)", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { effort: "turbo" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-effort-option-passthrough")).toHaveTextContent("turbo");
   });
 });
 
@@ -395,6 +448,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       interactive: false,
       // #345/#296: the library is model-aware; a model-less node sends null.
       model: null,
+      // #424: effort-aware too; an effort-less node sends null.
+      effort: null,
       prompt: "Review this code.",
     });
   });

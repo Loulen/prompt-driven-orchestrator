@@ -46,6 +46,11 @@ async fn library_node_preserves_all_port_fields() {
             }
         ],
         "interactive": true,
+        // #296/#424: the two per-node agent knobs. `POST /library` → GET →
+        // `instantiate` is the only daemon-real test of the node library, so it is
+        // the one place a dropped field surfaces end-to-end.
+        "model": "opus",
+        "effort": "low",
         "prompt": "You are a code reviewer."
     });
 
@@ -106,6 +111,11 @@ async fn library_node_preserves_all_port_fields() {
 
     // Assert metadata
     assert_eq!(entry["interactive"], true);
+    assert_eq!(entry["model"], "opus");
+    assert_eq!(
+        entry["effort"], "low",
+        "#424: the library must be effort-aware"
+    );
     assert_eq!(entry["prompt"], "You are a code reviewer.");
 
     // POST /library/{name}/instantiate and verify round-trip
@@ -134,5 +144,10 @@ async fn library_node_preserves_all_port_fields() {
         "instantiated output should have when"
     );
     assert_eq!(inst_output["when"]["verdict"]["eq"], "PASS");
+    assert_eq!(spec["model"], "opus");
+    assert_eq!(
+        spec["effort"], "low",
+        "#424: instantiating must restore the effort, not the default"
+    );
     assert_eq!(instantiated["prompt"], "You are a code reviewer.");
 }

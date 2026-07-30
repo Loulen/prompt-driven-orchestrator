@@ -273,6 +273,34 @@ describe("pipelinesEquivalent", () => {
     const b = def({ nodes: [node("a")] });
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
+
+  // #424: the per-node effort is SEMANTIC too. If it were classified as layout —
+  // or simply never emitted — the ⚠ drifted badge on New Run → Pipeline would stay
+  // dark on an effort change and the user would launch a stale library copy
+  // believing it current.
+  it("flags a real per-node effort change", () => {
+    const a = def({ nodes: [node("a", { effort: "low" })] });
+    const b = def({ nodes: [node("a", { effort: "high" })] });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  it("flags gaining an effort where the twin has none", () => {
+    const a = def({ nodes: [node("a", { effort: "low" })] });
+    const b = def({ nodes: [node("a")] });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  it("treats identical per-node efforts as equivalent", () => {
+    const a = def({ nodes: [node("a", { effort: "max" })] });
+    const b = def({ nodes: [node("a", { effort: "max" })] });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("treats an unset effort as equivalent to an absent one (no false diverge)", () => {
+    const a = def({ nodes: [node("a", { effort: null })] });
+    const b = def({ nodes: [node("a")] });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
 });
 
 describe("computePipelineSyncState", () => {

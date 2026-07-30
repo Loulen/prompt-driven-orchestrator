@@ -117,4 +117,29 @@ describe("MergeInspector", () => {
     render(<MergeInspector />);
     expect(screen.getByTestId("merge-model-trigger")).toHaveTextContent("sonnet");
   });
+
+  // #424: a merge node IS a NodeDef routed through `spawn_node`, so it carries an
+  // effort — unguarded, unlike a script node. (The `__merge_resolver__` infra
+  // session is a different thing with a confusingly similar name and never has
+  // one.)
+  it("exposes the Effort control unconditionally and writes the picked level", async () => {
+    const user = userEvent.setup();
+    setStoreState(makeMergeNode());
+    render(<MergeInspector />);
+
+    expect(screen.getByRole("radiogroup", { name: "Effort" })).toBeInTheDocument();
+    await user.click(screen.getByTestId("merge-effort-option-medium"));
+
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "mg1");
+    expect(node?.effort).toBe("medium");
+  });
+
+  it("renders a seeded effort as the checked segment", () => {
+    setStoreState(makeMergeNode({ effort: "xhigh" }));
+    render(<MergeInspector />);
+    expect(screen.getByTestId("merge-effort-option-xhigh")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
 });

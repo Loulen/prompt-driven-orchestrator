@@ -69,6 +69,11 @@ export function computeSyncState(
     // #296/#345: the per-node model is part of the node's identity — a model
     // change must flip the star to diverged (silent loss is forbidden, ADR-0001).
     (entry.model ?? null) === (node.model ?? null) &&
+    // #424: same for the effort level. NOTHING guards this comparison — neither
+    // `tsc` nor a type-level exhaustiveness check breaks if a field is missing
+    // here, and this is the verdict the user actually SEES on the star. A missing
+    // field reads `synced` while the two differ: bug #345, one field later.
+    (entry.effort ?? null) === (node.effort ?? null) &&
     entry.prompt === prompt &&
     portsMatch(node.inputs, entry.inputs) &&
     portsMatch(node.outputs, entry.outputs)

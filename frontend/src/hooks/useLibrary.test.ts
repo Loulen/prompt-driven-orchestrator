@@ -72,6 +72,42 @@ describe("computeSyncState", () => {
     expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
   });
 
+  it("returns diverged when the per-node effort differs (#424)", () => {
+    // `computeSyncState` is a hand-written comparison with NO guard — neither tsc
+    // nor a type-level check breaks if a field is missing from it — and this is
+    // the verdict the user reads off the star. A missing field would report
+    // `synced` while the two differ: bug #345, one field later.
+    const node = makeNode({ effort: "low" });
+    const entries = [makeEntry()];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns diverged when the entry has an effort and the node lost it (#424)", () => {
+    const node = makeNode();
+    const entries = [makeEntry({ effort: "low" })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns diverged when only the effort LEVEL changed (#424)", () => {
+    const node = makeNode({ effort: "high" });
+    const entries = [makeEntry({ effort: "low" })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns synced when node and entry share the same effort (#424)", () => {
+    const node = makeNode({ effort: "low" });
+    const entries = [makeEntry({ effort: "low" })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
+  it("treats an unset effort as equal to an absent one (#424)", () => {
+    // `null` on the node vs an omitted key on the entry: the same state, so the
+    // star must NOT read diverged — the `?? null` normalisation on both sides.
+    const node = makeNode({ effort: null });
+    const entries = [makeEntry()];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
   it("returns diverged when interactive differs", () => {
     const node = makeNode({ interactive: true });
     const entries = [makeEntry()];

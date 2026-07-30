@@ -110,6 +110,43 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(makeFullPipeline([impl]))).not.toContain("model:");
   });
 
+  it("emits a per-node effort override when set (#424)", () => {
+    // THE angle-blind spot the plan called out: the field lives happily in the
+    // store and renders in the inspector even when the serializer forgets it —
+    // only reading the emitted YAML proves it persists.
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).toContain("effort: low");
+    expect(yaml).toContain("model: opus");
+  });
+
+  it("emits an unknown effort level verbatim (#424, free-text wire)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 }, effort: "turbo",
+    };
+    expect(serializePipeline(makeFullPipeline([impl]))).toContain("effort: turbo");
+  });
+
+  it("omits effort when unset/null/empty — the byte-identical default (#424)", () => {
+    // `undefined`, `null` and `""` must all serialize as an ABSENT key: an
+    // `effort: ""` in the file would reach the tail as an empty `--effort`, which
+    // `claude` answers with a stderr warning and a silent fall back to the default.
+    for (const effort of [undefined, null, ""]) {
+      const impl: NodeDef = {
+        id: "impl", name: "implementer", type: "code-mutating",
+        inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+        interactive: false, view: { x: 200, y: 0 }, effort,
+      };
+      expect(serializePipeline(makeFullPipeline([impl]))).not.toContain("effort:");
+    }
+  });
+
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "doc-only",
@@ -534,6 +571,15 @@ describe("exportNodeAsYaml (#345)", () => {
   it("includes model when set and omits it when unset (#296)", () => {
     expect(exportNodeAsYaml(node({ model: "opus" }), "p")).toContain("model: opus");
     expect(exportNodeAsYaml(node({ model: null }), "p")).not.toContain("model:");
+  });
+
+  it("includes effort when set and omits it when unset (#424)", () => {
+    // `exportNodeAsYaml` is the SECOND emitter, deliberately not unified with
+    // `pipelineToYamlObject` — a field added to one must be added to the other.
+    expect(exportNodeAsYaml(node({ effort: "low" }), "p")).toContain("effort: low");
+    expect(exportNodeAsYaml(node({ effort: "turbo" }), "p")).toContain("effort: turbo");
+    expect(exportNodeAsYaml(node({ effort: null }), "p")).not.toContain("effort:");
+    expect(exportNodeAsYaml(node({ effort: "" }), "p")).not.toContain("effort:");
   });
 
   it("emits interactive only when true", () => {

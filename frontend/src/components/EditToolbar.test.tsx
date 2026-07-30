@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import EditToolbar from "./EditToolbar";
 import { TooltipProvider } from "./ui/tooltip";
@@ -20,7 +21,7 @@ describe("EditToolbar", () => {
     onLibraryDelete.mockClear();
   });
 
-  function renderToolbar() {
+  function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
     return render(
       <TooltipProvider>
         <EditToolbar
@@ -29,6 +30,7 @@ describe("EditToolbar", () => {
           onAddNodeFromYaml={onAddNodeFromYaml}
           libraryEntries={[]}
           onLibraryDelete={onLibraryDelete}
+          {...props}
         />
       </TooltipProvider>,
     );
@@ -121,6 +123,50 @@ describe("EditToolbar", () => {
     await user.hover(screen.getByTestId("toolbar-merge"));
     await waitFor(() => {
       expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Merge node");
+    });
+  });
+
+  // #397: the toolbar listed seven icon buttons in the a11y tree, six of them
+  // anonymous — a Radix tooltip is a description, not a name (WCAG 4.1.2).
+  describe("accessible names (#397)", () => {
+    // Each name is the button's own visible tooltip text, verbatim.
+    const NAMES: [string, string][] = [
+      ["toolbar-add", "Add"],
+      ["toolbar-library", "Library · L"],
+      ["toolbar-merge", "Merge node"],
+      ["toolbar-script", "Script node (deterministic bash)"],
+      ["toolbar-undo", "Undo · Ctrl+Z"],
+      ["toolbar-redo", "Redo · Ctrl+Y"],
+      ["toolbar-info", "Pipeline info"],
+    ];
+
+    it.each(NAMES)("%s is named %j at rest", (testid, name) => {
+      renderToolbar({ onToggleInfo: vi.fn() });
+      // No hover, no focus — the name must hold in the resting state, which is
+      // exactly where `aria-describedby` does not exist.
+      expect(screen.getByTestId(testid)).toHaveAccessibleName(name);
+    });
+
+    it("leaves no anonymous button in the toolbar", () => {
+      renderToolbar({ onToggleInfo: vi.fn() });
+      const toolbar = screen.getByTestId("edit-toolbar");
+      const buttons = [...toolbar.querySelectorAll("button")];
+      expect(buttons).toHaveLength(NAMES.length);
+      for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
+    });
+
+    it("undo/redo stay named while disabled", () => {
+      renderToolbar();
+      expect(screen.getByTestId("toolbar-undo")).toBeDisabled();
+      expect(screen.getByTestId("toolbar-undo")).toHaveAccessibleName("Undo · Ctrl+Z");
+      expect(screen.getByTestId("toolbar-redo")).toHaveAccessibleName("Redo · Ctrl+Y");
+    });
+
+    it("the read-only archived toolbar still names its lone info button (#315)", () => {
+      renderToolbar({ readOnly: true, onToggleInfo: vi.fn() });
+      const buttons = [...screen.getByTestId("edit-toolbar").querySelectorAll("button")];
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]).toHaveAccessibleName("Pipeline info");
     });
   });
 });

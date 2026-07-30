@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { RunState } from "../types";
 
 // The badge/banner live in the InfoTab header, above DiffSection. Mock the heavy
@@ -73,5 +74,31 @@ describe("PipelineInfoPanel — sandbox surface (#410)", () => {
     expect(screen.queryByTestId("sandbox-prep-banner")).not.toBeInTheDocument();
     // The badge stays visible after prep completes.
     expect(screen.getByTestId("sandbox-badge")).toBeInTheDocument();
+  });
+});
+
+// #397: the page-wide sweep that found the six anonymous toolbar buttons turned
+// up a seventh here — this panel's close cross, an `X` icon with no label.
+describe("PipelineInfoPanel — accessible names (#397)", () => {
+  it("names the close button", () => {
+    renderPanel(makeRun());
+    expect(screen.getByTestId("info-panel-close")).toHaveAccessibleName(
+      "Close pipeline info",
+    );
+  });
+
+  it("still calls onClose when activated by that name", async () => {
+    const onClose = vi.fn();
+    render(
+      <PipelineInfoPanel
+        run={makeRun()}
+        pipeline={null}
+        libraryPipelines={[]}
+        onLibraryChanged={() => {}}
+        onClose={onClose}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Close pipeline info" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

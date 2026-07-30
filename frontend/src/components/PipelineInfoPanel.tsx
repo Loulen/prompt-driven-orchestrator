@@ -92,6 +92,9 @@ export default function PipelineInfoPanel({
           onClick={onClose}
           className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
           data-testid="info-panel-close"
+          // #397: no Tooltip here to borrow a name from — the `X` icon is
+          // `aria-hidden`, so the label has to be explicit.
+          aria-label="Close pipeline info"
         >
           <X size={12} />
         </button>

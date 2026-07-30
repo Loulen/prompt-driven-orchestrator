@@ -22163,6 +22163,537 @@ edges:
         assert_eq!(run_state.status, event_log::RunStatus::Running);
     }
 
+    // --- #236: characterization net for POST /runs/{id}/commands ---
+    //
+    // Written BEFORE the dispatcher refactor and green on the unmodified tree.
+    // These do not describe a contract anyone designed — they RECORD what HEAD
+    // actually answers, so a "pure move" that quietly changes a status, a
+    // content-type or a side effect goes red instead of shipping. Every value
+    // below was observed, never deduced: the surface asserts no content-type
+    // anywhere else in the repo, and the unknown-run behaviour is a three-way
+    // split that no test covered.
+
+    /// POST a command and return `(status, content-type, body)` — the triplet
+    /// that IS the wire contract. Order matters: `into_body()` consumes the
+    /// response, so status and headers must be read first.
+    async fn command_triplet(
+        state: &Arc<AppState>,
+        run_id: &str,
+        body: &str,
+    ) -> (StatusCode, String, String) {
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = String::from_utf8_lossy(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .into_owned();
+        (status, content_type, body)
+    }
+
+    const JSON_CT: &str = "application/json";
+    const TEXT_CT: &str = "text/plain; charset=utf-8";
+
+    #[tokio::test]
+    async fn every_kind_status_and_content_type_on_an_unstarted_run() {
+        // THE test of the net. Against a run with an empty event log, this
+        // surface answers in three incompatible ways, and nothing pinned it:
+        //   * four kinds answer 200 and APPEND — they are designed to work
+        //     before the run exists (`inject_artifact` writes the file the run
+        //     has not yet produced; `rename_run` appends blind);
+        //   * eight answer 404 text/plain "run not found";
+        //   * `start_node` alone answers 404 as JSON, because it delegates to
+        //     `force_spawn_node`.
+        // Hoisting the `load_events -> project` preamble to the top of the
+        // handler — the single most tempting move in this refactor — flips the
+        // first group to 404 and the content-type of the third. Both would be
+        // silent: no other test in the repo looks.
+        //
+        // One run_id per row: the 200 rows APPEND, so a shared id would let row
+        // N poison row N+1's projection.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        // (body, status, content-type, body, does it leave events behind?)
+        let matrix: [(&str, StatusCode, &str, &str, bool); 14] = [
+            (
+                r#"{"kind":"mark_node_done","node_id":"n1"}"#,
+                StatusCode::OK,
+                JSON_CT,
+                r#"{"ok":true}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"extend_cycle","node_id":"n1","additional_iter":1}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"bump_region","region_id":"r1","additional_iter":1}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"end_region","region_id":"r1"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"pause_run"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"resume_run"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"kill_node","node_id":"n1"}"#,
+                StatusCode::OK,
+                JSON_CT,
+                r#"{"ok":true}"#,
+                true,
+            ),
+            // 404 text — but NOT without a trace: the arm kills the (absent)
+            // tmux session and appends its `CommandIssued` BEFORE re-projecting.
+            // `project` then returns `None` because the log carries no
+            // `RunStarted` (#328, `event_log.rs:986`), not because it is empty.
+            (
+                r#"{"kind":"restart_node","node_id":"n1"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                true,
+            ),
+            // The lone JSON 404 on this surface — it comes from
+            // `force_spawn_node`, not from the arm.
+            (
+                r#"{"kind":"start_node","node_id":"n1"}"#,
+                StatusCode::NOT_FOUND,
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"inject_artifact","path":"a/b.md","content":"x"}"#,
+                StatusCode::OK,
+                JSON_CT,
+                r#"{"ok":true}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"rename_run","name":"nn"}"#,
+                StatusCode::OK,
+                JSON_CT,
+                r#"{"ok":true}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"cleanup_run"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"retry_all"}"#,
+                StatusCode::NOT_FOUND,
+                TEXT_CT,
+                "run not found",
+                false,
+            ),
+            (
+                r#"{"kind":"bogus_command"}"#,
+                StatusCode::BAD_REQUEST,
+                JSON_CT,
+                r#"{"error":"unknown command: bogus_command"}"#,
+                false,
+            ),
+        ];
+
+        for (i, (req_body, want_status, want_ct, want_body, want_events)) in
+            matrix.iter().enumerate()
+        {
+            let run_id = format!("unstarted-{i}");
+            let (status, ct, body) = command_triplet(&state, &run_id, req_body).await;
+            assert_eq!(
+                (status, ct.as_str(), body.as_str()),
+                (*want_status, *want_ct, *want_body),
+                "row {i} {req_body}"
+            );
+            let left_events = !load_events(&state.db, &run_id).await.unwrap().is_empty();
+            assert_eq!(
+                left_events, *want_events,
+                "row {i} {req_body}: side-effect trace changed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_kind_is_410_on_a_forgotten_run() {
+        // ADR-0024 / #328: the tombstone gate runs BEFORE the kind match, so a
+        // forgotten run answers 410 to everything — including a kind nobody
+        // knows and a body missing its required fields. Move the parse ahead of
+        // the gate and those two become 400. One kind was covered before this.
+        let state = test_state().await;
+        let run_id = "forgotten-all-kinds";
+        seed_completed_run(&state, run_id).await;
+        post_cleanup_run(&state, run_id).await;
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        for req_body in [
+            r#"{"kind":"extend_cycle","node_id":"n1","additional_iter":1}"#,
+            r#"{"kind":"cleanup_run"}"#,
+            r#"{"kind":"inject_artifact","path":"a/b.md","content":"x"}"#,
+            r#"{"kind":"rename_run","name":"nn"}"#,
+            // No `node_id` — the 400 for a missing field must NOT outrank 410.
+            r#"{"kind":"kill_node"}"#,
+            // Unknown kind — likewise.
+            r#"{"kind":"bogus_command"}"#,
+        ] {
+            let (status, ct, body) = command_triplet(&state, run_id, req_body).await;
+            assert_eq!(
+                (status, ct.as_str(), body.as_str()),
+                (
+                    StatusCode::GONE,
+                    JSON_CT,
+                    format!(r#"{{"error":"run {run_id} has been forgotten"}}"#).as_str()
+                ),
+                "{req_body}"
+            );
+        }
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(events.is_empty(), "log must stay empty: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn cleanup_run_error_bodies_are_text_not_json() {
+        // `cleanup_run` is a pure passthrough to a delegate, so its two error
+        // bodies are text/plain while every sibling error on this surface is
+        // JSON. The 200/409 split is an operator contract (the disk janitor
+        // recipe reads it as "reclaimed / already archived"); the content-type
+        // is what a "let's normalise the error bodies" refactor would silently
+        // flip.
+        let state = test_state().await;
+        let run_id = "cleanup-bodies";
+        seed_completed_run(&state, run_id).await;
+
+        let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"cleanup_run"}"#).await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::OK, JSON_CT, r#"{"status":"archived"}"#)
+        );
+
+        let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"cleanup_run"}"#).await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::CONFLICT, TEXT_CT, "run is already archived")
+        );
+
+        let (status, ct, body) =
+            command_triplet(&state, "no-such-run", r#"{"kind":"cleanup_run"}"#).await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::NOT_FOUND, TEXT_CT, "run not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_node_happy_path_emits_command_issued_and_restarts() {
+        // The only arm with no happy-path coverage anywhere in the repo — and
+        // the one the refactor touches most (two projections, a transition
+        // guard probe, a tmux kill and a re-spawn). Pin its event trace.
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "restart-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "restart-happy";
+        seed_run_for_node_control(&state, run_id, "restart-pipe").await;
+
+        let (status, ct, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"restart_node","node_id":"worker","iter":1}"#,
+        )
+        .await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::OK, JSON_CT, r#"{"ok":true}"#)
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let cmd = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::CommandIssued)
+            .expect("restart_node appends a CommandIssued");
+        let payload = cmd.payload.as_ref().unwrap();
+        assert_eq!(payload["command"], "restart_node");
+        assert_eq!(payload["node_id"], "worker");
+        assert_eq!(payload["iter"], 1);
+        assert_eq!(cmd.node_id.as_deref(), Some("worker"));
+        assert_eq!(cmd.iter, Some(1));
+
+        // The re-spawn actually fired: the arm ends with `spawn_node`, whose
+        // `NodeStarted` is the only observable proof it ran.
+        let started: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+            .collect();
+        assert_eq!(started.len(), 1, "expected one re-spawn: {events:?}");
+        assert_eq!(started[0].node_id.as_deref(), Some("worker"));
+        assert_eq!(started[0].iter, Some(1));
+    }
+
+    #[tokio::test]
+    async fn resume_run_event_trace_by_state() {
+        // Three projected states, three different traces. The `CommandIssued
+        // {command:"resume_run"}` Halt-lift is emitted from FOUR sites in this
+        // handler — exactly the duplication a refactor is tempted to factor out
+        // — and only a negative assertion in the layer-3a suite guards it today.
+        // A `Paused` run must NOT get one, and a `Running` run must get nothing
+        // at all.
+        for (label, seed, want_resumed, want_command) in [
+            (
+                "resume-from-paused",
+                Some(event_log::EventKind::RunPaused),
+                true,
+                false,
+            ),
+            (
+                "resume-from-halted",
+                Some(event_log::EventKind::RunHalted),
+                false,
+                true,
+            ),
+            ("resume-from-running", None, false, false),
+        ] {
+            let state = test_state().await;
+            append_event(
+                &state,
+                &seed_event(
+                    label,
+                    event_log::EventKind::RunStarted,
+                    None,
+                    None,
+                    Some(serde_json::json!({ "pipeline_name": "resume-pipe" })),
+                ),
+            )
+            .await
+            .unwrap();
+            if let Some(kind) = seed {
+                append_event(&state, &seed_event(label, kind, None, None, None))
+                    .await
+                    .unwrap();
+            }
+
+            let (status, ct, _) = command_triplet(&state, label, r#"{"kind":"resume_run"}"#).await;
+            assert_eq!((status, ct.as_str()), (StatusCode::OK, JSON_CT), "{label}");
+
+            let events = load_events(&state.db, label).await.unwrap();
+            let resumed = events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunResumed);
+            let commanded = events.iter().any(|e| {
+                e.kind == event_log::EventKind::CommandIssued
+                    && e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("command"))
+                        .and_then(|v| v.as_str())
+                        == Some("resume_run")
+            });
+            assert_eq!(resumed, want_resumed, "{label}: RunResumed");
+            assert_eq!(commanded, want_command, "{label}: CommandIssued resume_run");
+        }
+    }
+
+    #[tokio::test]
+    async fn kill_node_happy_path_event_payloads() {
+        // `NodeFailed` rather than `NodeStopped` is the whole point of this arm
+        // (a killed node is failed, a stopped one is stopped — two verdicts, two
+        // colours in the UI), and `source: "kill_node"` is read downstream. No
+        // tmux needed: the kill is best-effort.
+        let state = test_state().await;
+        let run_id = "kill-happy";
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "kill-pipe" })),
+            ),
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let (status, ct, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"kill_node","node_id":"worker","iter":1}"#,
+        )
+        .await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::OK, JSON_CT, r#"{"ok":true}"#)
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let failed = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::NodeFailed)
+            .expect("kill_node marks the node failed, not stopped");
+        let payload = failed.payload.as_ref().unwrap();
+        assert_eq!(payload["reason"], "killed via kill_node command");
+        assert_eq!(payload["source"], "kill_node");
+        assert_eq!(failed.node_id.as_deref(), Some("worker"));
+        assert_eq!(failed.iter, Some(1));
+
+        let cmd = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::CommandIssued)
+            .expect("kill_node appends a CommandIssued");
+        let payload = cmd.payload.as_ref().unwrap();
+        assert_eq!(payload["command"], "kill_node");
+        assert_eq!(payload["node_id"], "worker");
+        assert_eq!(payload["iter"], 1);
+    }
+
+    #[tokio::test]
+    async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
+        // The four judgements a hand-written parser is most likely to reorder or
+        // "tidy up". Each is behaviour, not an accident:
+        //   * `bump_region` checks `region_id` BEFORE `additional_iter`;
+        //   * `inject_artifact` checks `content` BEFORE path traversal;
+        //   * `end_region` accepts and ignores a stray `additional_iter`;
+        //   * `rename_run` treats a missing `name` as the empty string.
+        let state = test_state().await;
+        let run_id = "parse-order";
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "parse-pipe" })),
+            ),
+        )
+        .await
+        .unwrap();
+
+        for (req_body, want) in [
+            (
+                r#"{"kind":"bump_region"}"#,
+                r#"{"error":"region_id required for bump_region"}"#,
+            ),
+            (
+                r#"{"kind":"end_region"}"#,
+                r#"{"error":"region_id required for end_region"}"#,
+            ),
+            (
+                r#"{"kind":"inject_artifact","path":"../x"}"#,
+                r#"{"error":"content required for inject_artifact"}"#,
+            ),
+            (
+                r#"{"kind":"inject_artifact","content":"x"}"#,
+                r#"{"error":"path required for inject_artifact"}"#,
+            ),
+        ] {
+            let (status, ct, body) = command_triplet(&state, run_id, req_body).await;
+            assert_eq!(
+                (status, ct.as_str(), body.as_str()),
+                (StatusCode::BAD_REQUEST, JSON_CT, want),
+                "{req_body}"
+            );
+        }
+
+        // A stray `additional_iter` on `end_region` is accepted and dropped —
+        // the recorded payload carries only the region.
+        let (status, ct, _) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"end_region","region_id":"r1","additional_iter":5}"#,
+        )
+        .await;
+        assert_eq!((status, ct.as_str()), (StatusCode::OK, JSON_CT));
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let payload = events
+            .iter()
+            .rev()
+            .find(|e| e.kind == event_log::EventKind::CommandIssued)
+            .and_then(|e| e.payload.clone())
+            .unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({ "command": "end_region", "region_id": "r1" })
+        );
+
+        // A missing `name` renames to the empty string — 200, not a reject.
+        let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"rename_run"}"#).await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (StatusCode::OK, JSON_CT, r#"{"ok":true}"#)
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let payload = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::RunRenamed)
+            .and_then(|e| e.payload.clone())
+            .unwrap();
+        assert_eq!(payload, serde_json::json!({ "name": "" }));
+    }
+
     // --- extract_variable_refs_from_outgoing_edges unit test ---
 
     #[test]

@@ -21339,6 +21339,330 @@ edges:
         assert_eq!(payload, serde_json::json!({ "name": "" }));
     }
 
+    // --- #236 / ADR-0025: the truthful-response matrix, without a daemon ---
+    //
+    // Four verdicts a command can reach: 400 unknown target, 409 wrong
+    // mechanism, 200 noop, 200 spawned. All four are reachable from the
+    // in-crate router — no HTTP listener, no git, no worktree. Case D does
+    // attempt a real `tmux` call, but its failure is swallowed
+    // (`node_spawn.rs`), so the verdict does not depend on tmux SUCCEEDING —
+    // which is the honest way to state it, "without tmux" would not be.
+    //
+    // The pipeline is written RUN-SCOPED (`.pdo/runs/<id>/pipeline.yaml`) on
+    // purpose: `resolve_run_pipeline_path` prefers it, so these tests can never
+    // silently pick up a real pipeline out of the developer's
+    // `$HOME/.pdo/pipelines` (the user-scoped fallback has no daemon override).
+
+    const ADR25_LOOP_YAML: &str = r#"name: adr25-loop
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: result
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [worker]
+    max_iter: 3
+"#;
+
+    const ADR25_LEGACY_YAML: &str = r#"name: adr25-legacy
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: planner
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: planner, port: task }
+"#;
+
+    /// Seed a run whose pipeline SNAPSHOT is the given YAML, plus its events.
+    async fn seed_adr25_run(
+        dir: &std::path::Path,
+        state: &Arc<AppState>,
+        run_id: &str,
+        pipeline_name: &str,
+        yaml: &str,
+        events: &[event_log::Event],
+    ) {
+        let run_dir = dir.join(".pdo").join("runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
+        append_event(
+            state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": pipeline_name })),
+            ),
+        )
+        .await
+        .unwrap();
+        for ev in events {
+            append_event(state, ev).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn adr25_case_a_unknown_target_is_400_and_leaves_no_trace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "adr25-a";
+        seed_adr25_run(
+            tmp.path(),
+            &state,
+            run_id,
+            "adr25-legacy",
+            ADR25_LEGACY_YAML,
+            &[],
+        )
+        .await;
+
+        let (status, ct, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"extend_cycle","node_id":"ghost","additional_iter":2}"#,
+        )
+        .await;
+        assert_eq!(
+            (status, ct.as_str(), body.as_str()),
+            (
+                StatusCode::BAD_REQUEST,
+                JSON_CT,
+                r#"{"error":"node 'ghost' not found in pipeline"}"#
+            )
+        );
+
+        // A rejection leaves NOTHING in the log — validation runs against the
+        // snapshot BEFORE any append (ADR-0025).
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued),
+            "rejected command must not append: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adr25_case_b_wrong_mechanism_is_409_naming_the_region() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "adr25-b";
+        seed_adr25_run(
+            tmp.path(),
+            &state,
+            run_id,
+            "adr25-loop",
+            ADR25_LOOP_YAML,
+            &[],
+        )
+        .await;
+
+        let (status, ct, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"extend_cycle","node_id":"worker","additional_iter":2}"#,
+        )
+        .await;
+        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
+        // The 409 must both NAME the region and say which command to use
+        // instead — it is the manager's only routing hint.
+        assert!(
+            body.contains("'review_loop'") && body.contains("bump_region"),
+            "409 must redirect to bump_region by id, got: {body}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued),
+            "rejected command must not append: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adr25_case_c_noop_carries_a_real_reason() {
+        // `worker` iter 1 is live, so the re-evaluation's dedup guard refuses a
+        // superfluous spawn and nothing launches. The body must say WHY.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "adr25-c";
+        seed_adr25_run(
+            tmp.path(),
+            &state,
+            run_id,
+            "adr25-loop",
+            ADR25_LOOP_YAML,
+            &[
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeStarted,
+                    Some("start"),
+                    Some(1),
+                    None,
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeCompleted,
+                    Some("start"),
+                    Some(1),
+                    None,
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeStarted,
+                    Some("worker"),
+                    Some(1),
+                    None,
+                ),
+            ],
+        )
+        .await;
+
+        let (status, ct, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"bump_region","region_id":"review_loop","additional_iter":2}"#,
+        )
+        .await;
+        assert_eq!((status, ct.as_str()), (StatusCode::OK, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(
+            body["noop"], true,
+            "nothing can spawn while the lap is live"
+        );
+        let reason = body["reason"].as_str().unwrap_or_default();
+        assert!(!reason.is_empty(), "noop must carry a reason: {body}");
+        // The degenerate noop: an unreadable snapshot ALSO produces a
+        // truthful-looking noop while proving nothing about the scheduler.
+        // Refuse that pass.
+        assert_ne!(
+            reason, "pipeline file unreadable",
+            "this asserts the guard, not a missing file: {body}"
+        );
+
+        // The command is still recorded — it applies when the lap finishes.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::CommandIssued)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn adr25_case_d_spawned_lists_what_actually_launched() {
+        // THE branch nothing in the repo pinned: `{ok, spawned:[{node_id,iter}]}`.
+        // The layer-3a tests that touch it accept the disjunction
+        // `spawned.is_array() || noop`, so a regression answering `noop`
+        // forever would keep the whole suite green.
+        //
+        // `start` is complete and `worker` has no live iteration, so the
+        // re-evaluation has exactly one eligible spawn.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "adr25-d";
+        seed_adr25_run(
+            tmp.path(),
+            &state,
+            run_id,
+            "adr25-loop",
+            ADR25_LOOP_YAML,
+            &[
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeStarted,
+                    Some("start"),
+                    Some(1),
+                    None,
+                ),
+                seed_event(
+                    run_id,
+                    event_log::EventKind::NodeCompleted,
+                    Some("start"),
+                    Some(1),
+                    None,
+                ),
+            ],
+        )
+        .await;
+
+        let before = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+            .count();
+
+        let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"resume_run"}"#).await;
+        assert_eq!((status, ct.as_str()), (StatusCode::OK, JSON_CT));
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["ok"], true);
+
+        let spawned = body["spawned"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected a spawned array, got: {body}"));
+        assert_eq!(spawned.len(), 1, "one eligible node: {body}");
+        assert_eq!(spawned[0]["node_id"], "worker");
+        assert_eq!(spawned[0]["iter"], 1);
+        assert!(body.get("noop").is_none(), "a spawn is not a noop: {body}");
+
+        // Proof obligation inherited from #108: the body must not claim a spawn
+        // the event log does not show.
+        let after = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+            .count();
+        assert_eq!(
+            after - before,
+            spawned.len(),
+            "one NodeStarted per reported spawn"
+        );
+    }
+
     // --- Merge resolver tests (issue #8) ---
 
     #[test]

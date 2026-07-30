@@ -1869,6 +1869,126 @@ mod tests {
         );
     }
 
+    // --- #236: the truthful response body (ADR-0025 / #327) ---
+    //
+    // `into_response_body` is what makes a command answer "here is what
+    // actually happened" instead of a blind `{ok:true}`. It is promised to the
+    // Pipeline Manager in its prompt preamble and asserted four times by the
+    // layer-3a suite — and had no direct test at all.
+
+    fn summary_with(spawned: &[(&str, i64)], skipped: &[&str]) -> ReEvalSummary {
+        let mut s = ReEvalSummary::default();
+        for (node_id, iter) in spawned {
+            s.record_spawn(node_id, *iter, SpawnOutcome::Spawned);
+        }
+        for reason in skipped {
+            s.skipped.push((*reason).to_string());
+        }
+        s
+    }
+
+    #[test]
+    fn response_body_reports_spawns_when_anything_launched() {
+        let body = summary_with(&[("worker", 2), ("scribe", 1)], &[]).into_response_body();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "ok": true,
+                "spawned": [
+                    { "node_id": "worker", "iter": 2 },
+                    { "node_id": "scribe", "iter": 1 },
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn response_body_prefers_spawns_over_a_terminal_verdict() {
+        // A run that both spawned and went terminal reports the spawns: the
+        // manager needs to know work started, and the terminal state is visible
+        // in the projection anyway.
+        let mut s = summary_with(&[("worker", 1)], &["something was skipped"]);
+        s.terminal = Some(ReEvalTerminal::Completed);
+        let body = s.into_response_body();
+        assert_eq!(body["spawned"][0]["node_id"], "worker");
+        assert!(body.get("noop").is_none(), "got {body}");
+    }
+
+    #[test]
+    fn response_body_explains_every_flavour_of_nothing_happened() {
+        for (summary, want_reason) in [
+            (summary_with(&[], &[]), "no eligible spawn"),
+            (
+                summary_with(&[], &["worker iter 2 throttled", "scribe refused"]),
+                "worker iter 2 throttled; scribe refused",
+            ),
+            (
+                {
+                    let mut s = summary_with(&[], &["ignored once terminal"]);
+                    s.terminal = Some(ReEvalTerminal::Completed);
+                    s
+                },
+                "run completed",
+            ),
+            (
+                {
+                    let mut s = summary_with(&[], &[]);
+                    s.terminal = Some(ReEvalTerminal::Halted("region exhausted".into()));
+                    s
+                },
+                "run halted: region exhausted",
+            ),
+        ] {
+            let body = summary.into_response_body();
+            assert_eq!(
+                body,
+                serde_json::json!({ "ok": true, "noop": true, "reason": want_reason })
+            );
+        }
+    }
+
+    #[test]
+    fn record_spawn_maps_every_outcome_to_the_right_bucket() {
+        // The three non-`Spawned` outcomes all read as "why nothing started",
+        // which is why `Deferred` joins `Refused`/`Failed` rather than getting
+        // its own arm (#445).
+        let mut s = ReEvalSummary::default();
+        s.record_spawn("a", 1, SpawnOutcome::Spawned);
+        s.record_spawn("b", 4, SpawnOutcome::Throttled);
+        s.record_spawn(
+            "c",
+            1,
+            SpawnOutcome::Refused {
+                reason: "refused c".into(),
+            },
+        );
+        s.record_spawn(
+            "d",
+            1,
+            SpawnOutcome::Deferred {
+                reason: "deferred d".into(),
+            },
+        );
+        s.record_spawn(
+            "e",
+            1,
+            SpawnOutcome::Failed {
+                reason: "failed e".into(),
+            },
+        );
+
+        assert_eq!(s.spawned, vec![("a".to_string(), 1)]);
+        assert_eq!(
+            s.skipped,
+            vec![
+                "node 'b' iter 4 throttled into waiting (session cap)".to_string(),
+                "refused c".to_string(),
+                "deferred d".to_string(),
+                "failed e".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn extract_var_refs_finds_dollar_variables_in_switch_outputs() {
         use crate::pipeline::*;

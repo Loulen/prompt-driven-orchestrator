@@ -432,8 +432,23 @@ async fn guard_exit_zero_fires_with_stdout_as_input() {
         "the guard stdout must be the Run input"
     );
 
+    // Assert on the `fired` row, not on `fires[0]`. `/triggers/{id}/fires` is
+    // ordered newest-first, and this trigger's cron is `* * * * *`: the daemon's
+    // own 30 s background tick can legitimately add a NEWER `skipped-overlap`
+    // row (the Run above is still live) before the assertion runs. That skip is
+    // the overlap gate working, not a defect — but it shifts `fired` to index 1
+    // and made this test flaky under whole-workspace load.
     let fires = list_fires(&daemon, &trigger_id).await;
-    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    let fired: Vec<_> = fires
+        .iter()
+        .filter(|f| f["outcome"].as_str() == Some("fired"))
+        .collect();
+    assert_eq!(
+        fired.len(),
+        1,
+        "guard exit 0 must produce exactly one `fired`, got: {fires:?}"
+    );
+    assert_eq!(fired[0]["run_id"].as_str(), Some(run_id));
 
     cleanup_runs(&daemon).await;
 }

@@ -72,12 +72,59 @@ edges:
     target: { node: planner, port: task }
 "#;
 
+/// A bounded region that exhausts after ONE lap with no route out — the shape
+/// of the repo's real `review-loop`, shrunk. Once `rev` finishes lap 1 the
+/// region is `exhausted — unrouted`, the run halts, and the operator's only way
+/// forward is `bump_region`. That command then genuinely RE-SCHEDULES work,
+/// which is the one situation exercising the `spawned:[…]` branch of ADR-0025.
+const EXHAUST_PIPELINE_NAME: &str = "exhaust-truth-test";
+const EXHAUST_PIPELINE_YAML: &str = r#"name: exhaust-truth-test
+version: "1.0"
+variables:
+  max_laps: 1
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: impl
+    name: impl
+    type: doc-only
+    outputs:
+      - name: code
+  - id: rev
+    name: rev
+    type: doc-only
+    outputs:
+      - name: review
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: impl, port: task }
+  - source: { node: impl, port: code }
+    target: { node: rev, port: code }
+  - source: { node: rev, port: review }
+    target: { node: impl, port: task }
+    else: true
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [rev, impl]
+    max_iter: $max_laps
+"#;
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
     for (name, yaml, prompt_node) in [
         (LOOP_PIPELINE_NAME, LOOP_PIPELINE_YAML, "worker"),
         (LEGACY_PIPELINE_NAME, LEGACY_PIPELINE_YAML, "planner"),
+        (EXHAUST_PIPELINE_NAME, EXHAUST_PIPELINE_YAML, "impl"),
     ] {
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml)?;
         let prompts_dir = pipelines_dir.join(format!("{name}.prompts"));
@@ -354,4 +401,188 @@ async fn resume_run_reports_noop_when_nothing_to_spawn() {
     let truthful =
         body["spawned"].is_array() || (body["noop"] == true && body["reason"].is_string());
     assert!(truthful, "body must report the real effect, got: {body}");
+}
+
+/// Every `(node_id, iter)` the run has ever started.
+async fn started_pairs(daemon_url: &str, run_id: &str) -> Vec<(String, i64)> {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}/events"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json.as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e["kind"] == "node_started")
+        .map(|e| {
+            (
+                e["node_id"].as_str().unwrap_or_default().to_string(),
+                e["iter"].as_i64().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+/// How many times a given node has started, whatever the iteration.
+async fn node_started_count(daemon_url: &str, run_id: &str, node_id: &str) -> usize {
+    started_pairs(daemon_url, run_id)
+        .await
+        .into_iter()
+        .filter(|(id, _)| id == node_id)
+        .count()
+}
+
+async fn run_status(daemon_url: &str, run_id: &str) -> String {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["status"].as_str().unwrap_or_default().to_string()
+}
+
+/// Poll until `pred` holds or the budget runs out. Layer 3a drives a real
+/// daemon, so the scheduler's work is asynchronous to the HTTP call.
+async fn wait_until<F, Fut>(what: &str, mut pred: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..100 {
+        if pred().await {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn bump_region_that_actually_reschedules_reports_the_spawn() {
+    // The `spawned:[{node_id,iter}]` branch of ADR-0025. Until this test it was
+    // pinned NOWHERE: the three sibling assertions accept the disjunction
+    // `spawned.is_array() || noop`, so a regression that answered `noop`
+    // forever would have kept the whole suite green.
+    //
+    // Getting a real spawn out of a command needs a region whose current lap is
+    // FINISHED and whose next lap only becomes admissible because of the
+    // command. `tight_loop` has `max_iter: 1` and no exit edge, so once worker
+    // iter 1 completes the run halts `exhausted — unrouted` — the operator
+    // situation `bump_region` exists for.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, EXHAUST_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    // Worker iter 1 must be up before it can be completed.
+    // Entry node `impl` is spawned by run creation.
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+
+    // Drive lap 1 to its end. `mark_node_done` validates declared outputs, so
+    // write each node's artifact first — through the command surface, not
+    // behind it.
+    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
+        wait_until(&format!("{node_id} iter 1 to start"), || async {
+            node_started_count(&url, &run_id, node_id).await >= 1
+        })
+        .await;
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({
+                "kind": "inject_artifact",
+                "path": format!("{node_id}/iter-1/{port}/output.md"),
+                "content": "# done\n",
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
+
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": 1 }),
+        )
+        .await;
+        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
+    }
+
+    // The region is now exhausted with nowhere to route: the run halts.
+    wait_until("the run to halt exhausted-unrouted", || async {
+        run_status(&url, &run_id).await == "halted"
+    })
+    .await;
+
+    let before = started_pairs(&url, &run_id).await;
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "bump_region", "region_id": "review_loop", "additional_iter": 1 }),
+    )
+    .await;
+    assert_eq!(status, 200, "bump_region must be accepted: {body}");
+    assert_eq!(body["ok"], true);
+
+    // THE assertion this test exists for: a real spawn, reported as one.
+    let spawned = body["spawned"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected spawned:[…], got: {body}"));
+    assert!(!spawned.is_empty(), "spawned must not be empty: {body}");
+    assert!(
+        body.get("noop").is_none(),
+        "a run that spawned is not a noop: {body}"
+    );
+
+    let mut reported: Vec<(String, i64)> = spawned
+        .iter()
+        .map(|e| {
+            (
+                e["node_id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("each entry carries a node_id: {body}"))
+                    .to_string(),
+                e["iter"]
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("each entry carries an iter: {body}")),
+            )
+        })
+        .collect();
+    reported.sort();
+    assert_eq!(
+        reported,
+        vec![("impl".to_string(), 2), ("rev".to_string(), 2)],
+        "the bump buys lap 2 for the region's members: {body}"
+    );
+
+    // Proof obligation inherited from #108: the body may not claim a spawn the
+    // event log does not show. One `node_started` per reported pair, no more.
+    let after = started_pairs(&url, &run_id).await;
+    let mut fresh: Vec<(String, i64)> = after
+        .iter()
+        .filter(|pair| !before.contains(pair))
+        .cloned()
+        .collect();
+    fresh.sort();
+    assert_eq!(
+        fresh, reported,
+        "event log and response body must agree (before={before:?}, after={after:?}): {body}"
+    );
+    assert_eq!(
+        after.len() - before.len(),
+        spawned.len(),
+        "no unreported spawn either: {body}"
+    );
+
+    // And the Halt was lifted, as the arm promises.
+    assert_eq!(
+        command_events(&url, &run_id, "resume_run").await.len(),
+        1,
+        "routing a halted region lifts the Halt"
+    );
 }

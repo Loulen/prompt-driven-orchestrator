@@ -60,7 +60,11 @@ falls outside the #279 reconciler's coverage.
   durably recorded and the advance is scheduled", not "the run has advanced".
   Advance errors surface via `RunFailed` + daemon logs, never via the HTTP
   response. Validation errors (transition-guard reject/no-op, merge conflicts,
-  output-validation failures, append failures) still return in-request.
+  output-validation failures, append failures) still return in-request — and
+  since ADR-0035 (#490) they return **non-2xx**: a refusal is never a 2xx, so
+  "2xx means recorded and scheduled" is now also "2xx means not refused". The
+  one exception is the legal-duplicate no-op, which grants nothing and stays a
+  `200` on purpose.
 - A client disconnect at any point can no longer cancel the advance — closing
   the whole silent-abort class upstream of #279's guard, including the
   end-port finalization drop.

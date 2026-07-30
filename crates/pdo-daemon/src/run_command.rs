@@ -29,12 +29,12 @@ use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
-    create_run_core, effective_repo_root, event_log, force_spawn_node, load_events, loop_region,
-    mark_sandbox_prep_ready, pipeline, reload_run_state, resolve_completed_frontmatter,
-    resolve_pipeline_path, resolve_run_pipeline_path, resolve_run_variables,
-    resolve_source_frontmatter, run_advance, run_is_forgotten, run_scoped_pipeline_path,
-    sandbox_run, scheduler, scheduler_interpreter, tmux_session_manager, transition_guard,
-    AppState, CreateRunRequest,
+    completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
+    load_events, loop_region, mark_sandbox_prep_ready, pipeline, reload_run_state,
+    resolve_completed_frontmatter, resolve_pipeline_path, resolve_run_pipeline_path,
+    resolve_run_variables, resolve_source_frontmatter, run_advance, run_is_forgotten,
+    run_scoped_pipeline_path, sandbox_run, scheduler, scheduler_interpreter, tmux_session_manager,
+    transition_guard, AppState, CreateRunRequest,
 };
 
 /// The wire shape of a command. `pub(crate)` only because `run_command` is —
@@ -411,14 +411,18 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // downstream dispatch). Shared head — same pure decision as
             // `node_done` and `node_skip`. `run_state.as_ref()` may be `None`
             // (unstarted run); the guard maps `None -> Allow`, forwarded verbatim.
-            if let Some(resp) = completion_head_gate(
+            // #490 / ADR-0035: the typed stop keeps the legal-duplicate no-op a
+            // `200` while a reject becomes `409 {"error":"completion_rejected",…}`.
+            // This arm is why the invariant could not live on `CompletionAttempt`:
+            // it never builds one, and it is the whole UI path.
+            if let Some(stop) = completion_head_gate(
                 run_advance::evaluate_completion_head(run_state.as_ref(), &run_id, &node_id, iter),
                 "mark_node_done",
                 &run_id,
                 &node_id,
                 iter,
             ) {
-                return resp;
+                return stop.into_response();
             }
 
             let empty_run_state = event_log::RunState::new(run_id.clone(), String::new());
@@ -431,7 +435,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let pipeline_path = resolve_run_pipeline_path(&repo_root, &run_id, pipeline_name);
             let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
             let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-            if let Some(resp) = check_output_validation_with_retry(
+            // The shared chokepoint (#490). Both surfaces project the refusal
+            // through the same single function, which is what makes "a refusal is
+            // never a 2xx" cover `POST /commands` too.
+            if let Some(refusal) = check_output_validation_with_retry(
                 &state,
                 &pipeline_path,
                 &node_id,
@@ -442,7 +449,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             )
             .await
             {
-                return resp;
+                return completion_refusal::refusal_response(&refusal);
             }
 
             let event = event_log::Event {

@@ -22,7 +22,7 @@ import {
   fetchNodeIO,
   artifactUrl,
 } from "../api";
-import type { PortIO, FileInfo, MarkNodeDoneResult } from "../api";
+import type { PortIO, FileInfo, MarkNodeDoneOutcome } from "../api";
 import type { PortType } from "../types";
 import {
   ResizablePanelGroup,
@@ -81,6 +81,137 @@ interface Props {
 // `{minimized + expanded}` state unrepresentable.
 type TerminalView = "minimized" | "split" | "expanded";
 
+/**
+ * What the last *Mark complete* click produced (#490, ADR-0035).
+ *
+ * `pending` exists so the verdict region always has a tenant: the handler no longer
+ * clears before awaiting, so there is no window in which a previous verdict has been
+ * erased and no new one written. `error` is the transport breakdown, which the
+ * pre-#490 code swallowed into `console.error` and rendered as nothing.
+ */
+type MarkVerdict =
+  | { kind: "pending" }
+  | MarkNodeDoneOutcome
+  | { kind: "error"; message: string };
+
+/**
+ * Three tones, because the three answers demand three different reactions:
+ * `await` = it is still your turn, `failed` = the node is failed *now*,
+ * `stopped` = refused with no state change, or indeterminable.
+ */
+function verdictTone(v: MarkVerdict): "await" | "failed" | "stopped" | "done" {
+  switch (v.kind) {
+    case "completed":
+      return "done";
+    case "noop":
+      return "stopped";
+    case "pending":
+      return "stopped";
+    case "error":
+      return "failed";
+    case "refused":
+      if (v.recoverable === true) return "await";
+      if (v.recoverable === false) return "failed";
+      return "stopped";
+  }
+}
+
+function verdictHeadline(v: MarkVerdict): string {
+  switch (v.kind) {
+    case "pending":
+      return "Marking complete…";
+    case "completed":
+      return "Marked complete.";
+    case "noop":
+      return `Already complete — nothing to do (${v.reason})`;
+    case "error":
+      return `Could not reach the daemon — ${v.message}`;
+    case "refused":
+      if (v.recoverable === true) return `Refused, still your turn — ${v.message}`;
+      if (v.recoverable === false) return `Refused, the node is now failed — ${v.message}`;
+      return `Refused — ${v.message}`;
+  }
+}
+
+/**
+ * Does this node's failure come from output validation? (#490)
+ *
+ * `includes`, **not** an equality or a `startsWith`: the two reasons are
+ * `"output validation failed"` (after retry) and `"script output validation failed"`
+ * (the `script` fail-fast), and the second neither equals nor starts with the first.
+ * Both banner gates use this one predicate, inverted — two separate tests would let
+ * both fire, or neither.
+ */
+function isOutputValidationFailure(node: NodeState): boolean {
+  return node.failure_reason?.includes("output validation failed") ?? false;
+}
+
+/**
+ * The verdict of a *Mark complete* click, rendered at the gesture (#490).
+ *
+ * `data-*` attributes rather than copy are the assertion surface: a level-5 driver
+ * asserts `data-recoverable="true"` for "still your turn" and `"false"` for "the node
+ * is failed now", so the journey survives a rewording.
+ */
+function MarkCompleteVerdict({ verdict }: { verdict: MarkVerdict }) {
+  const tone = verdictTone(verdict);
+  const toneClass = {
+    done: "border-st-done/30 bg-st-done-bg text-st-done",
+    await: "border-st-await/30 bg-st-await-bg text-st-await",
+    failed: "border-st-failed/30 bg-st-failed-bg text-st-failed",
+    stopped: "border-line-strong bg-bg-3 text-fg-3",
+  }[tone];
+  const refused = verdict.kind === "refused" ? verdict : null;
+
+  return (
+    <div
+      className={`flex flex-col gap-1 rounded-md border px-2.5 py-1.5 ${toneClass}`}
+      style={{ fontSize: "10.5px" }}
+      data-testid="mark-complete-verdict"
+      data-verdict={verdict.kind}
+      data-slug={refused?.slug ?? ""}
+      data-recoverable={refused ? String(refused.recoverable) : ""}
+    >
+      <div className="flex items-start gap-1.5">
+        {tone === "done" ? (
+          <CheckCircle size={12} className="mt-px shrink-0" />
+        ) : (
+          <AlertCircle size={12} className="mt-px shrink-0" />
+        )}
+        <span>{verdictHeadline(verdict)}</span>
+      </div>
+      {refused && refused.missing.length > 0 && (
+        <ul
+          className="flex flex-col gap-0.5 pl-5 font-mono"
+          data-testid="verdict-missing-list"
+        >
+          {/* The `Missing outputs:` prefix is load-bearing — the gating e2e spec
+              matches `/^Missing outputs:/`. */}
+          <li>Missing outputs: {refused.missing.join(", ")}</li>
+        </ul>
+      )}
+      {refused && refused.violations.length > 0 && (
+        <ul
+          className="flex flex-col gap-0.5 pl-5 font-mono"
+          data-testid="verdict-violation-list"
+        >
+          {refused.violations.map((v, i) => (
+            <li key={i}>
+              {v.port}.{v.field}: {v.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {refused?.recoverable === true && (
+        <span className="pl-5">Fix the above, then click Mark complete again.</span>
+      )}
+      {refused?.recoverable === false && (
+        <span className="pl-5">Resume the run to try again.</span>
+      )}
+    </div>
+  );
+}
+
 // The session is settled — the tmux session is gone, so the terminal WebSocket
 // would attach to a dead session. `{completed, failed, stopped}` is exactly the
 // "settled" tier of `pollInterval` (5s). `stale` is EXCLUDED unless archived:
@@ -113,7 +244,17 @@ export default function NodeDetailPanel({
   const [inputs, setInputs] = useState<PortIO[]>([]);
   const [outputs, setOutputs] = useState<PortIO[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [missingOutputs, setMissingOutputs] = useState<string[] | null>(null);
+  // #490: a VERDICT object, not `string[] | null`. The old shape was
+  // *structurally incapable* of expressing "refused for a reason that has no port
+  // list" — which is the bug: the transition guard's refusal ("resume the run
+  // first") arrived with an empty list and the banner was gated on `length > 0`, so
+  // the most frequent refusal of all rendered nothing.
+  //
+  // Scoped by `iter` on the `userSelectedIter` idiom of this file, which also kills
+  // a latent second bug: a verdict from iter 3 surviving a switch back to iter 1.
+  const [markVerdict, setMarkVerdict] = useState<
+    ({ iter: number } & MarkVerdict) | null
+  >(null);
   // Seed at mount only (no reactive effect on status): the issue trigger is
   // "clicking the node" (= selection / mount), not a live transition. A node
   // is `key`-ed by node_id at both mount sites, so selecting another terminated
@@ -262,14 +403,23 @@ export default function NodeDetailPanel({
   }, [runId, node.node_id]);
 
   const handleMarkComplete = useCallback(async () => {
-    setMissingOutputs(null);
+    // #490: NO `setMarkVerdict(null)` preamble. Clearing before awaiting is what
+    // made the banner flicker — on a lying `200` nothing was written back, so a
+    // verdict from a previous click vanished and never returned. The region always
+    // has a tenant: `pending` occupies it, and every exit writes a verdict.
+    const iter = selectedIter;
+    setMarkVerdict({ iter, kind: "pending" });
     try {
-      const result: MarkNodeDoneResult = await markNodeDone(runId, node.node_id, selectedIter);
-      if (!result.ok && result.missingOutputs) {
-        setMissingOutputs(result.missingOutputs.missing);
-      }
+      const outcome: MarkNodeDoneOutcome = await markNodeDone(runId, node.node_id, iter);
+      setMarkVerdict({ iter, ...outcome });
     } catch (e) {
-      console.error("Failed to mark node done:", e);
+      // No longer swallowed into `console.error`: a POST that never lands must not
+      // look like a success.
+      setMarkVerdict({
+        iter,
+        kind: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [runId, node.node_id, selectedIter]);
 
@@ -441,11 +591,11 @@ export default function NodeDetailPanel({
         </div>
       )}
 
-      {/* Failed banner — validation exhausted variant */}
-      {node.status === "failed" && node.failure_reason === "output validation failed" && (
+      {/* Failed banner — output-validation variant (#490) */}
+      {node.status === "failed" && isOutputValidationFailure(node) && (
         <div
           className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2"
-          data-testid="frontmatter-exhausted-banner"
+          data-testid="output-validation-banner"
         >
           <div className="flex items-center gap-2">
             <AlertCircle size={14} className="shrink-0 text-st-failed" />
@@ -453,7 +603,12 @@ export default function NodeDetailPanel({
               className="text-st-failed"
               style={{ fontSize: "11.5px", fontWeight: 500 }}
             >
-              Failed — output validation failed after retry
+              {/* #490: the reason VERBATIM, not a hard-coded "after retry" — which
+                  lied for the `script` fail-fast path, a path that never retries.
+                  It also makes the landing order safe: if the status arrives before
+                  the evidence, we show the right reason with no list, which is
+                  informationally equal to the pre-#490 behaviour. */}
+              Failed — {node.failure_reason}
             </span>
           </div>
           {node.frontmatter_violations && node.frontmatter_violations.length > 0 && (
@@ -469,11 +624,26 @@ export default function NodeDetailPanel({
               ))}
             </ul>
           )}
+          {/* #490: a `script` node failing on a MISSING output used to paint this
+              banner with an empty list — the daemon computed the evidence and the
+              projector threw it away. */}
+          {node.missing_outputs && node.missing_outputs.length > 0 && (
+            <ul
+              className="mt-0.5 flex flex-col gap-0.5 pl-5 font-mono text-st-failed"
+              style={{ fontSize: "10px" }}
+              data-testid="missing-output-list"
+            >
+              {node.missing_outputs.map((m) => (
+                <li key={m}>Missing outputs: {m}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {/* Failed banner — generic */}
-      {node.status === "failed" && node.failure_reason !== "output validation failed" && (
+      {/* Failed banner — generic. Same predicate, inverted: two different tests here
+          would let both banners fire (or neither). */}
+      {node.status === "failed" && !isOutputValidationFailure(node) && (
         <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-failed" />
           <span
@@ -530,6 +700,7 @@ export default function NodeDetailPanel({
                 <>
                   <button
                     onClick={handleMarkComplete}
+                    data-testid="mark-complete-btn"
                     className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
                     style={{ fontSize: "11.5px", fontWeight: 500 }}
                   >
@@ -537,16 +708,11 @@ export default function NodeDetailPanel({
                     Mark complete
                   </button>
 
-                  {missingOutputs && missingOutputs.length > 0 && (
-                    <div
-                      className="flex items-start gap-1.5 rounded-md border border-st-failed/30 bg-st-failed-bg px-2.5 py-1.5 font-mono text-st-failed"
-                      style={{ fontSize: "10.5px" }}
-                    >
-                      <AlertCircle size={12} className="mt-px shrink-0" />
-                      <span>
-                        Missing outputs: {missingOutputs.join(", ")}
-                      </span>
-                    </div>
+                  {/* #490: the verdict of the click, AT the gesture. Rendered for
+                      every outcome including `pending`, so nothing ever blinks out
+                      without a replacement. */}
+                  {markVerdict && markVerdict.iter === selectedIter && (
+                    <MarkCompleteVerdict verdict={markVerdict} />
                   )}
                 </>
               )}

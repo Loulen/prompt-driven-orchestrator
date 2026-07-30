@@ -25,11 +25,15 @@ const stopNodeMock = vi.fn().mockResolvedValue(undefined);
 const startNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 1 });
 const retryNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
 const retryNodePreviewMock = vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+// #490: was `markNodeDone: vi.fn()` inline, which resolves `undefined` — so NO test
+// had ever exercised a *Mark complete* click. Made controllable so the verdict
+// branches can be driven. Vitest compares arity strictly, hence the spread.
+const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
-  markNodeDone: vi.fn(),
+  markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
   killNode: (...args: unknown[]) => killNodeMock(...args),
   restartNode: (...args: unknown[]) => restartNodeMock(...args),
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
@@ -109,6 +113,8 @@ describe("NodeDetailPanel", () => {
     retryNodeMock.mockClear();
     retryNodePreviewMock.mockClear();
     retryNodePreviewMock.mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+    markNodeDoneMock.mockClear();
+    markNodeDoneMock.mockResolvedValue({ kind: "completed" });
     tmuxMountCount.current = 0;
     tmuxUnmountCount.current = 0;
   });
@@ -355,7 +361,7 @@ describe("NodeDetailPanel", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("shows exhausted banner when failed with output validation reason", () => {
+    it("shows the output-validation banner when failed with an output validation reason", () => {
       render(
         <TooltipProvider>
           <NodeDetailPanel
@@ -368,11 +374,53 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
       expect(
-        screen.getByTestId("frontmatter-exhausted-banner"),
+        screen.getByTestId("output-validation-banner"),
       ).toBeInTheDocument();
+      // #490: the reason VERBATIM. The old hard-coded "after retry" title lied for
+      // the `script` fail-fast path, which never retries.
       expect(
-        screen.getByTestId("frontmatter-exhausted-banner"),
-      ).toHaveTextContent("output validation failed after retry");
+        screen.getByTestId("output-validation-banner"),
+      ).toHaveTextContent("Failed — output validation failed");
+    });
+
+    it("titles the banner with the script fail-fast reason, not \"after retry\"", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "script output validation failed",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      const banner = screen.getByTestId("output-validation-banner");
+      expect(banner).toHaveTextContent("Failed — script output validation failed");
+      expect(banner).not.toHaveTextContent("after retry");
+      // `includes`, not `startsWith`: the script reason does not start with the
+      // after-retry one, so the generic banner must NOT also fire.
+      expect(screen.queryByText(/^Failed — script output validation failed$/)).toBeTruthy();
+    });
+
+    it("lists the missing output ports of a script fail-fast", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "script output validation failed",
+              missing_outputs: ["out"],
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      // Before #490 this list had no home at all in Rust OR TS, so the red banner
+      // showed with nothing in it.
+      expect(screen.getByTestId("missing-output-list")).toHaveTextContent(
+        "Missing outputs: out",
+      );
     });
 
     it("shows offending fields in exhausted banner when violations present", () => {
@@ -428,7 +476,7 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
       expect(
-        screen.queryByTestId("frontmatter-exhausted-banner"),
+        screen.queryByTestId("output-validation-banner"),
       ).not.toBeInTheDocument();
       expect(screen.getAllByText(/some other error/).length).toBeGreaterThan(0);
     });
@@ -905,7 +953,7 @@ describe("NodeDetailPanel", () => {
       );
 
       const staleBanner = staleContainer.querySelector('[data-testid="stale-banner"]');
-      const failedBanner = failedContainer.querySelector('[data-testid="frontmatter-exhausted-banner"]')
+      const failedBanner = failedContainer.querySelector('[data-testid="output-validation-banner"]')
         ?? failedContainer.querySelector('.border-st-failed\\/30');
 
       expect(staleBanner).toBeInTheDocument();
@@ -1246,6 +1294,205 @@ describe("NodeDetailPanel", () => {
 
       expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
       expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // #490 / ADR-0035 — the refusal of a *Mark complete* click must be visible AT the
+  // gesture, and must never blink out. Before this issue `markNodeDone` was mocked
+  // as a bare `vi.fn()` resolving `undefined`, so not one of these paths had ever
+  // been exercised.
+  describe("Mark complete verdict (#490)", () => {
+    const awaitingNode = () => makeNode({ status: "awaiting_user" });
+
+    async function clickMarkComplete() {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("mark-complete-btn"));
+      });
+    }
+
+    it("gives the button a testid so a driver need not match the copy", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    });
+
+    it("shows a recoverable refusal as still-your-turn, with the missing ports", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "refused");
+      expect(verdict).toHaveAttribute("data-slug", "missing_outputs");
+      expect(verdict).toHaveAttribute("data-recoverable", "true");
+      // The prefix is load-bearing: the gating e2e spec matches /^Missing outputs:/.
+      expect(screen.getByTestId("verdict-missing-list")).toHaveTextContent(
+        "Missing outputs: review",
+      );
+      expect(verdict).toHaveTextContent("still your turn");
+    });
+
+    it("shows a terminal refusal as the-node-is-now-failed", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "frontmatter_retry_exhausted",
+        recoverable: false,
+        message: "still did not match after the retry",
+        missing: [],
+        violations: [{ port: "review", field: "verdict", reason: "not in enum" }],
+        body: {},
+      });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-recoverable", "false");
+      expect(verdict).toHaveTextContent("now failed");
+      expect(screen.getByTestId("verdict-violation-list")).toHaveTextContent(
+        "review.verdict",
+      );
+    });
+
+    it("shows the transition guard's refusal, which used to display nothing at all", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "completion_rejected",
+        recoverable: false,
+        message: "run run-1 is Failed: resume the run first",
+        missing: [],
+        violations: [],
+        body: {},
+      });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "failed", failure_reason: "boom" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      // Pre-#490: read as `missing_outputs` with an empty list, gated on
+      // `length > 0`, therefore invisible. This is THE symptom of the issue.
+      expect(screen.getByTestId("mark-complete-verdict")).toHaveTextContent(
+        "resume the run first",
+      );
+    });
+
+    it("does not blink the verdict out between two consecutive clicks", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+
+      // The second click is the one that matters: the first has nothing to erase.
+      // The handler no longer clears before awaiting, so the region always has a
+      // tenant — `pending` occupies it and each outcome overwrites it.
+      let seenEmpty = false;
+      markNodeDoneMock.mockImplementation(async () => {
+        seenEmpty = seenEmpty || screen.queryByTestId("mark-complete-verdict") === null;
+        return {
+          kind: "refused",
+          slug: "missing_outputs",
+          recoverable: true,
+          message: "outputs are incomplete",
+          missing: ["review"],
+          violations: [],
+          body: {},
+        };
+      });
+      await clickMarkComplete();
+      expect(seenEmpty).toBe(false);
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+    });
+
+    it("treats a legal duplicate as nothing alarming", async () => {
+      markNodeDoneMock.mockResolvedValue({ kind: "noop", reason: "already completed" });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "noop");
+      expect(verdict).toHaveAttribute("data-recoverable", "");
+    });
+
+    it("surfaces a transport breakdown instead of swallowing it into console.error", async () => {
+      markNodeDoneMock.mockRejectedValue(new Error("Failed to fetch"));
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "error");
+      expect(verdict).toHaveTextContent("Failed to fetch");
+    });
+
+    it("scopes the verdict to the iteration it was produced for", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "awaiting_user",
+              iter: 2,
+              iterations: [
+                { iter: 1, status: "completed", started_at: null, completed_at: null },
+                { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+              ],
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      await clickMarkComplete();
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+
+      // Switching iteration must not carry a verdict that belongs to another one.
+      fireEvent.click(screen.getByText(/iter 2/));
+      const option = await screen.findByTestId("iter-option-1");
+      await act(async () => {
+        fireEvent.click(option);
+      });
+      expect(screen.queryByTestId("mark-complete-verdict")).not.toBeInTheDocument();
     });
   });
 });

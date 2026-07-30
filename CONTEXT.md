@@ -59,7 +59,8 @@ Chaque Node peut porter un **niveau d'effort** optionnel (`effort: Option<String
 
 Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude. Il tourne dans une **session tmux** (attachable comme tout NodeRun, ADR-0005) dont le tail est `timeout N bash <corps>` : **exit 0 ⇒ node `completed`**, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (pas de sous-worktree ; tourne dans le worktree du Run ; doit le laisser propre).
 
-- **I/O par variables d'environnement** (un script ne lit pas le préambule prose) : `PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`, plus les `PDO_RUN_ID/NODE_ID/NODE_ITER/DAEMON_URL` habituels. Le script écrit lui-même `output.md` à `$PDO_OUTPUT_<port>` ; pour piloter une edge `when:`, il y écrit sa propre frontmatter YAML. `outputs_validator` s'applique en **fail-fast** (pas de retry interactif — la session a quitté).
+- **I/O par variables d'environnement** (un script ne lit pas le préambule prose) : `PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`, plus les `PDO_RUN_ID/NODE_ID/NODE_ITER/DAEMON_URL` habituels. Le script écrit lui-même `output.md` à `$PDO_OUTPUT_<port>` ; pour piloter une edge `when:`, il y écrit sa propre frontmatter YAML. `outputs_validator` s'applique en **fail-fast** (pas de retry interactif — la session a quitté) : raison **`"script output validation failed"`**, détail **imbriqué sous `detail`** (`{kind, missing|violations}`) et volontairement distinct de la forme plate d'un échec après retry — deux causes, deux remèdes, deux empreintes d'audit. Réponse : `409 {"error":"script_validation_failed","recoverable":false,"detail":{…}}` (#490, ADR-0035).
+- **Le tail du node teste le code de sortie `4`** de `pdo complete` : un refus terminal n'y déclenche donc **pas** le `pdo fail` de repli, qui doublerait `NodeFailed` **et** `RunFailed` (ce dernier n'est pas gardé) avec une raison fausse. Le tail ne signale l'échec que sur un code de sortie qui n'est **ni** `0` **ni** `4`.
 - **Corps** stocké dans le slot prompt du node (`<pipeline>.prompts/<node>.md`). Un corps vide fait échouer le lancement (fail-loud, pas de no-op silencieux).
 - **Ni `model` ni `effort`** (aucun agent lancé). Le seam de test `tmux_cmd_override` ne s'applique pas à un script (le bash *est* déterministe, donc testable sans stub).
 - **Sécurité** : équivalent au guard de Trigger et au bash d'un agent — le bash de l'auteur dans son propre pipeline, aucune nouvelle frontière de confiance (#260 reste le contrôle réel).
@@ -287,15 +288,47 @@ outputs:
 
 Quand un NodeRun signale `pdo complete`, le runtime parse la frontmatter de chaque output produit et la matche contre le schéma déclaré. Si **mismatch** :
 
-1. **Fallback** : le runtime envoie un message dans la session tmux du NodeRun (*"Ton frontmatter ne respecte pas le schéma : <champ X manquant / valeur Y hors enum>. Corrige et retry."*). Le NodeRun reste en status `running` (pas marqué failed).
+1. **Fallback** : le runtime envoie un message dans la session tmux du NodeRun (*"Ton frontmatter ne respecte pas le schéma : <champ X manquant / valeur Y hors enum>. Corrige et retry."*). Le NodeRun reste en status `running` (pas marqué failed). La 1re tentative répond `409` `{"error":"frontmatter_retry_pending","recoverable":true,"violations":[…]}` : le refus dit « c'est encore ton tour », pas « c'est raté » — et c'est bien un **refus**, la complétion n'a pas été accordée (#490, ADR-0035 §2).
 2. L'agent corrige et appelle à nouveau `pdo complete`. Le runtime re-valide.
-3. Si la 2e tentative échoue (limite : **1 retry max**, 2 tentatives au total), le NodeRun est marqué `failed` avec raison *"output frontmatter mismatch après retry"*.
+3. Si la 2e tentative échoue (limite : **1 retry max**, 2 tentatives au total), le NodeRun est marqué `failed` avec raison **`"output validation failed"`**. Cette chaîne est **exacte et load-bearing** : la bannière rouge du panneau de nœud s'allume sur l'égalité `failure_reason.includes("output validation failed")`, et le fail-fast d'un node `script` la préfixe (`"script output validation failed"`) pour rester distinguable. Réponse : `409` `{"error":"frontmatter_retry_exhausted","recoverable":false,"violations":[…]}` — `NodeFailed` + `RunFailed` sont **déjà** appendés.
+   _Éviter_ : « output frontmatter mismatch après retry » (ancienne formulation, jamais présente dans le code ; écrire la chaîne exacte).
 
 Ce mécanisme évite de fail loud sur une erreur que l'agent peut typiquement corriger seul, tout en bornant la dérive (un agent qui boucle dans le mismatch finit failé en deux tours).
 
+### Contrat de refus de la complétion (#490, ADR-0035)
+
+Une tentative de complétion — `pdo complete` (`POST …/nodes/<node-id>/done`) ou *Mark complete*
+(`POST …/commands` `kind=mark_node_done`) — a **quatre** issues, et une seule non-succès peut porter un `2xx` :
+
+| Issue | Statut | Événement terminal | Exit `pdo complete` |
+|---|---|---|---|
+| **Completed** | `2xx` | appendé, avance planifiée (ADR-0023) | `0` |
+| **NoOp** — doublon légal sur un nœud déjà terminal | `2xx` `{"ok":true,"noop":true,"reason":…}` | **aucun** | `0` |
+| **Refused** | **jamais `2xx`** | selon `recoverable` | `3` ou `4` |
+| panne / cible inconnue | `404`/`500` | — | `1` |
+
+Forme **unique** de tout refus, sur les deux routes : `{"error":"<slug>","recoverable":<bool>, …détail}`.
+
+- **`error`** — slug `snake_case` stable, **le** point de discrimination. Brancher sur le statut est une faute : un statut n'a pas assez de bits pour neuf causes. Un slug inconnu se rend tel quel (ADR-0001).
+- **`recoverable`** — *est-ce encore ton tour ?* `true` ⇒ le nœud est toujours `running`, **rien de terminal n'est enregistré** ; `false` ⇒ le daemon a **déjà** enregistré l'issue terminale.
+- **Le détail est verbatim celui d'avant #490** (`missing`, `violations`, `detail`, `reason`, `message`).
+- Slugs : `missing_outputs` et `frontmatter_retry_pending` (récupérables) ; `frontmatter_retry_exhausted`, `script_validation_failed`, `doc_violated_code_immutability`, `merge_conflict`, `merge_resolution_failed`, `completion_rejected` (terminaux, `409`) ; `run_forgotten` (**`410`**, ADR-0024, inchangé).
+- « Jamais `2xx` » **≠** « toujours `409` » : le `410` du Run oublié, le `404` d'une cible inconnue et le `500` d'une panne ne bougent pas.
+
+Codes de sortie de `pdo complete` — contrat **public** (ils vivent dans le bash d'auteurs de pipelines) :
+
+| Code | Sens | Geste attendu |
+|---|---|---|
+| `0` | succès, ou doublon légal | rien |
+| `3` | refus **récupérable** | corriger, rappeler `pdo complete`. **Pas** `pdo fail` |
+| `4` | refus **terminal** | s'arrêter et rapporter. **Pas** `pdo fail` (déjà enregistré) ; `resume_run` est le seul levier |
+| `1` | panne, transport, corps illisible | ici **seulement**, `pdo fail` est le bon conseil |
+
+_Éviter_ : « erreur de complétion » pour un refus récupérable (rien n'est cassé, c'est encore le tour de l'agent) ; « échec de `pdo complete` » pour un `noop` (c'est un succès).
+
 ### Avance détachée après transition terminale (#304, ADR-0023)
 
-Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal est durablement enregistré et l'avance est planifiée », **pas** « le run a avancé ». Après l'append de l'événement terminal (`NodeCompleted`/`NodeFailed`/marqueur skip), la queue du handler — reap de la session tmux + avance du run (spawn du successeur, finalisation du port `end`, `RunFailed`/`RunSkipped`, `retry_waiting_nodes`) — s'exécute sur une tâche `tokio::spawn` **détachée** de la requête HTTP. Raison : le reap tue la session tmux du client `pdo` lui-même ; inline, hyper annulait la future de la requête à la fermeture de la socket et l'avance était silencieusement perdue (run coincé `running`). Les erreurs de validation (guard, merge conflict, outputs) restent renvoyées in-request ; les erreurs d'avance surfacent via `RunFailed` + logs, jamais via la réponse HTTP. Un panic dans la queue détachée est isolé (`catch_unwind`) et émet un `RunFailed` explicite.
+Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal est durablement enregistré et l'avance est planifiée », **pas** « le run a avancé » — et, depuis #490/ADR-0035, aussi « **ta complétion n'a pas été refusée** ». Après l'append de l'événement terminal (`NodeCompleted`/`NodeFailed`/marqueur skip), la queue du handler — reap de la session tmux + avance du run (spawn du successeur, finalisation du port `end`, `RunFailed`/`RunSkipped`, `retry_waiting_nodes`) — s'exécute sur une tâche `tokio::spawn` **détachée** de la requête HTTP. Raison : le reap tue la session tmux du client `pdo` lui-même ; inline, hyper annulait la future de la requête à la fermeture de la socket et l'avance était silencieusement perdue (run coincé `running`). Les erreurs de validation (guard, merge conflict, outputs) restent renvoyées **in-request**, et y sont en **`409`** (cf. *Contrat de refus de la complétion*) ; les erreurs d'avance surfacent via `RunFailed` + logs, jamais via la réponse HTTP. Un panic dans la queue détachée est isolé (`catch_unwind`) et émet un `RunFailed` explicite.
 
 ---
 
@@ -332,7 +365,7 @@ Le préambule contient au minimum :
   - Pour chaque port de sortie : chemin où écrire + schéma de frontmatter requis.
   - Ex. *"Tu dois produire à `<artifacts>/reviewer-1/iter-2/review.md` un fichier markdown avec frontmatter YAML contenant le champ `verdict: PASS | FAIL`. Le contenu détaillé (blocking issues, justifications) va dans le corps."*
 - **Capacités PDO-specific (CLI)** :
-  - `pdo complete` — à appeler via Bash quand le NodeRun est terminé (cf. signal de complétion, Q10).
+  - `pdo complete` — à appeler via Bash quand le NodeRun est terminé (cf. signal de complétion, Q10). Peut être **refusé** : exit `3` ⇒ corriger et rappeler, exit `4` ⇒ ne **pas** enchaîner sur `pdo fail` (l'échec est déjà enregistré). Cf. *Contrat de refus de la complétion*.
   - `pdo fail --reason "..."` — à appeler en cas d'incapacité à finir.
   - Ces commandes ne sont **pas** packagées comme skills Claude Code — elles sont 100% systématiques, sans bénéfice de progressive disclosure.
 - **Itération courante** : *"Tu es à l'itération {iter} de ce nœud."* Permet à l'agent d'adapter son comportement au tour de boucle (par exemple : Implementer en iter 1 implémente from scratch ; en iter 2+ il itère sur les reviews).
@@ -700,7 +733,7 @@ Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
 | `resume_run` | Relance le Run depuis l'état actuel (utile post-conflit résolu manuellement) |
 | `kill_node` | Tue un NodeRun en cours |
 | `restart_node` | Re-spawn un NodeRun (perd l'état tmux courant) |
-| `mark_node_done` | Force la complétion d'un NodeRun (cas typique : nœud `interactive: true` que l'utilisateur signale fini) |
+| `mark_node_done` | Force la complétion d'un NodeRun (cas typique : nœud `interactive: true` que l'utilisateur signale fini). Passe par le **même corps partagé** que `pdo complete` : refusé en `409` nommant la cause (cf. *Contrat de refus de la complétion*) |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts, événements |
 | `rename_run` | Donne au Run un nom descriptif (remplace le nom placeholder posé au spawn) |
@@ -714,7 +747,7 @@ Les commandes de pilotage de boucle (`extend_cycle`, `bump_region`, `end_region`
 
 - **Cible inconnue** (`node_id` ou `region_id` absent du pipeline du Run — snapshot du Run, pas la bibliothèque) → `400` `{"error":"node '<id>' not found in pipeline"}` (resp. `region '<id>'`). La validation précède l'append du `CommandIssued` **et** la levée du `Halted` : une commande rejetée ne modifie pas l'event log.
 - **Mauvais mécanisme** (`extend_cycle` sur un membre de région bornée) → `409` `{"error":"node '<id>' is a member of loop region '<region>'; use bump_region with region_id '<region>'"}`.
-- **Valide mais sans effet immédiat** (itération encore vivante, région déjà complétée, throttle d'admission) → `200` `{"ok":true,"noop":true,"reason":"..."}` (même convention que `mark_node_done`).
+- **Valide mais sans effet immédiat** (itération encore vivante, région déjà complétée, throttle d'admission) → `200` `{"ok":true,"noop":true,"reason":"..."}` (même convention que `mark_node_done`). La convention noop ne s'étend **qu'au** sans-effet : sur le chemin de complétion, un **refus** n'est jamais un `2xx` (#490, ADR-0035 — qui amende cette section).
 - **Effet réel** → `200` `{"ok":true,"spawned":[{"node_id":...,"iter":...}]}`.
 
 ### Ce que le manager ne peut **pas** faire
@@ -866,6 +899,8 @@ Multi-client par session (deux onglets browser sur la même session tmux) : grat
 Un Node marqué `interactive: true` spawn une session tmux normale, et **n'auto-complète jamais**. La session reste attachable indéfiniment ; l'utilisateur peut détach/réattacher autant de fois que nécessaire et continuer à interagir.
 
 La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur le nœud. Click → `POST /runs/<id>/commands { kind: "mark_node_done", node_id, iter }`. Pas de slash-command in-session (un slash-command suppose qu'on est attaché ; le bouton UI reste toujours accessible).
+
+Le bouton **n'est pas une garantie** : il est gaté sur le seul `status` du nœud (`awaiting_user`/`running`/`failed`/`stale`) et `NodeState` ne porte pas `node_type` — il s'affiche donc aussi sur un nœud `script` `failed`. C'est **voulu** : le garde de transition autorise explicitement « mark_node_done sur un nœud failed dont les outputs ont été corrigés à la main » comme chemin de récupération. Le clic peut donc être **refusé** (`409` nommant la cause), et le refus s'affiche au niveau du bouton — cf. *Contrat de refus de la complétion*. Ne pas confondre avec la phrase *« aucun bouton affiché ne peut produire un 409 »* de § *Contrôles de Run*, qui est scopée aux trois actions de **Run** (`pause_run`/`resume_run`/`retry_all`).
 
 À ce moment-là, les artefacts présents sur disque dans `<artifacts>/<node-id>/iter-<N>/` sont considérés comme finaux. Le préambule du nœud le dit explicitement à l'agent et au user : *"écris tes outputs aux chemins X, Y, Z ; quand tu cliques 'Mark complete' dans l'UI, ces fichiers seront pris tels quels"*.
 

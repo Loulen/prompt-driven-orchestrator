@@ -352,4 +352,57 @@ async fn script_node_missing_declared_output_fails_fast() {
         run["nodes"][NODE_ID]["status"], "failed",
         "missing declared output must fail-fast; run was: {run}"
     );
+
+    // #490: the projection now carries WHICH port was missing. Before this issue the
+    // daemon computed it, nested it under `payload.detail`, and nothing read it — so
+    // the red banner rendered an empty list.
+    assert_eq!(
+        run["nodes"][NODE_ID]["missing_outputs"],
+        serde_json::json!(["out"]),
+        "the failure must say which port is missing; run was: {run}"
+    );
+
+    // #490 / ADR-0035 §4 — THE regression the fix itself could introduce.
+    //
+    // Making the refusal a `409` woke up the tail's `pdo complete || pdo fail` (dead
+    // code while every refusal answered `200`). Without the `-ne 4` test in the tail,
+    // this run would now hold TWO `run_failed` events: the daemon's own fail-fast,
+    // then a second one from the tail carrying the false reason "output validation
+    // failed after script success". `NodeFailed` is absorbed by the transition guard;
+    // `RunFailed` is NOT guarded, which is what makes the count the load-bearing
+    // assertion.
+    //
+    // Let any doubled append land before counting — a passing count measured too
+    // early would be a false green.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let events: Vec<serde_json::Value> =
+        reqwest::get(format!("{}/runs/{run_id}/events", daemon.url()))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let run_failed: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "run_failed")
+        .collect();
+    assert_eq!(
+        run_failed.len(),
+        1,
+        "exactly one run_failed; the tail must not double the daemon's verdict. events={events:#?}"
+    );
+    let reason = run_failed[0]["payload"]["reason"].as_str().unwrap_or("");
+    assert!(
+        reason.contains("failed output validation"),
+        "the surviving reason must be the daemon's fail-fast one, got {reason:?}"
+    );
+    assert!(
+        !reason.contains("after script success"),
+        "that reason is the tail's, and it is false: {reason:?}"
+    );
+    let node_failed = events.iter().filter(|e| e["kind"] == "node_failed").count();
+    assert_eq!(
+        node_failed, 1,
+        "exactly one node_failed too. events={events:#?}"
+    );
 }

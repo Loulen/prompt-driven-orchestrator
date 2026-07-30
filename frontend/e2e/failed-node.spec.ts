@@ -11,13 +11,21 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 // 2. Mark complete with missing outputs shows the 409 sub-banner listing ports.
 // 3. Mark complete succeeds once the output files exist, and the node completes.
 //
+// 4. #490: clicking Mark complete on a node of an already-Failed run SHOWS the
+//    guard's refusal ("resume the run first") instead of nothing at all.
+//
 // Tests 2 and 3 operate on a *running* node, not a failed one: failing the only
 // worker drives the whole run terminal (Failed), and the daemon then refuses
-// `mark_node_done` with "resume the run first" (a different 409 with no `missing`
+// `mark_node_done` with "resume the run first" (a different 409, no `missing`
 // list) rather than the missing-outputs 409 the sub-banner is built from. A
 // running node in a live run is the state where Mark complete validates outputs,
 // which is exactly what those two assertions exercise. Each test owns its run so
 // they are independent of order and of each other's state.
+//
+// That second refusal used to be invisible — this file documented it as a
+// workaround for two years' worth of commits. Test 4 turns the workaround into
+// the assertion, and it is the #490 regression test at the ONE layer the CI
+// actually plays (vitest does not run in CI).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -201,4 +209,47 @@ test("Mark complete succeeds after creating output files", async ({
 
   // Node status transitions to Completed.
   await expect(page.getByText("Completed")).toBeVisible({ timeout: 5_000 });
+});
+
+test("Mark complete on a node of a failed run shows the guard's refusal (#490)", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  const runId = await createRun(page, baseURL!);
+
+  // Failing the only worker drives the whole run terminal, so the completion
+  // guard — not output validation — is what answers the next click.
+  const failResp = await page.request.post(
+    `${baseURL}/runs/${runId}/nodes/worker/fail`,
+    { data: { reason: "driven terminal on purpose", iter: 1 } },
+  );
+  expect(failResp.status()).toBe(200);
+  await waitForWorkerStatus(page, baseURL!, runId, "failed");
+
+  await selectWorkerRunPane(page, runId);
+  const button = page.getByTestId("mark-complete-btn");
+  await expect(button).toBeVisible({ timeout: 5_000 });
+
+  await button.click();
+
+  // Pre-#490 this produced a `200` carrying a prose `error`, which the client read
+  // as `missing_outputs` with an empty list and a `length > 0` gate — so NOTHING
+  // was displayed. Now the refusal names itself, and says what to do.
+  const verdict = page.getByTestId("mark-complete-verdict");
+  await expect(verdict).toBeVisible({ timeout: 5_000 });
+  await expect(verdict).toHaveAttribute("data-verdict", "refused");
+  await expect(verdict).toHaveAttribute("data-recoverable", "false");
+  await expect(verdict).toContainText("resume the run first");
+
+  // And it STAYS: a second click must not blink it out (the handler no longer
+  // clears before awaiting).
+  await button.click();
+  await expect(verdict).toBeVisible();
+  await page.waitForTimeout(1_500);
+  await expect(page.getByTestId("mark-complete-verdict")).toBeVisible();
 });

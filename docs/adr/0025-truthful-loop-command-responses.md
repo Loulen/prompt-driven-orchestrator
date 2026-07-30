@@ -2,6 +2,12 @@
 
 Date : 2026-07-11 · Statut : accepté · Issue : #327
 
+> **Amendé par ADR-0035 (#490).** La convention noop de §3 tient pour les quatre commandes de boucle,
+> mais elle citait `mark_node_done` comme précédent : sur le **corps de complétion partagé**, huit
+> refus répondaient `200`, quatre après avoir appendé `RunFailed`. ADR-0035 y ajoute la classe que
+> cette ADR n'avait pas — **noop ≠ refus** — et pose l'invariant « un refus n'est jamais un `2xx` ».
+> Lire §3 comme « dire l'effet », jamais comme « un `200` suffit à le dire ».
+
 ## Contexte
 
 `extend_cycle` répondait `{ok:true}` inconditionnellement : node_id inconnu, membre d'une
@@ -31,7 +37,8 @@ nœud à double rôle (membre de région portant sa propre arête `$var`) rend l
 3. **Dire l'effet.** `spawn_node` retourne un `SpawnOutcome`
    (Spawned/Throttled/Refused/Failed), `re_evaluate_after_command` agrège un `ReEvalSummary`.
    Les handlers répondent `{"ok":true,"spawned":[...]}` si effet, ou
-   `{"ok":true,"noop":true,"reason":...}` sinon (convention `mark_node_done`). Décision
+   `{"ok":true,"noop":true,"reason":...}` sinon (convention `mark_node_done` — dont le chemin de
+   *complétion* a depuis été corrigé par ADR-0035). Décision
    synchrone : le détachement ADR-0023 ne couvre que la queue de `node_done`, pas ce chemin.
 4. **Documenter le pilotage de région.** Le préambule du manager gagne `bump_region`/`end_region`
    en section 1 (recette de découverte du region_id : clés de `loop_states` dans

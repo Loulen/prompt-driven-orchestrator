@@ -352,6 +352,7 @@ mod tests {
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
+                missing_outputs: Vec::new(),
             },
         );
         rs

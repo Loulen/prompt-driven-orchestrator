@@ -264,6 +264,7 @@ mod tests {
                     iterations: vec![],
                     frontmatter_retries: 0,
                     frontmatter_violations: vec![],
+                    missing_outputs: vec![],
                 },
             );
         }

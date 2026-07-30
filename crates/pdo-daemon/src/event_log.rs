@@ -430,6 +430,18 @@ pub struct NodeState {
     pub frontmatter_retries: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frontmatter_violations: Vec<serde_json::Value>,
+    /// #490: declared output ports the validator found empty, from a `script`
+    /// node's fail-fast branch (`ValidationError::MissingOutputs`). Mutually
+    /// exclusive with `frontmatter_violations` by construction — `ValidationError`
+    /// is an exclusive-or, so no discriminator field is needed.
+    ///
+    /// Without a home, a `script` node that failed on a *missing output* rendered
+    /// the red banner with an empty list: the daemon computed the evidence and the
+    /// projector threw it away. `skip_serializing_if` mirrors its neighbour, so the
+    /// field is **absent** from every pre-#490 response and the wire shape is
+    /// byte-identical for any non-`script` failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_outputs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1299,6 +1311,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         iterations: Vec::new(),
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
+                        missing_outputs: Vec::new(),
                     });
                 node.status = NodeStatus::Waiting;
                 node.iter = iter;
@@ -1331,12 +1344,21 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         iterations: Vec::new(),
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
+                        missing_outputs: Vec::new(),
                     });
                 node.status = NodeStatus::Running;
                 node.iter = iter;
                 node.started_at = Some(event.ts.clone());
                 node.completed_at = None;
                 node.failure_reason = None;
+                // #490, pre-existing bug: this arm reset `completed_at` and
+                // `failure_reason` but not the evidence vectors, so a *successful*
+                // retry left stale violations on a green node — visible in the
+                // projection golden itself, where a `completed` node still carried
+                // its `frontmatter_violations`. A new attempt starts with no
+                // evidence against it.
+                node.frontmatter_violations = Vec::new();
+                node.missing_outputs = Vec::new();
                 upsert_iteration(&mut node.iterations, iteration);
             }
         }
@@ -1380,9 +1402,35 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                                 .get("reason")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                            if let Some(arr) = payload.get("violations").and_then(|v| v.as_array())
+                            // #490: read BOTH shapes of the validation evidence. The
+                            // after-retry branch puts `violations` at the top level;
+                            // the `script` fail-fast branch nests everything under
+                            // `detail` (`{kind, violations|missing}`), and nothing
+                            // used to read that — the field was computed and dropped.
+                            // Fixed at the consumer, not by flattening the producer:
+                            // the nesting is what keeps a fail-fast audit trail
+                            // distinguishable from an after-retry one (ADR-0035 §5).
+                            //
+                            // Collision-checked: the only other payload carrying
+                            // `detail` is `MergeConflictDetected`, which routes to
+                            // `apply_merge_event` and never reaches this arm.
+                            let detail = payload.get("detail");
+                            if let Some(arr) = payload
+                                .get("violations")
+                                .or_else(|| detail.and_then(|d| d.get("violations")))
+                                .and_then(|v| v.as_array())
                             {
                                 node.frontmatter_violations = arr.clone();
+                            }
+                            if let Some(arr) = payload
+                                .get("missing")
+                                .or_else(|| detail.and_then(|d| d.get("missing")))
+                                .and_then(|v| v.as_array())
+                            {
+                                node.missing_outputs = arr
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect();
                             }
                         }
                     }
@@ -1476,6 +1524,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     iterations: Vec::new(),
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
+                    missing_outputs: Vec::new(),
                 });
             node.status = NodeStatus::Completed;
             node.completed_at = Some(event.ts.clone());
@@ -2723,6 +2772,117 @@ mod tests {
         assert_eq!(node.frontmatter_violations.len(), 2);
         assert_eq!(node.frontmatter_violations[0]["field"], "verdict");
         assert_eq!(node.frontmatter_violations[1]["field"], "score");
+    }
+
+    /// #490 — the twin of the test above, for the `script` fail-fast shape, which
+    /// nests everything under `detail`. Nothing read `payload.detail` before this
+    /// issue: the daemon computed the evidence and the projector dropped it, so the
+    /// red banner rendered a list of nothing.
+    #[test]
+    fn projects_nested_detail_violations_of_a_script_fail_fast() {
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("silent"), Some(1)),
+            make_event_with_payload(
+                EventKind::NodeFailed,
+                Some("silent"),
+                serde_json::json!({
+                    "reason": "script output validation failed",
+                    "detail": {
+                        "kind": "frontmatter_mismatch",
+                        "violations": [
+                            { "port": "out", "field": "verdict", "reason": "not in allowed" },
+                        ],
+                    },
+                }),
+            ),
+            make_event(EventKind::RunFailed, None, None),
+        ];
+
+        let node = &project(&events).unwrap().nodes["silent"];
+        assert_eq!(node.frontmatter_violations.len(), 1);
+        assert_eq!(node.frontmatter_violations[0]["field"], "verdict");
+        assert!(
+            node.missing_outputs.is_empty(),
+            "exclusive-or by construction"
+        );
+    }
+
+    /// The other half of the same nesting: a `script` node that never wrote its
+    /// declared output. `missing_outputs` had NO home at all — Rust or TS — before
+    /// #490, which is why the banner listed nothing.
+    #[test]
+    fn projects_nested_detail_missing_outputs_of_a_script_fail_fast() {
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("silent"), Some(1)),
+            make_event_with_payload(
+                EventKind::NodeFailed,
+                Some("silent"),
+                serde_json::json!({
+                    "reason": "script output validation failed",
+                    "detail": { "kind": "missing_outputs", "missing": ["out", "log"] },
+                }),
+            ),
+        ];
+
+        let node = &project(&events).unwrap().nodes["silent"];
+        assert_eq!(node.missing_outputs, vec!["out", "log"]);
+        assert!(node.frontmatter_violations.is_empty());
+    }
+
+    /// A `MergeConflictDetected` also carries a `detail`, but it routes to
+    /// `apply_merge_event` and never reaches the `NodeFailed` arm. Pinned so the
+    /// `detail` lookup added by #490 cannot be read as a collision waiting to happen.
+    #[test]
+    fn a_merge_conflict_detail_never_lands_in_the_node_evidence() {
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("impl"), Some(1)),
+            make_event_with_payload(
+                EventKind::MergeConflictDetected,
+                Some("impl"),
+                serde_json::json!({
+                    "reason": "conflict merging impl into pipeline branch",
+                    "detail": "CONFLICT (content): Merge conflict in shared.txt",
+                }),
+            ),
+        ];
+
+        let node = &project(&events).unwrap().nodes["impl"];
+        assert!(node.frontmatter_violations.is_empty());
+        assert!(node.missing_outputs.is_empty());
+    }
+
+    /// #490, pre-existing bug: a *successful* retry used to leave stale violations on
+    /// a green node — `NodeStarted` reset `completed_at` and `failure_reason` but not
+    /// the evidence vectors. Visible in the projection golden itself, where a
+    /// `completed` node still carried them.
+    #[test]
+    fn a_new_attempt_purges_the_evidence_of_the_previous_one() {
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("reviewer"), Some(1)),
+            make_event_with_payload(
+                EventKind::NodeFailed,
+                Some("reviewer"),
+                serde_json::json!({
+                    "reason": "output validation failed",
+                    "violations": [{ "port": "review", "field": "verdict", "reason": "nope" }],
+                    "missing": ["review"],
+                }),
+            ),
+            make_event(EventKind::NodeStarted, Some("reviewer"), Some(2)),
+            make_event(EventKind::NodeCompleted, Some("reviewer"), Some(2)),
+        ];
+
+        let node = &project(&events).unwrap().nodes["reviewer"];
+        assert_eq!(node.status, NodeStatus::Completed);
+        assert!(
+            node.frontmatter_violations.is_empty(),
+            "a green node must not carry the violations of the attempt it recovered from"
+        );
+        assert!(node.missing_outputs.is_empty());
     }
 
     #[test]
@@ -4646,6 +4806,7 @@ mod tests {
                 .collect(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
         }
     }
 
@@ -5550,9 +5711,15 @@ mod tests {
                     "iterations": [ { "completed_at": "2026-02-01T00:05:00.000Z", "iter": 1, "started_at": "2026-02-01T00:05:00.000Z", "status": "completed" } ],
                     "node_id": "sw", "started_at": "2026-02-01T00:05:00.000Z", "status": "completed"
                 },
+                // #490: `worker` failed iter 1 on a frontmatter mismatch, then
+                // succeeded on iter 2. It carries NO `frontmatter_violations` any
+                // more — `NodeStarted` purges the evidence vectors, so a green node
+                // no longer shows the violations of the attempt it recovered from.
+                // This is the ONE justified edit to this golden: `missing_outputs`
+                // is `skip_serializing_if`-empty everywhere, so every other byte is
+                // unchanged — which is the wire-compatibility proof.
                 "worker": {
                     "completed_at": "2026-02-01T00:02:03.000Z", "failure_reason": null, "frontmatter_retries": 0,
-                    "frontmatter_violations": [ { "field": "verdict", "port": "out", "reason": "not allowed" } ],
                     "iter": 2,
                     "iterations": [
                         { "completed_at": "2026-02-01T00:02:01.000Z", "iter": 1, "started_at": "2026-02-01T00:02:00.000Z", "status": "failed" },

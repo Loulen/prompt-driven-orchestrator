@@ -669,13 +669,17 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 ### 5. restart_node
 
-Kill a NodeRun and re-spawn it fresh (same iter, new session).
+Kill a NodeRun and re-spawn it on the **same iter** with a new session. On a `code-mutating` or `merge` node the sub-worktree is **reused in place**, so the dead session's uncommitted work is still there.
 
 ```bash
 curl -X POST {daemon_url}/runs/{run_id}/commands \
   -H 'Content-Type: application/json' \
   -d '{{"kind":"restart_node","node_id":"<node-id>","iter":<N>}}'
 ```
+
+The response tells you what actually happened; it never blanket-claims success (#489, ADR-0037). `200 {{"ok":true,"spawned":[{{"node_id":"…","iter":N}}],"reused_sub_worktree":<bool>,"base_sha":"<sha>"|null,"stale_git_lock":"index.lock"|null}}` when the node was re-spawned — when `reused_sub_worktree` is true, tell the fresh agent to look at what is already in its working directory before it starts over, and if `stale_git_lock` is set, tell it to clear that lock or its merge-back will fail. `200 {{"ok":true,"waiting":true,"reason":"…"}}` when the session cap queued it: a `NodeWaiting` **was** recorded and the admission sweep owns it — it will spawn, do not re-issue. Otherwise: `409 {{"error":"<slug>","recoverable":<bool>, …}}` with `restart_refused`, `sandbox_prep_not_ready` or `sub_worktree_occupied`; `400 {{"error":"node_not_found"}}`; `500 {{"error":"spawn_failed","run_failed":<bool>}}`. Discriminate on `error`, never on the status.
+
+Every knowable refusal is raised **before** the session is killed: an error body with `session_killed:false` means nothing was touched, so fix the cause and re-issue. `session_killed:true` means the session is gone and nothing replaced it — that node needs a different lever, not a retry of this one.
 
 ### 6. mark_node_done
 

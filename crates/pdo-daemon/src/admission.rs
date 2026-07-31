@@ -99,11 +99,52 @@ pub fn env_cap() -> Option<usize> {
 /// Pipeline Manager sessions are not represented as nodes in the run state, so
 /// they are excluded by construction.
 pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>) -> usize {
-    runs.into_iter()
-        .filter(|run| run.status.is_live())
-        .flat_map(|run| run.nodes.values())
-        .filter(|node| node_holds_session(&node.status))
-        .count()
+    count_live_node_sessions_excluding(runs, None)
+}
+
+/// The one node-session slot a spawn is **taking back**, and must therefore not be
+/// counted against itself (#489-C).
+///
+/// The key is the full triple. `(node_id, iter)` alone is an over-admission bug:
+/// the count is global across Runs while node ids are local to a pipeline, so two
+/// concurrent Runs of the same pipeline both carry an `implementer` at `iter 1` —
+/// and a Run-blind exclusion would discount the *other* Run's live session, letting
+/// the cap be exceeded. That is the very collapse this module exists to prevent.
+///
+/// `iter` is an `i64`, as everywhere else in the event log.
+pub struct SlotExclusion<'a> {
+    pub run_id: &'a str,
+    pub node_id: &'a str,
+    pub iter: i64,
+}
+
+/// [`count_live_node_sessions`], minus at most one slot (#489-C).
+///
+/// The exclusion applies only when that exact `(run_id, node_id, iter)` is
+/// **currently session-holding**. Without that condition it would be a free `+1`
+/// on any spawn of a non-live iteration, which would raise the effective cap.
+pub fn count_live_node_sessions_excluding<'a>(
+    runs: impl IntoIterator<Item = &'a RunState>,
+    exclude: Option<SlotExclusion<'_>>,
+) -> usize {
+    let mut live = 0;
+    for run in runs {
+        if !run.status.is_live() {
+            continue;
+        }
+        for node in run.nodes.values() {
+            if !node_holds_session(&node.status) {
+                continue;
+            }
+            let is_self = exclude.as_ref().is_some_and(|x| {
+                x.run_id == run.run_id && x.node_id == node.node_id && x.iter == node.iter
+            });
+            if !is_self {
+                live += 1;
+            }
+        }
+    }
+    live
 }
 
 /// Whether a node in the given status is currently holding a NodeRun tmux
@@ -268,6 +309,118 @@ mod tests {
             Some(v) => std::env::set_var(SESSION_CAP_ENV, v),
             None => std::env::remove_var(SESSION_CAP_ENV),
         }
+    }
+
+    // ── #489-C : the self-slot exclusion ─────────────────────────────────────
+
+    fn run_with_node_at_iter(
+        run_id: &str,
+        node_id: &str,
+        status: NodeStatus,
+        iter: i64,
+    ) -> RunState {
+        let mut run = run_with_nodes(run_id, &[(node_id, status)]);
+        run.nodes.get_mut(node_id).unwrap().iter = iter;
+        run
+    }
+
+    /// The bug: a `restart_node` kills its own session, re-spawns the same
+    /// iteration, and appends no lifecycle event in between — so the node still
+    /// projects `Running` and, at `live == cap`, the restart is throttled against
+    /// itself. Deterministically, and for good.
+    #[test]
+    fn the_slot_a_spawn_is_taking_back_is_not_counted_against_it() {
+        let run = run_with_node_at_iter("r1", "impl", NodeStatus::Running, 1);
+        assert_eq!(count_live_node_sessions([&run]), 1);
+        assert_eq!(
+            count_live_node_sessions_excluding(
+                [&run],
+                Some(SlotExclusion {
+                    run_id: "r1",
+                    node_id: "impl",
+                    iter: 1,
+                })
+            ),
+            0
+        );
+    }
+
+    /// **The over-admission bug the key closes.** The count is global across Runs
+    /// while node ids are local to a pipeline, so two concurrent Runs of the same
+    /// pipeline both carry an `implementer` at `iter 1`. A `(node_id, iter)` key
+    /// would discount the OTHER Run's live session and let the cap be exceeded —
+    /// exactly the collapse this module exists to prevent.
+    #[test]
+    fn the_exclusion_never_discounts_another_runs_session() {
+        let a = run_with_node_at_iter("run-a", "implementer", NodeStatus::Running, 1);
+        let b = run_with_node_at_iter("run-b", "implementer", NodeStatus::Running, 1);
+        assert_eq!(count_live_node_sessions([&a, &b]), 2);
+        assert_eq!(
+            count_live_node_sessions_excluding(
+                [&a, &b],
+                Some(SlotExclusion {
+                    run_id: "run-b",
+                    node_id: "implementer",
+                    iter: 1,
+                })
+            ),
+            1,
+            "only run-b's own slot comes off the count"
+        );
+    }
+
+    /// Without the `iter` condition the exclusion would be a free `+1` on any
+    /// restart of a non-live iteration, i.e. a silent cap raise.
+    #[test]
+    fn the_exclusion_only_bites_on_the_live_iteration() {
+        let run = run_with_node_at_iter("r1", "impl", NodeStatus::Running, 2);
+        assert_eq!(
+            count_live_node_sessions_excluding(
+                [&run],
+                Some(SlotExclusion {
+                    run_id: "r1",
+                    node_id: "impl",
+                    iter: 1,
+                })
+            ),
+            1,
+            "iter 1 is not the live iteration: nothing to take back"
+        );
+    }
+
+    /// A `Waiting` node holds no session, so there is nothing to exclude — and the
+    /// exclusion must not conjure a slot out of it.
+    #[test]
+    fn excluding_a_session_less_node_changes_nothing() {
+        let run = run_with_node_at_iter("r1", "impl", NodeStatus::Waiting, 1);
+        assert_eq!(count_live_node_sessions([&run]), 0);
+        assert_eq!(
+            count_live_node_sessions_excluding(
+                [&run],
+                Some(SlotExclusion {
+                    run_id: "r1",
+                    node_id: "impl",
+                    iter: 1,
+                })
+            ),
+            0
+        );
+    }
+
+    /// `None` is byte-for-byte the historical count — what `GET /sessions` and every
+    /// other reader keeps calling, because an observability endpoint must report the
+    /// TRUE count.
+    #[test]
+    fn no_exclusion_is_the_historical_count() {
+        let r1 = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
+        let r2 = run_with_nodes(
+            "r2",
+            &[("b", NodeStatus::Running), ("c", NodeStatus::AwaitingUser)],
+        );
+        assert_eq!(
+            count_live_node_sessions_excluding([&r1, &r2], None),
+            count_live_node_sessions([&r1, &r2])
+        );
     }
 
     #[test]

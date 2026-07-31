@@ -18,12 +18,13 @@ use anyhow::Context;
 use tracing::{error, info, warn};
 
 use crate::worktree_ops::{
-    create_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
+    ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
 use crate::{
-    admission, append_event_with, count_global_live_sessions, event_log, input_resolution,
-    panic_payload_message, pipeline, prompt_augmenter, reload_run_state_with, stored_default_model,
-    stored_session_cap, tmux_session_manager, transition_guard, AppState,
+    admission, append_event_with, count_global_live_sessions_excluding, event_log,
+    input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
+    reload_run_state_with, stored_default_model, stored_session_cap, tmux_session_manager,
+    transition_guard, AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -117,7 +118,23 @@ fn find_collection_context(
 #[derive(Debug, Clone)]
 pub(crate) enum SpawnOutcome {
     /// A tmux session was launched and `NodeStarted` recorded.
-    Spawned,
+    ///
+    /// Carries what the caller has to be able to say out loud (#489-A): a
+    /// `restart_node` that reused an existing sub-worktree handed the fresh agent
+    /// the dead session's uncommitted work, and that changes what the operator (or
+    /// the manager) should tell it to do.
+    Spawned {
+        /// The sub-worktree already existed on the right branch and was reused **in
+        /// place** — nothing was re-cut, nothing was destroyed. Always `false` for
+        /// a node that owns no sub-worktree.
+        reused_sub_worktree: bool,
+        /// The commit the sub-worktree is cut from (#503 / ADR-0036), carried over
+        /// unchanged on a reuse. `None` for a node with no sub-worktree.
+        base_sha: Option<String>,
+        /// A git lock found in the reused worktree's private gitdir. Reported, not
+        /// removed — see `worktree_ops::ensure_sub_worktree`.
+        stale_git_lock: Option<String>,
+    },
     /// Admission cap reached: the node entered `waiting` (`NodeWaiting`
     /// appended); `retry_waiting_nodes` re-drives it later.
     Throttled,
@@ -159,8 +176,12 @@ pub(crate) async fn spawn_node(
         iter: Some(iter),
         payload: None,
     };
-    let projected = reload_run_state_with(deps.db, run_id).await.map(|(_, s)| s);
-    match transition_guard::validate_transition(projected.as_ref(), &started_probe) {
+    // Events kept alongside the projection: #503's `base_sha` lives on the previous
+    // `NodeStarted` of this same iteration, and a reuse has to carry it forward
+    // (#489-B / ADR-0037 §6).
+    let loaded = reload_run_state_with(deps.db, run_id).await;
+    let projected = loaded.as_ref().map(|(_, s)| s);
+    match transition_guard::validate_transition(projected, &started_probe) {
         transition_guard::Verdict::Allow => {}
         transition_guard::Verdict::NoOp { reason }
         | transition_guard::Verdict::Reject { reason } => {
@@ -173,7 +194,7 @@ pub(crate) async fn spawn_node(
     // it is, the tail below is wrapped to run inside `pdo-sbx-<run_id>`. Read from the
     // guard projection — `sandbox` never changes over a Run's life. A `bool` and not
     // the mode (#432): the profile name is owned, and only the off-ness matters here.
-    let run_sandboxed = projected.as_ref().is_some_and(|s| !s.sandbox.is_off());
+    let run_sandboxed = projected.is_some_and(|s| !s.sandbox.is_off());
 
     // #445: SANDBOX PRECONDITION — "a sandboxed Run whose prep is not `ready` is not
     // schedulable". Carried by the spawn itself, deliberately NOT by its callers: the
@@ -193,7 +214,7 @@ pub(crate) async fn spawn_node(
     // the watcher could wedge for ever. `run_stall_reason` knows about this window and
     // will not read it as a silent spawn-abort (it fails loud only past its own
     // sandbox-prep grace).
-    if let Some(reason) = projected.as_ref().and_then(|s| s.sandbox_spawn_block()) {
+    if let Some(reason) = projected.and_then(|s| s.sandbox_spawn_block()) {
         info!(
             "spawn_node deferred for {} iter {iter}: {reason} (replayed on sandbox_prep_ready)",
             node.id
@@ -228,9 +249,39 @@ pub(crate) async fn spawn_node(
     // one more would exceed the cap, the node enters `waiting` and holds no
     // session; `retry_waiting_nodes` re-drives it once a slot frees. Checked
     // first so a throttled node creates no worktree.
+    //
+    // #489-C: the count EXCLUDES the slot this very spawn is taking back. A
+    // `restart_node` kills the node's session and then re-spawns the SAME
+    // iteration, but appends no lifecycle event in between — so the node still
+    // projects `Running` and, at `live == cap`, the restart is throttled against
+    // *itself*, deterministically. Nothing then rescues it: `retry_waiting_nodes`
+    // has no timer, `resume_run` treats a throttled node as owned by the sweep,
+    // boot recovery only looks at `Running`/`AwaitingUser`, and the Stop button
+    // 409s because `node_stop` requires `Running`. The Run froze for good.
+    //
+    // The exclusion key is `(run_id, node_id, iter)` — never `(node_id, iter)`:
+    // the count is global across Runs while node ids are local to a pipeline, so
+    // two concurrent Runs of the same pipeline both have an `implementer` at
+    // `iter 1`, and a Run-blind key would discount the *other* Run's live session
+    // and overshoot the cap. It is unconditional because it can only ever subtract
+    // when that exact triple currently holds a session, and `validate_start` allows
+    // re-spawning a live iteration for exactly one reason: this spawn replaces it
+    // (`transition_guard.rs`, "Same iter: legal restart/promotion").
+    //
+    // Computed INSIDE the lock, from the same all-Runs projection as the count —
+    // reusing the pre-lock projection above would reopen the check-and-reserve race
+    // the lock exists to close.
     let admission_guard = deps.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(deps.db).await);
-    let live = count_global_live_sessions(deps.db).await;
+    let live = count_global_live_sessions_excluding(
+        deps.db,
+        Some(admission::SlotExclusion {
+            run_id,
+            node_id: &node.id,
+            iter,
+        }),
+    )
+    .await;
     if !admission::can_admit(live, cap) {
         let waiting = event_log::Event {
             id: None,
@@ -267,26 +318,56 @@ pub(crate) async fn spawn_node(
     // `NodeStarted`. It is the sole basis on which a later merge-back conflict may
     // be resolved in the node's favour — no base recorded, no resolution.
     let mut spawn_base_sha: Option<String> = None;
+    // #489: what the wire has to be able to say about the sub-worktree.
+    let mut reused_sub_worktree = false;
+    let mut stale_git_lock: Option<String> = None;
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
         let pipeline_branch = format!("pdo/run-{run_id}");
 
-        match create_sub_worktree(
+        // #503 / ADR-0036 under reuse (ADR-0037 §6): a reuse does not cut anything,
+        // so it carries the ORIGINAL base forward rather than deriving a new one.
+        let previous_base_sha = loaded
+            .as_ref()
+            .and_then(|(events, _)| merge_action::spawn_base_sha(events, &node.id, iter));
+
+        // #489-B: `ensure_sub_worktree`, not `create_sub_worktree`. The bare create
+        // replayed `git worktree add -b <branch>` on a branch that already existed
+        // and failed with exit 255 on EVERY re-spawn of the same iteration — i.e. on
+        // every `restart_node` of a `code-mutating` / `merge` node, 100% of the time.
+        match ensure_sub_worktree(
             spawn_ctx.repo_root,
             &sub_wt_dir,
             &sub_branch,
             &pipeline_branch,
+            previous_base_sha.as_deref(),
         ) {
-            Ok(base_sha) => spawn_base_sha = Some(base_sha),
+            Ok(ensured) => {
+                spawn_base_sha = ensured.base_sha;
+                reused_sub_worktree = !ensured.created;
+                stale_git_lock = ensured.entry_state.stale_git_lock().map(str::to_string);
+                // #489-B: `Some(...)` ONLY when this spawn created the worktree.
+                // On a reuse, any later abort in the panic-isolated span would send
+                // `fail_spawn_before_start` into `reap_orphan_sub_worktree`, and
+                // `worktree remove --force` succeeds on a dirty tree — it would
+                // destroy exactly the work the restart exists to save. Gated, the
+                // abort path appends `RunFailed` and destroys nothing: the Run goes
+                // terminal with the work intact, `resume_run` reopens it and the next
+                // classification answers `Reusable`. #279's invariant ("an aborted
+                // spawn leaves no orphan") is untouched — it only ever covered what
+                // the spawn itself created.
+                if ensured.created {
+                    orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
+                }
+            }
             Err(e) => {
-                error!("failed to create sub-worktree for {}: {e:#}", node.id);
+                error!("failed to ensure sub-worktree for {}: {e:#}", node.id);
                 return SpawnOutcome::Failed {
-                    reason: format!("failed to create sub-worktree for {}: {e:#}", node.id),
+                    reason: format!("failed to ensure sub-worktree for {}: {e:#}", node.id),
                 };
             }
         }
-        orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
         sub_wt_dir
     } else {
         spawn_ctx.worktree_dir.to_path_buf()
@@ -583,7 +664,11 @@ pub(crate) async fn spawn_node(
         }
     }
 
-    SpawnOutcome::Spawned
+    SpawnOutcome::Spawned {
+        reused_sub_worktree,
+        base_sha: spawn_base_sha,
+        stale_git_lock,
+    }
 }
 
 /// Fail a run loud when a node spawn aborts *before* `NodeStarted` is appended

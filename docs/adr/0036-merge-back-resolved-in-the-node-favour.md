@@ -8,6 +8,14 @@
 > supprime toujours aucune branche ni aucun worktree, mais il peut désormais **déplacer** la ref de la
 > branche pipeline — sous un commit de merge qui garde l'ancien tip en premier parent, donc sans jamais
 > rendre un commit inatteignable.
+>
+> **Amendé par ADR-0037 (#489) sur le `base_sha`.** Depuis #489, `restart_node` **réutilise** le
+> sous-worktree d'une itération au lieu de le recouper. Une réutilisation ne coupe rien : elle
+> **reporte** le `base_sha` du `NodeStarted` précédent de la même itération, telle quelle. Les deux
+> autres réponses sont pires que le bug — relire `HEAD` dans le worktree réutilisé rend le commit *du
+> nœud* et désactive donc silencieusement l'échappatoire ci-dessous pour tout nœud redémarré ; prendre
+> le tip pipeline au moment de la réutilisation l'**arme à faux** et peut écraser le travail d'un nœud
+> voisin mergé depuis la coupe d'origine. La règle d'adoption elle-même est inchangée.
 
 ## Contexte
 

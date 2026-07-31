@@ -17,27 +17,49 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 /// Reap a sub-worktree + branch left orphaned by a spawn that aborted before
-/// `NodeStarted` (#279). The worktree was created at the pipeline branch's tip
-/// with no agent run, so removing it loses no work. Best-effort throughout
-/// (mirrors `cleanup_run`): a missing dir / branch is fine.
+/// `NodeStarted` (#279), or a registration that has already lost all value
+/// ([`SubWorktreeState::Recyclable`], #489). Best-effort throughout (mirrors
+/// `cleanup_run`): a missing dir / branch is fine.
+///
+/// **`worktree prune` before `branch -D`, and the `remove` is unconditional**
+/// (#489 / #498). The pre-#489 form skipped `worktree remove` when the directory
+/// was already gone, which left git's *registration* in place — and a registered
+/// worktree pins its branch:
+///
+/// ```text
+/// $ git branch -D pdo/sub-A3
+/// error: cannot delete branch 'pdo/sub-A3' used by worktree at '…/nodes/A3/iter-1'   # exit 1
+/// ```
+///
+/// So the old reap left **both** locks standing and the next `worktree add -b`
+/// still failed 255. Measured: either `worktree prune` or an unconditional
+/// `worktree remove --force` clears the registration; doing the prune too is free
+/// and covers the dir-already-deleted case the `remove` cannot.
 pub(crate) fn reap_orphan_sub_worktree(
     repo_root: &std::path::Path,
     sub_worktree_dir: &std::path::Path,
     sub_branch: &str,
 ) {
-    if sub_worktree_dir.exists() {
-        let _ = std::process::Command::new("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(sub_worktree_dir)
-            .current_dir(repo_root)
-            .output();
-    }
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(sub_worktree_dir)
+        .current_dir(repo_root)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo_root)
+        .output();
     let _ = std::process::Command::new("git")
         .args(["branch", "-D", sub_branch])
         .current_dir(repo_root)
         .output();
+    // `worktree remove` unlinks the directory it knew about; a directory git never
+    // registered (or one left behind by a failed remove) is ours to clear.
+    if sub_worktree_dir.exists() {
+        let _ = std::fs::remove_dir_all(sub_worktree_dir);
+    }
     info!(
-        "Reaped orphaned sub-worktree {} (branch {sub_branch}) after aborted spawn (#279)",
+        "Reaped sub-worktree {} (branch {sub_branch}) — nothing of value was there (#279/#489)",
         sub_worktree_dir.display()
     );
 }
@@ -105,6 +127,374 @@ pub(crate) fn create_sub_worktree(
     rev_parse(sub_worktree_dir, "HEAD")
 }
 
+/// What the disk says about a node's sub-worktree before a spawn touches it
+/// (#489-B).
+///
+/// Four states, not three. The tempting three-way split — absent / reusable /
+/// "blocked, so reap it" — is what makes `restart_node` destructive: a stale git
+/// lock (`index.lock` from a SIGKILLed agent, a `MERGE_HEAD`) over a **dirty**
+/// tree is not "already worthless", it is precisely the work #489 exists to save.
+/// So *recyclable* (nothing to lose) is separated from *occupied* (someone else
+/// holds it — refuse and name what holds it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubWorktreeState {
+    /// Nothing on disk, no branch ref, no registration — or a directory that
+    /// exists but is empty, which `git worktree add` accepts. A fresh cut.
+    Absent,
+    /// Registered, on the expected branch, not prunable: **reuse it in place**.
+    /// This is the `restart_node` case, and the dead session's uncommitted work is
+    /// still in it. Never reaped.
+    Reusable {
+        /// `git status --porcelain` is non-empty (untracked included) — there is
+        /// something in there a reap would destroy.
+        has_work: bool,
+        /// The base branch is no longer an ancestor of the sub-branch: the cut is
+        /// stale. Reported, never "fixed" — see [`ensure_sub_worktree`].
+        base_moved: bool,
+        /// A git lock left in the worktree's private gitdir (`index.lock`,
+        /// `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Reported, never
+        /// deleted: PDO cannot prove the writer is dead.
+        stale_git_lock: Option<String>,
+    },
+    /// Registered but prunable, or an orphaned branch ref with no worktree, or a
+    /// detached checkout of our own path. Nothing here has value; reap and re-cut.
+    Recyclable { detail: String },
+    /// The branch is checked out in another live worktree, or the path exists as a
+    /// non-empty non-worktree directory. Refuse — touching it is not ours to do.
+    Occupied { detail: String },
+}
+
+impl SubWorktreeState {
+    /// The stale lock, if this state carries one. `None` for every state that is
+    /// about to be created from scratch.
+    pub(crate) fn stale_git_lock(&self) -> Option<&str> {
+        match self {
+            Self::Reusable { stale_git_lock, .. } => stale_git_lock.as_deref(),
+            Self::Absent | Self::Recyclable { .. } | Self::Occupied { .. } => None,
+        }
+    }
+}
+
+/// One `worktree list --porcelain` record.
+struct WorktreeRecord {
+    path: PathBuf,
+    branch: Option<String>,
+    prunable: Option<String>,
+}
+
+/// Ask git — from `repo_root` — which worktrees it has registered.
+///
+/// **`git worktree list --porcelain` is the authoritative probe, and a
+/// per-directory one is not.** Measured: `git -C <dir> rev-parse --abbrev-ref HEAD`
+/// on a plain directory *inside* the repo walks up to the main worktree and
+/// answers `main` — a per-directory probe lies in silence. Neither
+/// `worktree list --porcelain` nor `worktree prune` existed anywhere in the daemon
+/// before #489; this is its first repository-registration probe.
+fn registered_worktrees(repo_root: &std::path::Path) -> Vec<WorktreeRecord> {
+    let Ok(output) = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut records = Vec::new();
+    let mut current: Option<WorktreeRecord> = None;
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(rec) = current.take() {
+                records.push(rec);
+            }
+            current = Some(WorktreeRecord {
+                path: PathBuf::from(path.trim()),
+                branch: None,
+                prunable: None,
+            });
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            if let Some(rec) = current.as_mut() {
+                rec.branch = Some(branch.trim().to_string());
+            }
+        } else if let Some(reason) = line.strip_prefix("prunable") {
+            if let Some(rec) = current.as_mut() {
+                rec.prunable = Some(reason.trim().to_string());
+            }
+        }
+    }
+    if let Some(rec) = current.take() {
+        records.push(rec);
+    }
+    records
+}
+
+/// Canonicalize for comparison, falling back to the path itself when the target
+/// does not exist (which is exactly the interesting case: a registered worktree
+/// whose directory was deleted).
+fn comparable(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The linked worktree's private gitdir (`<repo>/.git/worktrees/<name>`), read
+/// from the `gitdir:` pointer git writes into `<dir>/.git`.
+///
+/// Read from the pointer file rather than derived from the basename: `.git/worktrees/`
+/// is named after the **basename**, so every node collides on `iter-1` and git
+/// disambiguates to `iter-11`, `iter-12`… Deriving it would probe another node's
+/// gitdir.
+fn private_gitdir(sub_worktree_dir: &std::path::Path) -> Option<PathBuf> {
+    let pointer = std::fs::read_to_string(sub_worktree_dir.join(".git")).ok()?;
+    let raw = pointer.lines().next()?.strip_prefix("gitdir:")?.trim();
+    Some(PathBuf::from(raw))
+}
+
+/// The name of the first git lock present in the worktree's private gitdir, if any.
+fn stale_git_lock_in(sub_worktree_dir: &std::path::Path) -> Option<String> {
+    let gitdir = private_gitdir(sub_worktree_dir)?;
+    for candidate in ["index.lock", "MERGE_HEAD", "rebase-merge", "rebase-apply"] {
+        if gitdir.join(candidate).exists() {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn dir_is_empty(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+}
+
+/// Classify a node's sub-worktree **without mutating anything** (#489-B).
+///
+/// Pure read path: safe to call from the pre-kill probes of `restart_node`, which
+/// is the whole point — an `Occupied` verdict must be knowable before a session is
+/// destroyed.
+pub(crate) fn classify_sub_worktree(
+    repo_root: &std::path::Path,
+    sub_worktree_dir: &std::path::Path,
+    sub_branch: &str,
+    base_branch: &str,
+) -> SubWorktreeState {
+    let want_ref = format!("refs/heads/{sub_branch}");
+    let target = comparable(sub_worktree_dir);
+    let records = registered_worktrees(repo_root);
+
+    // The branch checked out somewhere ELSE, and that somewhere is still live.
+    if let Some(other) = records
+        .iter()
+        .find(|r| r.branch.as_deref() == Some(&want_ref) && comparable(&r.path) != target)
+    {
+        if other.prunable.is_none() {
+            return SubWorktreeState::Occupied {
+                detail: format!(
+                    "branch {sub_branch} is checked out in another worktree at {}",
+                    other.path.display()
+                ),
+            };
+        }
+    }
+
+    match records.iter().find(|r| comparable(&r.path) == target) {
+        Some(own) => {
+            if let Some(reason) = own.prunable.as_deref() {
+                return SubWorktreeState::Recyclable {
+                    detail: format!(
+                        "git reports the worktree registration for {} prunable: {reason}",
+                        sub_worktree_dir.display()
+                    ),
+                };
+            }
+            match own.branch.as_deref() {
+                Some(branch) if branch == want_ref => SubWorktreeState::Reusable {
+                    has_work: has_any_change(sub_worktree_dir),
+                    base_moved: !base_is_ancestor(repo_root, base_branch, &want_ref),
+                    stale_git_lock: stale_git_lock_in(sub_worktree_dir),
+                },
+                // Detached HEAD at our own path: only PDO ever creates a worktree
+                // there, so its branch was deleted from under it. Nothing to keep.
+                None => SubWorktreeState::Recyclable {
+                    detail: format!(
+                        "worktree at {} is detached, not on {sub_branch}",
+                        sub_worktree_dir.display()
+                    ),
+                },
+                // A live worktree on a DIFFERENT named branch. Not ours to reap.
+                Some(other) => SubWorktreeState::Occupied {
+                    detail: format!(
+                        "worktree at {} is checked out on {other}, not {want_ref}",
+                        sub_worktree_dir.display()
+                    ),
+                },
+            }
+        }
+        None => {
+            if sub_worktree_dir.exists() && !dir_is_empty(sub_worktree_dir) {
+                return SubWorktreeState::Occupied {
+                    detail: format!(
+                        "{} exists and is not a registered git worktree",
+                        sub_worktree_dir.display()
+                    ),
+                };
+            }
+            if branch_ref_exists(repo_root, &want_ref) {
+                // The #498 shape: the branch ref outlives its worktree, and
+                // `worktree add -b` refuses it (exit 255) for ever.
+                return SubWorktreeState::Recyclable {
+                    detail: format!(
+                        "branch {sub_branch} exists with no worktree registered at {}",
+                        sub_worktree_dir.display()
+                    ),
+                };
+            }
+            SubWorktreeState::Absent
+        }
+    }
+}
+
+/// Anything at all in the tree, **untracked included** — the opposite polarity to
+/// [`worktree_has_tracked_changes`], which deliberately ignores `??` lines.
+fn has_any_change(worktree_dir: &std::path::Path) -> bool {
+    std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(worktree_dir)
+        .output()
+        .is_ok_and(|out| !String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
+fn base_is_ancestor(repo_root: &std::path::Path, base_branch: &str, sub_ref: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", base_branch, sub_ref])
+        .current_dir(repo_root)
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+fn branch_ref_exists(repo_root: &std::path::Path, full_ref: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", full_ref])
+        .current_dir(repo_root)
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// What [`ensure_sub_worktree`] settled on.
+#[derive(Debug)]
+pub(crate) struct EnsuredSubWorktree {
+    /// The state the disk was in *before* this call — what the wire reports as
+    /// `reused_sub_worktree` and `stale_git_lock`.
+    pub entry_state: SubWorktreeState,
+    /// `true` iff this call ran `git worktree add`. Gates `orphan_to_reap`: a
+    /// reused worktree must never be reapable by a later spawn abort.
+    pub created: bool,
+    /// The commit the sub-worktree is cut from (#503 / ADR-0036). Freshly read on a
+    /// create, **carried over** on a reuse.
+    pub base_sha: Option<String>,
+}
+
+/// Make a node's sub-worktree usable, whatever state it is in — the single
+/// primitive both spawn paths call (#489-B).
+///
+/// Replaces the bare `create_sub_worktree` at both production sites, which failed
+/// with exit 255 (`a branch named … already exists`) on **every** re-spawn of the
+/// same iteration, i.e. on every `restart_node` of a `code-mutating` or `merge`
+/// node.
+///
+/// The contract, state by state:
+///
+/// * [`SubWorktreeState::Absent`] → create, and the base SHA is the cut's own.
+/// * [`SubWorktreeState::Reusable`] → **no mutating git call at all.** The dead
+///   session's uncommitted work is the reason the restart was asked for.
+/// * [`SubWorktreeState::Recyclable`] → reap, then create.
+/// * [`SubWorktreeState::Occupied`] → `Err`, naming what holds it. Nothing is
+///   touched.
+///
+/// `previous_base_sha` is the `base_sha` recorded by the **previous**
+/// `NodeStarted` of this same iteration, and it is what a reuse reports. This
+/// cannot be computed here, and the two obvious alternatives are worse than the
+/// bug (ADR-0037 §6): re-reading `HEAD` in a reused worktree yields the *node's*
+/// commit, which never equals the pipeline tip, so ADR-0036's adoption escape
+/// hatch would be silently dead for every restarted node; and taking the pipeline
+/// tip *at reuse time* would **arm** adoption falsely and let the node's tree
+/// overwrite a sibling merged since the original cut.
+///
+/// Two things it deliberately does **not** do (ADR-0037, "Accepted limits"):
+/// it does not refresh a stale base (measured: `git merge` into a dirty
+/// sub-worktree fails, and committing first hands a fresh agent a tree full of
+/// conflict markers — `node_retry` is the fresh-base tool), and it does not delete
+/// a stale git lock (PDO cannot prove the writer is dead; #485 is the precedent
+/// that cost).
+pub(crate) fn ensure_sub_worktree(
+    repo_root: &std::path::Path,
+    sub_worktree_dir: &std::path::Path,
+    sub_branch: &str,
+    base_branch: &str,
+    previous_base_sha: Option<&str>,
+) -> Result<EnsuredSubWorktree> {
+    let entry_state = classify_sub_worktree(repo_root, sub_worktree_dir, sub_branch, base_branch);
+    match &entry_state {
+        SubWorktreeState::Occupied { detail } => {
+            anyhow::bail!(
+                "sub-worktree {} is occupied: {detail}",
+                sub_worktree_dir.display()
+            )
+        }
+        SubWorktreeState::Reusable {
+            has_work,
+            base_moved,
+            stale_git_lock,
+        } => {
+            info!(
+                "Reusing sub-worktree {} in place (branch {sub_branch}): has_work={has_work}, \
+                 base_moved={base_moved}, stale_git_lock={stale_git_lock:?} (#489)",
+                sub_worktree_dir.display()
+            );
+            if *base_moved {
+                warn!(
+                    "Sub-worktree {} was cut from a base that has since moved; PDO does not \
+                     refresh it — use node_retry for a fresh base (#489)",
+                    sub_worktree_dir.display()
+                );
+            }
+            if let Some(lock) = stale_git_lock {
+                warn!(
+                    "Sub-worktree {} carries a git lock ({lock}); it is reported, not removed — \
+                     the merge-back will fail loudly if it is still there (#489)",
+                    sub_worktree_dir.display()
+                );
+            }
+            Ok(EnsuredSubWorktree {
+                base_sha: previous_base_sha.map(str::to_string),
+                created: false,
+                entry_state,
+            })
+        }
+        SubWorktreeState::Recyclable { detail } => {
+            warn!(
+                "Recycling sub-worktree {} before re-cutting it: {detail} (#489/#498)",
+                sub_worktree_dir.display()
+            );
+            reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
+            let base_sha =
+                create_sub_worktree(repo_root, sub_worktree_dir, sub_branch, base_branch)?;
+            Ok(EnsuredSubWorktree {
+                entry_state,
+                created: true,
+                base_sha: Some(base_sha),
+            })
+        }
+        SubWorktreeState::Absent => {
+            let base_sha =
+                create_sub_worktree(repo_root, sub_worktree_dir, sub_branch, base_branch)?;
+            Ok(EnsuredSubWorktree {
+                entry_state,
+                created: true,
+                base_sha: Some(base_sha),
+            })
+        }
+    }
+}
+
 /// Everything a conflicting merge-back knows about itself (#503, AC3/AC4).
 ///
 /// Exists because `MergeResult::Conflict(String)` could not answer the only two
@@ -154,6 +544,7 @@ pub(crate) struct MergeAdoption {
     pub conflicting_files: Vec<String>,
 }
 
+#[derive(Debug)]
 pub(crate) enum MergeResult {
     Success,
     /// #503: the three-way merge conflicted, but resolving it entirely in the
@@ -200,11 +591,36 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
     keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<MergeResult> {
-    let _ = std::process::Command::new("git")
+    // #489: the exit STATUS of `git add -A`, not just the spawn. Discarding it
+    // loses the whole node's work in silence, and reusing a sub-worktree (#489-B)
+    // promotes that from latent to routine. The measured chain, with a leftover
+    // `index.lock`:
+    //
+    // ```text
+    // git add -A                  -> exit 128  "Unable to create '…/index.lock': File exists"
+    // git diff --cached --quiet   -> exit 0    => NO COMMIT TAKEN
+    // git merge pdo/sub-…         -> "Already up to date."  exit 0
+    // => MergeResult::Success — the agent's file is ABSENT from the pipeline worktree
+    // ```
+    //
+    // `pdo complete` answered `Success`, the Run went green, and 100% of the
+    // uncommitted work vanished with no conflict, no event and no trace — the
+    // silent loss ADR-0004 forbids. Nothing in #503 fires either: no
+    // `MergeConflictDetected`, no `NodeFailed`, no `failure_reason`. `bail!` here
+    // surfaces as `CompletionRefusal::MergeFailed` (a 500 the caller already
+    // handles), which is loud.
+    let add_output = std::process::Command::new("git")
         .args(["add", "-A"])
         .current_dir(sub_worktree_dir)
         .output()
         .context("git add failed in sub-worktree")?;
+    if !add_output.status.success() {
+        anyhow::bail!(
+            "git add -A in sub-worktree failed, refusing to report a merge that would drop the \
+             node's work: {}",
+            git_report(&add_output)
+        );
+    }
 
     let status_output = std::process::Command::new("git")
         .args(["diff", "--cached", "--quiet"])
@@ -1405,6 +1821,347 @@ mod tests {
             String::from_utf8_lossy(&after.stdout).trim().is_empty(),
             "sub-branch must be deleted after reap"
         );
+    }
+
+    // ── #489-B / ADR-0037 : classify + ensure ────────────────────────────────
+    //
+    // The six locks a re-spawn can hit were MEASURED, and the #497 corollary ("it
+    // is the branch ref that blocks, not the directory") is true for its own
+    // incident and false in general:
+    //
+    // | starting state                                   | `add -b B dir base` |
+    // |--------------------------------------------------|---------------------|
+    // | nothing                                          | ✅ 0                |
+    // | branch + dir + registered ← the `restart_node` case | ❌ 255 branch exists |
+    // | branch, dir deleted, still registered            | ❌ 255              |
+    // | branch, dir absent and unregistered ← the #498 case | ❌ 255           |
+    // | branch deleted, dir non-empty                    | ❌ 128 dir exists   |
+    // | branch checked out in another live worktree      | ❌ 255              |
+
+    /// A repo with a Run's pipeline worktree, ready to cut sub-worktrees from.
+    fn repo_with_pipeline_branch(tmp: &tempfile::TempDir, run_id: &str) -> (PathBuf, String) {
+        let repo = tmp.path().to_path_buf();
+        init_test_repo(&repo);
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(&repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        (repo, pipeline_branch)
+    }
+
+    #[test]
+    fn classify_reports_absent_when_nothing_is_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-absent");
+        let dir = sub_worktree_path(&repo, "cls-absent", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-absent", "impl-1", 1);
+        assert_eq!(
+            classify_sub_worktree(&repo, &dir, &branch, &base),
+            SubWorktreeState::Absent
+        );
+    }
+
+    /// **THE #489 case.** A sub-worktree registered on its own branch is reusable,
+    /// and its uncommitted work is exactly why.
+    #[test]
+    fn classify_reports_reusable_and_sees_the_work_in_flight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-reuse");
+        let dir = sub_worktree_path(&repo, "cls-reuse", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-reuse", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+
+        let clean = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert_eq!(
+            clean,
+            SubWorktreeState::Reusable {
+                has_work: false,
+                base_moved: false,
+                stale_git_lock: None,
+            }
+        );
+
+        // Untracked counts (the opposite polarity to `worktree_has_tracked_changes`):
+        // an agent's scratch files are work a reap would destroy.
+        std::fs::write(dir.join("scratch.txt"), "in flight\n").unwrap();
+        let dirty = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert_eq!(
+            dirty,
+            SubWorktreeState::Reusable {
+                has_work: true,
+                base_moved: false,
+                stale_git_lock: None,
+            }
+        );
+    }
+
+    /// A stale git lock is REPORTED, and the worktree stays reusable. Refusing here
+    /// would remove the last recovery lever on a state the restart can improve; and
+    /// deleting the lock ourselves is what git warns against — PDO cannot prove the
+    /// writer is dead (#485 is the precedent that cost).
+    #[test]
+    fn classify_reports_a_stale_lock_without_refusing_the_reuse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-lock");
+        let dir = sub_worktree_path(&repo, "cls-lock", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-lock", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+        std::fs::write(dir.join("scratch.txt"), "in flight\n").unwrap();
+
+        // The gitdir is read from the `gitdir:` pointer, never derived from the
+        // basename: `.git/worktrees/` is named by basename, so every node collides
+        // on `iter-1` and git disambiguates to `iter-11`, `iter-12`…
+        let gitdir = private_gitdir(&dir).expect("a linked worktree has a gitdir pointer");
+        std::fs::write(gitdir.join("index.lock"), "").unwrap();
+
+        let state = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert_eq!(
+            state,
+            SubWorktreeState::Reusable {
+                has_work: true,
+                base_moved: false,
+                stale_git_lock: Some("index.lock".into()),
+            }
+        );
+        assert_eq!(state.stale_git_lock(), Some("index.lock"));
+    }
+
+    /// The #498 shape: the branch ref outlives its worktree, so `worktree add -b`
+    /// refuses it (exit 255) for ever. Nothing of value is on disk → recycle.
+    #[test]
+    fn classify_recycles_an_orphaned_branch_with_no_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-orphan");
+        let dir = sub_worktree_path(&repo, "cls-orphan", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-orphan", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+        // A worktree removed cleanly, leaving only the branch behind.
+        std::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&dir)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+
+        assert!(matches!(
+            classify_sub_worktree(&repo, &dir, &branch, &base),
+            SubWorktreeState::Recyclable { .. }
+        ));
+    }
+
+    /// A registration whose directory was `rm -rf`ed is prunable → recycle.
+    #[test]
+    fn classify_recycles_a_prunable_registration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-prunable");
+        let dir = sub_worktree_path(&repo, "cls-prunable", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-prunable", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let state = classify_sub_worktree(&repo, &dir, &branch, &base);
+        let SubWorktreeState::Recyclable { detail } = state else {
+            panic!("a registration pointing at a deleted dir is recyclable, got {state:?}");
+        };
+        assert!(detail.contains("prunable"), "{detail}");
+    }
+
+    /// The branch checked out in ANOTHER live worktree. Reaping it would delete a
+    /// directory that is not ours — refuse, and name what holds it.
+    #[test]
+    fn classify_refuses_a_branch_held_by_another_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-held");
+        let dir = sub_worktree_path(&repo, "cls-held", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-held", "impl-1", 1);
+        // Somebody checked our branch out somewhere else entirely.
+        let elsewhere = repo.join("borrowed");
+        create_worktree(&repo, &elsewhere, &branch, &base).unwrap();
+
+        let state = classify_sub_worktree(&repo, &dir, &branch, &base);
+        let SubWorktreeState::Occupied { detail } = state else {
+            panic!("expected Occupied, got {state:?}");
+        };
+        assert!(detail.contains("borrowed"), "{detail}");
+    }
+
+    /// A non-empty directory git never registered. `worktree add` fails 128 there,
+    /// and we have no idea what is in it → refuse.
+    #[test]
+    fn classify_refuses_a_foreign_non_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-foreign");
+        let dir = sub_worktree_path(&repo, "cls-foreign", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-foreign", "impl-1", 1);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("junk"), "?\n").unwrap();
+
+        assert!(matches!(
+            classify_sub_worktree(&repo, &dir, &branch, &base),
+            SubWorktreeState::Occupied { .. }
+        ));
+    }
+
+    /// Measured nuance: an EMPTY unregistered directory is accepted by
+    /// `git worktree add`, so `Absent` is not "nothing on disk".
+    #[test]
+    fn classify_treats_an_empty_foreign_directory_as_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-empty");
+        let dir = sub_worktree_path(&repo, "cls-empty", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-empty", "impl-1", 1);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            classify_sub_worktree(&repo, &dir, &branch, &base),
+            SubWorktreeState::Absent
+        );
+        // …and the create really does succeed from there.
+        assert!(ensure_sub_worktree(&repo, &dir, &branch, &base, None).is_ok());
+    }
+
+    /// **THE REGRESSION.** `create_sub_worktree` on an existing sub-worktree fails
+    /// 255; `ensure_sub_worktree` reuses it and touches nothing.
+    #[test]
+    fn ensure_reuses_an_existing_sub_worktree_and_destroys_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "ens-reuse");
+        let dir = sub_worktree_path(&repo, "ens-reuse", "impl-1", 1);
+        let branch = sub_worktree_branch("ens-reuse", "impl-1", 1);
+
+        let first = ensure_sub_worktree(&repo, &dir, &branch, &base, None).unwrap();
+        assert!(first.created);
+        let original_base = first
+            .base_sha
+            .clone()
+            .expect("a fresh cut records its base");
+
+        // The bare create — what every re-spawn used to call — refuses outright.
+        let err = create_sub_worktree(&repo, &dir, &branch, &base)
+            .expect_err("git worktree add -b on an existing branch must fail");
+        assert!(format!("{err:#}").contains("already exists"), "{err:#}");
+
+        // Work in flight: an untracked file AND a tracked file modified. The tracked
+        // leg is the load-bearing one — it is the only thing that distinguishes
+        // "reused" from "committed first, then re-cut".
+        std::fs::write(dir.join("scratch.txt"), "in flight\n").unwrap();
+        std::fs::write(dir.join("README.md"), "# edited\n").unwrap();
+        let head_before = rev_parse(&dir, "HEAD").unwrap();
+
+        let second =
+            ensure_sub_worktree(&repo, &dir, &branch, &base, Some(&original_base)).unwrap();
+        assert!(!second.created, "a reuse creates nothing");
+        assert!(matches!(
+            second.entry_state,
+            SubWorktreeState::Reusable { has_work: true, .. }
+        ));
+        // #503 / ADR-0036: the ORIGINAL base, carried over. Re-deriving `HEAD` here
+        // would yield the node's own commit and silently kill the adoption rule for
+        // every restarted node.
+        assert_eq!(second.base_sha.as_deref(), Some(original_base.as_str()));
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scratch.txt")).unwrap(),
+            "in flight\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("README.md")).unwrap(),
+            "# edited\n"
+        );
+        assert_eq!(rev_parse(&dir, "HEAD").unwrap(), head_before);
+    }
+
+    /// The #498 lever: an orphaned branch is reaped and re-cut, and the reap now
+    /// actually works (`worktree prune` before `branch -D`).
+    #[test]
+    fn ensure_recycles_an_orphaned_branch_and_re_cuts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "ens-recycle");
+        let dir = sub_worktree_path(&repo, "ens-recycle", "impl-1", 1);
+        let branch = sub_worktree_branch("ens-recycle", "impl-1", 1);
+        ensure_sub_worktree(&repo, &dir, &branch, &base, None).unwrap();
+        // The failure mode #498 documents: the directory vanishes, the registration
+        // and the branch ref stay.
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let again = ensure_sub_worktree(&repo, &dir, &branch, &base, None).unwrap();
+        assert!(again.created);
+        assert!(matches!(
+            again.entry_state,
+            SubWorktreeState::Recyclable { .. }
+        ));
+        assert!(dir.exists());
+        assert!(again.base_sha.is_some());
+    }
+
+    #[test]
+    fn ensure_refuses_an_occupied_sub_worktree_without_touching_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "ens-occupied");
+        let dir = sub_worktree_path(&repo, "ens-occupied", "impl-1", 1);
+        let branch = sub_worktree_branch("ens-occupied", "impl-1", 1);
+        let elsewhere = repo.join("borrowed");
+        create_worktree(&repo, &elsewhere, &branch, &base).unwrap();
+
+        let err = ensure_sub_worktree(&repo, &dir, &branch, &base, None)
+            .expect_err("an occupied sub-worktree must be refused, never reaped");
+        assert!(format!("{err:#}").contains("occupied"), "{err:#}");
+        // Untouched: the other worktree is still there, on the branch.
+        assert!(elsewhere.exists());
+        assert!(elsewhere.join("README.md").exists());
+    }
+
+    /// #489-B(a): the pre-#489 reap left BOTH locks in place when the directory had
+    /// already gone — `branch -D` fails on a branch a registration still pins.
+    #[test]
+    fn reap_clears_a_registration_whose_directory_already_vanished() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "reap-missing");
+        let dir = sub_worktree_path(&repo, "reap-missing", "impl-1", 1);
+        let branch = sub_worktree_branch("reap-missing", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        reap_orphan_sub_worktree(&repo, &dir, &branch);
+
+        let branches = std::process::Command::new("git")
+            .args(["branch", "--list", &branch])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&branches.stdout).trim().is_empty(),
+            "the branch must be gone, not pinned by a stale registration"
+        );
+        // And the whole point: a fresh cut is possible again.
+        assert!(create_sub_worktree(&repo, &dir, &branch, &base).is_ok());
+    }
+
+    /// #489-B(b) — **the silent total loss**. With a leftover `index.lock`,
+    /// `git add -A` exits 128, `diff --cached --quiet` exits 0, no commit is taken,
+    /// `git merge` says "Already up to date" and the pre-#489 code returned
+    /// `MergeResult::Success` on 100% of the work lost — no conflict, no event, no
+    /// trace.
+    #[test]
+    fn a_failing_git_add_fails_loudly_instead_of_reporting_a_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "add-fails");
+        let wt_dir = repo.join(".pdo/runs/add-fails/worktree");
+        let dir = sub_worktree_path(&repo, "add-fails", "impl-1", 1);
+        let branch = sub_worktree_branch("add-fails", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+
+        std::fs::write(dir.join("the_whole_point.rs"), "fn main() {}\n").unwrap();
+        let gitdir = private_gitdir(&dir).unwrap();
+        std::fs::write(gitdir.join("index.lock"), "").unwrap();
+
+        let err = commit_and_merge_sub_worktree(&dir, &wt_dir, &branch, "impl-1", 1)
+            .expect_err("a failed `git add -A` must not project to MergeResult::Success");
+        assert!(
+            format!("{err:#}").contains("git add -A"),
+            "the failure must name what broke; got {err:#}"
+        );
+        // And the loss is what it protects: the file never reached the pipeline tree.
+        assert!(!wt_dir.join("the_whole_point.rs").exists());
     }
 
     #[test]

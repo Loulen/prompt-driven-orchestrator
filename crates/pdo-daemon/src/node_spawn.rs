@@ -263,21 +263,28 @@ pub(crate) async fn spawn_node(
     // panic-isolated span below can reap them (#279). `None` for nodes that own
     // no worktree (doc-only / control nodes).
     let mut orphan_to_reap: Option<(PathBuf, String)> = None;
+    // #503 / ADR-0036: the commit the sub-worktree is cut from, recorded on
+    // `NodeStarted`. It is the sole basis on which a later merge-back conflict may
+    // be resolved in the node's favour — no base recorded, no resolution.
+    let mut spawn_base_sha: Option<String> = None;
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
         let pipeline_branch = format!("pdo/run-{run_id}");
 
-        if let Err(e) = create_sub_worktree(
+        match create_sub_worktree(
             spawn_ctx.repo_root,
             &sub_wt_dir,
             &sub_branch,
             &pipeline_branch,
         ) {
-            error!("failed to create sub-worktree for {}: {e:#}", node.id);
-            return SpawnOutcome::Failed {
-                reason: format!("failed to create sub-worktree for {}: {e:#}", node.id),
-            };
+            Ok(base_sha) => spawn_base_sha = Some(base_sha),
+            Err(e) => {
+                error!("failed to create sub-worktree for {}: {e:#}", node.id);
+                return SpawnOutcome::Failed {
+                    reason: format!("failed to create sub-worktree for {}: {e:#}", node.id),
+                };
+            }
         }
         orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
         sub_wt_dir
@@ -456,6 +463,11 @@ pub(crate) async fn spawn_node(
                 // so storing the effort alone would store half a fact.
                 "model": resolved_model,
                 "effort": resolved_effort,
+                // #503 / ADR-0036: the sub-worktree's base commit — what the
+                // merge-back compares the pipeline tip against to decide whether a
+                // conflict is the run's own history rewritten by this node. `null`
+                // for a node with no sub-worktree, which never merges back.
+                "base_sha": spawn_base_sha,
             })),
         };
         // A failed `NodeStarted` append means the reservation was NOT recorded:

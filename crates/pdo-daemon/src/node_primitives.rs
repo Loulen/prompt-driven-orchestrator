@@ -86,21 +86,28 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
         || node.node_type == pipeline::NodeType::Merge;
 
+    // #503 / ADR-0036: the commit the sub-worktree was cut from, recorded on
+    // `NodeStarted` below. Without it a merge-back conflict on this iteration can
+    // never be resolved in the node's favour — which is exactly why this path
+    // records it too, not just `node_spawn`: `restart_node` / `start_node` go
+    // through here, and an iteration with no base is an iteration with no recourse.
+    let mut spawn_base_sha: Option<String> = None;
     let working_dir = if has_sub_worktree {
         let sub_wt_dir =
             sub_worktree_path(params.repo_root, params.run_id, params.node_id, params.iter);
         let sub_branch = sub_worktree_branch(params.run_id, params.node_id, params.iter);
         let pipeline_branch = format!("pdo/run-{}", params.run_id);
 
-        if let Err(e) =
-            create_sub_worktree(params.repo_root, &sub_wt_dir, &sub_branch, &pipeline_branch)
-        {
-            return StartNodeResult {
-                outcome: PrimitiveOutcome::Rejected {
-                    reason: format!("failed to create sub-worktree: {e:#}"),
-                },
-                events: vec![],
-            };
+        match create_sub_worktree(params.repo_root, &sub_wt_dir, &sub_branch, &pipeline_branch) {
+            Ok(base_sha) => spawn_base_sha = Some(base_sha),
+            Err(e) => {
+                return StartNodeResult {
+                    outcome: PrimitiveOutcome::Rejected {
+                        reason: format!("failed to create sub-worktree: {e:#}"),
+                    },
+                    events: vec![],
+                };
+            }
         }
         sub_wt_dir
     } else {
@@ -235,6 +242,9 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // recorded even though nothing reads it back yet.
             "model": resolved_model,
             "effort": resolved_effort,
+            // #503: the sub-worktree's base commit. Absent for a node with no
+            // sub-worktree (`doc-only`/`script`), which never merges back.
+            "base_sha": spawn_base_sha,
         })),
     };
 

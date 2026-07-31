@@ -111,6 +111,11 @@ export default function RunsListPanel({
                 className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
                   run.status === "running" && !run.stalled ? "animate-pulse" : ""
                 }`}
+                // #503: the dot was the entire failure signal, with no text
+                // anywhere behind it — a Run that had actually shipped read the
+                // same as one that had not.
+                title={run.failure_reason ?? undefined}
+                data-testid="run-status-dot"
               />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{run.pipeline_name}</div>

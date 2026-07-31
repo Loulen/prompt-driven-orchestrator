@@ -390,6 +390,36 @@ Garde-fou : à la fin d'un NodeRun `doc-only`, la branche du Pipeline Run doit r
 
 Conséquence sur la parallélisation : les `doc-only` sont gratis-parallèles (pas de merge possible). Les `code-mutating` parallèles voient leurs branches mergées séquentiellement à la fin (ordre de complétion).
 
+### Merge-back d'un sous-worktree (#503, ADR-0036)
+
+Le sous-worktree est coupé depuis la branche pipeline, donc le merge-back suppose que le **tip de la
+branche pipeline reste un ancêtre de la branche du nœud** : tant que c'est vrai, `git merge` est un
+fast-forward. Un nœud qui **se rebase** casse l'invariant (typiquement un `Ship It` qui se rebase sur
+une branche d'intégration ayant bougé pendant le Run) : les deux branches portent alors chacune sa
+propre copie du même travail et le merge conflicte.
+
+Le garde est **structurel**, et sa donnée est la **base de spawn** : `create_sub_worktree` retourne le
+commit depuis lequel il a coupé, et les deux chemins de spawn l'écrivent dans le payload `NodeStarted`
+sous `base_sha`.
+
+- **Base de spawn == tip pipeline** — la divergence est l'histoire du Run réécrite par le nœud
+  lui-même : tout commit que le tip a et que le nœud n'a pas est un commit dont le nœud **est parti**.
+  Le merge-back se **résout en faveur du nœud** : un commit de merge dont l'arbre est celui du nœud,
+  avec l'ancien tip pipeline en **premier parent** — rien ne devient inatteignable. Événement
+  `merge_resolved_in_node_favour` ; jamais silencieux.
+- **Base périmée, ou inconnue** — quelque chose a atteint la branche pipeline entre-temps et peut être
+  absent de l'arbre du nœud : conflit, `NodeFailed` + `RunFailed`, comme avant. Résoudre perdrait ce
+  travail. Une base inconnue (Run pré-#503) n'est pas un permis de réécrire une branche.
+
+Un conflit porte désormais de quoi le diagnostiquer sans archéologie : le rapport de `git merge`
+**stdout inclus** (il n'écrit rien sur stderr en cas de conflit — le `detail` était vide sur 100 % des
+conflits), les deux SHA et la liste des chemins non mergés. Et le nœud dont le merge-back échoue est
+marqué `failed` et sa session reapée : il ne reste plus projeté `running`.
+
+Aucun garde de **contenu** ne marche : blobs, chemins et tree-sémantique refusent tous les trois
+l'occurrence qu'ils devaient sauver — un agent qui rebase renomme aussi, et un conflit est symétrique
+donc `merge-tree` conflicte partout où `git merge` a conflicté. Détail mesuré : ADR-0036 §3.
+
 ---
 
 ## Merge — nœud first-class
@@ -1550,6 +1580,11 @@ Chaque entrée de la liste de gauche porte un icône coloré indiquant son statu
 | `blocked` (run_halted ou conflit non résolu) | orange |
 | `failed` | rouge |
 | `archived` | gris |
+
+Le point ne peut pas être **tout** le signal (#503) : un Run non vert projette la raison de son
+événement terminal (`run_failed`/`run_skipped`.`reason`, `run_halted`.`message`) dans
+`RunState.failure_reason`, effacée par un resume. Elle titre le point dans la liste et s'affiche dans
+le panneau du Run — le premier endroit où l'on arrive en cliquant un point rouge.
 
 ### Cleanup vs archive
 

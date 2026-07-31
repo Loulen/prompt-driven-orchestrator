@@ -44,6 +44,33 @@ describe("RunsListPanel run status rendering", () => {
     expect(dot).toBeInTheDocument();
   });
 
+  // #503: the dot was the whole failure signal — a Run that had actually shipped
+  // read the same as one that had not, with no text anywhere behind it.
+  it("hangs the failure reason off the status dot", () => {
+    const runs: RunListEntry[] = [
+      {
+        run_id: "run-1",
+        pipeline_name: "shipped-but-filed-failed",
+        status: "failed",
+        started_at: null,
+        failure_reason: "merge conflict on ship: 20 conflicting file(s)",
+      },
+    ];
+    renderPanel({ runs });
+    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
+      "title",
+      "merge conflict on ship: 20 conflicting file(s)",
+    );
+  });
+
+  it("leaves the dot untitled when there is nothing to explain", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "run-1", pipeline_name: "green", status: "completed", started_at: null },
+    ];
+    renderPanel({ runs });
+    expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");
+  });
+
   it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
     const runs: RunListEntry[] = [
       { run_id: "run-1", pipeline_name: "noop-pipe", status: "skipped", started_at: null },

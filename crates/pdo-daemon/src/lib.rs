@@ -275,14 +275,20 @@ struct AppState {
     /// loop — sharing the field would be a naming lie waiting to happen.
     /// Surfaced by `GET /sessions` as `reaper.last_sweep_at`.
     reaper_last_sweep_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// Sessions killed by the most recent orphan-sweep pass (#485). Recomputed
-    /// each pass (leak-free, like `blocked_on_limit`), `0` if none.
+    /// Sessions killed by the orphan sweep **since this daemon booted** (#485) —
+    /// a monotonic counter, not a per-pass gauge. A kill is an *event*: counting
+    /// it is the only way the surface can answer "did the reaper kill my node?"
+    /// minutes after the fact. Resetting it each pass made the answer ~always
+    /// `0`, since the pass that kills is followed within seconds by an idle one.
+    /// Contrast `blocked_on_limit`, a genuine *level* that must be recomputed.
+    /// Not persisted — a restart resets it, and `journalctl` remains the record.
     reaper_killed: Arc<std::sync::atomic::AtomicI64>,
     /// Of those, how many were killed on an **absence** verdict — an absent run,
     /// an absent node, or an unparseable session name (#485). Split out from
     /// `reaper_killed` on purpose: a single counter cannot carry reasons, and
     /// after #485 this is the class that became a "can no longer happen" on a
-    /// live session. In steady state it must stay flat.
+    /// live session. Being cumulative is what makes "it must stay flat" a
+    /// checkable claim: flat now means *never incremented*, not *idle last pass*.
     reaper_killed_for_absent_run: Arc<std::sync::atomic::AtomicI64>,
     /// Debug-only fault-injection knob (#251): a one-shot poison pill. When armed
     /// (`true`), the next stale sweep `panic!`s, then disarms itself (`swap`) —
@@ -7016,9 +7022,11 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
 /// states for `version`, and it keeps the vite dev-proxy whitelist unchanged
 /// (`/sessions` is already proxied). Before #485 a reaper kill was visible
 /// *only* in `journalctl`, which ADR-0034 names as this product's recurrent
-/// failure mode. What this gauge deliberately does **not** answer is "who killed
-/// *my* node": it is instance-wide and recomputed every pass, so a per-run answer
-/// would need an event, which waits on an events UI that does not exist yet.
+/// failure mode. The two counters are **cumulative since boot**, so "the reaper
+/// killed something" survives long enough to be read; what the gauge deliberately
+/// does **not** answer is "who killed *my* node", since it is instance-wide — a
+/// per-run answer needs an event, which waits on an events UI that does not exist
+/// yet, and `journalctl` still holds the per-session detail.
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
@@ -9461,16 +9469,25 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
     //     all-or-nothing property the old snapshot phase had.
     let tally = tmux_session_manager::apply_sweep(socket, &decisions);
 
-    // #485: publish the pass's tally for `GET /sessions`. Recomputed from scratch
-    // each pass, like `blocked_on_limit` (#290) — nothing to prune.
+    // #485: publish the pass's tally for `GET /sessions`. The counters ACCUMULATE
+    // (`fetch_add`, not `store`): a per-pass gauge answers "did the *last* pass
+    // kill?", which is ~always "no" — the pass that kills is followed within
+    // seconds by an idle one that overwrites the count with 0, so an operator
+    // asking "did the reaper kill my node?" reads `0` however fast they look.
+    // `blocked_on_limit` (#290) is a *level* (how many nodes are blocked right
+    // now) and is rightly recomputed; a kill is an **event**, and events are
+    // counted, never levelled. Cumulative-since-boot also makes the tally
+    // independent of *which* pass did the killing, which a per-pass store made
+    // racy to observe at all (the periodic loop's first tick fires immediately,
+    // so it and an explicit sweep can trade places under load).
     let ord = std::sync::atomic::Ordering::Relaxed;
     state
         .reaper_last_sweep_ms
         .store(now.timestamp_millis(), ord);
-    state.reaper_killed.store(tally.killed, ord);
+    state.reaper_killed.fetch_add(tally.killed, ord);
     state
         .reaper_killed_for_absent_run
-        .store(tally.killed_for_absent_run, ord);
+        .fetch_add(tally.killed_for_absent_run, ord);
 
     Ok(())
 }

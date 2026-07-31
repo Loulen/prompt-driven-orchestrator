@@ -496,6 +496,35 @@ async fn reaper_gauge(daemon: &TestDaemon) -> serde_json::Value {
     json["reaper"].clone()
 }
 
+/// Wait until the periodic reaper loop has gone quiet, and return the settled
+/// gauge — required before any test may plant an orphan and attribute the tally
+/// to its own explicit [`TestDaemon::run_orphan_sweep_tick`].
+///
+/// `tokio::time::interval`'s **first tick fires immediately**, so setting
+/// `PDO_REAPER_INTERVAL_SECS=3600` buys a quiet loop only *after* that first tick
+/// has landed — and under load it lands late, concurrently with the explicit tick.
+/// Two overlapping passes each inventory the same live orphans and each tally
+/// them, so the counters legitimately double-counted and the test read `8` for
+/// four planted sessions. That overlap is a property of this test seam, not of the
+/// daemon: in production the reaper is one task whose passes are strictly
+/// sequential (`tick().await` then sweep), so no two passes can ever observe the
+/// same live session.
+///
+/// "Quiet" = `last_sweep_at` unchanged across two reads a beat apart. With the
+/// interval at an hour, that can only mean the immediate tick is done.
+async fn settle_reaper(daemon: &TestDaemon) -> serde_json::Value {
+    let mut previous = reaper_gauge(daemon).await;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+        let current = reaper_gauge(daemon).await;
+        if current["last_sweep_at"] == previous["last_sweep_at"] {
+            return current;
+        }
+        previous = current;
+    }
+    panic!("the reaper loop never went quiet — is PDO_REAPER_INTERVAL_SECS set high?");
+}
+
 /// Layer 3a (#485): the session of a node that IS in the event log survives an
 /// **immediate** sweep tick. This is the shape of the bug — before the fix the
 /// sweep resolved live sessions against a snapshot taken before they were born
@@ -549,6 +578,81 @@ async fn live_node_session_survives_an_immediate_sweep_tick() {
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
+/// Layer 3a (#485) — an **idle pass must not erase** what an earlier pass killed.
+///
+/// The counters are cumulative because a kill is an event, not a level. Reset each
+/// pass, the surface answered "did the *last* sweep kill?", whose answer is ~always
+/// `0`: the killing pass is followed within seconds by an empty one. An operator
+/// asking "did the reaper kill my node?" then reads `0` however fast they look,
+/// which is the `journalctl`-only failure mode this gauge exists to end. This is
+/// the regression test for that, and it is deliberately *not* about tmux state —
+/// it sweeps a second time over nothing and asserts the tally survives.
+#[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
+async fn an_idle_sweep_does_not_reset_the_kill_tally() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+
+    // Baseline, not zero, and taken only once the loop is quiet. The counters are
+    // cumulative, and the tmux socket name is derived from the daemon's ephemeral
+    // port — which the OS recycles across tests in this process — so a boot sweep
+    // can legitimately have reaped a previous daemon's leftovers on the same
+    // socket. Only the DELTA this test causes is its own; asserting an absolute
+    // would be asserting the OS's port allocation.
+    let baseline = settle_reaper(&daemon).await["killed"].as_i64().unwrap();
+
+    let orphan = tmux_session_manager::manager_session_name("20200101-000000-deadbee");
+    create_fake_tmux_session(&socket, &orphan);
+    daemon.run_orphan_sweep_tick().await;
+    assert!(
+        !tmux_has_session(&socket, &orphan),
+        "pre-condition: the orphan must be reaped before we can test the tally"
+    );
+
+    let killed_once = reaper_gauge(&daemon).await;
+    assert_eq!(
+        killed_once["killed"].as_i64(),
+        Some(baseline + 1),
+        "the pass that reaped the orphan must count it (baseline {baseline}), got {killed_once}"
+    );
+
+    // Now a pass with nothing whatsoever to do — the one that used to zero it.
+    daemon.run_orphan_sweep_tick().await;
+
+    let after_idle = reaper_gauge(&daemon).await;
+    assert!(
+        after_idle["last_sweep_at"].as_str() > killed_once["last_sweep_at"].as_str(),
+        "the idle pass must really have run, or this test proves nothing: \
+         {killed_once} → {after_idle}"
+    );
+    assert_eq!(
+        after_idle["killed"].as_i64(),
+        killed_once["killed"].as_i64(),
+        "REGRESSION: an idle sweep erased the tally — the gauge is back to answering \
+         'did the last pass kill?' instead of 'has the reaper killed?', got {after_idle}"
+    );
+    assert_eq!(
+        after_idle["killed_for_absent_run"].as_i64(),
+        killed_once["killed_for_absent_run"].as_i64(),
+        "the absence counter must survive an idle pass too, got {after_idle}"
+    );
+
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}
+
 /// Layer 3a (#485) — **the negative control, and it matters more than the test
 /// above.** A fix that simply neutralised the sweep would pass that one. All
 /// three absence arms plus the unparseable-name arm still kill, and the
@@ -572,17 +676,18 @@ async fn genuine_orphans_are_still_reaped_and_counted() {
     let socket = daemon.tmux_socket();
 
     // The boot sweep has already run (it precedes `build_router`), so the gauge is
-    // populated and quiet: nothing was there to kill.
-    let before = reaper_gauge(&daemon).await;
+    // populated. Its `killed` is a BASELINE, not necessarily zero: the counters are
+    // cumulative, and the socket name embeds the daemon's ephemeral port, which the
+    // OS recycles between tests in this process — so the boot sweep may have reaped
+    // a previous daemon's leftovers. This test owns the delta, not the absolute.
+    // Settled first, so the loop's immediate tick cannot double-count with ours.
+    let before = settle_reaper(&daemon).await;
     assert!(
         before["last_sweep_at"].is_string(),
         "the boot sweep must have published a timestamp, got {before}"
     );
-    assert_eq!(
-        before["killed"].as_i64(),
-        Some(0),
-        "a fresh daemon's boot sweep has nothing to kill, got {before}"
-    );
+    let base_killed = before["killed"].as_i64().unwrap();
+    let base_absent = before["killed_for_absent_run"].as_i64().unwrap();
 
     // A syntactically valid run_id that exists in no event log, on all four arms.
     let ghost = "20200101-000000-deadbee";
@@ -610,6 +715,14 @@ async fn genuine_orphans_are_still_reaped_and_counted() {
         );
     }
 
+    // The two counters are CUMULATIVE since boot, which is what makes this
+    // assertion sound rather than lucky. `time::interval`'s first tick fires
+    // immediately, so the periodic loop owns a sweep of its own that can be polled
+    // *after* the orphans are planted and steal the kill from the explicit tick
+    // above — the four sessions die either way, but with a per-pass gauge whichever
+    // pass came second wrote its `0` over the other's `4`, and this test failed
+    // under load while the product was behaving correctly. Accumulating removes the
+    // ordering from the assertion entirely.
     let after = reaper_gauge(&daemon).await;
     assert!(
         after["last_sweep_at"].as_str() > before["last_sweep_at"].as_str(),
@@ -617,13 +730,14 @@ async fn genuine_orphans_are_still_reaped_and_counted() {
     );
     assert_eq!(
         after["killed"].as_i64(),
-        Some(4),
-        "all four orphans should be tallied, got {after}"
+        Some(base_killed + 4),
+        "all four orphans should be tallied, whichever pass reaped them \
+         (baseline {base_killed}), got {after}"
     );
     assert_eq!(
         after["killed_for_absent_run"].as_i64(),
-        Some(4),
-        "all four are absence verdicts, got {after}"
+        Some(base_absent + 4),
+        "all four are absence verdicts (baseline {base_absent}), got {after}"
     );
 
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);

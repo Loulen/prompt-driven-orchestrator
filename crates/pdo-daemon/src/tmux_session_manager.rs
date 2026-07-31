@@ -1072,8 +1072,9 @@ impl KillReason {
 }
 
 /// What one sweep pass actually killed, for the `reaper` gauge on
-/// `GET /sessions` (#485). Recomputed from scratch each pass — there is no
-/// state to prune.
+/// `GET /sessions` (#485). Strictly the **pass's own** tally — this type stays
+/// per-pass and stateless; the caller is what accumulates it into the two
+/// since-boot counters it publishes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SweepTally {
     pub killed: i64,

@@ -157,6 +157,22 @@ citant #485 nommément —, `GET /sessions` porte désormais
 peut pas porter de raisons, et `killed_for_absent_run` est la classe qui doit rester **plate** en
 régime normal.
 
+Les deux sont **cumulés depuis le boot**, et c'est une décision, pas un détail. Un kill est un
+*événement* ; le nombre de nœuds bloqués sur le menu de limite (`blocked_on_limit`, #290) est un
+*niveau*. Un niveau se recalcule à chaque passe — c'est correct et sans état à purger. Un événement se
+**compte** : remis à zéro à chaque passe, le compteur répond « le *dernier* balayage a-t-il tué ? »,
+question dont la réponse est ~toujours `0`, puisque la passe qui tue est suivie en quelques secondes
+d'une passe à vide qui écrit `0` par-dessus. L'opérateur qui demande « le reaper a-t-il tué mon
+nœud ? » lisait donc `0` quelle que soit sa rapidité — la jauge reproduisait le défaut qu'elle devait
+corriger. Le cumul est aussi ce qui rend « doit rester plate » **vérifiable** : plate signifie
+*jamais incrémentée*, et non *dernière passe oisive*. Corollaire assumé : les compteurs ne sont pas
+persistés (un redémarrage les remet à zéro) et `journalctl` garde le détail par session.
+
+Ce cumul ne contredit pas le « recalculé de zéro à chaque passe » invoqué plus bas : cette propriété
+porte sur l'**état de décision** du balayage (aucune mémoire par session entre deux passes, donc rien
+à purger), pas sur deux scalaires d'observabilité. `SweepTally` reste strictement la tally de sa passe ;
+c'est l'appelant qui accumule.
+
 ## Alternatives écartées
 
 - **Un délai de grâce sur l'âge de la session** (« ne jamais tuer une session de moins de N
@@ -190,8 +206,8 @@ régime normal.
   L'ordre est gardé par **construction** (l'inventaire est un paramètre) plus le commentaire
   d'invariant ; les tests épinglent les conséquences observables des deux côtés, pas un rouge-puis-vert
   sur la course elle-même.
-- **La jauge ne répond pas « qui a tué *mon* nœud ».** C'est une question scopée au Run ; une jauge à
-  l'échelle de l'instance, recalculée à chaque passe, ne peut pas y répondre. La surface qui pourrait
+- **La jauge ne répond pas « qui a tué *mon* nœud ».** C'est une question scopée au Run ; deux
+  compteurs à l'échelle de l'instance ne peuvent pas y répondre, même cumulés. La surface qui pourrait
   est l'event log (un événement informatif, motif de projection no-op déjà établi), mais sa valeur est
   conditionnée à une UI d'historique d'events qui n'existe pas — le client d'API correspondant n'a
   aucun appelant dans le frontend. Follow-up, pas périmètre.

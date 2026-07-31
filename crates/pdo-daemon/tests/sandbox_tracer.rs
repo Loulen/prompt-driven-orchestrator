@@ -1869,3 +1869,68 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
         log_text(&log)
     );
 }
+
+/// #489 / ADR-0037 — `restart_node` mid-prep is a `409`, raised **before** the kill.
+///
+/// The `sandbox_spawn_block` precondition (#445) used to be discovered only inside
+/// `spawn_node`, i.e. after the arm had already killed the tmux session and appended
+/// its `CommandIssued` — and the caller was then told `200 {"ok":true}` because the
+/// `SpawnOutcome::Deferred` was thrown away. The predicate is pure, so #489 evaluates
+/// it at the head of the arm: no session dies for a container that is still building.
+#[tokio::test]
+async fn restart_node_mid_prep_is_refused_before_anything_is_touched() {
+    ensure_pdo_on_path();
+    // 6s: comfortably longer than the round trips below, so the restart provably
+    // lands inside the prep window.
+    let (_fake_dir, docker, _log) = write_slow_create_docker(6);
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, Some("full")).await;
+    assert!(
+        wait_for_event_kind(
+            &daemon,
+            &run_id,
+            "sandbox_prep_started",
+            Duration::from_secs(10)
+        )
+        .await,
+        "the detached prep task must announce itself before we probe the window"
+    );
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(
+        run["sandbox_prep"], "pending",
+        "precondition: the Run must be mid-prep, or this test means nothing: {run}"
+    );
+
+    let before = run_events(&daemon, &run_id).await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/commands", daemon.url()))
+        .json(&serde_json::json!({
+            "kind": "restart_node", "node_id": NODE_ID, "iter": 1
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"], "sandbox_prep_not_ready", "{body}");
+    assert_eq!(body["recoverable"], true, "{body}");
+    // THE point: the probe runs ahead of the kill, so nothing was destroyed.
+    assert_eq!(body["session_killed"], false, "{body}");
+
+    // …and nothing was written either.
+    let after = run_events(&daemon, &run_id).await;
+    assert!(
+        !after
+            .iter()
+            .skip(before.len())
+            .any(|e| e["kind"] == "command_issued" || e["kind"] == "node_started"),
+        "a pre-kill refusal appends nothing: {:#?}",
+        &after[before.len().min(after.len())..]
+    );
+}

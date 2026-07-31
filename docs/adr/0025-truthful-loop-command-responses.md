@@ -7,6 +7,15 @@ Date : 2026-07-11 · Statut : accepté · Issue : #327
 > refus répondaient `200`, quatre après avoir appendé `RunFailed`. ADR-0035 y ajoute la classe que
 > cette ADR n'avait pas — **noop ≠ refus** — et pose l'invariant « un refus n'est jamais un `2xx` ».
 > Lire §3 comme « dire l'effet », jamais comme « un `200` suffit à le dire ».
+>
+> **Amendé par ADR-0037 (#489).** Trois points. §2 (« valider avant d'écrire ») s'étend au **kill** :
+> sur une commande qui détruit une session tmux, un `4xx` rendu après la destruction n'est pas une
+> validation, c'est un constat. §3 est corrigé sur le mot `noop` pour le throttle d'un spawn **par
+> nœud** (`restart_node`, `node_retry`), qui répond `200 {"ok":true,"waiting":true,"reason":…}` : un
+> `NodeWaiting` **a** été appendé et il a changé le statut du nœud, donc appeler ça « no-op » est le
+> petit mensonge symétrique de celui qu'ADR-0035 a fermé. Les quatre commandes de boucle gardent le
+> vocabulaire de cette ADR. Et le périmètre s'étend : la véracité du `SpawnOutcome` vaut aussi pour
+> les commandes de spawn par nœud, que cette ADR ne nommait pas.
 
 ## Contexte
 

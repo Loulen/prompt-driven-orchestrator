@@ -32,6 +32,7 @@ mod pipeline_watcher;
 pub mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
+pub(crate) mod restart_verdict;
 mod run_advance;
 mod run_command;
 mod run_cost;
@@ -3849,6 +3850,19 @@ async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
 /// [`admission::count_live_node_sessions`]. Pipeline Manager sessions are not
 /// nodes, so they are excluded by construction.
 async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
+    count_global_live_sessions_excluding(db, None).await
+}
+
+/// [`count_global_live_sessions`], minus the one slot the calling spawn is taking
+/// back (#489-C).
+///
+/// Only `spawn_node`'s admission gate passes an exclusion. `GET /sessions` and every
+/// other reader keeps calling the plain form — an observability endpoint must report
+/// the **true** count.
+async fn count_global_live_sessions_excluding(
+    db: &sqlx::SqlitePool,
+    exclude: Option<admission::SlotExclusion<'_>>,
+) -> usize {
     let run_ids = match load_all_run_ids(db).await {
         Ok(ids) => ids,
         Err(e) => {
@@ -3864,7 +3878,7 @@ async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
             }
         }
     }
-    admission::count_live_node_sessions(states.iter())
+    admission::count_live_node_sessions_excluding(states.iter(), exclude)
 }
 
 /// The stored session cap from `instance_config`, as a `usize`, or `None` when
@@ -20871,12 +20885,33 @@ edges:
                 .unwrap(),
         )
         .unwrap();
+        // #489 / ADR-0037: the SLUG, not a substring of the prose. This assertion
+        // used to be `body["error"].contains("live")`, which only ever held because
+        // `error` carried the guard's whole sentence — the exact shape #490 removed
+        // from the completion path. `restart_refused` does NOT contain "live", so
+        // the old form had to go red here; the prose moved to `message`.
+        //
+        // Note the trap this closes: had #489 shipped a discriminating slug
+        // (`newer_iteration_live`, as the pre-grilling plan proposed), the substring
+        // assertion would have kept passing BY COINCIDENCE while silently ceasing to
+        // guard anything.
+        assert_eq!(body["error"], "restart_refused", "got {body}");
+        assert_eq!(body["recoverable"], true, "got {body}");
+        // Nothing was touched: the guard is the FIRST probe, above the kill.
+        assert_eq!(body["session_killed"], false, "got {body}");
         assert!(
-            body["error"].as_str().unwrap().contains("live"),
-            "got {body}"
+            body["message"].as_str().unwrap().contains("still live"),
+            "the guard's prose belongs in `message`; got {body}"
         );
 
         let events = load_events(&state.db, run_id).await.unwrap();
+        // A refused restart leaves NO trace at all — not even the audit event.
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued),
+            "a pre-kill refusal must append nothing: {events:?}"
+        );
         // iter 2 stays the only live iteration; iter 1 was not re-spawned.
         assert_eq!(
             count_events(&events, event_log::EventKind::NodeStarted, "worker"),
@@ -21852,16 +21887,20 @@ edges:
                 r#"{"ok":true}"#,
                 true,
             ),
-            // 404 text — but NOT without a trace: the arm kills the (absent)
-            // tmux session and appends its `CommandIssued` BEFORE re-projecting.
-            // `project` then returns `None` because the log carries no
-            // `RunStarted` (#328, `event_log.rs:986`), not because it is empty.
+            // 404 text, and since #489 WITHOUT A TRACE. Until then this arm killed
+            // the (absent) tmux session and appended its `CommandIssued` BEFORE
+            // re-projecting, so the "run not found" it answered arrived after two
+            // side effects. The `false` in the last column IS the fix: ADR-0037 §3
+            // extends ADR-0025's "validate before writing" to the KILL, so every
+            // knowable refusal — this one included — is raised ahead of both.
+            // (`project` still returns `None` here because the log carries no
+            // `RunStarted`, #328 / `event_log.rs`, not because it is empty.)
             (
                 r#"{"kind":"restart_node","node_id":"n1"}"#,
                 StatusCode::NOT_FOUND,
                 TEXT_CT,
                 "run not found",
-                true,
+                false,
             ),
             // The lone JSON 404 on this surface — it comes from
             // `force_spawn_node`, not from the arm.
@@ -21958,6 +21997,9 @@ edges:
             r#"{"kind":"kill_node"}"#,
             // Unknown kind — likewise.
             r#"{"kind":"bogus_command"}"#,
+            // #489: the tombstone must outrank every NEW projection this arm
+            // gained too — the `409`s, the `400 node_not_found` and the `500`.
+            r#"{"kind":"restart_node","node_id":"n1","iter":1}"#,
         ] {
             let (status, ct, body) = command_triplet(&state, run_id, req_body).await;
             assert_eq!(
@@ -22012,6 +22054,13 @@ edges:
         // The only arm with no happy-path coverage anywhere in the repo — and
         // the one the refactor touches most (two projections, a transition
         // guard probe, a tmux kill and a re-spawn). Pin its event trace.
+        //
+        // #489: the body is no longer a blind `{"ok":true}`. It reports the real
+        // effect — `spawned:[{node_id,iter}]` plus what happened to the
+        // sub-worktree — because the arm now READS `spawn_node`'s return.
+        // `worker` is `doc-only` (`write_test_pipeline`), so it owns no
+        // sub-worktree: `reused_sub_worktree:false`, `base_sha:null`. The
+        // `code-mutating` twin below is the one that can see #489 at all.
         let tmp = tempfile::tempdir().unwrap();
         write_test_pipeline(tmp.path(), "restart-pipe");
         let state = test_state_with_dir(tmp.path()).await;
@@ -22024,10 +22073,17 @@ edges:
             r#"{"kind":"restart_node","node_id":"worker","iter":1}"#,
         )
         .await;
+        assert_eq!((status, ct.as_str()), (StatusCode::OK, JSON_CT));
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["ok"], true, "got {body}");
         assert_eq!(
-            (status, ct.as_str(), body.as_str()),
-            (StatusCode::OK, JSON_CT, r#"{"ok":true}"#)
+            parsed["spawned"],
+            serde_json::json!([{ "node_id": "worker", "iter": 1 }]),
+            "got {body}"
         );
+        assert_eq!(parsed["reused_sub_worktree"], false, "got {body}");
+        assert!(parsed["base_sha"].is_null(), "got {body}");
+        assert!(parsed["stale_git_lock"].is_null(), "got {body}");
 
         let events = load_events(&state.db, run_id).await.unwrap();
         let cmd = events
@@ -22050,6 +22106,92 @@ edges:
         assert_eq!(started.len(), 1, "expected one re-spawn: {events:?}");
         assert_eq!(started[0].node_id.as_deref(), Some("worker"));
         assert_eq!(started[0].iter, Some(1));
+    }
+
+    /// The pipeline the `code-mutating` restart twin needs: `worker` owns a
+    /// sub-worktree, which is the ONLY node class #489 breaks.
+    fn write_code_mutating_pipeline(dir: &std::path::Path, name: &str) {
+        let pipelines_dir = dir.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+        );
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    #[tokio::test]
+    async fn restart_node_on_a_code_mutating_node_reuses_its_sub_worktree() {
+        // #489, the class that mattered. `write_test_pipeline`'s `worker` is
+        // `doc-only`, so the repo's only `restart_node` happy path was
+        // STRUCTURALLY incapable of seeing this bug: a `doc-only` node owns no
+        // sub-worktree, and `git worktree add -b` was never replayed.
+        //
+        // Here the first restart CREATES the sub-worktree and the second one has
+        // to REUSE it. Pre-#489 the second call answered `200 {"ok":true}` with
+        // `git worktree add -b` having failed 255 and no second `node_started` in
+        // the log — the whole issue, in two HTTP calls.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_code_mutating_pipeline(dir, "restart-cm");
+        init_test_repo(dir);
+        let state = test_state_with_dir(dir).await;
+        let run_id = "restart-cm-run";
+        seed_run_for_node_control(&state, run_id, "restart-cm").await;
+
+        // The Run's pipeline worktree has to exist: a sub-worktree is cut from
+        // `pdo/run-<id>`.
+        let wt_dir = worktree_dir_for_run(dir, run_id);
+        create_worktree(dir, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+
+        let sub_wt_dir = crate::worktree_ops::sub_worktree_path(dir, run_id, "worker", 1);
+        let body = r#"{"kind":"restart_node","node_id":"worker","iter":1}"#;
+
+        let (status, _, first) = command_triplet(&state, run_id, body).await;
+        assert_eq!(status, StatusCode::OK, "first restart: {first}");
+        let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["reused_sub_worktree"], false, "the first cut creates");
+        assert!(
+            first["base_sha"].as_str().is_some_and(|s| !s.is_empty()),
+            "a fresh cut records its base (#503): {first}"
+        );
+        assert!(sub_wt_dir.exists());
+
+        // Uncommitted work the agent left behind — untracked AND tracked-modified.
+        std::fs::write(sub_wt_dir.join("scratch.txt"), "in flight\n").unwrap();
+        std::fs::write(sub_wt_dir.join("README.md"), "# edited by the agent\n").unwrap();
+
+        let (status, _, second) = command_triplet(&state, run_id, body).await;
+        assert_eq!(status, StatusCode::OK, "second restart: {second}");
+        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(
+            second["reused_sub_worktree"], true,
+            "the second restart must reuse the sub-worktree in place: {second}"
+        );
+        // #503 / ADR-0036: the base is CARRIED OVER, never re-derived. A missing or
+        // re-derived base would disable (or falsely arm) the adoption escape hatch
+        // for every restarted node.
+        assert_eq!(
+            second["base_sha"], first["base_sha"],
+            "a reuse cuts nothing, so it reports the ORIGINAL base: {second}"
+        );
+
+        // The work survived — this is the guarantee #489-B adds.
+        assert_eq!(
+            std::fs::read_to_string(sub_wt_dir.join("scratch.txt")).unwrap(),
+            "in flight\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sub_wt_dir.join("README.md")).unwrap(),
+            "# edited by the agent\n"
+        );
+
+        // Two real re-spawns, not one plus a lie.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            count_events(&events, event_log::EventKind::NodeStarted, "worker"),
+            2,
+            "both restarts must have spawned: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -24769,7 +24911,7 @@ edges: []
 
         let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
         assert!(
-            matches!(outcome, SpawnOutcome::Spawned),
+            matches!(outcome, SpawnOutcome::Spawned { .. }),
             "an `off` Run must spawn exactly as before the precondition, got {outcome:?}"
         );
     }

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
-use crate::worktree_ops::{create_sub_worktree, sub_worktree_branch, sub_worktree_path};
+use crate::worktree_ops::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
 use crate::{blackboard, tmux_session_manager};
 
 // ---------------------------------------------------------------------------
@@ -98,12 +98,24 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         let sub_branch = sub_worktree_branch(params.run_id, params.node_id, params.iter);
         let pipeline_branch = format!("pdo/run-{}", params.run_id);
 
-        match create_sub_worktree(params.repo_root, &sub_wt_dir, &sub_branch, &pipeline_branch) {
-            Ok(base_sha) => spawn_base_sha = Some(base_sha),
+        // #489-B: the shared primitive, so a leftover branch ref from a reaped or
+        // invalidated iteration no longer wedges this path either (#498). No
+        // `previous_base_sha` to carry: `has_node_started_event` above already
+        // returned `AlreadyDone` for any iteration that has started, so the
+        // `Reusable` arm is unreachable from here — this site only ever creates or
+        // recycles, and both report the SHA of their own cut.
+        match ensure_sub_worktree(
+            params.repo_root,
+            &sub_wt_dir,
+            &sub_branch,
+            &pipeline_branch,
+            None,
+        ) {
+            Ok(ensured) => spawn_base_sha = ensured.base_sha,
             Err(e) => {
                 return StartNodeResult {
                     outcome: PrimitiveOutcome::Rejected {
-                        reason: format!("failed to create sub-worktree: {e:#}"),
+                        reason: format!("failed to ensure sub-worktree: {e:#}"),
                     },
                     events: vec![],
                 };

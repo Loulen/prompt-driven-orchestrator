@@ -30,7 +30,16 @@ use crate::event_log::{Event, EventKind};
 ///
 /// Anchored on the **last** `NodeStarted` for `(node_id, iter)`: `restart_node`
 /// and `invalidate_nodes` re-spawn the same iteration, and only the most recent
-/// spawn says what the current sub-worktree was cut from.
+/// spawn says what the current sub-worktree stands on.
+///
+/// Careful with the word "cut" here — #489 changed what a re-spawn does. It used
+/// to re-cut the sub-worktree "from wherever the branch is then"; since
+/// `ensure_sub_worktree`, a re-spawn of a still-present sub-worktree **reuses it in
+/// place** and CARRIES THIS VERY VALUE FORWARD onto the new `NodeStarted`. So the
+/// last spawn is still authoritative, but on a re-spawn it is authoritative because
+/// it copied the original cut, not because it made a new one. Re-deriving the base
+/// at reuse time would either kill the adoption rule for every restarted node or arm
+/// it falsely — see ADR-0037 §6.
 ///
 /// `None` — a run created by a pre-#503 daemon, or a spawn path that recorded no
 /// base — means *no adoption*. An unknown base is not a licence to rewrite a
@@ -141,8 +150,9 @@ mod tests {
         );
     }
 
-    /// Anchored on the LAST spawn of the iteration: `restart_node` and
-    /// `invalidate_nodes` re-cut the sub-worktree from wherever the branch is *then*.
+    /// Anchored on the LAST spawn of the iteration — the case where a re-spawn
+    /// genuinely re-cut the sub-worktree (`invalidate_nodes`, or a `restart_node`
+    /// whose worktree was `Recyclable`).
     #[test]
     fn a_respawn_of_the_same_iteration_wins() {
         let events = vec![
@@ -154,6 +164,24 @@ mod tests {
         assert_eq!(
             spawn_base_sha(&events, "ship", 1).as_deref(),
             Some("new11111")
+        );
+    }
+
+    /// …and the #489 shape, which reads the same but means something else: the
+    /// re-spawn REUSED the sub-worktree, so `ensure_sub_worktree` copied the
+    /// original base forward. "Last spawn wins" still holds, and it has to yield the
+    /// FIRST cut's SHA — that is the whole point of carrying it (ADR-0037 §6).
+    #[test]
+    fn a_reusing_respawn_carries_the_original_base_forward() {
+        let events = vec![
+            ev(EventKind::RunStarted, None, None),
+            spawn("ship", 1, "cut00000"),
+            // restart_node: the sub-worktree was `Reusable`, nothing was re-cut.
+            spawn("ship", 1, "cut00000"),
+        ];
+        assert_eq!(
+            spawn_base_sha(&events, "ship", 1).as_deref(),
+            Some("cut00000")
         );
     }
 

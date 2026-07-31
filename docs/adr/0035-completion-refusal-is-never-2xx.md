@@ -197,6 +197,13 @@ voir `__merge_resolver__` : aucune session de résolveur n'est jamais spawnée.
 - **Garder le `200` en enrichissant le corps.** C'est l'approche de #489, légitime **là-bas** parce
   qu'additive sur une surface qui ne mentait pas. Ici le statut *est* le mensonge : un client bien
   écrit qui teste `resp.ok` a raison de conclure « accordé ».
+  *(faux — corrigé par #489/ADR-0037 : la surface mentait déjà, et de la même façon.
+  `restart_node` répondait `200` sur un `node_id` absent du pipeline — le `find` du bras étant
+  **après** le kill de la session et après l'append du `CommandIssued`, en violation d'ADR-0025 §2 —
+  et `200` sur les cinq `SpawnOutcome`, y compris `Failed`, dont trois des quatre producteurs
+  appendent `RunFailed` : exactement le motif recensé ci-dessus, sur une autre route. Son unique
+  `409` portait de la prose dans `error`, sans `recoverable`. #489 n'est donc pas additif : il
+  déplace deux statuts **et** réécrit un corps.)*
 - **Énumérer les huit bras** et poser une assertion sur chacun. Le recensement a montré que la liste
   bouge (deux bras morts, un succès emballé en échec, un bras qui court-circuitait le point de
   passage) : une liste à relire est un invariant qui dérive. Le type, lui, ne dérive pas.
@@ -235,7 +242,9 @@ voir `__merge_resolver__` : aucune session de résolveur n'est jamais spawnée.
 ## Relations
 
 - Issue **#490** (cette décision). **#491** vient **après** (symétrie des corps de succès, filet de
-  content-types). **#489** est séparé et additif.
+  content-types). **#489** porte la même faute sur une autre route : il n'est ni séparé de
+  l'invariant, ni additif (voir l'errata des Alternatives écartées). Il est livré par
+  **ADR-0037**, qui reprend telle quelle la forme de corps posée ici.
 - **ADR-0025** (#327) — amendée : la convention noop tient, son précédent était partiellement faux,
   son vocabulaire gagne **noop ≠ refus**.
 - **ADR-0023** (#304) — amendée : « `2xx` = enregistré + planifié » devient aussi « `2xx` = pas

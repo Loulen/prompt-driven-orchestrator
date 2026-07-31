@@ -1059,8 +1059,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // Deliberately a BARE kill, not `reap_node_session` (#488): the helper's
             // pane snapshot would never be served, because `GET …/pane` only serves a
             // snapshot for a TERMINAL iteration and a restart leaves the node
-            // non-terminal. `CONTEXT.md` documents that hole and files it under the
-            // #492 family.
+            // non-terminal. `CONTEXT.md` § "Reap sur état terminal" already names the
+            // non-terminal bare kills as an open hole; #489 does not close it.
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
             // #407: also kill the in-container process tree before the re-spawn
             // (best-effort, no-op for `off`) so the old session's container process

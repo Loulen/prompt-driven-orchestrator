@@ -259,7 +259,8 @@ slot qu'un restart throttlé attend, et `retry_waiting_nodes` n'a aucun timer.
   `output.md`. Vrai avant comme après.
 - **Le kill reste nu**, et non `reap_node_session` (#488). Mécaniquement le reap serait correct, mais
   le snapshot de pane ne serait **jamais servi** : `GET …/pane` ne le sert que sur une itération
-  terminale, et un restart laisse le nœud non terminal. Famille #492.
+  terminale, et un restart laisse le nœud non terminal. CONTEXT.md § *Reap sur état terminal* nomme
+  déjà ce trou ; cette ADR ne le ferme pas.
 - **Les corps d'erreur `text/plain`** (Run absent, pipeline illisible/inparsable) restent tels quels.
   Les normaliser est le périmètre de **#491**, et le faire ici mélangerait une rupture et un nettoyage
   sous un seul bump.

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Env var that replaces the `claude …` tail in the tmux script.
 ///
@@ -29,7 +29,7 @@ pub const TMUX_CMD_OVERRIDE_ENV: &str = "PDO_TMUX_CMD_OVERRIDE";
 ///
 /// This eliminates the failure mode where a sub-claude transitively spawns
 /// its own `pdo daemon` (e.g. for an end-to-end test from a Tester
-/// node): the new daemon's boot-time `sweep_orphans` runs against an empty
+/// node): the new daemon's boot-time orphan sweep runs against an empty
 /// event log and would otherwise call `tmux kill-session` on every
 /// `pdo-*` session it finds on the system-default socket — collapsing
 /// the parent daemon's running pipelines.
@@ -789,6 +789,12 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
 // ---------------------------------------------------------------------------
 
 /// Information the reaper needs about a NodeRun to decide whether to reap.
+///
+/// A *facts* type on purpose (#485, ADR-0038): this deep module has no
+/// dependency on [`crate::event_log`], so the caller projects the run and hands
+/// the two facts down. Keeping the coupling this way round is what lets
+/// [`decide_sweep`] stay pure and unit-testable without a database.
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeRunInfo {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_archived: bool,
@@ -902,101 +908,312 @@ pub fn reaper_interval() -> Duration {
         .unwrap_or(DEFAULT_REAPER_INTERVAL)
 }
 
-/// Sweep orphan tmux sessions at daemon boot.
-///
-/// Scans only the daemon's private socket — never the system-default
-/// socket — so we can never reach into another daemon's tmux state.
-///
-/// An orphan is a `pdo-*` session whose corresponding run is:
-/// - archived
-/// - absent from the event log
-/// - a NodeRun that completed more than `ttl` ago
-pub fn sweep_orphans<F>(socket: &str, lookup: F, ttl: Duration)
-where
-    F: Fn(&str, &str, i64) -> Option<NodeRunInfo>,
-{
-    let sessions = list_pdo_sessions(socket);
-    let now = chrono::Utc::now();
+// The orphan sweep runs **at daemon boot AND on the periodic reaper loop**
+// (`DEFAULT_REAPER_INTERVAL`). That distinction is load-bearing (#485,
+// ADR-0038): only the periodic pass runs against live spawns, so only it can
+// race one. The boot pass cannot — it runs before the router is built, so no
+// request and no scheduler tick is concurrent with it. This module's
+// doc-comment used to say "at daemon boot" and nothing else, and that single
+// omission is what made the race invisible to inspection for the reaper's whole
+// life: the one dangerous caller was documented as not existing.
 
-    for session_name in &sessions {
-        let parsed = match parse_session_name(session_name) {
-            Some(p) => p,
-            None => {
-                info!("Orphan sweep: killing unrecognised session {session_name}");
-                kill(socket, session_name);
-                continue;
-            }
-        };
+/// One live `pdo-*` session, plus everything the reaper knows about its owner.
+///
+/// **The inventory is an input, never something the sweep fetches for itself
+/// (#485, ADR-0038).** The pre-#485 `sweep_orphans` called
+/// [`list_pdo_sessions`] from its own body, so the *order* of its two
+/// observations — the tmux inventory and the event-log read — could not be
+/// expressed, let alone guaranteed, by the caller. It read the log first, so a
+/// session born between the two was live in tmux and missing from a snapshot
+/// that predated it: judged absent, killed ~150 ms after its own spawn. Keying
+/// the input *per session* makes the correct order the path of least
+/// resistance — `info` cannot be filled without already holding the names.
+#[derive(Debug, Clone)]
+pub struct SweepInput {
+    pub session_name: String,
+    /// `None` = [`parse_session_name`] refused the name (unconditional-kill arm).
+    pub parsed: Option<ParsedSession>,
+    /// Its owner's facts, resolved **after** the inventory. `None` = absent from
+    /// the event log.
+    pub info: Option<NodeRunInfo>,
+}
 
-        match parsed {
-            ParsedSession::Manager { ref run_id } => {
-                // Kill manager sessions for absent/archived runs
-                let info = lookup(run_id, "__manager__", 0);
-                match info {
-                    None => {
-                        info!("Orphan sweep: killing manager session for absent run {run_id}");
-                        kill(socket, session_name);
-                    }
-                    Some(info) if info.is_archived => {
-                        info!("Orphan sweep: killing manager session for archived run {run_id}");
-                        kill(socket, session_name);
-                    }
-                    _ => {}
-                }
+/// What the sweep decided about one live session. One per input, `Keep`
+/// included, so a test can assert the *absence* of a kill as strongly as its
+/// presence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SweepDecision {
+    pub session_name: String,
+    pub verdict: SweepVerdict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SweepVerdict {
+    Keep,
+    Kill(KillReason),
+}
+
+/// One variant per log line the sweep emitted before #485.
+///
+/// Flat on purpose: two of the messages are irregular and a composed
+/// `{kind} × {cause}` formatter would smooth them over silently. The NodeRun
+/// arms say `killing session for absent run …` with **no** "node" word (unlike
+/// manager/shell), and the stale arm keys off the session name rather than
+/// `run_id`/`node_id`. `journalctl | grep "Orphan sweep: killing session for
+/// absent run"` is how #485 was diagnosed in the first place, so these strings
+/// are a contract — `kill_reason_messages_are_verbatim` pins all eight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KillReason {
+    UnrecognisedName {
+        session_name: String,
+    },
+    ManagerRunAbsent {
+        run_id: String,
+    },
+    ManagerRunArchived {
+        run_id: String,
+    },
+    ShellRunAbsent {
+        run_id: String,
+    },
+    ShellRunArchived {
+        run_id: String,
+    },
+    NodeRunAbsent {
+        run_id: String,
+        node_id: String,
+    },
+    NodeRunArchived {
+        run_id: String,
+        node_id: String,
+    },
+    /// The **only** TTL arm. Neither Manager (#458) nor Shell (#316) has one —
+    /// do not "unify" them.
+    NodeRunStale {
+        session_name: String,
+        age_secs: i64,
+    },
+}
+
+impl std::fmt::Display for KillReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KillReason::UnrecognisedName { session_name } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing unrecognised session {session_name}"
+                )
             }
-            ParsedSession::Shell { ref run_id } => {
-                // #316: mirror the Manager arm — reap iff the run is absent or
-                // archived, NEVER on a TTL (an interactive shell must not be
-                // yanked from a user who stepped away). The `__shell__` lookup
-                // branch supplies the run's archived flag.
-                let info = lookup(run_id, "__shell__", 0);
-                match info {
-                    None => {
-                        info!("Orphan sweep: killing shell session for absent run {run_id}");
-                        kill(socket, session_name);
-                    }
-                    Some(info) if info.is_archived => {
-                        info!("Orphan sweep: killing shell session for archived run {run_id}");
-                        kill(socket, session_name);
-                    }
-                    _ => {}
-                }
+            KillReason::ManagerRunAbsent { run_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing manager session for absent run {run_id}"
+                )
             }
-            ParsedSession::NodeRun {
-                ref run_id,
-                ref node_id,
-                iter,
-            } => {
-                let info = lookup(run_id, node_id, iter);
-                match info {
-                    None => {
-                        info!("Orphan sweep: killing session for absent run {run_id}/{node_id}");
-                        kill(socket, session_name);
-                    }
-                    Some(info) if info.is_archived => {
-                        info!("Orphan sweep: killing session for archived run {run_id}/{node_id}");
-                        kill(socket, session_name);
-                    }
-                    Some(NodeRunInfo {
-                        completed_at: Some(completed),
-                        ..
-                    }) => {
-                        let age = now.signed_duration_since(completed);
-                        if age
-                            > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1))
-                        {
-                            info!(
-                                "Orphan sweep: killing stale session {session_name} (completed {}s ago)",
-                                age.num_seconds()
-                            );
-                            kill(socket, session_name);
-                        }
-                    }
-                    _ => {} // still running or not yet completed
-                }
+            KillReason::ManagerRunArchived { run_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing manager session for archived run {run_id}"
+                )
             }
+            KillReason::ShellRunAbsent { run_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing shell session for absent run {run_id}"
+                )
+            }
+            KillReason::ShellRunArchived { run_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing shell session for archived run {run_id}"
+                )
+            }
+            KillReason::NodeRunAbsent { run_id, node_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing session for absent run {run_id}/{node_id}"
+                )
+            }
+            KillReason::NodeRunArchived { run_id, node_id } => {
+                write!(
+                    f,
+                    "Orphan sweep: killing session for archived run {run_id}/{node_id}"
+                )
+            }
+            KillReason::NodeRunStale {
+                session_name,
+                age_secs,
+            } => write!(
+                f,
+                "Orphan sweep: killing stale session {session_name} (completed {age_secs}s ago)"
+            ),
         }
     }
+}
+
+impl KillReason {
+    /// Whether this kill is an *absence* verdict (including an unparseable
+    /// name) rather than routine housekeeping.
+    ///
+    /// After #485 an absence verdict on a **live** session is a "can no longer
+    /// happen": it means either a genuinely leaked session or a reservation that
+    /// never landed. Housekeeping (archived run, TTL-expired node) is nominal
+    /// and happens every 60 s. The split drives both the log level in
+    /// [`apply_sweep`] and the `killed_for_absent_run` gauge on `GET /sessions`.
+    pub fn is_absence(&self) -> bool {
+        matches!(
+            self,
+            KillReason::UnrecognisedName { .. }
+                | KillReason::ManagerRunAbsent { .. }
+                | KillReason::ShellRunAbsent { .. }
+                | KillReason::NodeRunAbsent { .. }
+        )
+    }
+}
+
+/// What one sweep pass actually killed, for the `reaper` gauge on
+/// `GET /sessions` (#485). Recomputed from scratch each pass — there is no
+/// state to prune.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SweepTally {
+    pub killed: i64,
+    pub killed_for_absent_run: i64,
+}
+
+/// Decide, for every live session, whether it is an orphan — **pure**.
+///
+/// ADR-0009 layer 1: no tmux, no DB, no clock. `now` and `ttl` are injected so
+/// the TTL arm is deterministic in a test, and every input yields a decision
+/// (`Keep` included) so a test can pin "this session survives" as hard as
+/// "this one dies".
+///
+/// An orphan is a `pdo-*` session whose owner is:
+/// - archived,
+/// - absent from the event log,
+/// - or a NodeRun that completed more than `ttl` ago (NodeRun only — #316/#458).
+///
+/// **Correctness precondition, and this function cannot enforce it (#485,
+/// ADR-0038):** `info` must have been resolved from a log read that happened
+/// *after* the inventory that produced `session_name`. The log only grows, so an
+/// absence observed after the inventory implies absence *at* the inventory —
+/// which is what makes the `Absent` verdicts sound. The reverse order has no
+/// symmetric proof.
+pub fn decide_sweep(
+    inputs: &[SweepInput],
+    ttl: Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<SweepDecision> {
+    inputs
+        .iter()
+        .map(|input| SweepDecision {
+            session_name: input.session_name.clone(),
+            verdict: decide_one(input, ttl, now),
+        })
+        .collect()
+}
+
+fn decide_one(
+    input: &SweepInput,
+    ttl: Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> SweepVerdict {
+    let parsed = match &input.parsed {
+        Some(p) => p,
+        None => {
+            return SweepVerdict::Kill(KillReason::UnrecognisedName {
+                session_name: input.session_name.clone(),
+            })
+        }
+    };
+
+    match parsed {
+        ParsedSession::Manager { run_id } => match &input.info {
+            // Kill manager sessions for absent/archived runs
+            None => SweepVerdict::Kill(KillReason::ManagerRunAbsent {
+                run_id: run_id.clone(),
+            }),
+            Some(info) if info.is_archived => SweepVerdict::Kill(KillReason::ManagerRunArchived {
+                run_id: run_id.clone(),
+            }),
+            // No TTL arm (#458): a manager outlives its run's completion.
+            _ => SweepVerdict::Keep,
+        },
+        ParsedSession::Shell { run_id } => match &input.info {
+            // #316: mirror the Manager arm — reap iff the run is absent or
+            // archived, NEVER on a TTL (an interactive shell must not be
+            // yanked from a user who stepped away). The `__shell__` lookup
+            // branch supplies the run's archived flag.
+            None => SweepVerdict::Kill(KillReason::ShellRunAbsent {
+                run_id: run_id.clone(),
+            }),
+            Some(info) if info.is_archived => SweepVerdict::Kill(KillReason::ShellRunArchived {
+                run_id: run_id.clone(),
+            }),
+            _ => SweepVerdict::Keep,
+        },
+        ParsedSession::NodeRun {
+            run_id,
+            node_id,
+            iter: _,
+        } => match &input.info {
+            None => SweepVerdict::Kill(KillReason::NodeRunAbsent {
+                run_id: run_id.clone(),
+                node_id: node_id.clone(),
+            }),
+            Some(info) if info.is_archived => SweepVerdict::Kill(KillReason::NodeRunArchived {
+                run_id: run_id.clone(),
+                node_id: node_id.clone(),
+            }),
+            Some(NodeRunInfo {
+                completed_at: Some(completed),
+                ..
+            }) => {
+                let age = now.signed_duration_since(*completed);
+                if age > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)) {
+                    SweepVerdict::Kill(KillReason::NodeRunStale {
+                        session_name: input.session_name.clone(),
+                        age_secs: age.num_seconds(),
+                    })
+                } else {
+                    SweepVerdict::Keep
+                }
+            }
+            _ => SweepVerdict::Keep, // still running or not yet completed
+        },
+    }
+}
+
+/// Execute the decisions: log the reason verbatim, then `tmux kill-session`.
+/// The edge half of the sweep (ADR-0009 layer 1 boundary).
+///
+/// Scans only the daemon's private socket — never the system-default socket —
+/// so we can never reach into another daemon's tmux state.
+///
+/// Log levels split routine housekeeping from "can no longer happen" (#485):
+/// *archived* / *stale* stay `info!` (nominal, every 60 s — promoting them
+/// would train the operator to ignore a permanent warning stream), while
+/// *absent* / *unrecognised* are `warn!` so `journalctl -p warning` surfaces
+/// them without a full-log grep. Precedent: `boot_recovery` warns for the same
+/// act (the daemon finding an orphaned node).
+pub fn apply_sweep(socket: &str, decisions: &[SweepDecision]) -> SweepTally {
+    let mut tally = SweepTally::default();
+
+    for decision in decisions {
+        let reason = match &decision.verdict {
+            SweepVerdict::Keep => continue,
+            SweepVerdict::Kill(reason) => reason,
+        };
+        if reason.is_absence() {
+            warn!("{reason}");
+            tally.killed_for_absent_run += 1;
+        } else {
+            info!("{reason}");
+        }
+        tally.killed += 1;
+        kill(socket, &decision.session_name);
+    }
+
+    tally
 }
 
 /// Resolve the working_dir for a NodeRun given run context.
@@ -1088,6 +1305,368 @@ mod tests {
         assert!(parse_session_name("pdo-").is_none());
         assert!(parse_session_name("pdo-mgr-").is_none());
         assert!(parse_session_name("pdo-shell-").is_none());
+    }
+
+    /// Formatters and parser pinned as a **round trip**, not independently
+    /// against literals (which is all `parse_*_session` / the naming tests do).
+    /// Without this, a brand-new session kind whose formatter lands with no
+    /// matching parser branch is silently reaped within 60 s, leaving one `info!`
+    /// line as the only trace. This turns that into a red test.
+    #[test]
+    fn session_name_formatters_round_trip_through_the_parser() {
+        let run_id = "20260731-153057-553fcb3";
+
+        assert_eq!(
+            parse_session_name(&node_session_name(run_id, "impl-worker", 7)),
+            Some(ParsedSession::NodeRun {
+                run_id: run_id.into(),
+                node_id: "impl-worker".into(),
+                iter: 7,
+            })
+        );
+        assert_eq!(
+            parse_session_name(&manager_session_name(run_id)),
+            Some(ParsedSession::Manager {
+                run_id: run_id.into()
+            })
+        );
+        assert_eq!(
+            parse_session_name(&shell_session_name(run_id)),
+            Some(ParsedSession::Shell {
+                run_id: run_id.into()
+            })
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Orphan sweep — `decide_sweep` (#485, ADR-0038)
+    //
+    // Layer 1 (ADR-0009): no tmux, no DB, no clock. `sweep_orphans` had zero
+    // unit tests before #485 precisely because it fetched the inventory and the
+    // clock itself; making both inputs is what puts the sweep's decision rule
+    // under CI on every machine, with no `tmux_available()` skip to hide behind.
+    // -----------------------------------------------------------------------
+
+    const RID: &str = "20260731-153057-553fcb3";
+
+    fn at(iso: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// One input, already resolved: the session name plus its owner's facts.
+    fn input(session_name: &str, info: Option<NodeRunInfo>) -> SweepInput {
+        SweepInput {
+            session_name: session_name.to_string(),
+            parsed: parse_session_name(session_name),
+            info,
+        }
+    }
+
+    fn live() -> Option<NodeRunInfo> {
+        Some(NodeRunInfo {
+            completed_at: None,
+            is_archived: false,
+        })
+    }
+
+    fn verdict(inputs: &[SweepInput], now: chrono::DateTime<chrono::Utc>) -> SweepVerdict {
+        let decisions = decide_sweep(inputs, Duration::from_secs(3600), now);
+        assert_eq!(decisions.len(), inputs.len(), "one decision per input");
+        decisions[0].verdict.clone()
+    }
+
+    /// **The test #485 asks for.** A node whose reservation IS visible in the log
+    /// survives — reproduced with no dependency on timing at all, because the
+    /// snapshot is a parameter.
+    #[test]
+    fn young_session_of_a_live_node_survives() {
+        let name = node_session_name(RID, "alpha", 1);
+        assert_eq!(
+            verdict(&[input(&name, live())], at("2026-07-31T15:32:19Z")),
+            SweepVerdict::Keep
+        );
+    }
+
+    /// **The twin, and it is non-negotiable.** Without it, a "fix" that simply
+    /// neutralises the sweep passes the test above and lets sessions pile up
+    /// toward the ~30-session tmux collapse point (#77/#78).
+    #[test]
+    fn genuinely_absent_node_is_still_killed() {
+        let name = node_session_name(RID, "alpha", 1);
+        assert_eq!(
+            verdict(&[input(&name, None)], at("2026-07-31T15:32:19Z")),
+            SweepVerdict::Kill(KillReason::NodeRunAbsent {
+                run_id: RID.into(),
+                node_id: "alpha".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn archived_run_is_killed_on_every_arm() {
+        let archived = || {
+            Some(NodeRunInfo {
+                completed_at: None,
+                is_archived: true,
+            })
+        };
+        let now = at("2026-07-31T15:32:19Z");
+
+        let node = node_session_name(RID, "alpha", 1);
+        assert_eq!(
+            verdict(&[input(&node, archived())], now),
+            SweepVerdict::Kill(KillReason::NodeRunArchived {
+                run_id: RID.into(),
+                node_id: "alpha".into(),
+            })
+        );
+        assert_eq!(
+            verdict(&[input(&manager_session_name(RID), archived())], now),
+            SweepVerdict::Kill(KillReason::ManagerRunArchived { run_id: RID.into() })
+        );
+        assert_eq!(
+            verdict(&[input(&shell_session_name(RID), archived())], now),
+            SweepVerdict::Kill(KillReason::ShellRunArchived { run_id: RID.into() })
+        );
+    }
+
+    #[test]
+    fn absent_run_is_killed_on_manager_and_shell_arms_too() {
+        let now = at("2026-07-31T15:32:19Z");
+        assert_eq!(
+            verdict(&[input(&manager_session_name(RID), None)], now),
+            SweepVerdict::Kill(KillReason::ManagerRunAbsent { run_id: RID.into() })
+        );
+        assert_eq!(
+            verdict(&[input(&shell_session_name(RID), None)], now),
+            SweepVerdict::Kill(KillReason::ShellRunAbsent { run_id: RID.into() })
+        );
+    }
+
+    /// An unparseable name is killed without consulting `info` at all — the same
+    /// unconditional arm as before #485. A private socket makes this the right
+    /// default (#86); the round-trip test above is what guards against our *own*
+    /// formatters drifting into it.
+    #[test]
+    fn unrecognised_name_is_killed_without_a_lookup() {
+        let decisions = decide_sweep(
+            &[SweepInput {
+                session_name: "pdo-ceci-nest-pas-un-nom".into(),
+                parsed: None,
+                info: live(),
+            }],
+            Duration::from_secs(3600),
+            at("2026-07-31T15:32:19Z"),
+        );
+        assert_eq!(
+            decisions[0].verdict,
+            SweepVerdict::Kill(KillReason::UnrecognisedName {
+                session_name: "pdo-ceci-nest-pas-un-nom".into(),
+            })
+        );
+    }
+
+    /// The TTL comparison is `>`, strictly — `age == ttl` keeps. Deterministic
+    /// only because `now` is injected.
+    #[test]
+    fn ttl_boundary_is_strict() {
+        let name = node_session_name(RID, "alpha", 1);
+        let completed = at("2026-07-31T12:00:00Z");
+        let done = |completed| {
+            Some(NodeRunInfo {
+                completed_at: Some(completed),
+                is_archived: false,
+            })
+        };
+
+        // age == ttl (3600 s) → Keep.
+        assert_eq!(
+            verdict(&[input(&name, done(completed))], at("2026-07-31T13:00:00Z")),
+            SweepVerdict::Keep
+        );
+        // age == ttl + 1 s → Kill.
+        assert_eq!(
+            verdict(&[input(&name, done(completed))], at("2026-07-31T13:00:01Z")),
+            SweepVerdict::Kill(KillReason::NodeRunStale {
+                session_name: name.clone(),
+                age_secs: 3601,
+            })
+        );
+    }
+
+    /// An out-of-range `ttl` falls back to one hour, not to "kill everything"
+    /// (`chrono::Duration::from_std(..).unwrap_or(hours(1))`).
+    #[test]
+    fn ttl_out_of_chrono_range_falls_back_to_one_hour() {
+        let name = node_session_name(RID, "alpha", 1);
+        let info = Some(NodeRunInfo {
+            completed_at: Some(at("2026-07-31T12:00:00Z")),
+            is_archived: false,
+        });
+        let absurd = Duration::from_secs(u64::MAX);
+
+        // 30 min old, 1 h fallback → Keep.
+        let keep = decide_sweep(
+            &[input(&name, info.clone())],
+            absurd,
+            at("2026-07-31T12:30:00Z"),
+        );
+        assert_eq!(keep[0].verdict, SweepVerdict::Keep);
+
+        // 2 h old → Kill, so the fallback is 1 h and not "never".
+        let kill = decide_sweep(&[input(&name, info)], absurd, at("2026-07-31T14:00:00Z"));
+        assert!(matches!(
+            kill[0].verdict,
+            SweepVerdict::Kill(KillReason::NodeRunStale { .. })
+        ));
+    }
+
+    /// Manager (#458) and Shell (#316) have **no** TTL arm: a long-completed run
+    /// keeps both. Do not "unify" the three arms.
+    #[test]
+    fn manager_and_shell_have_no_ttl_arm() {
+        let long_done = || {
+            Some(NodeRunInfo {
+                completed_at: Some(at("2020-01-01T00:00:00Z")),
+                is_archived: false,
+            })
+        };
+        let now = at("2026-07-31T15:32:19Z");
+
+        assert_eq!(
+            verdict(&[input(&manager_session_name(RID), long_done())], now),
+            SweepVerdict::Keep
+        );
+        assert_eq!(
+            verdict(&[input(&shell_session_name(RID), long_done())], now),
+            SweepVerdict::Keep
+        );
+    }
+
+    /// The eight kill messages, byte for byte. The whole #485 investigation was a
+    /// `journalctl | grep "Orphan sweep: killing session for absent run"`, so
+    /// these strings are a contract, not cosmetics. Note the two irregularities a
+    /// composed formatter would smooth over: the NodeRun arms have no "node" word,
+    /// and the stale arm keys off the session name.
+    #[test]
+    fn kill_reason_messages_are_verbatim() {
+        assert_eq!(
+            KillReason::UnrecognisedName {
+                session_name: "pdo-weird".into()
+            }
+            .to_string(),
+            "Orphan sweep: killing unrecognised session pdo-weird"
+        );
+        assert_eq!(
+            KillReason::ManagerRunAbsent { run_id: RID.into() }.to_string(),
+            "Orphan sweep: killing manager session for absent run 20260731-153057-553fcb3"
+        );
+        assert_eq!(
+            KillReason::ManagerRunArchived { run_id: RID.into() }.to_string(),
+            "Orphan sweep: killing manager session for archived run 20260731-153057-553fcb3"
+        );
+        assert_eq!(
+            KillReason::ShellRunAbsent { run_id: RID.into() }.to_string(),
+            "Orphan sweep: killing shell session for absent run 20260731-153057-553fcb3"
+        );
+        assert_eq!(
+            KillReason::ShellRunArchived { run_id: RID.into() }.to_string(),
+            "Orphan sweep: killing shell session for archived run 20260731-153057-553fcb3"
+        );
+        assert_eq!(
+            KillReason::NodeRunAbsent {
+                run_id: RID.into(),
+                node_id: "alpha".into()
+            }
+            .to_string(),
+            "Orphan sweep: killing session for absent run 20260731-153057-553fcb3/alpha"
+        );
+        assert_eq!(
+            KillReason::NodeRunArchived {
+                run_id: RID.into(),
+                node_id: "alpha".into()
+            }
+            .to_string(),
+            "Orphan sweep: killing session for archived run 20260731-153057-553fcb3/alpha"
+        );
+        assert_eq!(
+            KillReason::NodeRunStale {
+                session_name: "pdo-20260731-153057-553fcb3-alpha-iter-1".into(),
+                age_secs: 7200,
+            }
+            .to_string(),
+            "Orphan sweep: killing stale session pdo-20260731-153057-553fcb3-alpha-iter-1 \
+             (completed 7200s ago)"
+        );
+    }
+
+    /// The level split feeding both `apply_sweep`'s `warn!`/`info!` choice and the
+    /// `killed_for_absent_run` gauge: absence (incl. an unparseable name) is the
+    /// "can no longer happen" class; archived/stale is nominal housekeeping.
+    #[test]
+    fn only_absence_verdicts_are_flagged_as_abnormal() {
+        for reason in [
+            KillReason::UnrecognisedName {
+                session_name: "x".into(),
+            },
+            KillReason::ManagerRunAbsent { run_id: RID.into() },
+            KillReason::ShellRunAbsent { run_id: RID.into() },
+            KillReason::NodeRunAbsent {
+                run_id: RID.into(),
+                node_id: "alpha".into(),
+            },
+        ] {
+            assert!(reason.is_absence(), "{reason} should be an absence verdict");
+        }
+        for reason in [
+            KillReason::ManagerRunArchived { run_id: RID.into() },
+            KillReason::ShellRunArchived { run_id: RID.into() },
+            KillReason::NodeRunArchived {
+                run_id: RID.into(),
+                node_id: "alpha".into(),
+            },
+            KillReason::NodeRunStale {
+                session_name: "x".into(),
+                age_secs: 1,
+            },
+        ] {
+            assert!(!reason.is_absence(), "{reason} is routine housekeeping");
+        }
+    }
+
+    /// `decide_sweep` yields one decision per input, in input order, mixing
+    /// verdicts — the property that lets a caller tally kills and a test assert an
+    /// absence of kills.
+    #[test]
+    fn decide_sweep_returns_one_decision_per_input_in_order() {
+        let live_node = node_session_name(RID, "alpha", 1);
+        let dead_node = node_session_name(RID, "beta", 1);
+        let decisions = decide_sweep(
+            &[
+                input(&live_node, live()),
+                input(&dead_node, None),
+                input(&manager_session_name(RID), live()),
+            ],
+            Duration::from_secs(3600),
+            at("2026-07-31T15:32:19Z"),
+        );
+
+        assert_eq!(
+            decisions
+                .iter()
+                .map(|d| d.session_name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                live_node.as_str(),
+                dead_node.as_str(),
+                &manager_session_name(RID)
+            ]
+        );
+        assert_eq!(decisions[0].verdict, SweepVerdict::Keep);
+        assert!(matches!(decisions[1].verdict, SweepVerdict::Kill(_)));
+        assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
     #[test]

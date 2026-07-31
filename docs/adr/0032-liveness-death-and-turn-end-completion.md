@@ -4,6 +4,11 @@
 > process — résilience ». Amende **ADR-0012** (autonomie méritée : le réglage §2 en est l'application)
 > et **#214** (invariant terminal : *surfacer* et *tuer* redeviennent distincts pour un nœud vivant).
 > Clôt **#373 Unit B** en won't-do (§3). Remplace la conception mtime de **#123**.
+>
+> **Amendé par ADR-0038 (#485).** « La mort de session est exacte par construction » vaut pour le
+> *détecteur* et était fausse pour le *reaper* : celui-ci **fabriquait** la mort que le détecteur
+> observait ensuite fidèlement, sous un `session_died` parfaitement crédible. Le verdict terminal
+> reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
 
 Trois décisions durables, arbitrées sur deux réponses du owner : *on veut détecter Mort, pas un seuil
 qui ne serait pas robuste* ; *un faux positif ne doit pas coûter un Run*.

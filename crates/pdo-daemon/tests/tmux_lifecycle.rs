@@ -385,3 +385,385 @@ async fn dead_session_respawn_via_pane_endpoint() {
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
+
+// ---------------------------------------------------------------------------
+// #485 / ADR-0038 — the sweep must not kill the session it just spawned
+//
+// Driven through the deterministic `run_orphan_sweep_tick()` seam, never by
+// racing the 60 s interval. Honest limit, stated in the PR: no layer-3 test can
+// *reproduce* the race — there is no hook between the inventory and the log read.
+// The order is guaranteed by construction (the inventory is a parameter of
+// `decide_sweep`) plus the invariant comments; these tests pin the observable
+// consequences on both sides — the live session survives, the real orphan dies.
+// ---------------------------------------------------------------------------
+
+const TWO_NODE_PIPELINE: &str = "two-step";
+const TWO_NODE_YAML: &str = r#"name: two-step
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: worker
+    type: doc-only
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: second
+    name: second
+    type: doc-only
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: in }
+  - source: { node: worker, port: out }
+    target: { node: second, port: in }
+  - source: { node: second, port: out }
+    target: { node: end, port: result }
+"#;
+
+fn seed_two_node(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{TWO_NODE_PIPELINE}.yaml")),
+        TWO_NODE_YAML,
+    )?;
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+async fn create_run_of(daemon: &TestDaemon, pipeline: &str) -> String {
+    let body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "test input",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["run_id"].as_str().unwrap().to_string()
+}
+
+async fn run_events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
+    let resp = reqwest::Client::new()
+        .get(format!("{}/runs/{run_id}/events", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json.as_array().cloned().unwrap_or_default()
+}
+
+/// Has `NodeStarted` for (node, iter) already landed in the persisted log?
+async fn node_started_is_recorded(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> bool {
+    run_events(daemon, run_id).await.iter().any(|e| {
+        e["kind"] == "node_started" && e["node_id"] == node_id && e["iter"].as_i64() == Some(iter)
+    })
+}
+
+async fn reaper_gauge(daemon: &TestDaemon) -> serde_json::Value {
+    let resp = reqwest::Client::new()
+        .get(format!("{}/sessions", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["reaper"].clone()
+}
+
+/// Layer 3a (#485): the session of a node that IS in the event log survives an
+/// **immediate** sweep tick. This is the shape of the bug — before the fix the
+/// sweep resolved live sessions against a snapshot taken before they were born
+/// and killed them within ~150 ms of their own spawn.
+#[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
+async fn live_node_session_survives_an_immediate_sweep_tick() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    // Long TTL + interval: the only sweep that runs is the one we drive, and the
+    // TTL arm cannot be the thing under test.
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "session should appear after POST /runs"
+    );
+
+    // Three back-to-back ticks: any of them reading the log before the inventory
+    // would classify this live session as an orphan.
+    for _ in 0..3 {
+        daemon.run_orphan_sweep_tick().await;
+    }
+
+    assert!(
+        tmux_has_session(&socket, &session),
+        "#485 REGRESSION: the sweep killed a live node's session"
+    );
+    let gauge = reaper_gauge(&daemon).await;
+    assert_eq!(
+        gauge["killed_for_absent_run"].as_i64(),
+        Some(0),
+        "no absence verdict may be reached in steady state, got {gauge}"
+    );
+
+    tmux_session_manager::kill(&socket, &session);
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}
+
+/// Layer 3a (#485) — **the negative control, and it matters more than the test
+/// above.** A fix that simply neutralised the sweep would pass that one. All
+/// three absence arms plus the unparseable-name arm still kill, and the
+/// `GET /sessions` reaper gauge counts them.
+#[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
+async fn genuine_orphans_are_still_reaped_and_counted() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+
+    // The boot sweep has already run (it precedes `build_router`), so the gauge is
+    // populated and quiet: nothing was there to kill.
+    let before = reaper_gauge(&daemon).await;
+    assert!(
+        before["last_sweep_at"].is_string(),
+        "the boot sweep must have published a timestamp, got {before}"
+    );
+    assert_eq!(
+        before["killed"].as_i64(),
+        Some(0),
+        "a fresh daemon's boot sweep has nothing to kill, got {before}"
+    );
+
+    // A syntactically valid run_id that exists in no event log, on all four arms.
+    let ghost = "20200101-000000-deadbee";
+    let orphans = [
+        tmux_session_manager::node_session_name(ghost, "zzTESTzz", 1),
+        tmux_session_manager::manager_session_name(ghost),
+        tmux_session_manager::shell_session_name(ghost),
+        "pdo-ceci-nest-pas-un-nom".to_string(),
+    ];
+    for name in &orphans {
+        create_fake_tmux_session(&socket, name);
+        assert!(
+            tmux_has_session(&socket, name),
+            "pre-condition: {name} should exist on the daemon's socket"
+        );
+    }
+
+    daemon.run_orphan_sweep_tick().await;
+
+    for name in &orphans {
+        assert!(
+            !tmux_has_session(&socket, name),
+            "REGRESSION: the sweep spared a genuine orphan ({name}) — sessions would \
+             pile up toward the tmux collapse point"
+        );
+    }
+
+    let after = reaper_gauge(&daemon).await;
+    assert!(
+        after["last_sweep_at"].as_str() > before["last_sweep_at"].as_str(),
+        "the sweep must advance its timestamp: {before} → {after}"
+    );
+    assert_eq!(
+        after["killed"].as_i64(),
+        Some(4),
+        "all four orphans should be tallied, got {after}"
+    );
+    assert_eq!(
+        after["killed_for_absent_run"].as_i64(),
+        Some(4),
+        "all four are absence verdicts, got {after}"
+    );
+
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}
+
+/// Layer 3a (#485, slice A — `force_spawn_node`, the UI **Start** button): the
+/// reservation is in the persisted log *before* the session exists, so an
+/// immediate sweep tick cannot see a session without one. Before the fix the
+/// primitive spawned first and returned the event for the caller to append, and
+/// `force_spawn_node` targets a node with no history at all — so the reaper's
+/// lookup found no entry for it.
+#[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
+async fn force_spawn_reserves_before_it_spawns() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run_of(&daemon, TWO_NODE_PIPELINE).await;
+
+    // `second` is downstream of a still-running `worker`, so it has no entry in
+    // the projection at all — exactly the force-spawn exposure.
+    assert!(
+        wait_for_session(
+            &socket,
+            &tmux_session_manager::node_session_name(&run_id, "worker", 1),
+            Duration::from_secs(5)
+        )
+        .await,
+        "pre-condition: the entry node should be running"
+    );
+    assert!(
+        !node_started_is_recorded(&daemon, &run_id, "second", 1).await,
+        "pre-condition: `second` must be un-started"
+    );
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/nodes/second/start", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "Start should be accepted");
+
+    let session = tmux_session_manager::node_session_name(&run_id, "second", 1);
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "Start should spawn the session"
+    );
+    assert!(
+        node_started_is_recorded(&daemon, &run_id, "second", 1).await,
+        "#485 slice A: the reservation must already be readable once the session exists"
+    );
+
+    for _ in 0..3 {
+        daemon.run_orphan_sweep_tick().await;
+    }
+    assert!(
+        tmux_has_session(&socket, &session),
+        "#485 REGRESSION: the sweep killed a force-spawned session"
+    );
+
+    tmux_session_manager::kill(&socket, &session);
+    tmux_session_manager::kill(
+        &socket,
+        &tmux_session_manager::node_session_name(&run_id, "worker", 1),
+    );
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}
+
+/// Layer 3a (#485, slice A — `node_retry`, the UI **Retry** button): same
+/// invariant on the more exposed of the two paths. Retry appends
+/// `NodeInvalidated` for the node itself, and that applier does an unconditional
+/// `nodes.remove(node_id)` — so during the old spawn-then-append window the
+/// reaper's lookup found no entry at *every* iteration, not just the first.
+#[tokio::test]
+// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
+// the env-var-sensitive reaper tests from racing each other — intentional, and
+// the same allow the rest of the crate uses for serialized async tests.
+#[allow(clippy::await_holding_lock)]
+async fn retry_reserves_before_it_spawns() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon).await;
+    let iter1 = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    assert!(
+        wait_for_session(&socket, &iter1, Duration::from_secs(5)).await,
+        "pre-condition: iter 1 should be running"
+    );
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/runs/{run_id}/nodes/{NODE_ID}/retry",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "Retry should be accepted");
+
+    let iter2 = tmux_session_manager::node_session_name(&run_id, NODE_ID, 2);
+    assert!(
+        wait_for_session(&socket, &iter2, Duration::from_secs(5)).await,
+        "Retry should spawn iter 2"
+    );
+    assert!(
+        node_started_is_recorded(&daemon, &run_id, NODE_ID, 2).await,
+        "#485 slice A: the retry's reservation must already be readable once its \
+         session exists"
+    );
+
+    for _ in 0..3 {
+        daemon.run_orphan_sweep_tick().await;
+    }
+    assert!(
+        tmux_has_session(&socket, &iter2),
+        "#485 REGRESSION: the sweep killed a retried session"
+    );
+
+    tmux_session_manager::kill(&socket, &iter2);
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}

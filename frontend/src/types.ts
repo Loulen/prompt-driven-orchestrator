@@ -375,6 +375,12 @@ export interface RunListEntry {
    */
   stalled?: boolean;
   started_at: string | null;
+  /**
+   * Why the Run ended non-green (#503). Absent on a green or live Run. Present on
+   * the list entry so the red dot has something to say — before #503 the whole
+   * failure signal in this list was a coloured dot with no text behind it.
+   */
+  failure_reason?: string | null;
   name?: string | null;
   /** Provenance: the id of the Trigger that created this Run, if any (#160). */
   triggered_by?: string | null;
@@ -585,6 +591,14 @@ export interface RunState {
   input: string | null;
   started_at: string | null;
   completed_at: string | null;
+  /**
+   * Why the Run ended non-green — the `reason` of its `run_failed` / `run_skipped`
+   * / `run_halted` (#503). Absent on a green or live Run, and cleared by a resume.
+   *
+   * Every one of those events had always carried a reason and nothing read it, so
+   * the whole failure signal a user got was a red dot in the Runs list.
+   */
+  failure_reason?: string | null;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];

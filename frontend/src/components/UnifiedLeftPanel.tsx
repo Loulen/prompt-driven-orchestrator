@@ -235,7 +235,13 @@ export default function UnifiedLeftPanel({
   // repo (#258). Extracted so both code paths share the exact same markup.
   function renderRunRow(run: RunListEntry) {
     const isSelected = run.run_id === selectedRunId;
-    const { dot } = STATUS_STYLES[run.status] ?? STATUS_STYLES.running;
+    // A stalled run (no node running/waiting, nothing schedulable; #180) is
+    // surfaced amber and steady, overriding its still-`running` canonical
+    // status — "never a silent stall". `stalled` is derived per read by the
+    // daemon (`event_log::is_stalled`) and shipped on every list entry.
+    const dot = run.stalled
+      ? "bg-st-stale"
+      : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
     const isArchived = run.status === "archived";
     const canCleanup = !isArchived;
     const isRenaming = renamingRunId === run.run_id;
@@ -264,8 +270,13 @@ export default function UnifiedLeftPanel({
       >
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
-            run.status === "running" ? "animate-pulse" : ""
+            run.status === "running" && !run.stalled ? "animate-pulse" : ""
           }`}
+          // #503: the dot was the entire failure signal, with no text anywhere
+          // behind it — a Run that had actually shipped read the same as one
+          // that had not.
+          title={run.failure_reason ?? undefined}
+          data-testid="run-status-dot"
         />
         <div className="min-w-0 flex-1">
           {isRenaming ? (

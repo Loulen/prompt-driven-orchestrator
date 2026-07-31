@@ -400,6 +400,11 @@ struct RunListEntry {
     /// though `status` stays `running`. Derived per read by `event_log::is_stalled`.
     stalled: bool,
     started_at: Option<String>,
+    /// Why the Run ended non-green (#503). Carried on the *list* entry so the red
+    /// dot has something to say: pre-#503 the entire failure signal in this list
+    /// was a coloured dot with no text anywhere behind it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     /// Provenance: the Trigger that created this Run, if any.
@@ -8362,6 +8367,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 status: run_state.status,
                 stalled,
                 started_at: run_state.started_at,
+                failure_reason: run_state.failure_reason,
                 name: run_state.name,
                 triggered_by: run_state.triggered_by,
                 effective_repo,
@@ -10287,6 +10293,13 @@ async fn complete_node_iteration(
             let sub_wt_dir = sub_worktree_path(&repo_root, &run_id, &node_id, iter);
             let sub_branch = sub_worktree_branch(&run_id, &node_id, iter);
 
+            // #503 / ADR-0036: the commit this sub-worktree was cut from, read off
+            // the log we already loaded. On a conflict, `worktree_ops` compares it
+            // to the pipeline branch's actual tip: still equal ⇒ the divergence is
+            // the run's own history rewritten by this node, and resolving in its
+            // favour drops nothing. No base recorded ⇒ no resolution.
+            let spawn_base = merge_action::spawn_base_sha(&events, &node_id, iter);
+
             let _lock = state.merge_lock.lock().await;
             let merge_result = match commit_and_merge_sub_worktree_inner(
                 &sub_wt_dir,
@@ -10295,6 +10308,7 @@ async fn complete_node_iteration(
                 &node_id,
                 iter,
                 false,
+                spawn_base.as_deref(),
             ) {
                 Ok(r) => r,
                 Err(e) => {
@@ -10308,7 +10322,46 @@ async fn complete_node_iteration(
             };
             match merge_result {
                 MergeResult::Success => {}
-                MergeResult::Conflict(detail) => {
+                // #503: not a failure — but PDO rewrote a branch, so it is logged
+                // with both tips, the resolution commit and the blast radius. The
+                // completion continues exactly as a clean merge would.
+                MergeResult::ResolvedInNodeFavour(adoption) => {
+                    let resolved = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::MergeResolvedInNodeFavour,
+                        node_id: Some(node_id.clone()),
+                        iter: Some(iter),
+                        payload: Some(serde_json::json!({
+                            "reason": format!(
+                                "merge-back of {node_id} conflicted on {} file(s) and was \
+                                 resolved in the node's favour",
+                                adoption.conflicting_files.len(),
+                            ),
+                            "rule": worktree_ops::ADOPTION_RULE,
+                            "pipeline_tip": adoption.pipeline_tip,
+                            "node_tip": adoption.node_tip,
+                            "merge_commit": adoption.merge_commit,
+                            "conflicting_files": adoption.conflicting_files,
+                        })),
+                    };
+                    let _ = append_event(state, &resolved).await;
+                    warn!(
+                        "Run {run_id}: merge-back of {node_id} resolved in the node's favour \
+                         ({} conflicting file(s)); pipeline branch now at {} (#503)",
+                        adoption.conflicting_files.len(),
+                        adoption.merge_commit,
+                    );
+                }
+                MergeResult::Conflict(conflict) => {
+                    let reason = format!(
+                        "merge conflict on {node_id}: {} conflicting file(s) merging {} into the \
+                         pipeline branch at {}",
+                        conflict.conflicting_files.len(),
+                        short(&conflict.node_tip),
+                        short(&conflict.pipeline_tip),
+                    );
                     let conflict_event = event_log::Event {
                         id: None,
                         run_id: run_id.clone(),
@@ -10318,10 +10371,31 @@ async fn complete_node_iteration(
                         iter: Some(iter),
                         payload: Some(serde_json::json!({
                             "reason": format!("conflict merging {node_id} into pipeline branch"),
-                            "detail": detail,
+                            // #503 AC3/AC4: git's own report (stdout included — the
+                            // half that pre-#503 was dropped, and the only half a
+                            // conflict writes), the two tips, and the file list.
+                            "detail": conflict.detail,
+                            "pipeline_tip": conflict.pipeline_tip,
+                            "node_tip": conflict.node_tip,
+                            "conflicting_files": conflict.conflicting_files,
                         })),
                     };
                     let _ = append_event(state, &conflict_event).await;
+
+                    // #503 AC5: the node is dead — its agent's `pdo complete` just
+                    // failed terminally and the run is about to be `failed`. Without
+                    // this the node stayed projected `running` for ever, with a live
+                    // tmux session and a UI offering Stop/Retry on it.
+                    let node_failed = event_log::Event {
+                        id: None,
+                        run_id: run_id.clone(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::NodeFailed,
+                        node_id: Some(node_id.clone()),
+                        iter: Some(iter),
+                        payload: Some(serde_json::json!({ "reason": reason })),
+                    };
+                    let _ = append_event(state, &node_failed).await;
 
                     let run_failed = event_log::Event {
                         id: None,
@@ -10330,20 +10404,26 @@ async fn complete_node_iteration(
                         kind: event_log::EventKind::RunFailed,
                         node_id: None,
                         iter: None,
-                        payload: Some(serde_json::json!({
-                            "reason": format!("merge conflict on {node_id}")
-                        })),
+                        payload: Some(serde_json::json!({ "reason": reason })),
                     };
                     let _ = append_event(state, &run_failed).await;
 
-                    warn!("Merge conflict for node {node_id} in run {run_id}");
+                    warn!("Merge conflict for node {node_id} in run {run_id}: {reason}");
+                    reap_dead_node_after_run_failure(
+                        state,
+                        &repo_root,
+                        &run_id,
+                        &node_id,
+                        iter,
+                        !pre_run_state.sandbox.is_off(),
+                    );
                     return CompletionAttempt::refused(
                         completion_refusal::CompletionRefusal::MergeConflict {
                             node_id: node_id.clone(),
                         },
                     );
                 }
-                MergeResult::ConflictPendingResolution(detail) => {
+                MergeResult::ConflictPendingResolution(conflict) => {
                     let conflict_event = event_log::Event {
                         id: None,
                         run_id: run_id.clone(),
@@ -10353,7 +10433,10 @@ async fn complete_node_iteration(
                         iter: Some(iter),
                         payload: Some(serde_json::json!({
                             "reason": format!("conflict merging {node_id} into pipeline branch"),
-                            "detail": detail,
+                            "detail": conflict.detail,
+                            "pipeline_tip": conflict.pipeline_tip,
+                            "node_tip": conflict.node_tip,
+                            "conflicting_files": conflict.conflicting_files,
                         })),
                     };
                     let _ = append_event(state, &conflict_event).await;
@@ -10403,6 +10486,16 @@ async fn complete_node_iteration(
                 let _ = append_event(state, &run_failed).await;
 
                 warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
+                // Same leak as the merge-conflict path (#503 AC5): this refusal kills
+                // the Run, so the node's session has nothing left to do.
+                reap_dead_node_after_run_failure(
+                    state,
+                    &repo_root,
+                    &run_id,
+                    &node_id,
+                    iter,
+                    !pre_run_state.sandbox.is_off(),
+                );
                 return CompletionAttempt::refused(
                     completion_refusal::CompletionRefusal::DocImmutabilityViolated {
                         node_id: node_id.clone(),
@@ -12608,6 +12701,56 @@ fn reap_node_session(
     info!("Reaped tmux session {session} on terminal transition");
 }
 
+/// A commit SHA cut to git's own abbreviation length, for a human-facing reason
+/// string. Never for comparison — the full SHAs live in the event payload.
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// Reap the session of a node whose completion just killed the Run (#503 AC5).
+///
+/// Called from the refusal paths that append `RunFailed` — a merge-back conflict
+/// and a doc-only immutability violation. Those return a refusal *to a
+/// `pdo complete` running inside the very session being killed*, so the kill has
+/// to outlive this request: detached, exactly like `node_done`'s reap (#304,
+/// ADR-0023), or the response never reaches the CLI and #490's exit codes lose
+/// their meaning.
+///
+/// Not called on the `MergeFailed` error path: that one leaves the Run alive and
+/// the agent free to retry, so its session is still doing something.
+fn reap_dead_node_after_run_failure(
+    state: &Arc<AppState>,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    sandboxed: bool,
+) {
+    let tail_state = state.clone();
+    let tail_repo = repo_root.to_path_buf();
+    let tail_run = run_id.to_string();
+    let tail_node = node_id.to_string();
+    detach_terminal_tail(
+        "run_failed_reap",
+        state.clone(),
+        run_id.to_string(),
+        node_id.to_string(),
+        async move {
+            reap_node_session(
+                &tail_state,
+                &tail_repo,
+                &tail_run,
+                &tail_node,
+                iter,
+                sandboxed,
+            );
+            // The run is dead: its slot is free, so re-drive nodes throttled by the
+            // session cap in other runs (#159), like every other terminal path does.
+            retry_waiting_nodes(&tail_state).await;
+        },
+    );
+}
+
 const MERGE_RESOLVER_NODE_ID: &str = "__merge_resolver__";
 
 const FALLBACK_MERGE_RESOLVER_PROMPT: &str = "\
@@ -14619,6 +14762,68 @@ mod tests {
         .unwrap();
         let entry = body.iter().find(|r| r["run_id"] == run_id).unwrap();
         assert!(entry.get("name").is_none() || entry["name"].is_null());
+    }
+
+    /// #503: the Runs list is where a user first meets a failure, and the entire
+    /// signal there was a coloured dot. Every `run_failed` had always carried a
+    /// `reason`; nothing read it, so nothing could title the dot.
+    #[tokio::test]
+    async fn the_runs_list_carries_a_failed_run_reason() {
+        let state = test_state().await;
+        let failed = "failed-with-reason";
+        let green = "green-run";
+        seed_completed_run(&state, green).await;
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: failed.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test-pipe" })),
+            },
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: failed.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(
+                    serde_json::json!({ "reason": "merge conflict on ship: 20 conflicting file(s)" }),
+                ),
+            },
+        )
+        .await
+        .unwrap();
+
+        let resp = build_router(state.clone())
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Vec<serde_json::Value> = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let entry = body.iter().find(|r| r["run_id"] == failed).unwrap();
+        assert_eq!(
+            entry["failure_reason"],
+            "merge conflict on ship: 20 conflicting file(s)"
+        );
+        // A green run carries no reason and no empty key to render.
+        let entry = body.iter().find(|r| r["run_id"] == green).unwrap();
+        assert!(entry.get("failure_reason").is_none());
     }
 
     #[tokio::test]
@@ -26723,10 +26928,17 @@ edges:
         let pipeline_branch = format!("pdo/run-{run_id}");
         create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
+        let mut spawn_bases = std::collections::HashMap::new();
         for node in ["impl_a", "impl_b"] {
             let sub_dir = sub_worktree_path(repo, run_id, node, 1);
             let sub_branch = sub_worktree_branch(run_id, node, 1);
-            create_sub_worktree(repo, &sub_dir, &sub_branch, &pipeline_branch).unwrap();
+            // #503: both siblings were cut from the same tip. impl_a's merge moves
+            // it, so impl_b's base goes stale — which is what makes its conflict a
+            // *genuine* one the resolution must not swallow (AC2).
+            spawn_bases.insert(
+                node,
+                create_sub_worktree(repo, &sub_dir, &sub_branch, &pipeline_branch).unwrap(),
+            );
             std::fs::write(sub_dir.join("shared.txt"), format!("from {node}\n")).unwrap();
             // Both nodes declare a `patch` output; write it so validation is not
             // what refuses.
@@ -26757,7 +26969,7 @@ edges:
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("impl_a".into()),
                 iter: Some(1),
-                payload: None,
+                payload: Some(serde_json::json!({ "base_sha": spawn_bases["impl_a"] })),
             },
             event_log::Event {
                 id: None,
@@ -26766,7 +26978,7 @@ edges:
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("impl_b".into()),
                 iter: Some(1),
-                payload: None,
+                payload: Some(serde_json::json!({ "base_sha": spawn_bases["impl_b"] })),
             },
         ] {
             append_event(&state, &event).await.unwrap();
@@ -26785,9 +26997,223 @@ edges:
         assert_eq!(body["recoverable"], false);
 
         let events = load_events(&state.db, run_id).await.unwrap();
-        assert!(events
+        let conflict = events
             .iter()
-            .any(|e| e.kind == event_log::EventKind::MergeConflictDetected));
+            .find(|e| e.kind == event_log::EventKind::MergeConflictDetected)
+            .expect("a merge_conflict_detected event");
+
+        // #503 AC3/AC4: the event has to be diagnosable on its own. `detail` was
+        // `git merge`'s stderr, which is byte-empty on a conflict, so every one of
+        // these events ever written said `detail: ""` about N conflicting files.
+        let payload = conflict.payload.as_ref().unwrap();
+        assert!(
+            payload["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("CONFLICT"),
+            "detail must carry git's report; got {:?}",
+            payload["detail"]
+        );
+        assert_eq!(
+            payload["conflicting_files"],
+            serde_json::json!(["shared.txt"])
+        );
+        for tip in ["pipeline_tip", "node_tip"] {
+            assert_eq!(
+                payload[tip].as_str().unwrap_or_default().len(),
+                40,
+                "{tip} must be a full SHA; got {:?}",
+                payload[tip]
+            );
+        }
+
+        // #503 AC5: the node must not stay projected `running` on a dead Run.
+        let projected = event_log::project(&events).unwrap();
+        assert_eq!(projected.status, event_log::RunStatus::Failed);
+        assert_eq!(
+            projected.nodes["impl_b"].status,
+            event_log::NodeStatus::Failed,
+            "the node whose merge-back failed must be Failed, not Running"
+        );
+        // …and the Run must say why, in one field a UI can render.
+        let run_reason = projected.failure_reason.expect("a run failure reason");
+        assert!(
+            run_reason.contains("merge conflict on impl_b") && run_reason.contains("1 conflicting"),
+            "the run's reason must name the node and the blast radius; got {run_reason:?}"
+        );
+        assert_eq!(
+            projected.nodes["impl_b"].failure_reason.as_deref(),
+            Some(run_reason.as_str()),
+            "node and run must agree on the cause"
+        );
+    }
+
+    /// #503 / ADR-0036: the terminal-node rebase. A single-node Run whose node
+    /// rewrote its branch onto a base that moved mid-Run must **complete**: the
+    /// pipeline branch is no longer an ancestor of the node's branch, the three-way
+    /// merge conflicts, and resolving it in the node's favour drops nothing because
+    /// nothing else reached the pipeline branch since the node was cut from it.
+    ///
+    /// The pre-#503 daemon answered `409 merge_conflict` here and filed the Run
+    /// `failed` with its work already delivered.
+    #[tokio::test]
+    async fn a_terminal_node_that_rebased_still_completes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_git_repo_for_refusal_tests(repo);
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let base_branch = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        let pipe = "terminal-rebase";
+        let pipelines_dir = repo.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(
+            pipelines_dir.join(format!("{pipe}.yaml")),
+            format!(
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ship\n    name: ship\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
+            ),
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(repo).await;
+        let run_id = "terminal-rebase-run";
+        let wt_dir = worktree_dir_for_run(repo, run_id);
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        // An earlier node's work, already merged back onto the pipeline branch.
+        std::fs::write(wt_dir.join("VERSION"), "1.5.0\n").unwrap();
+        git(&wt_dir, &["add", "-A"]);
+        git(&wt_dir, &["commit", "-m", "implementer: 1.5.0"]);
+
+        // A concurrent Run lands on the integration branch while this Run is live.
+        std::fs::write(repo.join("VERSION"), "1.5.0\n").unwrap();
+        std::fs::write(repo.join("concurrent.rs"), "pub fn other() {}\n").unwrap();
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-m", "concurrent run: 1.5.0"]);
+
+        // The terminal node, cut from the pipeline branch, rebases onto it and bumps.
+        let sub_dir = sub_worktree_path(repo, run_id, "ship", 1);
+        let sub_branch = sub_worktree_branch(run_id, "ship", 1);
+        let spawn_base =
+            create_sub_worktree(repo, &sub_dir, &sub_branch, &pipeline_branch).unwrap();
+        let rebase = std::process::Command::new("git")
+            .args(["rebase", &base_branch])
+            .current_dir(&sub_dir)
+            .output()
+            .unwrap();
+        if !rebase.status.success() {
+            std::fs::write(sub_dir.join("VERSION"), "1.5.0\n").unwrap();
+            git(&sub_dir, &["add", "-A"]);
+            let cont = std::process::Command::new("git")
+                .args(["rebase", "--continue"])
+                .env("GIT_EDITOR", "true")
+                .current_dir(&sub_dir)
+                .output()
+                .unwrap();
+            assert!(cont.status.success(), "rebase --continue failed");
+        }
+        std::fs::write(sub_dir.join("VERSION"), "1.6.0\n").unwrap();
+        git(&sub_dir, &["add", "-A"]);
+        git(&sub_dir, &["commit", "-m", "ship it: 1.6.0"]);
+        write_artifact_for(repo, run_id, "ship", "patch", "done\n");
+
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipe,
+                    "node_defs": [
+                        { "id": "ship", "node_type": "code-mutating", "inputs": [], "outputs": [] },
+                    ],
+                    "edges": [],
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("ship".into()),
+                iter: Some(1),
+                // What a real spawn records (#503): the commit the sub-worktree was
+                // cut from. It is the *only* thing that authorises the resolution.
+                payload: Some(serde_json::json!({ "base_sha": spawn_base })),
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let (status, _, raw) = done_triplet(&state, run_id, "ship", "{}").await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a delivered Run must not be refused over PDO's own bookkeeping; got {raw}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let resolved = events
+            .iter()
+            .find(|e| e.kind == event_log::EventKind::MergeResolvedInNodeFavour)
+            .expect("the rewrite must be logged, never silent");
+        let payload = resolved.payload.as_ref().unwrap();
+        assert_eq!(payload["conflicting_files"], serde_json::json!(["VERSION"]));
+        assert_eq!(
+            payload["pipeline_tip"].as_str(),
+            Some(spawn_base.as_str()),
+            "the rewritten tip must be the base the node was cut from — that IS the rule"
+        );
+        assert!(payload["rule"]
+            .as_str()
+            .unwrap()
+            .contains("still the commit"));
+        assert_eq!(
+            payload["merge_commit"].as_str().map(str::len),
+            Some(40),
+            "the resolution commit must be named, so the rewrite is auditable"
+        );
+        assert!(!events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::RunFailed));
+
+        // The pipeline branch carries the node's tree — including what the node
+        // rebased onto — so a downstream node would see what was delivered.
+        assert_eq!(
+            std::fs::read_to_string(wt_dir.join("VERSION")).unwrap(),
+            "1.6.0\n"
+        );
+        assert!(wt_dir.join("concurrent.rs").exists());
+        let projected = event_log::project(&events).unwrap();
+        assert_eq!(
+            projected.nodes["ship"].status,
+            event_log::NodeStatus::Completed
+        );
     }
 
     /// ADR-0024's tombstone keeps its `410` on this route: "never a 2xx" is not

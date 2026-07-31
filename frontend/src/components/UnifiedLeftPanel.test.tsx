@@ -187,6 +187,87 @@ describe("UnifiedLeftPanel run display labels", () => {
   });
 });
 
+// The run row's status dot. These assertions used to live on `RunsListPanel`,
+// a component nothing but its own test imported — so they guarded markup the
+// app never mounted. Deleted with it (#503); the live surface is this panel.
+describe("UnifiedLeftPanel run status dot", () => {
+  const run = (over: Partial<RunListEntry>): RunListEntry[] => [
+    { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, ...over },
+  ];
+
+  it("maps every status to its own dot colour", () => {
+    // `archived` excluded: its row lives in the folded Archived section (#136),
+    // covered there. Every other status renders inline.
+    const expected: Partial<Record<RunListEntry["status"], string>> = {
+      running: "bg-st-running",
+      awaiting_user: "bg-st-await",
+      completed: "bg-st-done",
+      failed: "bg-st-failed",
+      skipped: "bg-st-skipped",
+      halted: "bg-st-blocked",
+      paused: "bg-st-paused",
+    };
+    for (const [status, cls] of Object.entries(expected)) {
+      const { unmount } = renderPanel({
+        runs: run({ status: status as RunListEntry["status"] }),
+      });
+      expect(screen.getByTestId("run-status-dot").className).toContain(cls);
+      unmount();
+    }
+  });
+
+  it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
+    renderPanel({ runs: run({ status: "skipped" }) });
+    const dot = screen.getByTestId("run-status-dot");
+    expect(dot.className).toContain("bg-st-skipped");
+    // A skipped run is terminal: it must not read as failed/running.
+    expect(dot.className).not.toContain("bg-st-failed");
+    expect(dot.className).not.toContain("bg-st-running");
+  });
+
+  it("renders a stalled run with an amber, steady dot (#180)", () => {
+    // A stalled run keeps status "running" but must surface amber and NOT pulse.
+    // Per ADR-0032 the daemon no longer has a `Stale` producer, so `stalled` only
+    // ever comes back true for a historical Run — which is precisely why the amber
+    // surface stays in place. Do NOT "repair" this dot by rebranching a producer.
+    renderPanel({ runs: run({ status: "running", stalled: true }) });
+    const dot = screen.getByTestId("run-status-dot");
+    expect(dot.className).toContain("bg-st-stale");
+    expect(dot.className).not.toContain("animate-pulse");
+    // It must not fall through to the active-running blue dot.
+    expect(dot.className).not.toContain("bg-st-running");
+  });
+
+  it("renders a genuinely-running (not stalled) run blue and pulsing", () => {
+    renderPanel({ runs: run({ status: "running", stalled: false }) });
+    const dot = screen.getByTestId("run-status-dot");
+    expect(dot.className).toContain("bg-st-running");
+    expect(dot.className).toContain("animate-pulse");
+    expect(dot.className).not.toContain("bg-st-stale");
+  });
+
+  // #503: the dot was the whole failure signal — a Run that had actually shipped
+  // read the same as one that had not, with no text anywhere behind it.
+  it("hangs the failure reason off the status dot", () => {
+    renderPanel({
+      runs: run({
+        pipeline_name: "shipped-but-filed-failed",
+        status: "failed",
+        failure_reason: "merge conflict on ship: 20 conflicting file(s)",
+      }),
+    });
+    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
+      "title",
+      "merge conflict on ship: 20 conflicting file(s)",
+    );
+  });
+
+  it("leaves the dot untitled when there is nothing to explain", () => {
+    renderPanel({ runs: run({ status: "completed" }) });
+    expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");
+  });
+});
+
 describe("UnifiedLeftPanel three-tab strip", () => {
   it("renders Runs, Triggers and Library tabs", () => {
     renderPanel();

@@ -10,6 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.7.0
+
+Rien de cassant. Une note, parce qu'elle ne se déduit pas du titre du commit et qu'elle change ce
+qu'un opérateur peut supposer de ses branches.
+
+### Le runtime peut désormais déplacer la ref d'une branche pipeline (#503, ADR-0036)
+
+Jusqu'ici le runtime ne touchait jamais une ref existante : il créait des branches et des worktrees,
+n'en supprimait aucun, n'en réécrivait aucun (ADR-0012(a)). Le merge-back d'un sous-worktree peut
+maintenant **déplacer** le tip de la branche pipeline pour adopter l'arbre du nœud, lorsque la
+divergence est l'histoire du Run que ce nœud a lui-même réécrite en se rebasant. Le déplacement passe
+par un `commit-tree` à deux parents qui garde **l'ancien tip en premier parent** : aucun commit ne
+devient inatteignable, `git log` de l'ancien tip reste intact, et la règle d'ADR-0012(a) sur la
+non-suppression est inchangée. Le garde est structurel — le tip pipeline doit encore être exactement
+le `base_sha` depuis lequel ce sous-worktree a été coupé — donc il ne peut pas adopter par-dessus le
+travail d'un autre nœud.
+
+Deux effets de bord du même défaut sont corrigés au passage : `merge_conflict_detected.payload.detail`
+est enfin rempli (il lisait `stderr`, que `git merge` laisse vide en cas de conflit — le rapport est
+sur stdout), et un merge-back qui échoue appende `NodeFailed` puis reape la session du nœud au lieu de
+la laisser vivante sous une projection `running`.
+
 ## 1.6.0
 
 Un changement cassant livré sous un bump **mineur**, dans la ligne des précédents posés en 1.2.0 et

@@ -63,6 +63,18 @@ pub enum EventKind {
     NodeCompleted,
     NodeFailed,
     MergeConflictDetected,
+    /// A merge-back conflicted and was resolved **in the node's favour** instead of
+    /// failing the Run (#503, ADR-0036): the node's branch had stopped being a
+    /// descendant of the pipeline branch (a terminal node rebasing onto a moved
+    /// integration branch does that), and nothing else had reached the pipeline
+    /// branch since the node was cut from it, so the divergence was the run's own
+    /// history rewritten by the node.
+    ///
+    /// Informational in projection — the completion continues normally — but never
+    /// silent: PDO rewrote a branch, and the payload carries the two tips, the
+    /// resolution commit and what would have conflicted. Wire form:
+    /// `"merge_resolved_in_node_favour"`.
+    MergeResolvedInNodeFavour,
     MergeResolverStarted,
     MergeResolverCompleted,
     MergeResolverFailed,
@@ -580,6 +592,20 @@ pub struct RunState {
     pub input: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// Why the Run reached a non-green terminal state — the `reason` of its
+    /// `RunFailed` / `RunSkipped` / `RunHalted` (#503).
+    ///
+    /// Every one of those events has always carried a reason and nothing read it,
+    /// so the entire failure signal a user got was a red dot in the Runs list. A
+    /// `merge_conflict_detected` whose `detail` was empty *and* a Run whose reason
+    /// was unreachable is what turned a one-in-445 event into an afternoon of
+    /// archaeology.
+    ///
+    /// Set on the terminal event and cleared by `RunResumed`, mirroring
+    /// `NodeState::failure_reason`: a Run being driven again must not still show
+    /// last time's cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -729,6 +755,7 @@ impl RunState {
             input: None,
             started_at: None,
             completed_at: None,
+            failure_reason: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
@@ -960,6 +987,7 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::FrontmatterRetryPending => apply_node_event(&mut state, event),
 
             EventKind::MergeConflictDetected
+            | EventKind::MergeResolvedInNodeFavour
             | EventKind::MergeResolverStarted
             | EventKind::MergeResolverCompleted
             | EventKind::MergeResolverFailed => apply_merge_event(&mut state, event),
@@ -1018,6 +1046,22 @@ pub fn project(events: &[Event]) -> Option<RunState> {
 /// Run-lifecycle events: start (bootstrap pipeline/edges/node-defs/start+end
 /// nodes), the terminal transitions (completed/failed/skipped/halted), the
 /// resumable pause/resume pair, rename, and archive.
+/// The `reason` a non-green run terminal carries, if it says anything (#503).
+///
+/// An empty string is treated as absent: `Some("")` in the projection would make
+/// the UI render an explanation box with nothing in it, which is worse than the
+/// red dot it replaces.
+fn run_event_reason(event: &Event) -> Option<String> {
+    event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("reason"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
 fn apply_run_event(state: &mut RunState, event: &Event) {
     match event.kind {
         EventKind::RunStarted => {
@@ -1220,6 +1264,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
         EventKind::RunFailed => {
             state.status = RunStatus::Failed;
             state.completed_at = Some(event.ts.clone());
+            state.failure_reason = run_event_reason(event);
         }
         EventKind::RunSkipped => {
             // Graceful no-op (#245): terminal, like RunFailed/RunCompleted.
@@ -1228,10 +1273,20 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             // "fired but nothing to do".
             state.status = RunStatus::Skipped;
             state.completed_at = Some(event.ts.clone());
+            state.failure_reason = run_event_reason(event);
         }
         EventKind::RunHalted => {
             state.status = RunStatus::Halted;
             state.completed_at = Some(event.ts.clone());
+            // A halt carries `message`, not `reason`. Surface it on the run too, so
+            // all three non-green terminals answer "why?" through one field.
+            state.failure_reason = event
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("message").or_else(|| p.get("reason")))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
             if let Some(ref mut end_node) = state.end_node {
                 let reason = event
                     .payload
@@ -1255,6 +1310,9 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             if state.status == RunStatus::Paused {
                 state.status = RunStatus::Running;
             }
+            // A Run being driven again must not still display last time's cause
+            // (#503) — same rule `NodeStarted` applies to `NodeState::failure_reason`.
+            state.failure_reason = None;
         }
         EventKind::RunRenamed => {
             if let Some(ref payload) = event.payload {
@@ -1749,7 +1807,13 @@ fn apply_collection_event(state: &mut RunState, event: &Event) {
 fn apply_merge_event(state: &mut RunState, event: &Event) {
     match event.kind {
         EventKind::MergeConflictDetected => {
-            // Informational — the run either spawns a resolver or fails
+            // Informational — the run either spawns a resolver, resolves the
+            // conflict in the node's favour (#503) or fails.
+        }
+        EventKind::MergeResolvedInNodeFavour => {
+            // Informational (#503) — the completion carries on from here, so the
+            // node's own `NodeCompleted` moves the state. Nothing to project: this
+            // event exists so that a rewritten pipeline branch is never silent.
         }
         EventKind::MergeResolverStarted => {
             if let Some(ref payload) = event.payload {
@@ -4490,6 +4554,125 @@ mod tests {
         );
     }
 
+    /// #503: a Run's whole failure signal used to be a red dot — every
+    /// `RunFailed` carried a `reason` and nothing read it.
+    #[test]
+    fn a_failed_run_carries_its_reason() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event_with_payload(
+                EventKind::RunFailed,
+                None,
+                serde_json::json!({ "reason": "merge conflict on ship: 20 conflicting file(s)" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Failed);
+        assert_eq!(
+            state.failure_reason.as_deref(),
+            Some("merge conflict on ship: 20 conflicting file(s)")
+        );
+    }
+
+    /// A blank reason is *absence*: an explanation box with nothing in it reads
+    /// worse than the red dot it replaces.
+    #[test]
+    fn a_blank_run_reason_is_no_reason() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event_with_payload(
+                EventKind::RunFailed,
+                None,
+                serde_json::json!({ "reason": "   " }),
+            ),
+        ];
+        assert!(project(&events).unwrap().failure_reason.is_none());
+    }
+
+    /// A halt says `message`, a skip says `reason` — all three non-green terminals
+    /// answer "why?" through the one field a UI can render.
+    #[test]
+    fn a_halt_and_a_skip_also_carry_their_reason() {
+        for (kind, payload, expected) in [
+            (
+                EventKind::RunHalted,
+                serde_json::json!({ "message": "stop condition met" }),
+                "stop condition met",
+            ),
+            (
+                EventKind::RunSkipped,
+                serde_json::json!({ "reason": "eligible pool was empty" }),
+                "eligible pool was empty",
+            ),
+        ] {
+            let events = vec![
+                make_event_with_payload(
+                    EventKind::RunStarted,
+                    None,
+                    serde_json::json!({ "pipeline_name": "p" }),
+                ),
+                make_event_with_payload(kind, None, payload),
+            ];
+            assert_eq!(
+                project(&events).unwrap().failure_reason.as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    /// A Run being driven again must not still display last time's cause — same
+    /// rule `NodeStarted` applies to a node's `failure_reason`.
+    #[test]
+    fn resuming_clears_the_previous_run_failure_reason() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event_with_payload(
+                EventKind::RunFailed,
+                None,
+                serde_json::json!({ "reason": "merge conflict on ship" }),
+            ),
+            make_event(EventKind::RunResumed, None, None),
+        ];
+        assert!(project(&events).unwrap().failure_reason.is_none());
+    }
+
+    /// #503: informational, exactly like `MergeConflictDetected` — the completion
+    /// carries on and moves the node itself.
+    #[test]
+    fn resolving_a_merge_back_in_the_node_favour_touches_no_state() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("ship"), Some(1)),
+            make_event_with_payload(
+                EventKind::MergeResolvedInNodeFavour,
+                Some("ship"),
+                serde_json::json!({ "merge_commit": "deadbeef" }),
+            ),
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert_eq!(state.nodes["ship"].status, NodeStatus::Running);
+        assert!(state.failure_reason.is_none());
+    }
+
     #[test]
     fn event_kind_serialization_roundtrip() {
         let kinds = vec![
@@ -4498,6 +4681,7 @@ mod tests {
             EventKind::NodeStale,
             EventKind::NodeBlockedOnLimit,
             EventKind::NodeAutoCompleteObserved,
+            EventKind::MergeResolvedInNodeFavour,
             EventKind::RunPaused,
             EventKind::RunResumed,
         ];
@@ -4507,6 +4691,7 @@ mod tests {
             "\"node_stale\"",
             "\"node_blocked_on_limit\"",
             "\"node_auto_complete_observed\"",
+            "\"merge_resolved_in_node_favour\"",
             "\"run_paused\"",
             "\"run_resumed\"",
         ];

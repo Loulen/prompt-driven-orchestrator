@@ -51,9 +51,111 @@ pub struct StartNodeParams<'a> {
     pub default_model: Option<String>,
 }
 
+/// Everything needed to launch the node's tmux session, once its reservation has
+/// been appended (#485, ADR-0038).
+///
+/// **Why this type exists at all.** Before #485 this primitive spawned the
+/// session itself and only *then* handed `NodeStarted` back for the caller to
+/// append — so between the two there was a live tmux session with no reservation
+/// in the event log, which is precisely the state the orphan sweep kills on
+/// sight. The window was unreachable by accident (a kill needed the append
+/// latency to exceed the sweep's 21 s snapshot build), and reordering the sweep's
+/// observations makes that snapshot cheap — which would have reopened the window
+/// silently. So the order has to become a property of the *type*: the primitive
+/// returns an intention, the caller appends first and executes second, and the
+/// wrong order is not expressible.
+///
+/// Owns its data (`String`/`PathBuf`) because [`tmux_session_manager::SessionTail`]
+/// and [`tmux_session_manager::SandboxWrap`] borrow — they are rebuilt inside
+/// [`StartNodeSpawn::execute`].
+pub struct StartNodeSpawn {
+    session_name: String,
+    prompt: String,
+    working_dir: PathBuf,
+    run_id: String,
+    node_id: String,
+    iter: i64,
+    daemon_port: u16,
+    tmux_cmd_override: Option<String>,
+    tail: StartNodeTail,
+    sandbox: Option<StartNodeSandbox>,
+}
+
+/// Owned mirror of [`tmux_session_manager::SessionTail`] — the borrowing enum
+/// cannot be carried across the append.
+enum StartNodeTail {
+    Agent {
+        model: Option<String>,
+        effort: Option<String>,
+    },
+    Script {
+        timeout_secs: u64,
+        env: Vec<(String, String)>,
+    },
+}
+
+/// Owned mirror of [`tmux_session_manager::SandboxWrap`] (#407). `marker` and
+/// `workdir` are not stored: they are always the session name and the working
+/// dir, which [`StartNodeSpawn`] already owns.
+struct StartNodeSandbox {
+    docker_bin: String,
+    uid: u32,
+    gid: u32,
+}
+
+impl StartNodeSpawn {
+    /// Launch the session. **Call this only after the `NodeStarted` event has been
+    /// appended** (#485, ADR-0038) — see the type's doc-comment.
+    ///
+    /// The deliberate trade: if the append succeeds and this fails, the run has a
+    /// `NodeStarted` with no session. That is exactly what `spawn_node` has always
+    /// done, and since #469 (ADR-0032) session death is a loud verdict — so a
+    /// silent failure is exchanged for a visible one. That is the right way round.
+    pub fn execute(&self) -> anyhow::Result<()> {
+        let tail = match &self.tail {
+            StartNodeTail::Agent { model, effort } => tmux_session_manager::SessionTail::Agent {
+                model: model.as_deref(),
+                effort: effort.as_deref(),
+            },
+            StartNodeTail::Script { timeout_secs, env } => {
+                tmux_session_manager::SessionTail::Script {
+                    timeout_secs: *timeout_secs,
+                    env,
+                }
+            }
+        };
+        let sandbox_wrap = self
+            .sandbox
+            .as_ref()
+            .map(|sbx| tmux_session_manager::SandboxWrap {
+                docker_bin: &sbx.docker_bin,
+                uid: sbx.uid,
+                gid: sbx.gid,
+                marker: &self.session_name,
+                workdir: &self.working_dir,
+            });
+        tmux_session_manager::spawn(
+            &self.session_name,
+            &self.prompt,
+            &self.working_dir,
+            &self.run_id,
+            &self.node_id,
+            self.iter,
+            self.daemon_port,
+            self.tmux_cmd_override.as_deref(),
+            tail,
+            sandbox_wrap.as_ref(),
+        )
+    }
+}
+
 pub struct StartNodeResult {
     pub outcome: PrimitiveOutcome,
     pub events: Vec<event_log::Event>,
+    /// The session to launch, or `None` when there is nothing to launch
+    /// (`AlreadyDone` / `Rejected`). Execute it **after** appending `events`
+    /// (#485, ADR-0038).
+    pub spawn: Option<StartNodeSpawn>,
 }
 
 pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
@@ -70,6 +172,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
                     reason: format!("node '{}' not found in pipeline", params.node_id),
                 },
                 events: vec![],
+                spawn: None,
             }
         }
     };
@@ -78,6 +181,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         return StartNodeResult {
             outcome: PrimitiveOutcome::AlreadyDone,
             events: vec![],
+            spawn: None,
         };
     }
 
@@ -118,6 +222,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
                         reason: format!("failed to ensure sub-worktree: {e:#}"),
                     },
                     events: vec![],
+                    spawn: None,
                 };
             }
         }
@@ -202,6 +307,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
                 reason: format!("script node '{}' has an empty body", params.node_id),
             },
             events: vec![],
+            spawn: None,
         };
     }
 
@@ -227,14 +333,14 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     );
     let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
     let tail = if is_script {
-        tmux_session_manager::SessionTail::Script {
+        StartNodeTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
-            env: &script_env,
+            env: script_env,
         }
     } else {
-        tmux_session_manager::SessionTail::Agent {
-            model: resolved_model,
-            effort: resolved_effort,
+        StartNodeTail::Agent {
+            model: resolved_model.map(str::to_string),
+            effort: resolved_effort.map(str::to_string),
         }
     };
 
@@ -262,34 +368,36 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let session_name =
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
-    // #407: wrap the tail into the Run's container when sandboxed (manual
-    // force-spawn / restart door, #204). Marker = the session name (kill target).
-    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: params.docker_cmd_override.unwrap_or("docker"),
+    // #485 / ADR-0038: this is where the session USED to be spawned — before the
+    // caller had appended the `NodeStarted` built just above. That order left a
+    // live tmux session with no reservation in the event log, which is exactly the
+    // state the orphan sweep kills as an orphan (and which a failed append, only
+    // an `error!` at both call sites, left behind for good). This primitive is
+    // synchronous and DB-less by contract, so it cannot append; it hands back an
+    // *intention* the caller executes **after** the append instead. **Do not add a
+    // spawn path that bypasses that order** — the reaper's "absent ⇒ orphan"
+    // verdict is only sound because no session can exist before its reservation.
+    //
+    // #407: the sandbox wrap is rebuilt inside `StartNodeSpawn::execute` (manual
+    // force-spawn / retry door, #204); its marker is always the session name,
+    // which the targeted `/proc` kill path scans for.
+    let sandbox = sandboxed.then(|| StartNodeSandbox {
+        docker_bin: params.docker_cmd_override.unwrap_or("docker").to_string(),
         uid: crate::sandbox_container::host_uid(),
         gid: crate::sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: &working_dir,
     });
-    if let Err(e) = tmux_session_manager::spawn(
-        &session_name,
-        spawn_prompt,
-        &working_dir,
-        params.run_id,
-        params.node_id,
-        params.iter,
-        params.daemon_port,
-        params.tmux_cmd_override,
+    let spawn = StartNodeSpawn {
+        session_name,
+        prompt: spawn_prompt.to_string(),
+        working_dir,
+        run_id: params.run_id.to_string(),
+        node_id: params.node_id.to_string(),
+        iter: params.iter,
+        daemon_port: params.daemon_port,
+        tmux_cmd_override: params.tmux_cmd_override.map(str::to_string),
         tail,
-        sandbox_wrap.as_ref(),
-    ) {
-        return StartNodeResult {
-            outcome: PrimitiveOutcome::Rejected {
-                reason: format!("failed to spawn tmux session: {e}"),
-            },
-            events: vec![],
-        };
-    }
+        sandbox,
+    };
 
     let mut events = vec![node_started];
 
@@ -308,6 +416,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     StartNodeResult {
         outcome: PrimitiveOutcome::Executed,
         events,
+        spawn: Some(spawn),
     }
 }
 

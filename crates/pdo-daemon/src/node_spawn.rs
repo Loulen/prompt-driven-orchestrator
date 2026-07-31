@@ -554,6 +554,14 @@ pub(crate) async fn spawn_node(
         // A failed `NodeStarted` append means the reservation was NOT recorded:
         // treat it as a spawn abort (reap + RunFailed) rather than launching a
         // tmux session the run's event log has no record of.
+        //
+        // Since #485 (ADR-0038) this ordering is also another subsystem's
+        // correctness precondition, not just local hygiene: the orphan sweep's
+        // "absent from the log ⇒ orphan ⇒ kill" verdict is only sound because no
+        // session can exist before its reservation is durably appended. This was
+        // the one spawn path that already got it right, and it is why the sweep
+        // never killed a scheduler-spawned node once its snapshot was correctly
+        // ordered. Do not reorder this for readability.
         append_event_with(deps.db, deps.event_tx, &node_started)
             .await
             .context("failed to append node_started")?;

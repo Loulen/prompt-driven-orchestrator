@@ -269,6 +269,27 @@ struct AppState {
     /// `GET /stale/health` next to the heartbeat. Observability-only: the sweep
     /// never changes a flagged node's status (Slice 1).
     blocked_on_limit: Arc<std::sync::atomic::AtomicI64>,
+    /// Epoch-millis of the most recent orphan-sweep pass, or `0` if it has never
+    /// swept (#485). Its own gauge, **not** merged into `/stale/health`: that is
+    /// the stale detector's 30 s heartbeat, and the reaper is a different 60 s
+    /// loop — sharing the field would be a naming lie waiting to happen.
+    /// Surfaced by `GET /sessions` as `reaper.last_sweep_at`.
+    reaper_last_sweep_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Sessions killed by the orphan sweep **since this daemon booted** (#485) —
+    /// a monotonic counter, not a per-pass gauge. A kill is an *event*: counting
+    /// it is the only way the surface can answer "did the reaper kill my node?"
+    /// minutes after the fact. Resetting it each pass made the answer ~always
+    /// `0`, since the pass that kills is followed within seconds by an idle one.
+    /// Contrast `blocked_on_limit`, a genuine *level* that must be recomputed.
+    /// Not persisted — a restart resets it, and `journalctl` remains the record.
+    reaper_killed: Arc<std::sync::atomic::AtomicI64>,
+    /// Of those, how many were killed on an **absence** verdict — an absent run,
+    /// an absent node, or an unparseable session name (#485). Split out from
+    /// `reaper_killed` on purpose: a single counter cannot carry reasons, and
+    /// after #485 this is the class that became a "can no longer happen" on a
+    /// live session. Being cumulative is what makes "it must stay flat" a
+    /// checkable claim: flat now means *never incremented*, not *idle last pass*.
+    reaper_killed_for_absent_run: Arc<std::sync::atomic::AtomicI64>,
     /// Debug-only fault-injection knob (#251): a one-shot poison pill. When armed
     /// (`true`), the next stale sweep `panic!`s, then disarms itself (`swap`) —
     /// exercising the sweep's panic isolation and proving the *next* sweep
@@ -1472,7 +1493,7 @@ impl DaemonHandle {
             .and_then(|c| c.reaper_ttl_secs)
             .map(|n| n as u64);
         let ttl = tmux_session_manager::reaper_ttl_with(stored_ttl);
-        if let Err(e) = run_orphan_sweep(&self.state.db, &socket, ttl).await {
+        if let Err(e) = run_orphan_sweep(&self.state, &socket, ttl).await {
             warn!("Reaper sweep (test seam) failed: {e}");
         }
     }
@@ -1941,6 +1962,9 @@ pub async fn serve_with_config(
         panic_on_trigger_name: config.panic_on_trigger_name,
         last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
         )),
@@ -1979,7 +2003,7 @@ pub async fn serve_with_config(
         );
     } else {
         if let Err(e) = run_orphan_sweep(
-            &state.db,
+            &state,
             &state.tmux_socket(),
             tmux_session_manager::reaper_ttl(),
         )
@@ -2027,7 +2051,7 @@ pub async fn serve_with_config(
                 let st = reaper_state.clone();
                 let socket = socket.clone();
                 run_isolated("reaper", async move {
-                    if let Err(e) = run_orphan_sweep(&st.db, &socket, ttl).await {
+                    if let Err(e) = run_orphan_sweep(&st, &socket, ttl).await {
                         warn!("Reaper sweep failed: {e}");
                     }
                 })
@@ -6888,6 +6912,15 @@ pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason
     }
 }
 
+/// Spawn the Run's Pipeline Manager session.
+///
+/// **Its only reservation is `RunStarted`** (#485, ADR-0038): the orphan sweep
+/// resolves a `pdo-mgr-<run>` session against the *run*, not a node, so a manager
+/// spawned for a run whose `RunStarted` never landed is an orphan the sweep will
+/// legitimately kill — and it would be right to. Conformant by construction
+/// today: `create_run` appends `RunStarted` and `return Err`s on failure, well
+/// before either spawn site here (host, or the detached sandbox task). Keep it
+/// that way.
 fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
@@ -6977,19 +7010,42 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
 }
 
 /// `GET /sessions` — the live NodeRun-session count, the configured cap, the
-/// daemon version, and the persistent-service health, for the bottom status bar
-/// (admission control #159, version display #139, service persistence #156).
+/// daemon version, the persistent-service health, and the orphan-sweep gauge, for
+/// the bottom status bar (admission control #159, version display #139, service
+/// persistence #156, reaper observability #485).
 /// Manager sessions are excluded by construction (they are not nodes). The
 /// `service` object is computed once at boot and cached in `AppState`, so this
 /// polled endpoint stays subprocess-free (#156, D5).
+///
+/// Also carries the orphan-sweep gauge (#485, ADR-0038) as an additional JSON
+/// field rather than a dedicated route — the convention this project already
+/// states for `version`, and it keeps the vite dev-proxy whitelist unchanged
+/// (`/sessions` is already proxied). Before #485 a reaper kill was visible
+/// *only* in `journalctl`, which ADR-0034 names as this product's recurrent
+/// failure mode. The two counters are **cumulative since boot**, so "the reaper
+/// killed something" survives long enough to be read; what the gauge deliberately
+/// does **not** answer is "who killed *my* node", since it is instance-wide — a
+/// per-run answer needs an event, which waits on an events UI that does not exist
+/// yet, and `journalctl` still holds the per-session detail.
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
+    let ord = std::sync::atomic::Ordering::Relaxed;
+    let sweep_ms = state.reaper_last_sweep_ms.load(ord);
+    let last_sweep_at = (sweep_ms != 0)
+        .then(|| chrono::DateTime::from_timestamp_millis(sweep_ms))
+        .flatten()
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     Json(serde_json::json!({
         "live": live,
         "cap": cap,
         "version": env!("CARGO_PKG_VERSION"),
         "service": &*state.service_health,
+        "reaper": {
+            "last_sweep_at": last_sweep_at,
+            "killed": state.reaper_killed.load(ord),
+            "killed_for_absent_run": state.reaper_killed_for_absent_run.load(ord),
+        },
     }))
     .into_response()
 }
@@ -9306,66 +9362,187 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
 // --- Orphan sweep / reaper ---
 
-async fn run_orphan_sweep(db: &sqlx::SqlitePool, socket: &str, ttl: Duration) -> Result<()> {
-    let run_ids = load_all_run_ids(db).await?;
-    let mut run_states: HashMap<String, event_log::RunState> = HashMap::new();
+/// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
+///
+/// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (#485, ADR-0038).** The
+/// sweep's "absent" verdict is never true on its own — it is true *relative to
+/// two observations*, the tmux inventory and the event-log read. Before #485
+/// they ran in the other order (snapshot the whole log, then list tmux), so a
+/// session born in between was live in tmux and missing from a snapshot that
+/// predated it: `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
+/// its own spawn, and the liveness sweep then reported the death it had caused as
+/// `session_died` with `tmux_server_alive=true`. Two runs were lost in one night.
+///
+/// The correct order is sound because **the log only grows**: an absence
+/// observed *after* the inventory implies absence *at* the inventory, so a
+/// session missing from the log we read here cannot have existed when we listed
+/// — it is simply not in `names`, and it gets judged on the next pass with its
+/// reservation visible. Monotonicity works in this direction only; the reverse
+/// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
+///
+/// The window was never one instruction: it was one SQLite read per run
+/// (`load_all_run_ids` + `load_events` per id, 437 round-trips on a 5-connection
+/// pool — 21 s measured), so it **grew with the age of the instance**. The
+/// boot-time caller never saw it (it runs before `build_router`, so no spawn is
+/// concurrent); only the periodic reaper races live spawns, which is why the old
+/// doc-comment claiming "at daemon boot" kept the defect invisible for so long.
+///
+/// Finally: this function's correctness rests on a precondition it cannot
+/// enforce — **no tmux session exists before the event that reserves it is
+/// durably appended**. `node_spawn::spawn_node`, `node_primitives::start_node`'s
+/// callers and `spawn_manager_session` all own that half; the reaper is only its
+/// consumer.
+async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Result<()> {
+    // (1) EDGE FIRST — the tmux inventory. Sorted into a `Vec` so kill order and
+    //     log order are deterministic (`list_pdo_sessions` returns a `HashSet`).
+    let mut names: Vec<String> = tmux_session_manager::list_pdo_sessions(socket)
+        .into_iter()
+        .collect();
+    names.sort();
 
-    for run_id in &run_ids {
-        let events = load_events(db, run_id).await?;
-        if let Some(state) = event_log::project(&events) {
-            run_states.insert(run_id.clone(), state);
-        }
+    // (2) ONE clock for the whole pass, taken right after the inventory and
+    //     before any read — byte-identical TTL behaviour to the pre-#485 order
+    //     (which took it on the line after `list_pdo_sessions`), rather than "a
+    //     bit more aggressive because the reads took 4 s".
+    let now = chrono::Utc::now();
+
+    // (3) EDGE SECOND — project ONLY the runs that actually hold a live session.
+    //     The lookup's domain is `{ run_id | ∃ live session }` by construction,
+    //     so `load_all_run_ids` + project-everything was dead weight: this
+    //     removes the sweep's N+1 as a side effect of the reordering, not as a
+    //     performance patch (the other eight `load_all_run_ids` callers really do
+    //     need every run — see #493).
+    //
+    //     The `?` on `load_events` is load-bearing and must NOT be swallowed into
+    //     `None`: a pool timeout — exactly what the #485 journal showed
+    //     (`aquired_after_secs=3.944`) — would read a live run as "absent" and
+    //     kill its session. Propagating is fail-closed: both production callers
+    //     only `warn!`, so an aborted pass reaps *nothing* and retries in 60 s.
+    //     `load_events` never errors on an unknown run_id (it is a `fetch_all`:
+    //     zero rows = `Ok(vec![])` → `project` → `None` → absent → killed, which
+    //     is what `reaper_kills_shell_of_absent_run` already pins).
+    let mut inputs: Vec<tmux_session_manager::SweepInput> = Vec::with_capacity(names.len());
+    let mut projected: HashMap<String, Option<event_log::RunState>> = HashMap::new();
+
+    for session_name in names {
+        let parsed = tmux_session_manager::parse_session_name(&session_name);
+        let info = match &parsed {
+            // Unparseable name: no lookup at all, exactly as before.
+            None => None,
+            Some(p) => {
+                let (run_id, node_id) = match p {
+                    tmux_session_manager::ParsedSession::Manager { run_id } => {
+                        (run_id.as_str(), "__manager__")
+                    }
+                    tmux_session_manager::ParsedSession::Shell { run_id } => {
+                        (run_id.as_str(), "__shell__")
+                    }
+                    tmux_session_manager::ParsedSession::NodeRun {
+                        run_id, node_id, ..
+                    } => (run_id.as_str(), node_id.as_str()),
+                };
+                if !projected.contains_key(run_id) {
+                    let events = load_events(&state.db, run_id).await?;
+                    // Keep the `if let Some(..)` shape: synthesising an empty
+                    // `RunState` for a fragmentary log (#328 — events with no
+                    // `RunStarted`) would turn "absent" into "keep".
+                    projected.insert(run_id.to_string(), event_log::project(&events));
+                }
+                projected
+                    .get(run_id)
+                    .and_then(|s| s.as_ref())
+                    .and_then(|rs| reaper_info_for(rs, node_id))
+            }
+        };
+        inputs.push(tmux_session_manager::SweepInput {
+            session_name,
+            parsed,
+            info,
+        });
     }
 
-    tmux_session_manager::sweep_orphans(
-        socket,
-        |run_id, node_id, _iter| {
-            let run_state = run_states.get(run_id)?;
-            let is_archived = run_state.status == event_log::RunStatus::Archived;
+    // (4) PURE — no tmux, no DB, no clock inside.
+    let decisions = tmux_session_manager::decide_sweep(&inputs, ttl, now);
 
-            if node_id == "__manager__" {
-                return Some(tmux_session_manager::NodeRunInfo {
-                    completed_at: run_state
-                        .completed_at
-                        .as_deref()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&chrono::Utc)),
-                    is_archived,
-                });
-            }
+    // (5) EDGE — log + kill. Nothing has been killed before this point, so a DB
+    //     error in (3) aborts the pass having reaped nothing: the same
+    //     all-or-nothing property the old snapshot phase had.
+    let tally = tmux_session_manager::apply_sweep(socket, &decisions);
 
-            // #316: the run shell is not a projected node — resolve it against
-            // the run itself (mirror of `__manager__`). Without this branch,
-            // `run_state.nodes.get("__shell__")` is None → the sweep would kill
-            // the shell as "absent" on every pass. The Shell sweep arm ignores
-            // `completed_at` (no TTL), so only `is_archived` is load-bearing.
-            if node_id == "__shell__" {
-                return Some(tmux_session_manager::NodeRunInfo {
-                    completed_at: run_state
-                        .completed_at
-                        .as_deref()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&chrono::Utc)),
-                    is_archived,
-                });
-            }
+    // #485: publish the pass's tally for `GET /sessions`. The counters ACCUMULATE
+    // (`fetch_add`, not `store`): a per-pass gauge answers "did the *last* pass
+    // kill?", which is ~always "no" — the pass that kills is followed within
+    // seconds by an idle one that overwrites the count with 0, so an operator
+    // asking "did the reaper kill my node?" reads `0` however fast they look.
+    // `blocked_on_limit` (#290) is a *level* (how many nodes are blocked right
+    // now) and is rightly recomputed; a kill is an **event**, and events are
+    // counted, never levelled. Cumulative-since-boot also makes the tally
+    // independent of *which* pass did the killing, which a per-pass store made
+    // racy to observe at all (the periodic loop's first tick fires immediately,
+    // so it and an explicit sweep can trade places under load).
+    let ord = std::sync::atomic::Ordering::Relaxed;
+    state
+        .reaper_last_sweep_ms
+        .store(now.timestamp_millis(), ord);
+    state.reaper_killed.fetch_add(tally.killed, ord);
+    state
+        .reaper_killed_for_absent_run
+        .fetch_add(tally.killed_for_absent_run, ord);
 
-            let node = run_state.nodes.get(node_id)?;
-            let completed_at = node
+    Ok(())
+}
+
+/// The reaper's facts about one session's owner — the pre-#485 lookup closure
+/// (`lib.rs:9308-9350`), logic **unchanged**, now called *after* the inventory.
+///
+/// Lives here rather than in `tmux_session_manager` so that deep module keeps its
+/// zero dependency on `event_log`; [`tmux_session_manager::NodeRunInfo`] exists
+/// precisely as the decoupled facts type. `None` = absent from the log, which is
+/// the sweep's kill arm.
+fn reaper_info_for(
+    run_state: &event_log::RunState,
+    node_id: &str,
+) -> Option<tmux_session_manager::NodeRunInfo> {
+    let is_archived = run_state.status == event_log::RunStatus::Archived;
+
+    if node_id == "__manager__" {
+        return Some(tmux_session_manager::NodeRunInfo {
+            completed_at: run_state
                 .completed_at
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc));
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            is_archived,
+        });
+    }
 
-            Some(tmux_session_manager::NodeRunInfo {
-                completed_at,
-                is_archived,
-            })
-        },
-        ttl,
-    );
+    // #316: the run shell is not a projected node — resolve it against
+    // the run itself (mirror of `__manager__`). Without this branch,
+    // `run_state.nodes.get("__shell__")` is None → the sweep would kill
+    // the shell as "absent" on every pass. The Shell sweep arm ignores
+    // `completed_at` (no TTL), so only `is_archived` is load-bearing.
+    if node_id == "__shell__" {
+        return Some(tmux_session_manager::NodeRunInfo {
+            completed_at: run_state
+                .completed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            is_archived,
+        });
+    }
 
-    Ok(())
+    let node = run_state.nodes.get(node_id)?;
+    let completed_at = node
+        .completed_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    Some(tmux_session_manager::NodeRunInfo {
+        completed_at,
+        is_archived,
+    })
 }
 
 // --- Pane endpoint ---
@@ -10821,11 +10998,14 @@ async fn node_start(
 /// Guards run **before** any side effect, in order:
 ///  - run must exist (`404`) and the node must not already be `Running` (`409`);
 ///  - **D4 (orphan-session fix):** the derived `NodeStarted` is pre-validated
-///    through [`transition_guard`] *before* the primitive spawns its tmux
-///    session. `node_primitives::start_node` spawns the session and only then
-///    returns the event for the caller to append, so leaning on `append_event`'s
-///    backstop alone would leave an orphan session (and a lying `200`) whenever
-///    the run cannot accept a start. `RunStatus::is_live()` is deliberately
+///    through [`transition_guard`] *before* anything is spawned. Since #485 the
+///    primitive no longer spawns at all — it returns a `StartNodeSpawn` this
+///    handler executes *after* the append — so the pre-validation is now belt and
+///    braces rather than the only thing standing between a refused start and an
+///    orphan session (plus a lying `200`). Keep it: it is what makes the refusal
+///    a `409` here instead of an `error!` swallowed by the append loop below, and
+///    the guard it calls is the same one `append_event` uses as a backstop.
+///    `RunStatus::is_live()` is deliberately
 ///    *not* the predicate: it admits `Paused`, which the append backstop
 ///    (`run_accepts_lifecycle` = `Running`/`AwaitingUser`) rejects — that gap
 ///    would orphan a session on a paused run. Pre-validating the actual event
@@ -10976,6 +11156,19 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     for ev in &result.events {
         if let Err(e) = append_event(state, ev).await {
             error!("failed to append event: {e}");
+        }
+    }
+
+    // #485 / ADR-0038: reserve, THEN spawn. The primitive used to spawn the
+    // session itself and hand the reservation back, so between the two calls a
+    // live session had no `NodeStarted` in the log — and the orphan sweep kills
+    // exactly that. Appending first also means a rejected append no longer leaves
+    // an orphan session; the residual risk (append landed, spawn failed) is what
+    // `spawn_node` has always carried, and #469/ADR-0032 makes a missing session a
+    // loud verdict rather than a silent one.
+    if let Some(spawn) = &result.spawn {
+        if let Err(e) = spawn.execute() {
+            error!("failed to spawn tmux session: {e}");
         }
     }
 
@@ -11210,6 +11403,18 @@ async fn node_retry(
     for ev in &start_result.events {
         if let Err(e) = append_event(&state, ev).await {
             error!("failed to append start event: {e}");
+        }
+    }
+
+    // #485 / ADR-0038: reserve, THEN spawn — see the same pair in
+    // `force_spawn_node`. Retry is the *more* exposed of the two paths: it appends
+    // `NodeInvalidated` for the node itself, whose applier does an unconditional
+    // `nodes.remove(node_id)`, so the reaper's lookup found no entry at **every**
+    // iteration during the old spawn-then-append window, not just on a node with
+    // no history.
+    if let Some(spawn) = &start_result.spawn {
+        if let Err(e) = spawn.execute() {
+            error!("failed to spawn tmux session: {e}");
         }
     }
 
@@ -13275,6 +13480,9 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -13321,6 +13529,9 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -13730,7 +13941,7 @@ mod tests {
         // non-existent tmux socket (no sessions to kill — we only care that the
         // sweep leaves the disk and run status untouched).
         run_orphan_sweep(
-            &state.db,
+            &state,
             "pdo-test-doctrine-nonexistent",
             std::time::Duration::ZERO,
         )
@@ -13810,6 +14021,19 @@ mod tests {
             json["version"],
             env!("CARGO_PKG_VERSION"),
             "the status-bar payload carries the daemon version (#139)"
+        );
+        // #485 / ADR-0038: the orphan-sweep gauge rides the same payload. This
+        // daemon has never swept, so the timestamp is null and both counters are
+        // zero — the shape is what matters here (the moving parts are pinned by
+        // `tests/tmux_lifecycle.rs::genuine_orphans_are_still_reaped_and_counted`).
+        assert_eq!(
+            json["reaper"],
+            serde_json::json!({
+                "last_sweep_at": serde_json::Value::Null,
+                "killed": 0,
+                "killed_for_absent_run": 0,
+            }),
+            "the status-bar payload carries the reaper gauge (#485)"
         );
     }
 
@@ -17193,6 +17417,9 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -22885,6 +23112,9 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -23078,6 +23308,9 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),

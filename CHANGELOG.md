@@ -10,6 +10,54 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.9.0
+
+Rien de cassant. Une note, parce qu'elle change **rétroactivement** ce qu'un opérateur peut croire de
+ses incidents passés.
+
+### Le balayage d'orphelins tuait les sessions qu'il venait de spawner (#485, ADR-0038)
+
+Le reaper prenait ses deux observations dans le mauvais ordre : instantané de **tous** les Runs
+(N+1, 21 s mesurées sur 437 Runs en production) **puis** énumération des sessions tmux. Une session née
+dans cet intervalle était vivante dans tmux et absente de l'instantané — donc classée orpheline, et
+tuée. Dans une occurrence, **150 ms après son propre spawn**. Neuf occurrences en huit jours, deux Runs
+perdus dans la nuit du 2026-07-30 ; la probabilité croissait avec le nombre de Runs conservés, ce qui
+en faisait un défaut qui empire tout seul.
+
+**Ce qu'il faut relire dans vos incidents passés** : la veille de vivacité imputait ces morts à tmux
+sous un `session_died: tmux session pdo-… no longer exists` parfaitement crédible, suivi d'un
+`run_stalled` et d'un Run `Failed`. Tout verdict `session_died` antérieur à cette version sur un nœud
+qui venait de démarrer est donc suspect — la cause nommée accusait tmux, la RAM ou l'API pour un bug
+d'ordonnancement d'observations. Le seul témoin du kill était `journalctl`.
+
+L'ordre est désormais porté par les types plutôt que par la discipline des appelants :
+`decide_sweep` est pure et reçoit l'inventaire tmux comme **donnée d'entrée** clé par session, si bien
+que l'ordre inverse n'est plus exprimable ; la lecture du log vient après, et la preuve est par
+contraposée (le log ne fait que croître, donc une absence constatée *après* l'inventaire garantit
+l'absence *au moment* de l'inventaire). Le N+1 disparaît par construction : seuls les Runs qui tiennent
+une session vivante sont projetés. Côté spawn, `start_node` ne spawne plus — elle rend une intention
+que l'appelant exécute **après** l'append de `NodeStarted`, de sorte qu'aucune session n'existe avant
+sa réservation.
+
+Aucun changement de politique de reap : les trois motifs d'orphelinage, le shell sans TTL (#316), le
+Manager sans TTL (#458) et l'aveuglement à `iter` sont inchangés, et les huit messages de kill sont
+byte-identiques. Deux ajouts d'observabilité : les kills pour **absence** et pour **nom non reconnu**
+passent en `warn!` (le ménage nominal — archivé, TTL — reste en `info!`), donc `journalctl -p warning`
+les trouve sans grep intégral ; et `GET /sessions` porte `reaper: { last_sweep_at, killed,
+killed_for_absent_run }`. Les deux compteurs sont **cumulés depuis le
+démarrage du daemon** (non persistés : un redémarrage les remet à zéro), parce qu'un kill est un
+*événement* — une jauge par passe répondait « le *dernier* balayage a-t-il tué ? », donc `0` quelle que
+soit la vitesse à laquelle on regarde, la passe qui tue étant suivie en quelques secondes d'une passe à
+vide. `killed_for_absent_run` doit rester **plat** : après ce correctif, une absence constatée sur une
+session vivante est un « ne peut plus arriver », et le cumul est ce qui rend cette affirmation
+vérifiable. Le détail par session reste dans `journalctl`.
+
+Ne ferme pas #498 : le sous-worktree et la branche d'une session tuée survivent et condamnent le nœud
+au respawn ; ce correctif n'en supprime que le producteur principal.
+
+> **Note de numérotation** : cette ADR est **0038**. Elle a été écrite et revue sous le numéro 0037,
+> que #489 (1.8.0) a pris entre-temps ; le renommage est purement éditorial.
+
 ## 1.8.0
 
 Un changement cassant livré sous un bump **mineur**, dans la ligne des précédents posés en 1.2.0, 1.3.0

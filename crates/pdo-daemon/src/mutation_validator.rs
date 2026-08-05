@@ -1,12 +1,12 @@
 use crate::{event_log, pipeline, scheduler};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MutationRejection {
+pub(crate) struct MutationRejection {
     pub node_id: String,
     pub reason: String,
 }
 
-pub fn validate_run_mutation(
+pub(crate) fn validate_run_mutation(
     old: &pipeline::PipelineDef,
     new: &pipeline::PipelineDef,
     run_state: &event_log::RunState,

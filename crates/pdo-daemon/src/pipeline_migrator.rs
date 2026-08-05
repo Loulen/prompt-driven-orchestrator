@@ -122,7 +122,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
 }
 
 #[derive(Debug)]
-pub struct MigrateResult {
+pub(crate) struct MigrateResult {
     pub migrated: bool,
     pub yaml_text: String,
     pub prompt_moves: Vec<(String, String)>,
@@ -211,7 +211,7 @@ edges:
     target: { node: end, port: result }
 "#;
 
-pub fn migrate_pipeline_yaml(
+pub(crate) fn migrate_pipeline_yaml(
     yaml_text: &str,
     pipeline_path: &Path,
 ) -> Result<MigrateResult, String> {
@@ -1394,7 +1394,7 @@ fn body_members(
     out
 }
 
-pub fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String> {
+pub(crate) fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String> {
     let yaml_text = std::fs::read_to_string(pipeline_path)
         .map_err(|e| format!("read {}: {e}", pipeline_path.display()))?;
 
@@ -1424,7 +1424,9 @@ pub fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-pub fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
     let mut count = 0;
     let entries = std::fs::read_dir(pipelines_dir)
         .map_err(|e| format!("read dir {}: {e}", pipelines_dir.display()))?;
@@ -1469,7 +1471,7 @@ pub fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
 /// an existing canonical file) is preserved rather than destroyed.
 ///
 /// Returns the number of prompt files moved.
-pub fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usize, String> {
+pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usize, String> {
     let flat_dir = pipelines_dir.join("prompts");
     if !flat_dir.is_dir() {
         return Ok(0);
@@ -1577,7 +1579,9 @@ pub fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usize, Stri
 /// target but no Merge node sits between them and the target.
 ///
 /// Returns info-only diagnostics (ADR-0001: non-blocking).
-pub fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     let cm_ids: HashSet<&str> = pipeline

@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use crate::variable_resolver;
 
 #[derive(Debug, Clone)]
-pub struct EvalContext {
+pub(crate) struct EvalContext {
     pub iter: i64,
     pub fields: HashMap<String, serde_yaml::Value>,
     pub variables: HashMap<String, serde_yaml::Value>,
 }
 
 impl EvalContext {
-    pub fn new(iter: i64) -> Self {
+    pub(crate) fn new(iter: i64) -> Self {
         Self {
             iter,
             fields: HashMap::new(),
@@ -18,12 +18,12 @@ impl EvalContext {
         }
     }
 
-    pub fn with_variables(mut self, variables: HashMap<String, serde_yaml::Value>) -> Self {
+    pub(crate) fn with_variables(mut self, variables: HashMap<String, serde_yaml::Value>) -> Self {
         self.variables = variables;
         self
     }
 
-    pub fn with_fields(mut self, fields: HashMap<String, serde_yaml::Value>) -> Self {
+    pub(crate) fn with_fields(mut self, fields: HashMap<String, serde_yaml::Value>) -> Self {
         self.fields = fields;
         self
     }
@@ -127,7 +127,7 @@ fn to_f64_num(n: &serde_yaml::Number) -> f64 {
     }
 }
 
-pub fn evaluate_with_iter(when: &serde_yaml::Value, ctx: &EvalContext) -> bool {
+pub(crate) fn evaluate_with_iter(when: &serde_yaml::Value, ctx: &EvalContext) -> bool {
     let Some(map) = when.as_mapping() else {
         return false;
     };
@@ -168,14 +168,14 @@ fn evaluate_any_with_iter(clauses: &serde_yaml::Value, ctx: &EvalContext) -> boo
     seq.iter().any(|clause| evaluate_with_iter(clause, ctx))
 }
 
-pub struct HaltContext {
+pub(crate) struct HaltContext {
     pub iter: i64,
     pub node_id: String,
     pub variables: HashMap<String, serde_yaml::Value>,
     pub fields: HashMap<String, serde_yaml::Value>,
 }
 
-pub fn render_halt_message(template: &str, ctx: &HaltContext) -> String {
+pub(crate) fn render_halt_message(template: &str, ctx: &HaltContext) -> String {
     let mut result = template
         .replace("{iter}", &ctx.iter.to_string())
         .replace("{node-id}", &ctx.node_id);

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-pub struct ResolveError {
+pub(crate) struct ResolveError {
     pub variable_name: String,
 }
 
@@ -12,7 +12,7 @@ impl std::fmt::Display for ResolveError {
 }
 
 #[allow(dead_code)]
-pub fn resolve_variables(
+pub(crate) fn resolve_variables(
     pipeline_defaults: &HashMap<String, serde_yaml::Value>,
     run_overrides: &HashMap<String, serde_yaml::Value>,
 ) -> HashMap<String, serde_yaml::Value> {
@@ -23,7 +23,7 @@ pub fn resolve_variables(
     resolved
 }
 
-pub fn resolve_value(
+pub(crate) fn resolve_value(
     operand: &serde_yaml::Value,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Result<serde_yaml::Value, ResolveError> {

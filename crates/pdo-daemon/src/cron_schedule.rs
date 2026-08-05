@@ -10,7 +10,7 @@ use chrono::{DateTime, Datelike, Duration, SecondsFormat, TimeZone, Timelike, Ut
 
 /// A parsed 5-field cron expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CronSchedule {
+pub(crate) struct CronSchedule {
     minutes: Vec<u32>,
     hours: Vec<u32>,
     days_of_month: Vec<u32>,
@@ -24,7 +24,7 @@ pub struct CronSchedule {
 
 /// Error parsing a cron expression.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CronError {
+pub(crate) enum CronError {
     #[error("cron expression must have exactly 5 fields, got {0}")]
     FieldCount(usize),
     #[error("invalid value in cron field '{field}': {detail}")]
@@ -34,7 +34,7 @@ pub enum CronError {
 impl CronSchedule {
     /// Parse a standard 5-field cron expression
     /// (`minute hour day-of-month month day-of-week`).
-    pub fn parse(expr: &str) -> Result<Self, CronError> {
+    pub(crate) fn parse(expr: &str) -> Result<Self, CronError> {
         let fields: Vec<&str> = expr.split_whitespace().collect();
         if fields.len() != 5 {
             return Err(CronError::FieldCount(fields.len()));
@@ -62,7 +62,7 @@ impl CronSchedule {
     /// Returns `None` only if no match is found within a bounded search horizon
     /// (e.g. an impossible expression like Feb 30) — callers treat that as
     /// "never fires".
-    pub fn next_fire_after<Tz: TimeZone>(&self, now: DateTime<Tz>) -> Option<DateTime<Tz>> {
+    pub(crate) fn next_fire_after<Tz: TimeZone>(&self, now: DateTime<Tz>) -> Option<DateTime<Tz>> {
         // Start from the next whole minute strictly after `now`.
         let mut candidate = now
             .with_second(0)?
@@ -92,7 +92,7 @@ impl CronSchedule {
     /// would print `+HH:MM` — exactly the #222 bug. The type makes the canonical
     /// `…Z` impossible to violate. (`next_fire_after` stays generic over `Tz`
     /// for its own tz-aware tests; this wrapper sits on top in UTC.)
-    pub fn next_fire_utc(&self, now: DateTime<Utc>) -> Option<String> {
+    pub(crate) fn next_fire_utc(&self, now: DateTime<Utc>) -> Option<String> {
         self.next_fire_after(now)
             .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
     }

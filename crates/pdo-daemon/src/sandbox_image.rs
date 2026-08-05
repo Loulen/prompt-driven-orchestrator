@@ -64,7 +64,7 @@ const EMBEDDED_DOCKERFILE: &str = include_str!("../assets/sandbox/Dockerfile");
 /// Env var pointant les invocations docker vers un exécutable fake (seam test/intégration).
 /// Miroir de [`crate::tmux_session_manager::TMUX_CMD_OVERRIDE_ENV`] : lue UNE fois au bord,
 /// jamais dans le cœur.
-pub const DOCKER_CMD_OVERRIDE_ENV: &str = "PDO_DOCKER_CMD_OVERRIDE";
+pub(crate) const DOCKER_CMD_OVERRIDE_ENV: &str = "PDO_DOCKER_CMD_OVERRIDE";
 
 /// Message d'erreur unique quand le binaire `docker` est introuvable sur le PATH. Devient la
 /// `reason` d'un `RunFailed` (US-16) : jamais d'exécution silencieuse sur l'hôte.

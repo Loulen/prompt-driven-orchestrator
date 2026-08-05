@@ -8,7 +8,7 @@ use crate::pipeline::{NodeType, PipelineDef};
 use crate::switch_router;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchedulerAction {
+pub(crate) enum SchedulerAction {
     Spawn {
         node_id: String,
         iter: i64,
@@ -100,7 +100,7 @@ pub(crate) fn collection_started_payload(action: &SchedulerAction) -> Option<ser
 /// edge handling in [`evaluate_outgoing_edges_with_context`] (which never
 /// fires when the loop is the very first downstream of `Start`, because Start
 /// itself never "completes" in the scheduler's eyes).
-pub fn seed_pending_loops(
+pub(crate) fn seed_pending_loops(
     pipeline: &PipelineDef,
     run_state: &RunState,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
@@ -162,7 +162,7 @@ pub fn seed_pending_loops(
 }
 
 #[cfg(test)]
-pub fn evaluate_outgoing_edges(
+pub(crate) fn evaluate_outgoing_edges(
     pipeline: &PipelineDef,
     run_state: &RunState,
     completed_node_id: &str,
@@ -176,7 +176,7 @@ pub fn evaluate_outgoing_edges(
     )
 }
 
-pub fn evaluate_outgoing_edges_with_context(
+pub(crate) fn evaluate_outgoing_edges_with_context(
     pipeline: &PipelineDef,
     run_state: &RunState,
     completed_node_id: &str,
@@ -207,7 +207,7 @@ pub fn evaluate_outgoing_edges_with_context(
 /// scheduler entry point: the daemon's event-driven handlers
 /// (`handle_node_completion`, `re_evaluate_after_command`) call it for each
 /// completed producer.
-pub fn evaluate_outgoing_edges_full(
+pub(crate) fn evaluate_outgoing_edges_full(
     pipeline: &PipelineDef,
     run_state: &RunState,
     completed_node_id: &str,
@@ -654,7 +654,7 @@ fn reaches(pipeline: &PipelineDef, from: &str, to: &str) -> bool {
     false
 }
 
-pub fn resolve_max_iter(
+pub(crate) fn resolve_max_iter(
     loop_node: &crate::pipeline::NodeDef,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> i64 {
@@ -723,7 +723,7 @@ fn handle_loop_input(
     actions
 }
 
-pub fn evaluate_loop_body_completion(
+pub(crate) fn evaluate_loop_body_completion(
     pipeline: &PipelineDef,
     run_state: &RunState,
     loop_node_id: &str,
@@ -884,7 +884,7 @@ fn handle_collection_entry(
 /// fire the region's exits once (`Complete` if a target is `End`). The region
 /// twin of [`evaluate_foreach_body_completion`]; called from the lib.rs sweep
 /// after each node completion / re-evaluation, on fresh projected state.
-pub fn evaluate_collection_barrier(
+pub(crate) fn evaluate_collection_barrier(
     pipeline: &PipelineDef,
     run_state: &RunState,
     region: &crate::pipeline::LoopRegion,

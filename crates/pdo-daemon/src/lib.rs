@@ -1,3 +1,8 @@
+// #494 / ADR-0039: the daemon is a single crate of sibling modules. A `pub`
+// item with no consumer outside its own file is a leak — this lint flags it so
+// `clippy -D warnings` in CI keeps the crate's surface from re-widening.
+#![warn(unreachable_pub)]
+
 pub mod admission;
 mod blackboard;
 mod boot_recovery;
@@ -11,25 +16,25 @@ mod event_log;
 #[allow(dead_code)]
 mod fire_decision;
 mod frontmatter_parser;
-pub mod graph_resolver;
+mod graph_resolver;
 mod guard_runner;
 mod input_resolution;
 mod instance_config;
-pub mod library_store;
+mod library_store;
 #[allow(dead_code)]
 mod loop_region;
 #[allow(dead_code)]
 mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;
-pub mod node_primitives;
+mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
 mod pipeline;
-pub mod pipeline_migrator;
+mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
-pub mod price_table;
+mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
 pub(crate) mod restart_verdict;
@@ -50,7 +55,7 @@ pub mod stale_detector;
 mod stats;
 mod switch_router;
 pub mod tmux_session_manager;
-pub mod transition_guard;
+mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]

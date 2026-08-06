@@ -14,7 +14,7 @@ use crate::{blackboard, tmux_session_manager};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PrimitiveOutcome {
+pub(crate) enum PrimitiveOutcome {
     Executed,
     AlreadyDone,
     Rejected { reason: String },
@@ -24,7 +24,7 @@ pub enum PrimitiveOutcome {
 // start_node
 // ---------------------------------------------------------------------------
 
-pub struct StartNodeParams<'a> {
+pub(crate) struct StartNodeParams<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
     pub iter: i64,
@@ -68,7 +68,7 @@ pub struct StartNodeParams<'a> {
 /// Owns its data (`String`/`PathBuf`) because [`tmux_session_manager::SessionTail`]
 /// and [`tmux_session_manager::SandboxWrap`] borrow — they are rebuilt inside
 /// [`StartNodeSpawn::execute`].
-pub struct StartNodeSpawn {
+pub(crate) struct StartNodeSpawn {
     session_name: String,
     prompt: String,
     working_dir: PathBuf,
@@ -111,7 +111,7 @@ impl StartNodeSpawn {
     /// `NodeStarted` with no session. That is exactly what `spawn_node` has always
     /// done, and since #469 (ADR-0032) session death is a loud verdict — so a
     /// silent failure is exchanged for a visible one. That is the right way round.
-    pub fn execute(&self) -> anyhow::Result<()> {
+    pub(crate) fn execute(&self) -> anyhow::Result<()> {
         let tail = match &self.tail {
             StartNodeTail::Agent { model, effort } => tmux_session_manager::SessionTail::Agent {
                 model: model.as_deref(),
@@ -149,7 +149,7 @@ impl StartNodeSpawn {
     }
 }
 
-pub struct StartNodeResult {
+pub(crate) struct StartNodeResult {
     pub outcome: PrimitiveOutcome,
     pub events: Vec<event_log::Event>,
     /// The session to launch, or `None` when there is nothing to launch
@@ -158,7 +158,7 @@ pub struct StartNodeResult {
     pub spawn: Option<StartNodeSpawn>,
 }
 
-pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
+pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     let node = match params
         .pipeline
         .nodes
@@ -522,19 +522,21 @@ fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
 // stop_node
 // ---------------------------------------------------------------------------
 
-pub struct StopNodeParams<'a> {
+pub(crate) struct StopNodeParams<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
     pub iter: i64,
     pub tmux_socket: &'a str,
 }
 
-pub struct StopNodeResult {
+// #494: some fields are asserted on only by this module's unit tests since demotion.
+#[allow(dead_code)]
+pub(crate) struct StopNodeResult {
     pub outcome: PrimitiveOutcome,
     pub events: Vec<event_log::Event>,
 }
 
-pub fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
+pub(crate) fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
     let session_name =
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
 
@@ -562,19 +564,21 @@ pub fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
 // invalidate_nodes
 // ---------------------------------------------------------------------------
 
-pub struct InvalidateNodesParams<'a> {
+pub(crate) struct InvalidateNodesParams<'a> {
     pub run_id: &'a str,
     pub node_ids: &'a [String],
     pub artifacts_dir: &'a Path,
 }
 
-pub struct InvalidateNodesResult {
+// #494: some fields are asserted on only by this module's unit tests since demotion.
+#[allow(dead_code)]
+pub(crate) struct InvalidateNodesResult {
     pub outcome: PrimitiveOutcome,
     pub events: Vec<event_log::Event>,
     pub deleted_dirs: Vec<PathBuf>,
 }
 
-pub fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> InvalidateNodesResult {
+pub(crate) fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> InvalidateNodesResult {
     if params.node_ids.is_empty() {
         return InvalidateNodesResult {
             outcome: PrimitiveOutcome::Executed,
@@ -620,19 +624,23 @@ pub fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> InvalidateNodesRe
 // inject_outputs
 // ---------------------------------------------------------------------------
 
-pub struct InjectOutputsParams<'a> {
-    pub node_id: &'a str,
-    pub iter: i64,
-    pub artifacts: &'a HashMap<String, String>,
-    pub artifacts_dir: &'a Path,
+pub(crate) struct InjectOutputsParams<'a> {
+    pub(crate) node_id: &'a str,
+    pub(crate) iter: i64,
+    pub(crate) artifacts: &'a HashMap<String, String>,
+    pub(crate) artifacts_dir: &'a Path,
 }
 
-pub struct InjectOutputsResult {
-    pub outcome: PrimitiveOutcome,
-    pub written_paths: Vec<PathBuf>,
+// #494: fields are asserted on only by this module's unit tests since demotion.
+#[allow(dead_code)]
+pub(crate) struct InjectOutputsResult {
+    pub(crate) outcome: PrimitiveOutcome,
+    pub(crate) written_paths: Vec<PathBuf>,
 }
 
-pub fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
     if params.artifacts.is_empty() {
         return InjectOutputsResult {
             outcome: PrimitiveOutcome::Executed,

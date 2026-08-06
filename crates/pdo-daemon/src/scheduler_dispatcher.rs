@@ -3,12 +3,15 @@ use crate::graph_resolver;
 use crate::pipeline::PipelineDef;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadySpawn {
+pub(crate) struct ReadySpawn {
     pub node_id: String,
     pub iter: i64,
 }
 
-pub fn compute_ready_to_spawn(pipeline: &PipelineDef, run_state: &RunState) -> Vec<ReadySpawn> {
+pub(crate) fn compute_ready_to_spawn(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+) -> Vec<ReadySpawn> {
     graph_resolver::ready_nodes(pipeline, run_state)
         .into_iter()
         .filter(|node_id| match run_state.nodes.get(node_id) {
@@ -24,7 +27,7 @@ pub fn compute_ready_to_spawn(pipeline: &PipelineDef, run_state: &RunState) -> V
 /// These already exist in the run state (so [`compute_ready_to_spawn`] skips
 /// them) but hold no session yet. The dispatcher retries them against the
 /// session cap whenever a slot may have freed (admission control, #159).
-pub fn waiting_nodes(run_state: &RunState) -> Vec<ReadySpawn> {
+pub(crate) fn waiting_nodes(run_state: &RunState) -> Vec<ReadySpawn> {
     let mut waiting: Vec<ReadySpawn> = run_state
         .nodes
         .values()

@@ -44,7 +44,7 @@ use crate::event_log::{Event, EventKind};
 /// `None` — a run created by a pre-#503 daemon, or a spawn path that recorded no
 /// base — means *no adoption*. An unknown base is not a licence to rewrite a
 /// branch.
-pub fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+pub(crate) fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
     events
         .iter()
         .rev()
@@ -63,7 +63,7 @@ pub fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Option<Stri
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MergeOutcome {
+pub(crate) enum MergeOutcome {
     AutoMerged {
         branch_count: usize,
         merged_md: String,
@@ -73,7 +73,7 @@ pub enum MergeOutcome {
     },
 }
 
-pub fn determine_outcome(
+pub(crate) fn determine_outcome(
     upstream_branches: &[&str],
     conflict_count: usize,
     conflict_files: &[String],

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::pipeline::{NodeDef, PipelineDef, PortType, IMAGE_EXTENSIONS};
 
-pub struct InputResolution {
+pub(crate) struct InputResolution {
     pub port_name: String,
     /// The concrete artifact path(s) this input resolves to. A single wire is a
     /// one-element list; a `repeated`/pooled input (#353) is one path per
@@ -17,19 +17,19 @@ pub struct InputResolution {
     pub from_start: bool,
 }
 
-pub struct OutputDeclaration {
+pub(crate) struct OutputDeclaration {
     pub port_name: String,
     pub path: PathBuf,
     pub port_type: PortType,
 }
 
-pub struct ForEachContext {
+pub(crate) struct ForEachContext {
     pub current_item: String,
     pub current_iter: i64,
     pub total: i64,
 }
 
-pub struct AugmentContext<'a> {
+pub(crate) struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
     #[allow(dead_code)]
@@ -66,7 +66,7 @@ pub struct AugmentContext<'a> {
     pub repeated_iters: HashMap<String, Vec<i64>>,
 }
 
-pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
+pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     let input_dir = artifacts_dir.join("_input");
     let entries = match std::fs::read_dir(&input_dir) {
         Ok(e) => e,
@@ -97,7 +97,7 @@ pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
 /// non-whitespace content. `Ok(false)` when the file is absent — the expected
 /// prompt-optional case, not an error. `Err` only on a genuine I/O failure, so the
 /// caller can surface it instead of silently reporting "no prompt" (#274).
-pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
+pub(crate) fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
     match std::fs::read_to_string(crate::blackboard::input_path(artifacts_dir)) {
         Ok(text) => Ok(!text.trim().is_empty()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -105,7 +105,7 @@ pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> 
     }
 }
 
-pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
+pub(crate) fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     // Project over the single edge-walk (#370): the iteration decision (source's
     // latest-completed iter, completed-iters pool, Start → `_input`) lives in
     // `input_resolution::resolve_consumer_inputs`, fed the precomputed maps the
@@ -141,7 +141,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     inputs
 }
 
-pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> {
+pub(crate) fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> {
     ctx.node
         .outputs
         .iter()
@@ -226,7 +226,7 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
 /// by `tmux_session_manager::wrap_with_env` and are *not* repeated here.
-pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
+pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
     let mut env = Vec::new();
 
     env.push((
@@ -297,7 +297,7 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
 /// is `.../output.md` (create its parent); for an image port it is a directory
 /// (create it directly). Best-effort: a failure here is not fatal — the script's
 /// own redirect will surface any real problem.
-pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
+pub(crate) fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     for output in resolve_output_paths(ctx) {
         let dir = match output.port_type {
             PortType::Image | PortType::ImageList => output.path.clone(),
@@ -320,7 +320,7 @@ pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     }
 }
 
-pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
+pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     let inputs = resolve_input_paths(ctx);
     let outputs = resolve_output_paths(ctx);
 
@@ -581,14 +581,14 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     preamble
 }
 
-pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
+pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
     let preamble = build_preamble(ctx);
     format!("{preamble}---\n\n{role_prompt}")
 }
 
 /// How the manager should treat run naming, decided by the daemon at spawn (#184).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RunNameHint {
+pub(crate) enum RunNameHint {
     /// The user supplied a display name — do not rename.
     UserProvided,
     /// No name, but there is input to summarise — name it now from `_input`.
@@ -598,7 +598,11 @@ pub enum RunNameHint {
     Placeholder,
 }
 
-pub fn build_manager_preamble(run_id: &str, daemon_url: &str, name_hint: RunNameHint) -> String {
+pub(crate) fn build_manager_preamble(
+    run_id: &str,
+    daemon_url: &str,
+    name_hint: RunNameHint,
+) -> String {
     let auto_name_instruction = match name_hint {
         RunNameHint::UserProvided => String::new(),
         RunNameHint::DeriveFromInput =>
@@ -751,7 +755,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
     )
 }
 
-pub fn build_manager_prompt(
+pub(crate) fn build_manager_prompt(
     run_id: &str,
     daemon_url: &str,
     role_prompt: &str,

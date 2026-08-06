@@ -17,7 +17,7 @@ use crate::pipeline::{LoopKind, LoopRegion, NodeType, PipelineDef};
 /// The default iteration cap given to an auto-materialized bounded region, so a
 /// drawn cycle is never accidentally unbounded (ADR-0011 / #148). Matches the
 /// daemon's existing `max_iter` fallback.
-pub const DEFAULT_MAX_ITER: i64 = 5;
+pub(crate) const DEFAULT_MAX_ITER: i64 = 5;
 
 /// A short, deterministic region id derived from the sorted member ids, prefixed
 /// `loop-`: FNV-1a over the members (each followed by a `0x2f` separator),
@@ -31,7 +31,7 @@ pub const DEFAULT_MAX_ITER: i64 = 5;
 /// `generated_region_id_matches_the_editor_mirror` / its vitest twin), so a
 /// region materialized on the canvas and the same region materialized here carry
 /// the same identity.
-pub fn generated_region_id(members: &[String]) -> String {
+pub(crate) fn generated_region_id(members: &[String]) -> String {
     let mut sorted: Vec<&str> = members.iter().map(String::as_str).collect();
     sorted.sort_unstable();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -70,7 +70,7 @@ pub fn generated_region_id(members: &[String]) -> String {
 /// the engine ran the node's real bound (#396: the dial would lie). Those
 /// pipelines are the migrator's job — `parse_pipeline` emits the
 /// `run pdo migrate` diagnostic for them instead.
-pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
+pub(crate) fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
     let legacy_loop_nodes: std::collections::HashSet<&str> = pipeline
         .nodes
         .iter()
@@ -110,7 +110,7 @@ pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
 
 /// The live per-region iteration counter (keyed by the region `id` elsewhere).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegionRuntime {
+pub(crate) struct RegionRuntime {
     pub current_iter: i64,
     pub max_iter: i64,
     pub exhausted: bool,
@@ -118,7 +118,7 @@ pub struct RegionRuntime {
 
 impl RegionRuntime {
     /// A region begins at lap 1.
-    pub fn new(max_iter: i64) -> Self {
+    pub(crate) fn new(max_iter: i64) -> Self {
         Self {
             current_iter: 1,
             max_iter,
@@ -129,7 +129,7 @@ impl RegionRuntime {
 
 /// The outcome of resolving a completed lap's re-entry signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LapDecision {
+pub(crate) enum LapDecision {
     /// Start the next lap: bump the counter to `iter` and re-spawn `entry` once.
     NextLap { iter: i64, entry: String },
     /// `max_iter` reached with re-entry still requested: the region is exhausted.
@@ -146,7 +146,7 @@ pub enum LapDecision {
 /// region) that fired in the completed lap. Any positive count is **coalesced**
 /// into a single next-lap entry-spawn: firing two back-edges in one lap must not
 /// advance the counter twice nor spawn the entry twice (#108 regression).
-pub fn resolve_lap(
+pub(crate) fn resolve_lap(
     pipeline: &PipelineDef,
     region: &LoopRegion,
     runtime: &RegionRuntime,
@@ -175,7 +175,7 @@ pub fn resolve_lap(
 /// These are the back-edges whose firing requests another lap. No edge is
 /// flagged a "back-edge" in the YAML — the role is derived from the region
 /// topology (ADR-0011).
-pub fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<usize> {
+pub(crate) fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<usize> {
     let entry = match graph_resolver::region_entry(pipeline, &region.members) {
         Some(e) => e,
         None => match region.members.first() {
@@ -220,7 +220,10 @@ fn region_has_cycle(pipeline: &PipelineDef, region: &LoopRegion) -> bool {
 /// confirm, the caller removes each returned region's `loops:` entry (its bound
 /// and iteration state go with it); deleting a non-last cycle edge returns an
 /// empty list and pops nothing.
-pub fn regions_destroyed_by_edge_removal(pipeline: &PipelineDef, edge_index: usize) -> Vec<String> {
+pub(crate) fn regions_destroyed_by_edge_removal(
+    pipeline: &PipelineDef,
+    edge_index: usize,
+) -> Vec<String> {
     if edge_index >= pipeline.edges.len() {
         return Vec::new();
     }
@@ -241,7 +244,7 @@ pub fn regions_destroyed_by_edge_removal(pipeline: &PipelineDef, edge_index: usi
 /// dead) for the out-of-loop case; inside a region the resolution state must be
 /// keyed by `(loop id, iter, edge)` so an edge that fired at lap 1 is not counted
 /// resolved at lap 2.
-pub fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
+pub(crate) fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
     format!("{loop_id}#{iter}#{edge_index}")
 }
 
@@ -250,7 +253,7 @@ pub fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
 /// falls back to [`DEFAULT_MAX_ITER`] so a region is never accidentally
 /// unbounded. Mirrors `scheduler::resolve_max_iter` for the legacy Loop node so
 /// region and node iteration agree on the same bound semantics.
-pub fn resolve_region_max_iter(
+pub(crate) fn resolve_region_max_iter(
     region: &LoopRegion,
     vars: &std::collections::HashMap<String, serde_yaml::Value>,
 ) -> i64 {
@@ -274,7 +277,7 @@ pub fn resolve_region_max_iter(
 /// `bump_region` is the right lever for it, never `extend_cycle`. The head /
 /// entry node of a region is a member like any other. Returns the first
 /// matching `bounded` region.
-pub fn bounded_region_for_member<'a>(
+pub(crate) fn bounded_region_for_member<'a>(
     pipeline: &'a PipelineDef,
     node_id: &str,
 ) -> Option<&'a LoopRegion> {
@@ -290,7 +293,7 @@ pub fn bounded_region_for_member<'a>(
 /// region iteration / exhaustion governs the spawn instead of the generic path.
 /// Returns the first matching `bounded` region whose entry is `target` and whose
 /// members include `source` (the back-edge `source -> target` closes the region).
-pub fn bounded_region_reentered_by_edge<'a>(
+pub(crate) fn bounded_region_reentered_by_edge<'a>(
     pipeline: &'a PipelineDef,
     source: &str,
     target: &str,
@@ -307,7 +310,7 @@ pub fn bounded_region_reentered_by_edge<'a>(
 
 /// The outcome of an exhausted bounded region (ADR-0011 / #148).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExhaustionOutcome {
+pub(crate) enum ExhaustionOutcome {
     /// An `iter >= max` (or otherwise matching) exit edge routes the exhaustion
     /// to one or more external targets. Targets are de-duplicated, in edge order.
     Routed(Vec<String>),
@@ -321,7 +324,7 @@ pub enum ExhaustionOutcome {
 /// (reusing the conditional-edge router, so an `iter >= max` guard fires) and
 /// collects the edges leaving the region (member → non-member). If any fire, the
 /// exhaustion is `Routed` to their external targets; otherwise it is `Unrouted`.
-pub fn exhaustion_outcome(
+pub(crate) fn exhaustion_outcome(
     pipeline: &PipelineDef,
     region: &LoopRegion,
     runtime: &RegionRuntime,
@@ -372,7 +375,7 @@ pub fn exhaustion_outcome(
 /// error; an empty collection simply fires the barrier immediately). Mirrors the
 /// legacy `scheduler::foreach_resolve_collection` so the collection region and
 /// the retired ForEach node agree on resolution.
-pub fn resolve_collection(
+pub(crate) fn resolve_collection(
     region: &LoopRegion,
     frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
 ) -> Vec<serde_yaml::Value> {
@@ -393,7 +396,7 @@ pub fn resolve_collection(
 /// own item). An empty collection has `total == 0` and no entry spawns — the
 /// caller fires the barrier immediately.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CollectionFanout {
+pub(crate) struct CollectionFanout {
     pub total: i64,
     pub entry: String,
     pub items: Vec<serde_yaml::Value>,
@@ -405,7 +408,7 @@ pub struct CollectionFanout {
 /// single-member collection that is the lone member) as the node spawned **once
 /// per item**, at laps `1..=total`. An empty collection yields `total == 0` and
 /// no spawns; the caller fires the barrier immediately.
-pub fn collection_fanout(
+pub(crate) fn collection_fanout(
     pipeline: &PipelineDef,
     region: &LoopRegion,
     frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
@@ -428,7 +431,7 @@ pub fn collection_fanout(
 /// the set of laps whose every member has finished. The barrier is reached when
 /// laps `1..=total` are all complete. An empty collection (`total == 0`) is
 /// barriered by definition (vacuously), so the caller fires immediately.
-pub fn collection_barrier_reached(
+pub(crate) fn collection_barrier_reached(
     total: i64,
     completed_iters: &std::collections::HashSet<i64>,
 ) -> bool {
@@ -443,7 +446,7 @@ pub fn collection_barrier_reached(
 /// it is spawned once per item by the region engine, never by the generic
 /// forward path, and its member→non-member edges fire only on the barrier.
 /// Returns the first matching `collection` region.
-pub fn collection_region_for_member<'a>(
+pub(crate) fn collection_region_for_member<'a>(
     pipeline: &'a PipelineDef,
     node_id: &str,
 ) -> Option<&'a LoopRegion> {
@@ -458,7 +461,7 @@ pub fn collection_region_for_member<'a>(
 /// artifact whose frontmatter holds the region's `over` list — the scheduler
 /// hands it to the fan-out engine instead of the generic forward-spawn path.
 /// Returns the first matching `collection` region.
-pub fn collection_region_entered_by_edge<'a>(
+pub(crate) fn collection_region_entered_by_edge<'a>(
     pipeline: &'a PipelineDef,
     source: &str,
     target: &str,
@@ -475,7 +478,10 @@ pub fn collection_region_entered_by_edge<'a>(
 /// edge order, de-duplicated — preserving `done → Merge` convergence (ADR-0006).
 /// Collection-region outgoing edges are unconditional barriers (the lap count is
 /// the collection, not a guard), so every member→non-member edge fires.
-pub fn collection_barrier_targets(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<String> {
+pub(crate) fn collection_barrier_targets(
+    pipeline: &PipelineDef,
+    region: &LoopRegion,
+) -> Vec<String> {
     let member_set: std::collections::HashSet<&str> =
         region.members.iter().map(String::as_str).collect();
     let mut targets: Vec<String> = Vec::new();

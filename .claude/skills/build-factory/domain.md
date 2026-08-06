@@ -38,6 +38,12 @@ Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
         └── docs/adr/
 ```
 
+## Read, don't write
+
+`CONTEXT.md` and the ADRs have a **single writer: the grilling session** (`/grill-with-docs`). That's the point of grilling — externalizing business context and technical decisions into one deliberate step. Implementation, triage, and review **read** them; they never amend them.
+
+When implementation discovers that an ADR is wrong or incomplete (a mechanism measured broken, a decision that didn't survive contact), record the discovery **in the issue/PR** — with the measurements. The doc amendment happens in the next grilling session, which folds it into the ADR body properly (see the `grill-with-docs` skill's `ADR-FORMAT.md`). Shipping an ADR edit inside an implementation PR is how implementation post-mortems end up bloating the decision record.
+
 ## Use the glossary's vocabulary
 
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.

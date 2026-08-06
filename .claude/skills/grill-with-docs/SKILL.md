@@ -78,6 +78,10 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
 
+### This session is the writer
+
+The grilling session is the **only writer** of `CONTEXT.md` and the ADRs — that's its purpose: externalizing business context and technical decisions into one deliberate step. Every other flow (implementation, triage, review) reads them and routes discovered corrections back here via the issue/PR (see `build-factory/domain.md`, *Read, don't write*).
+
 ### Update CONTEXT.md inline
 
 When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).

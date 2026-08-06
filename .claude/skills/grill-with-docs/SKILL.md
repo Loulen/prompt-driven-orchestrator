@@ -78,11 +78,15 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
 
+### This session is the writer
+
+The grilling session is the **only writer** of `CONTEXT.md` and the ADRs — that's its purpose: externalizing business context and technical decisions into one deliberate step. Every other flow (implementation, triage, review) reads them and routes discovered corrections back here via the issue/PR (see `build-factory/domain.md`, *Read, don't write*).
+
 ### Update CONTEXT.md inline
 
 When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
 
-`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, a changelog, or a repository for implementation decisions. It is a glossary and nothing else. An entry that needs the full contract points to the ADR that fixed it — it never inlines the contract. If a session leaves you with material that fits neither the glossary nor an ADR (implementation plans, case matrices, test inventories), it belongs in the issue/PR that will implement it — not in the docs.
 
 ### Offer ADRs sparingly
 
@@ -93,5 +97,7 @@ Only offer to create an ADR when all three are true:
 3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
 
 If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+An ADR captures the decision, its why, and the measurements that killed the alternatives — never the implementation plan that follows (see *What stays out* in ADR-FORMAT.md). When a decision revises an earlier ADR, rewrite that ADR's body so it reads true today (see *Amending an ADR*) — never stack a dated addendum on a body that has become wrong.
 
 </supporting-info>

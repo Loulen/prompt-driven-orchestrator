@@ -16,9 +16,26 @@ export function costPrecision(usd: number): number {
 export const COST_ESTIMATE_NOTE =
   "Estimate from local Claude Code token usage × public list prices — not an invoice.";
 
-/** Lower-bound clause appended when an unpriced model was excluded (matches
- *  `/lower bound/i`). Byte-identical between the per-run row and the charts. */
+/** Generic lower-bound clause, used only when the excluded model's name is not
+ *  available (matches `/lower bound/i`). The named form (#425) is preferred. */
 export const COST_LOWER_BOUND_NOTE = " Lower bound: an unpriced model was excluded.";
+
+/**
+ * The lower-bound clause for a tooltip. Names the excluded model family keys
+ * when known (#425 AC#4 — "an unpriced model" was invisible enough to hide the
+ * priciest model for weeks), else falls back to the generic note. `runSuffix`
+ * (e.g. `" (2 partial runs)."`) is appended by the aggregate bucket and omitted
+ * for a single run.
+ */
+function lowerBoundClause(unpricedModels: string[], runSuffix = ""): string {
+  const body =
+    unpricedModels.length > 0
+      ? ` Lower bound: unpriced ${
+          unpricedModels.length === 1 ? "model" : "models"
+        } excluded: ${unpricedModels.join(", ")}.`
+      : COST_LOWER_BOUND_NOTE;
+  return body + runSuffix;
+}
 
 export interface CostLabel {
   /** Display text, e.g. `~$1.2345`. */
@@ -32,13 +49,17 @@ export interface CostLabel {
 /**
  * Format a single run's estimated cost (#272): `~$X` at adaptive precision, with
  * a `†` marker and a "lower bound" note when the estimate excluded an unpriced
- * model.
+ * model — naming which model(s) when known (#425).
  */
-export function formatEstCost(usd: number, partial: boolean): CostLabel {
+export function formatEstCost(
+  usd: number,
+  partial: boolean,
+  unpricedModels: string[] = [],
+): CostLabel {
   return {
     text: `~$${usd.toFixed(costPrecision(usd))}`,
     dagger: partial,
-    title: COST_ESTIMATE_NOTE + (partial ? COST_LOWER_BOUND_NOTE : ""),
+    title: COST_ESTIMATE_NOTE + (partial ? lowerBoundClause(unpricedModels) : ""),
   };
 }
 
@@ -54,7 +75,8 @@ function plural(n: number, word: string): string {
 /**
  * Format an aggregated cost bucket (#377). A bucket is a **sum of lower bounds**:
  *
- * - any `partial` run makes the whole bucket a lower bound (`†`);
+ * - any `partial` run makes the whole bucket a lower bound (`†`), and the
+ *   excluded model family keys are named when known (#425);
  * - runs with no transcript (`nullCount`) are excluded from `usd` but surfaced
  *   in the tooltip so the bucket is never silently undercounted;
  * - a bucket with nothing priced (`runs === 0`, or every run was null) renders
@@ -65,6 +87,7 @@ export function formatBucketCost(
   partialCount: number,
   nullCount: number,
   runs: number,
+  unpricedModels: string[] = [],
 ): CostBucketLabel {
   const priced = runs - nullCount;
   const empty = priced <= 0;
@@ -72,7 +95,7 @@ export function formatBucketCost(
 
   let title = COST_ESTIMATE_NOTE;
   if (partial) {
-    title += `${COST_LOWER_BOUND_NOTE} (${plural(partialCount, "partial run")}).`;
+    title += lowerBoundClause(unpricedModels, ` (${plural(partialCount, "partial run")}).`);
   }
   if (nullCount > 0) {
     title += ` ${plural(nullCount, "run")} had no transcript (excluded).`;

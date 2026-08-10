@@ -296,7 +296,11 @@ function InfoTab({
                 (() => {
                   // Shared honesty helper (#272/#377): same vocabulary as the
                   // aggregated Stats charts.
-                  const c = formatEstCost(run.cost.usd, run.cost.partial);
+                  const c = formatEstCost(
+                    run.cost.usd,
+                    run.cost.partial,
+                    run.cost.unpriced_models,
+                  );
                   return (
                     <span className="flex items-center gap-1" title={c.title}>
                       {c.text}

@@ -589,19 +589,19 @@ pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> 
 /// Env seam for the instance default of Run auto-naming (#338, ADR-0015). Middle
 /// tier of `stored → env → default(true)`; the resolver is
 /// [`default_auto_name_with`].
-pub const DEFAULT_AUTO_NAME_ENV: &str = "PDO_DEFAULT_AUTO_NAME";
+pub(crate) const DEFAULT_AUTO_NAME_ENV: &str = "PDO_DEFAULT_AUTO_NAME";
 
 /// Built-in default for Run auto-naming: **on**.
 ///
 /// `true` preserves the pre-#338 behaviour exactly — a Run created with no name is
 /// auto-named by the manager (from its input, or a placeholder renamed best-effort).
 /// #338 only makes that *configurable*; the floor stays what it always was.
-pub const DEFAULT_AUTO_NAME_DEFAULT: bool = true;
+pub(crate) const DEFAULT_AUTO_NAME_DEFAULT: bool = true;
 
 /// The `env` tier of the Run auto-naming default (#338). Reuses the shared boolean
 /// parser so a typo falls through to the next tier rather than silently meaning
 /// `false`.
-pub fn env_default_auto_name() -> Option<bool> {
+pub(crate) fn env_default_auto_name() -> Option<bool> {
     std::env::var(DEFAULT_AUTO_NAME_ENV)
         .ok()
         .as_deref()
@@ -617,7 +617,7 @@ pub fn env_default_auto_name() -> Option<bool> {
 ///
 /// This is only ever the *default* — the create-run chokepoint consults it solely
 /// when the request carries neither an explicit `auto_name` flag nor a `name`.
-pub fn default_auto_name_with(stored: Option<i64>) -> bool {
+pub(crate) fn default_auto_name_with(stored: Option<i64>) -> bool {
     match stored {
         Some(v) => v != 0,
         None => env_default_auto_name().unwrap_or(DEFAULT_AUTO_NAME_DEFAULT),

@@ -1114,13 +1114,13 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 SpawnOutcome::Spawned {
                     reused_sub_worktree,
                     base_sha,
-                    stale_git_lock,
+                    interrupted_git_ops,
                 } => restart_verdict::RestartVerdict::Spawned {
                     node_id: node_id.clone(),
                     iter,
                     reused_sub_worktree,
                     base_sha,
-                    stale_git_lock,
+                    interrupted_git_ops,
                 },
                 // ADR-0037 §2: a `2xx`, and NOT a `noop`. A `NodeWaiting` was
                 // appended, it flipped the node to `Waiting`, and
@@ -2081,14 +2081,14 @@ mod tests {
 
     /// A plain `Spawned`, for tests that only care about the BUCKET
     /// `record_spawn` files an outcome in. #489 gave the variant three fields
-    /// (`reused_sub_worktree` / `base_sha` / `stale_git_lock`) that the summary
+    /// (`reused_sub_worktree` / `base_sha` / `interrupted_git_ops`) that the summary
     /// deliberately ignores: `ReEvalSummary` reports `spawned:[{node_id,iter}]`
     /// per ADR-0025, and the sub-worktree detail belongs to `restart_verdict`.
     fn spawned_sample() -> SpawnOutcome {
         SpawnOutcome::Spawned {
             reused_sub_worktree: false,
             base_sha: None,
-            stale_git_lock: None,
+            interrupted_git_ops: Vec::new(),
         }
     }
 

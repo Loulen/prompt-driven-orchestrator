@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.13.0
+## 1.14.0
 
 Rien de cassant. Un champ **purement additif** sur l'estimation de coût (périmètre AC#4 de #425,
 dans le cadre d'ADR-0034 — pas de nouvel ADR).
@@ -33,6 +33,41 @@ sonnet-5, fable-5) — cela réviserait le principe de membership d'ADR-0034 et 
 propriétaire (#527). Sur une instance non-syncée, le modèle par défaut du compte continue donc de
 contribuer $0 ; la différence est qu'il est maintenant **nommé**, donc actionnable (un clic « Sync
 coûts » ou une ligne dans `~/.pdo/prices/models.yaml`).
+
+## 1.13.0
+
+**Cassant** (`feat(#516)!`) : le champ de réponse `stale_git_lock` disparaît, remplacé par
+`interrupted_git_ops`. Amende ADR-0037, pas de nouvel ADR.
+
+### `stale_git_lock` (`string|null`) → `interrupted_git_ops` (`array`, `[]` si rien) (#516)
+
+Quand `restart_node` réutilise le sous-worktree d'un nœud `code-mutating`/`merge`, une session tuée
+**au milieu d'une opération git** y laisse des marqueurs dans le gitdir privé (`index.lock`,
+`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Le daemon les **détectait** — mais n'en remontait
+qu'**un seul**, le premier du scan. Chaîne mesurée sur le code 1.12.0 : un `index.lock` **masquait** un
+`MERGE_HEAD` coexistant, l'agent retirait le verrou dont on l'avait averti, lançait `pdo complete`, et
+le merge-back faisait un `git commit` avec le `MERGE_HEAD` resté en place → **un commit de merge à deux
+parents que personne n'a voulu, en silence** (`MergeResult::Success`, zéro événement). Le filet d'ADR-0037
+§7 est en aval du commit ; il ne l'attrape pas.
+
+Trois changements :
+
+- **Inventaire complet.** Le scanner remonte désormais **tous** les marqueurs présents, dans l'ordre du
+  scan (`index.lock` en tête), au lieu du premier seul.
+- **Migration filaire cassante.** Le corps de succès de `restart_node` remplace
+  `"stale_git_lock":"index.lock"|null` par `"interrupted_git_ops":["index.lock",…]|[]` — **toujours** un
+  tableau, jamais `null` ni absent (un client lit `body.interrupted_git_ops.length` sans garde).
+  « Stale git lock » était faux pour trois marqueurs sur quatre : un `MERGE_HEAD` ou un rebase interrompu
+  n'est pas un verrou, et le nommer ainsi a masqué le second marqueur derrière le premier. Le champ,
+  interne comme filaire, se propage du scanner (`SubWorktreeState::Reusable`) jusqu'à la réponse HTTP.
+- **Routage vers le préambule.** La consigne différenciée (retirer `index.lock` d'abord ; inspecter puis
+  finir **ou** avorter un `MERGE_HEAD`/rebase, au jugement de l'agent) arrive maintenant **dans le
+  préambule du nœud re-spawné lui-même**, plus seulement dans le corps que voit le manager. L'agent frais
+  n'attend plus qu'on la lui relaie, et le daemon ne supprime **jamais** un marqueur (il ne peut pas
+  prouver que l'écrivain est mort — #485 est le précédent qui coûte cher).
+
+Aucun travail frontend : l'UI jette déjà le corps de la réponse (`responseMode:"void"`), et le trou
+d'observabilité reste la propriété de #492.
 
 ## 1.12.0
 

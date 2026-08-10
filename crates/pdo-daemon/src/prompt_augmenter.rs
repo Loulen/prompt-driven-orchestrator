@@ -64,6 +64,18 @@ pub(crate) struct AugmentContext<'a> {
     /// failed iterations are quarantined, and no raw `iter-*` glob is ever
     /// handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
+    /// The sub-worktree already existed on the right branch and was reused **in
+    /// place** at `restart_node` (#489): a prior agent's uncommitted work is still
+    /// there. Precomputed by the daemon; `build_preamble` stays pure (same pattern
+    /// as `start_prompt_present`). Always `false` on the start/retry path, where a
+    /// reuse is unreachable by construction.
+    pub reused_sub_worktree: bool,
+    /// Every interrupted git operation the reused sub-worktree carries, in scan
+    /// order (`index.lock` first) — `index.lock`, `MERGE_HEAD`, `rebase-merge/`,
+    /// `rebase-apply/` (#516). Borrowed: the owning `Vec` lives in `node_spawn` and
+    /// is also moved into `SpawnOutcome::Spawned`. `build_preamble` routes a
+    /// differentiated notice from its contents; empty means no notice.
+    pub interrupted_git_ops: &'a [String],
 }
 
 pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
@@ -508,6 +520,58 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              silently dropped from the merge.\n\n",
             sub_wt.display()
         ));
+
+        // #516: route the interrupted-git-op notice into the re-spawned node's own
+        // preamble — no longer only into the response the manager sees. Two parts,
+        // BOTH conditional and rendered mechanically from `ctx`, so a fresh cut (the
+        // common case) gets neither.
+        if ctx.reused_sub_worktree {
+            preamble.push_str(
+                "> **This worktree was REUSED from a previous attempt.** A prior agent may \
+                 have left uncommitted work here. Inspect what is already in the working \
+                 directory (`git status`, read the changed files) BEFORE you start over — do \
+                 not blindly reset or redo work that is already done.\n\n",
+            );
+        }
+        if !ctx.interrupted_git_ops.is_empty() {
+            let listed = ctx
+                .interrupted_git_ops
+                .iter()
+                .map(|op| format!("`{op}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            preamble.push_str(&format!(
+                "> ⚠ **An interrupted git operation was left in this worktree:** {listed}\n>\n"
+            ));
+            // One sentence per marker, in vector order — `index.lock` leads, and its
+            // instruction ("remove it before anything else") depends on that.
+            for op in ctx.interrupted_git_ops {
+                let line = match op.as_str() {
+                    "index.lock" => "> - `index.lock`: first confirm no git process is running \
+                         here, then remove `.git/index.lock` **before anything else** — the \
+                         `--abort` / `--continue` commands below themselves need the index lock \
+                         free to run.\n"
+                        .to_string(),
+                    "MERGE_HEAD" => "> - `MERGE_HEAD`: a merge is in progress. Inspect it (`git \
+                         status`, `git diff`) — it may carry conflicts a previous agent already \
+                         resolved (work worth keeping). Decide deliberately: finish it (`git \
+                         commit`) **or** abandon it (`git merge --abort`). Never `--abort` \
+                         blindly.\n"
+                        .to_string(),
+                    "rebase-merge" | "rebase-apply" => "> - a rebase is in progress. `git \
+                         status` to inspect; `git rebase --continue` to finish or `git rebase \
+                         --abort` to abandon.\n"
+                        .to_string(),
+                    other => format!("> - `{other}`: resolve this git state before completing.\n"),
+                };
+                preamble.push_str(&line);
+            }
+            preamble.push_str(
+                ">\n> Do NOT run `pdo complete` until the worktree is in a clean git state — \
+                 otherwise the merge-back may record a merge commit nobody intended, \
+                 **silently**.\n\n",
+            );
+        }
     }
 
     // CLI commands
@@ -719,7 +783,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"restart_node","node_id":"<node-id>","iter":<N>}}'
 ```
 
-The response tells you what actually happened; it never blanket-claims success (#489, ADR-0037). `200 {{"ok":true,"spawned":[{{"node_id":"…","iter":N}}],"reused_sub_worktree":<bool>,"base_sha":"<sha>"|null,"stale_git_lock":"index.lock"|null}}` when the node was re-spawned — when `reused_sub_worktree` is true, tell the fresh agent to look at what is already in its working directory before it starts over, and if `stale_git_lock` is set, tell it to clear that lock or its merge-back will fail. `200 {{"ok":true,"waiting":true,"reason":"…"}}` when the session cap queued it: a `NodeWaiting` **was** recorded and the admission sweep owns it — it will spawn, do not re-issue. Otherwise: `409 {{"error":"<slug>","recoverable":<bool>, …}}` with `restart_refused`, `sandbox_prep_not_ready` or `sub_worktree_occupied`; `400 {{"error":"node_not_found"}}`; `500 {{"error":"spawn_failed","run_failed":<bool>}}`. Discriminate on `error`, never on the status.
+The response tells you what actually happened; it never blanket-claims success (#489, ADR-0037). `200 {{"ok":true,"spawned":[{{"node_id":"…","iter":N}}],"reused_sub_worktree":<bool>,"base_sha":"<sha>"|null,"interrupted_git_ops":["index.lock",…]|[]}}` when the node was re-spawned. The re-spawned agent is told **directly in its own preamble** what to do about a reused worktree and any interrupted git operation left in it, so you do not need to relay instructions — `reused_sub_worktree` and `interrupted_git_ops` are there for your situational awareness (`interrupted_git_ops` lists every marker found, in order — `index.lock`, `MERGE_HEAD`, `rebase-*` — and is `[]` when the reused worktree's git state was clean). `200 {{"ok":true,"waiting":true,"reason":"…"}}` when the session cap queued it: a `NodeWaiting` **was** recorded and the admission sweep owns it — it will spawn, do not re-issue. Otherwise: `409 {{"error":"<slug>","recoverable":<bool>, …}}` with `restart_refused`, `sandbox_prep_not_ready` or `sub_worktree_occupied`; `400 {{"error":"node_not_found"}}`; `500 {{"error":"spawn_failed","run_failed":<bool>}}`. Discriminate on `error`, never on the status.
 
 Every knowable refusal is raised **before** the session is killed: an error body with `session_killed:false` means nothing was touched, so fix the cause and re-issue. `session_killed:true` means the session is gone and nothing replaced it — that node needs a different lever, not a retry of this one.
 
@@ -868,6 +932,8 @@ mod tests {
             start_prompt_present: false,
             source_iters: HashMap::new(),
             repeated_iters: HashMap::new(),
+            reused_sub_worktree: false,
+            interrupted_git_ops: &[],
         }
     }
 
@@ -2016,6 +2082,109 @@ mod tests {
         assert!(
             !preamble.contains("Input Images"),
             "preamble should not contain Input Images section when no images"
+        );
+    }
+
+    // --- #516: the interrupted-git-op notice is ROUTED into the re-spawned node's
+    // own preamble. Pure string-in → string-out, exercised directly. ---
+
+    const SUB_WT: &str = "/repo/.pdo/runs/r/nodes/impl-1/iter-1";
+
+    /// **THE #516 case.** A reused worktree carrying BOTH an `index.lock` and a
+    /// `MERGE_HEAD` gets a notice that names both markers, gives the differentiated
+    /// instruction for each (remove the lock first; inspect-then-finish-or-abort the
+    /// merge), and warns that `pdo complete` on a dirty git state records a merge
+    /// nobody intended, silently.
+    #[test]
+    fn preamble_routes_every_interrupted_git_op_with_differentiated_advice() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = true;
+        let ops = vec!["index.lock".to_string(), "MERGE_HEAD".to_string()];
+        ctx.interrupted_git_ops = &ops;
+
+        let preamble = build_preamble(&ctx);
+
+        // The reuse notice.
+        assert!(
+            preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        // Both markers surface — neither is masked by the other.
+        assert!(preamble.contains("index.lock"), "{preamble}");
+        assert!(preamble.contains("MERGE_HEAD"), "{preamble}");
+        // Differentiated instructions.
+        assert!(
+            preamble.contains("remove `.git/index.lock`"),
+            "index.lock must get the remove-first instruction: {preamble}"
+        );
+        assert!(
+            preamble.contains("git merge --abort"),
+            "MERGE_HEAD must get the finish-or-abort instruction: {preamble}"
+        );
+        // The load-bearing warning: a silent merge commit is the whole bug.
+        assert!(
+            preamble.contains("nobody intended") && preamble.contains("**silently**"),
+            "the silent-merge warning is the point of #516: {preamble}"
+        );
+        // Scan order: `index.lock` is mentioned before `MERGE_HEAD`.
+        assert!(
+            preamble.find("index.lock").unwrap() < preamble.find("MERGE_HEAD").unwrap(),
+            "index.lock must lead (remove-first depends on it): {preamble}"
+        );
+    }
+
+    /// **A/B negative control.** A fresh cut — `reused_sub_worktree=false`,
+    /// `interrupted_git_ops=[]` — gets NEITHER notice. Proves the notice is not
+    /// unconditional prose that just happens to be true in the positive test.
+    #[test]
+    fn preamble_omits_both_notices_on_a_fresh_cut() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = false;
+        ctx.interrupted_git_ops = &[];
+
+        let preamble = build_preamble(&ctx);
+
+        // The base "Source code edits" section is still there…
+        assert!(preamble.contains("## Source code edits"), "{preamble}");
+        // …but neither the reuse notice nor the interrupted-op notice.
+        assert!(
+            !preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        assert!(
+            !preamble.contains("interrupted git operation"),
+            "{preamble}"
+        );
+    }
+
+    /// A reused worktree with a CLEAN git state gets the "inspect what is here"
+    /// notice but NOT the interrupted-op part.
+    #[test]
+    fn preamble_reuse_notice_without_ops_when_git_state_is_clean() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = true;
+        ctx.interrupted_git_ops = &[];
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        assert!(
+            !preamble.contains("interrupted git operation"),
+            "no ops means no interrupted-op notice: {preamble}"
         );
     }
 

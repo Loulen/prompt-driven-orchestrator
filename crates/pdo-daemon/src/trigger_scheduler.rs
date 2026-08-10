@@ -310,6 +310,7 @@ mod tests {
             overlap_policy: "skip".to_string(),
             max_concurrent: None,
             sandbox: None,
+            auto_name: true,
             enabled: true,
             next_fire_at: next_fire_at.map(str::to_string),
             last_fired_at: None,

@@ -445,6 +445,15 @@ struct CreateRunRequest {
     /// (`create_run_inner`) resolves it once against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
+    /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
+    /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
+    /// back-compatibly by the presence of `name` (a supplied `name` with no flag
+    /// keeps the name, exactly as before this field existed); `Some(b)` is an
+    /// explicit choice that wins. The UI always sends the flag; the CLI / bare API
+    /// need not. Resolved once at the create chokepoint against the FRESH instance
+    /// default — see [`prompt_augmenter::default_auto_name_with`].
+    #[serde(default)]
+    auto_name: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -1808,6 +1817,7 @@ impl DaemonHandle {
                 overlap_policy: "skip".to_string(),
                 max_concurrent: None,
                 sandbox: None,
+                auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
         )
@@ -2779,10 +2789,22 @@ struct CreateTriggerRequest {
     /// request's explicit tier.
     #[serde(default)]
     sandbox: Option<String>,
+    /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
+    /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
+    /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
+    #[serde(default = "default_true")]
+    auto_name: bool,
 }
 
 fn default_overlap_policy() -> String {
     "skip".to_string()
+}
+
+/// serde default for the flat `auto_name` bool on trigger create (#338): an omitted
+/// field means "auto-name", matching the `NOT NULL DEFAULT 1` column and the built-in
+/// resolver default.
+fn default_true() -> bool {
+    true
 }
 
 /// The SHARED existence gate for any `sandbox` reference a client can store (#432,
@@ -3093,6 +3115,10 @@ async fn create_trigger(
         // #410: normalise `Some("")` to `None` (inherit the instance default), so an
         // empty selector value never persists as a bogus stored mode.
         sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
+        // #338: freeze the auto-naming choice on the row (seeded from the instance
+        // default in the modal). No re-resolution at fire time — the runtime never
+        // decides autonomy (ADR-0012 frontier).
+        auto_name: req.auto_name,
         next_fire_at,
     };
 
@@ -3248,6 +3274,12 @@ struct PatchTriggerRequest {
     /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     sandbox: Option<Option<String>>,
+    /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
+    /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
+    /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
+    /// `Some(v)` sets it.
+    #[serde(default)]
+    auto_name: Option<bool>,
 }
 
 async fn patch_trigger(
@@ -3484,6 +3516,8 @@ async fn patch_trigger(
         // instance default, `None` leaves it. The FE maps the "use instance default"
         // option to `null`, so an empty string never reaches here.
         sandbox: req.sandbox,
+        // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
+        auto_name: req.auto_name,
         next_fire_at,
         // Fold the enable/disable toggle into the single UpdateTrigger write
         // (#372): the enable bit and the forward next_fire_at land in one atomic
@@ -4537,6 +4571,11 @@ async fn fire_one_trigger(
                     .sandbox
                     .as_deref()
                     .and_then(event_log::SandboxMode::parse),
+                // #338: pass the Trigger's frozen auto-naming choice as the explicit
+                // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
+                // fire with `auto_name=false` keeps a stable per-id name and the manager
+                // is never told to rename — covers cron AND manual fire in one line.
+                auto_name: Some(trigger.auto_name),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -6329,6 +6368,11 @@ async fn parse_multipart_create_run(
     // defers to the trigger/instance default at the chokepoint. An unknown token is
     // treated as unset (defensive; the FE only ever sends valid variants).
     let mut sandbox: Option<event_log::SandboxMode> = None;
+    // #338: an explicit auto-naming choice may ride the multipart (browser) create
+    // when images are attached, so an unchecked "Auto-generated" box is honoured on
+    // that path too. `None` when the field is absent — the chokepoint then resolves
+    // back-compat by the presence of `name`.
+    let mut auto_name: Option<bool> = None;
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -6410,6 +6454,18 @@ async fn parse_multipart_create_run(
                     sandbox = event_log::SandboxMode::parse(&v);
                 }
             }
+            "auto_name" => {
+                // #338: an explicit flag off the multipart form. Reuses the shared
+                // boolean parser; an unrecognised token leaves `None` (defer to the
+                // name-presence back-compat resolution at the chokepoint).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field auto_name: {e}"))?;
+                if !v.is_empty() {
+                    auto_name = stale_detector::parse_bool_setting(&v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -6443,6 +6499,8 @@ async fn parse_multipart_create_run(
         // create with attached images). `None` when the field is absent — the
         // chokepoint then defers to the trigger/instance default.
         sandbox,
+        // #338: the explicit auto-naming choice threaded off the multipart form.
+        auto_name,
     };
     Ok((req, images))
 }
@@ -6525,15 +6583,28 @@ fn placeholder_run_name(run_id: &str) -> String {
     format!("Untitled run {}", &run_id[..15])
 }
 
-/// Decide how the daemon should treat naming for a run at spawn (#184).
+/// Decide how the daemon should treat naming for a run at spawn (#184, #338).
 ///
-/// Three mutually-exclusive cases, gated on `req.input` (NOT on the pipeline's
-/// `prompt_required` flag): a user-supplied name always wins; otherwise an empty
-/// input means there is nothing to summarise yet, so the daemon sets a
-/// deterministic placeholder and the manager renames best-effort later; a
-/// non-empty input lets the manager derive the name immediately from `_input`.
-fn run_name_hint(name: Option<&str>, input: &str) -> prompt_augmenter::RunNameHint {
-    if name.is_some_and(|n| !n.is_empty()) {
+/// `auto_name` is the resolved autonomy decision (see the resolution at the create
+/// chokepoint). When it is `false` the manager is never instructed to rename — the
+/// caller keeps whatever name it supplied, or a stable placeholder if it supplied
+/// none. When it is `true` the pre-#338 behaviour holds, gated on `input` (NOT on
+/// the pipeline's `prompt_required` flag): an empty input means there is nothing to
+/// summarise yet, so the daemon sets a deterministic placeholder and the manager
+/// renames best-effort later; a non-empty input lets the manager derive the name
+/// immediately from `_input`.
+///
+/// Note that with `auto_name == false` the branch no longer looks at `name`: the
+/// display name is chosen by the caller (`create_run_inner`), and this hint only
+/// governs whether the manager is *told to rename*. A blank name under `false` still
+/// yields `UserProvided` — a stable placeholder with no rename instruction — which
+/// is exactly what the Trigger case needs.
+fn run_name_hint(
+    auto_name: bool,
+    _name: Option<&str>,
+    input: &str,
+) -> prompt_augmenter::RunNameHint {
+    if !auto_name {
         prompt_augmenter::RunNameHint::UserProvided
     } else if input.trim().is_empty() {
         prompt_augmenter::RunNameHint::Placeholder
@@ -6836,13 +6907,46 @@ async fn create_run_inner(
     if let Some(ref branch) = req.source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
-    // Naming decision (#184), shared between the payload write here and the
-    // manager spawn below so they can never disagree. The user's name wins; with
-    // no name, an empty input gets a deterministic placeholder (the prompt-less
-    // case), and a non-empty input is left unnamed so the manager derives it.
-    let name_hint = run_name_hint(req.name.as_deref(), &req.input);
+    // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
+    // same chokepoint as the sandbox default, and read FRESH from the DB so a
+    // `PUT /settings` bites on the very next create with no restart (never cached at
+    // boot — the reaper-TTL trap of ADR-0015).
+    //
+    // Back-compat is load-bearing: an omitted flag (`None`) with a supplied `name`
+    // must keep that name (`false`), so the CLI / bare API / every pre-#338 caller
+    // that passes a `name` without the new flag is unaffected. Only an omitted flag
+    // AND no name consults the instance default. An explicit `Some(b)` always wins.
+    let auto_name = match req.auto_name {
+        Some(b) => b,
+        None => {
+            if req.name.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+                false
+            } else {
+                let stored = instance_config::get(&state.db)
+                    .await
+                    .ok()
+                    .and_then(|c| c.default_auto_name);
+                prompt_augmenter::default_auto_name_with(stored)
+            }
+        }
+    };
+
+    // Naming decision (#184, #338), shared between the payload write here and the
+    // manager spawn below so they can never disagree. With auto-naming OFF the Run
+    // keeps its supplied name, or a stable per-id placeholder when none was given
+    // (the manager is NOT told to rename); with it ON, an empty input gets a
+    // deterministic placeholder (the prompt-less case) and a non-empty input is left
+    // unnamed so the manager derives it.
+    let name_hint = run_name_hint(auto_name, req.name.as_deref(), &req.input);
     let display_name: Option<String> = match name_hint {
-        prompt_augmenter::RunNameHint::UserProvided => req.name.clone(),
+        // #338: UserProvided now also covers the auto_name=false case. If no name was
+        // supplied, fall back to the stable placeholder so a Trigger with autonomy off
+        // does not leave every fire sharing one blank name — WITHOUT re-arming the
+        // rename instruction (that lives in the hint, still `UserProvided` here).
+        prompt_augmenter::RunNameHint::UserProvided => Some(match req.name.as_deref() {
+            Some(n) if !n.trim().is_empty() => n.to_string(),
+            _ => placeholder_run_name(&run_id),
+        }),
         prompt_augmenter::RunNameHint::Placeholder => Some(placeholder_run_name(&run_id)),
         prompt_augmenter::RunNameHint::DeriveFromInput => None,
     };
@@ -7501,6 +7605,21 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- default auto-naming (bool ; built-in default `true`) (#338) ---
+    // Same discipline as `autocomplete_turn_end`: `effective` comes from the SAME
+    // resolver the create chokepoint consumes, so the disclosed default can never drift
+    // from what a nameless Run actually gets. Stored `0`/`1` both win over the env.
+    let dan_stored = cfg.default_auto_name.map(|v| v != 0);
+    let dan_env = prompt_augmenter::env_default_auto_name();
+    let dan_effective = prompt_augmenter::default_auto_name_with(cfg.default_auto_name);
+    let dan_source = if dan_stored.is_some() {
+        "stored"
+    } else if dan_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
@@ -7602,6 +7721,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             ate_stored,
             ate_env,
             stale_detector::AUTOCOMPLETE_TURN_END_DEFAULT,
+        ),
+        "default_auto_name": settings_field_bool(
+            dan_effective,
+            dan_source,
+            dan_stored,
+            dan_env,
+            prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
         ),
         "updated_at": cfg.updated_at,
     }))
@@ -21384,6 +21510,40 @@ edges:
     }
 
     #[tokio::test]
+    async fn settings_view_discloses_the_default_auto_name_tiers() {
+        // #338 / ADR-0015: `effective` comes from the SAME resolver the create
+        // chokepoint consumes, the built-in default is ON, and both directions of an
+        // explicit save are a STORED decision (a stored 0 must beat
+        // `PDO_DEFAULT_AUTO_NAME=1`, or unticking the box would be a no-op with the env set).
+        let state = test_state().await;
+
+        let fresh = build_settings_view(&state).await.unwrap();
+        assert_eq!(fresh["default_auto_name"]["effective"], true);
+        assert_eq!(fresh["default_auto_name"]["default"], true);
+        assert!(fresh["default_auto_name"]["stored"].is_null());
+
+        for on in [false, true] {
+            instance_config::update(
+                &state.db,
+                instance_config::UpdateInstanceConfig {
+                    default_auto_name: Some(on),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let view = build_settings_view(&state).await.unwrap();
+            assert_eq!(view["default_auto_name"]["effective"], serde_json::json!(on));
+            assert_eq!(
+                view["default_auto_name"]["stored"],
+                serde_json::json!(on),
+                "the stored tier is disclosed as a bool, not as 0/1"
+            );
+            assert_eq!(view["default_auto_name"]["source"], serde_json::json!("stored"));
+        }
+    }
+
+    #[tokio::test]
     async fn restart_node_rejected_while_newer_iteration_is_live() {
         // #196: restart_node on a stale iter must not race the scheduler's
         // newer live iteration — reject with a readable cause, spawn nothing.
@@ -26502,23 +26662,35 @@ edges:
     #[test]
     fn run_name_hint_matrix() {
         use prompt_augmenter::RunNameHint;
-        // A user-supplied (non-empty) name always wins, regardless of input.
-        assert_eq!(run_name_hint(Some("My Run"), ""), RunNameHint::UserProvided);
+        // #338: the hint is now gated on the RESOLVED `auto_name`, not on the name.
+        // With auto-naming OFF the manager is never told to rename — `UserProvided`
+        // regardless of name or input (the display name is chosen by the caller).
         assert_eq!(
-            run_name_hint(Some("My Run"), "some input"),
+            run_name_hint(false, Some("My Run"), ""),
             RunNameHint::UserProvided
         );
-        // No name + no (meaningful) input → deterministic placeholder.
-        assert_eq!(run_name_hint(None, ""), RunNameHint::Placeholder);
-        assert_eq!(run_name_hint(None, "   \n\t "), RunNameHint::Placeholder);
-        assert_eq!(run_name_hint(Some(""), ""), RunNameHint::Placeholder);
-        // No name but real input → manager derives the name from `_input`.
         assert_eq!(
-            run_name_hint(None, "do a thing"),
+            run_name_hint(false, Some("My Run"), "some input"),
+            RunNameHint::UserProvided
+        );
+        assert_eq!(run_name_hint(false, None, ""), RunNameHint::UserProvided);
+        assert_eq!(
+            run_name_hint(false, None, "do a thing"),
+            RunNameHint::UserProvided
+        );
+
+        // With auto-naming ON the pre-#338 behaviour holds, gated on input only.
+        // No (meaningful) input → deterministic placeholder, renamed best-effort later.
+        assert_eq!(run_name_hint(true, None, ""), RunNameHint::Placeholder);
+        assert_eq!(run_name_hint(true, None, "   \n\t "), RunNameHint::Placeholder);
+        assert_eq!(run_name_hint(true, Some(""), ""), RunNameHint::Placeholder);
+        // Real input → manager derives the name from `_input` immediately.
+        assert_eq!(
+            run_name_hint(true, None, "do a thing"),
             RunNameHint::DeriveFromInput
         );
         assert_eq!(
-            run_name_hint(Some(""), "do a thing"),
+            run_name_hint(true, Some("ignored when auto"), "do a thing"),
             RunNameHint::DeriveFromInput
         );
     }
@@ -26946,6 +27118,39 @@ edges:
                 .autocomplete_turn_end,
             Some(0),
             "off must persist a stored 0, never NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_round_trips_the_default_auto_name_flag_both_ways() {
+        // #338: the checkbox is authoritative in BOTH directions. Unticking must persist a
+        // stored `0` (source still "stored"), not clear back to unset — otherwise it could
+        // not override `PDO_DEFAULT_AUTO_NAME=1`.
+        let state = test_state().await;
+
+        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": false}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["default_auto_name"]["effective"], false);
+        assert_eq!(view["default_auto_name"]["source"], "stored");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .default_auto_name,
+            Some(0),
+            "off must persist a stored 0, never NULL"
+        );
+
+        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": true}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["default_auto_name"]["effective"], true);
+        assert_eq!(view["default_auto_name"]["source"], "stored");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .default_auto_name,
+            Some(1)
         );
     }
 

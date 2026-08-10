@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.12.0
+
+Rien de cassant. Un nouveau réglage d'instance **purement additif** (application directe d'ADR-0015,
+pas de nouvel ADR).
+
+### Le nommage automatique des Runs par le manager est désormais configurable (#338)
+
+Jusqu'ici, un Run créé sans nom était **toujours** nommé par le Pipeline Manager (depuis son input,
+ou via un placeholder renommé best-effort), et les Triggers l'étaient sans réglage possible. #338
+livre trois choses, sans rien casser :
+
+- un défaut d'instance `default_auto_name` (booléen, résolu `stored → env PDO_DEFAULT_AUTO_NAME →
+  défaut **true**`), exposé dans `SettingsModal` avec la divulgation de source habituelle. Colonne
+  `instance_config.default_auto_name` NULLABLE, migration `ALTER … ADD COLUMN` PRAGMA-guardée ;
+- un override par-Run — champ optionnel `auto_name` sur `POST /runs` (JSON **et** multipart). **La
+  compat est préservée** : un appelant qui passe un `name` sans le flag garde son nom exactement
+  comme avant (le flag ne se résout sur le défaut d'instance que lorsqu'il est absent ET qu'aucun
+  nom n'est fourni) ;
+- un override par-Trigger — colonne `triggers.auto_name` (`NOT NULL DEFAULT 1`, donc les Triggers
+  existants continuent d'auto-nommer), figée à la création depuis le défaut d'instance et lue au
+  fire. Désactivée, chaque Run né du Trigger porte un *nom placeholder* stable (`Untitled run <id>`)
+  et le manager n'est pas instruit de renommer.
+
 ## 1.9.0
 
 Rien de cassant. Une note, parce qu'elle change **rétroactivement** ce qu'un opérateur peut croire de

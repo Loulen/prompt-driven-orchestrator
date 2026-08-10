@@ -15,7 +15,7 @@ use crate::trigger_store::{FireRecord, Trigger};
 
 /// How often the scheduler wakes up. Cron resolves to the minute; a 30 s tick
 /// guarantees every slot is seen.
-pub const TICK_INTERVAL_SECS: u64 = 30;
+pub(crate) const TICK_INTERVAL_SECS: u64 = 30;
 
 /// Where a fire evaluation comes from (#341, ADR-0027). `Cron` is the ~30 s
 /// scheduler tick; `Manual` is a user clicking "Run now" (`POST
@@ -24,14 +24,14 @@ pub const TICK_INTERVAL_SECS: u64 = 30;
 /// is the schedule) and never touches `next_fire_at` (the cron heartbeat owns
 /// it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FireSource {
+pub(crate) enum FireSource {
     Cron,
     Manual,
 }
 
 impl FireSource {
     /// The `trigger_fires.source` column value for this origin.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             FireSource::Cron => "cron",
             FireSource::Manual => "manual",
@@ -50,7 +50,7 @@ impl FireSource {
 /// cron lives in the request, not the stored row; `&str` would re-derive a parse
 /// error each route already handles to render its own `400`.)
 #[derive(Debug, Clone, Copy)]
-pub enum Transition<'a> {
+pub(crate) enum Transition<'a> {
     /// A freshly created Trigger.
     Create(&'a CronSchedule),
     /// A schedule edit (new cron).
@@ -80,7 +80,7 @@ pub enum Transition<'a> {
 /// *proves* every transition chose a behaviour explicitly (the issue's ask), and
 /// the compiler forces any future transition to choose too. The `Enable` arm
 /// advancing (rather than leaving, as it did by omission) is the #372 fix.
-pub fn recompute_next_fire(
+pub(crate) fn recompute_next_fire(
     now: DateTime<Utc>,
     transition: Transition<'_>,
 ) -> Option<Option<String>> {
@@ -100,7 +100,7 @@ pub fn recompute_next_fire(
 /// The plan for one Trigger on one tick: what to do, what to audit, and the
 /// recomputed next fire.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TickPlan {
+pub(crate) struct TickPlan {
     pub decision: FireDecision,
     /// The audit record to persist, if this tick was significant. A not-due /
     /// disabled no-op produces `None`.
@@ -119,7 +119,7 @@ pub struct TickPlan {
 /// compared against the overlap ceiling (`skip` ⇒ 1, bounded `allow` ⇒
 /// `max_concurrent`). `guard` is the guard result (`None` for a cron-only trigger
 /// with no guard command; the guard is run and wired in `lib.rs`).
-pub fn plan_tick(
+pub(crate) fn plan_tick(
     trigger: &Trigger,
     now: DateTime<Utc>,
     live_run_count: usize,

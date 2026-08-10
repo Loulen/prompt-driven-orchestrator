@@ -21,7 +21,7 @@ use crate::fire_decision::GuardResult;
 
 /// The hard timeout for a guard command. Run off the scheduler tick so a hung
 /// guard never freezes the scheduler.
-pub const GUARD_TIMEOUT_SECS: u64 = 60;
+pub(crate) const GUARD_TIMEOUT_SECS: u64 = 60;
 
 /// Test seam: override the guard timeout (in milliseconds) so integration tests
 /// can exercise the timeout path without waiting the full production bound.
@@ -29,13 +29,13 @@ pub const GUARD_TIMEOUT_MS_OVERRIDE_ENV: &str = "PDO_GUARD_TIMEOUT_MS";
 
 /// Environment variable injected into the guard process pointing at the target
 /// repo, so a guard can reference it without hardcoding a path.
-pub const TARGET_REPO_ENV: &str = "PDO_TARGET_REPO";
+pub(crate) const TARGET_REPO_ENV: &str = "PDO_TARGET_REPO";
 
 /// Cap on the guard output we *capture* for the fire history (#244): each of
 /// stdout/stderr is tail-kept to at most this many bytes. This bounds the
 /// diagnostic blob stored per skip row; it is **never** applied to the `Pass`
 /// path, whose stdout is the actual Run input and must stay byte-for-byte.
-pub const GUARD_CAPTURE_LIMIT_BYTES: usize = 16 * 1024;
+pub(crate) const GUARD_CAPTURE_LIMIT_BYTES: usize = 16 * 1024;
 
 /// Prefix prepended to a tail-capped stream so a reader knows the head was
 /// dropped (errors usually print last, so we keep the tail).
@@ -67,7 +67,7 @@ fn cap_tail(s: &str, limit: usize) -> String {
 /// The guard timeout is read fresh on each tick, so a stored change takes effect
 /// on the next tick without a restart. [`guard_timeout`] is the `stored = None`
 /// shorthand (env-only, unchanged — preserves the ms test seam).
-pub fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
+pub(crate) fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
     stored_secs
         .filter(|&n| (1..=600).contains(&n))
         .map(Duration::from_secs)
@@ -82,7 +82,7 @@ pub fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
 /// shadowed env var and compute the winning tier identically to
 /// [`guard_timeout_with`] (#129, ADR-0015). Note the unit is ms, while the
 /// stored/default guard values are seconds.
-pub fn env_guard_timeout_ms() -> Option<u64> {
+pub(crate) fn env_guard_timeout_ms() -> Option<u64> {
     std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -94,7 +94,7 @@ pub fn env_guard_timeout_ms() -> Option<u64> {
 /// daemon environment is inherited and `PDO_TARGET_REPO` is injected.
 /// The command is bounded by `timeout`; exceeding it yields
 /// [`GuardResult::Error`] rather than blocking.
-pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
+pub(crate) async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command)

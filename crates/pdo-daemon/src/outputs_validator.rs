@@ -31,19 +31,19 @@ fn count_image_files(dir: &Path) -> usize {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldViolation {
+pub(crate) struct FieldViolation {
     pub port: String,
     pub field: String,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValidationError {
+pub(crate) enum ValidationError {
     MissingOutputs(Vec<String>),
     FrontmatterMismatch(Vec<FieldViolation>),
 }
 
-pub fn validate(
+pub(crate) fn validate(
     pipeline: &PipelineDef,
     node_id: &str,
     iter: i64,
@@ -258,7 +258,7 @@ fn yaml_value_to_string(v: &serde_yaml::Value) -> String {
 /// refusal contract (ADR-0035 §3): the completion was refused, the node is still
 /// running, it is still the agent's turn — which is exactly what `pdo complete`'s
 /// exit code `3` says, so nudge and exit code agree instead of contradicting.
-pub fn corrective_message(violations: &[FieldViolation]) -> String {
+pub(crate) fn corrective_message(violations: &[FieldViolation]) -> String {
     let mut msg = String::from(
         "Your output frontmatter does not match the declared schema, so your completion was REFUSED. \
          The node is still running and nothing has failed: it is still your turn. Fix the following:\n",

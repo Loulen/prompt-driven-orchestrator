@@ -8,7 +8,7 @@ use crate::frontmatter_parser;
 use crate::pipeline::{self, PipelineDef, PortType};
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FileInfo {
+pub(crate) struct FileInfo {
     pub path: String,
     pub exists: bool,
     pub size: Option<u64>,
@@ -16,7 +16,7 @@ pub struct FileInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PortIO {
+pub(crate) struct PortIO {
     pub port: String,
     pub repeated: bool,
     pub port_type: PortType,
@@ -24,7 +24,7 @@ pub struct PortIO {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct NodeIO {
+pub(crate) struct NodeIO {
     pub inputs: Vec<PortIO>,
     pub outputs: Vec<PortIO>,
 }
@@ -38,7 +38,7 @@ pub struct NodeIO {
 /// would surface artifacts of failed iterations. Works identically for live and
 /// archived runs (#315): the projection comes from the durable event log, never
 /// purged by archival; only *where files are read* differs.
-pub fn resolve(
+pub(crate) fn resolve(
     pipeline: &PipelineDef,
     artifacts_dir: &Path,
     node_id: &str,

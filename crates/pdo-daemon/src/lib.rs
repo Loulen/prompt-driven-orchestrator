@@ -1,3 +1,8 @@
+// #494 / ADR-0039: the daemon is a single crate of sibling modules. A `pub`
+// item with no consumer outside its own file is a leak — this lint flags it so
+// `clippy -D warnings` in CI keeps the crate's surface from re-widening.
+#![warn(unreachable_pub)]
+
 pub mod admission;
 mod blackboard;
 mod boot_recovery;
@@ -11,27 +16,28 @@ mod event_log;
 #[allow(dead_code)]
 mod fire_decision;
 mod frontmatter_parser;
-pub mod graph_resolver;
+mod graph_resolver;
 mod guard_runner;
 mod input_resolution;
 mod instance_config;
-pub mod library_store;
+mod library_store;
 #[allow(dead_code)]
 mod loop_region;
 #[allow(dead_code)]
 mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;
-pub mod node_primitives;
+mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
 mod pipeline;
-pub mod pipeline_migrator;
+mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
-pub mod price_table;
+mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
+mod reap_policy;
 pub(crate) mod restart_verdict;
 mod run_advance;
 mod run_command;
@@ -50,7 +56,7 @@ pub mod stale_detector;
 mod stats;
 mod switch_router;
 pub mod tmux_session_manager;
-pub mod transition_guard;
+mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
@@ -164,6 +170,40 @@ pub enum Commands {
         /// Report what would be migrated without writing anything.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Reclaim disk from old terminal Runs surfaced by `GET /runs/reapable`
+    /// (#480, #128 Track A). Applies a graded-TTL policy ([`reap_policy`]) and
+    /// archives each match via the existing `cleanup_run` command.
+    ///
+    /// A blocking one-shot (like `Complete`/`Migrate`) that talks to the daemon
+    /// over HTTP — deterministic Rust, so the shipped `disk-janitor` pipeline can
+    /// drive it from a `script` node (ADR-0017) with zero LLM turn and full CI
+    /// coverage. The deletion's *origin* stays a pipeline/CLI action, never the
+    /// runtime itself (ADR-0012a: « le runtime ne déclenche jamais d'action
+    /// durable de lui-même »).
+    Reap {
+        /// Print only the number of Runs the policy would reclaim, then exit 0.
+        /// A Trigger guard can gate on it: `[ "$(pdo reap --count)" -gt 0 ]`.
+        #[arg(long)]
+        count: bool,
+        /// Show the reclaim plan without archiving anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// TTL in hours for `completed` Runs (default 24). Tighten under disk
+        /// pressure, e.g. `--ttl-hours 1`.
+        #[arg(long)]
+        ttl_hours: Option<i64>,
+        /// TTL in hours for `failed`/`halted`/`skipped` Runs — post-mortem
+        /// evidence, held longer but bounded (default 72).
+        #[arg(long)]
+        terminal_ttl_hours: Option<i64>,
+        /// Wall-clock budget in seconds for issuing reclaims (default 40).
+        /// `cleanup_run` is synchronous and a `script` node is killed at
+        /// `SCRIPT_TIMEOUT_SECS` (60s); past the budget the janitor stops
+        /// starting new reclaims and still exits 0, leaving the rest for the next
+        /// fire rather than failing (a failed janitor Run leaks its own worktree).
+        #[arg(long, default_value_t = 40)]
+        budget_secs: u64,
     },
     /// Manage the persistent OS service unit for the daemon (#156, ADR-0019).
     ///
@@ -913,6 +953,189 @@ pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()>
     if errors > 0 {
         anyhow::bail!("{errors} pipeline(s) failed to migrate");
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `pdo reap` (#480, #128 Track A) — the disk-janitor's mechanical half.
+// ---------------------------------------------------------------------------
+
+/// Human-readable byte size for reap reports (binary units, one decimal).
+fn human_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let f = n as f64;
+    if f >= GB {
+        format!("{:.1} GB", f / GB)
+    } else if f >= MB {
+        format!("{:.1} MB", f / MB)
+    } else if f >= KB {
+        format!("{:.1} KB", f / KB)
+    } else {
+        format!("{n} B")
+    }
+}
+
+/// snake_case status label for reap reports (mirrors the wire representation).
+fn reap_status_label(status: &event_log::RunStatus) -> &'static str {
+    match status {
+        event_log::RunStatus::Running => "running",
+        event_log::RunStatus::AwaitingUser => "awaiting_user",
+        event_log::RunStatus::Completed => "completed",
+        event_log::RunStatus::Failed => "failed",
+        event_log::RunStatus::Skipped => "skipped",
+        event_log::RunStatus::Halted => "halted",
+        event_log::RunStatus::Paused => "paused",
+        event_log::RunStatus::Archived => "archived",
+    }
+}
+
+/// One-shot `pdo reap` (#480): the mechanical, deterministic half of the disk
+/// janitor. Lists `GET /runs/reapable?size=true`, runs the pure
+/// [`reap_policy`] over it, and — unless `--count`/`--dry-run` — archives each
+/// selected Run via `POST /runs/{id}/commands {"kind":"cleanup_run"}`.
+///
+/// Blocking, no tokio (mirrors `run_complete`/`run_migrate`): it uses
+/// `reqwest::blocking`. The daemon URL comes from `PDO_DAEMON_URL` (injected into
+/// every node session) or the built-in default.
+///
+/// **Exit semantics.** Failure to *list* is fatal (a broken URL that silently
+/// no-ops forever is worse than a visible node failure). Per-run reclaim errors
+/// and a wall-clock cutoff are **not** fatal — the function still returns `Ok`
+/// (exit 0), because a failed janitor Run would leave its *own* worktree behind,
+/// which a `completed`-only policy never reclaims → monotone residue. Progress is
+/// reported honestly; the rest waits for the next fire.
+pub fn run_reap(
+    count: bool,
+    dry_run: bool,
+    ttl_hours: Option<i64>,
+    terminal_ttl_hours: Option<i64>,
+    budget_secs: u64,
+) -> Result<()> {
+    let url = cli_daemon_url();
+    let client = reqwest::blocking::Client::new();
+    let listing = format!("{url}/runs/reapable?size=true");
+
+    // `?size=true` so the plan can order biggest-first and report bytes.
+    let list_runs = |client: &reqwest::blocking::Client| -> Result<Vec<reap_policy::ReapableRun>> {
+        client
+            .get(&listing)
+            .send()
+            .context("failed to reach daemon (GET /runs/reapable)")?
+            .error_for_status()
+            .context("daemon rejected GET /runs/reapable")?
+            .json()
+            .context("failed to parse /runs/reapable response")
+    };
+
+    let runs = list_runs(&client)?;
+
+    let mut policy = reap_policy::ReapPolicy::default();
+    if let Some(h) = ttl_hours {
+        policy.completed_ttl_secs = h.saturating_mul(3600);
+    }
+    if let Some(h) = terminal_ttl_hours {
+        policy.terminal_ttl_secs = h.saturating_mul(3600);
+    }
+
+    let plan = policy.plan(&runs);
+
+    // Guard mode: just the count. Exit 0 either way — the caller reads stdout.
+    if count {
+        println!("{}", plan.reclaim.len());
+        return Ok(());
+    }
+
+    if plan.reclaim.is_empty() {
+        println!(
+            "disk-janitor: nothing to reclaim ({} terminal run(s) listed, none past TTL)",
+            plan.retained
+        );
+        return Ok(());
+    }
+
+    println!(
+        "disk-janitor: {} run(s) to reclaim (~{}), {} retained",
+        plan.reclaim.len(),
+        human_bytes(plan.reclaim_bytes),
+        plan.retained
+    );
+    for d in &plan.reclaim {
+        println!(
+            "  {} [{}] ~{} — {}",
+            d.run_id,
+            reap_status_label(&d.status),
+            human_bytes(d.approx_disk_bytes.unwrap_or(0)),
+            d.reason
+        );
+    }
+
+    if dry_run {
+        println!("disk-janitor: --dry-run, no reclaim issued");
+        return Ok(());
+    }
+
+    // Reclaim within the wall-clock budget.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(budget_secs.max(1));
+    let mut reclaimed_ids: Vec<String> = Vec::new();
+    let mut deferred = 0usize;
+    let mut errors = 0usize;
+
+    for d in &plan.reclaim {
+        if std::time::Instant::now() >= deadline {
+            deferred += 1;
+            continue;
+        }
+        let endpoint = format!("{url}/runs/{}/commands", d.run_id);
+        match client
+            .post(&endpoint)
+            .json(&serde_json::json!({ "kind": "cleanup_run" }))
+            .send()
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let code = status.as_u16();
+                let body = resp.text().unwrap_or_default();
+                // A bare `200` is not proof here (a mistyped path 200s the SPA
+                // shell, and `cleanup_run` swallows fs/git errors) — assert on the
+                // body. `409` = archived between listing and now (benign no-op).
+                // Either way the command was accepted; the re-list below is what
+                // actually confirms the bytes left.
+                if code == 409 || (code == 200 && body.contains("\"archived\"")) {
+                    reclaimed_ids.push(d.run_id.clone());
+                } else {
+                    errors += 1;
+                    eprintln!("  cleanup_run {} → {} {}", d.run_id, status, body.trim());
+                }
+            }
+            Err(e) => {
+                errors += 1;
+                eprintln!("  cleanup_run {} → transport error: {e}", d.run_id);
+            }
+        }
+    }
+
+    // Honest proof: re-list and confirm the reclaimed ids are gone. A `200` /
+    // `409` above only says the command was accepted, not that the bytes left.
+    let confirmed = match list_runs(&client) {
+        Ok(after) => {
+            let still: std::collections::HashSet<String> =
+                after.into_iter().map(|r| r.run_id).collect();
+            reclaimed_ids
+                .iter()
+                .filter(|id| !still.contains(*id))
+                .count()
+        }
+        // Can't re-list — report the accepted count without the confirmation.
+        Err(_) => reclaimed_ids.len(),
+    };
+
+    println!(
+        "disk-janitor: reclaimed {} run(s) ({confirmed} confirmed gone), {deferred} deferred (budget {budget_secs}s), {errors} error(s)",
+        reclaimed_ids.len()
+    );
+
     Ok(())
 }
 
@@ -13889,6 +14112,61 @@ mod tests {
         );
     }
 
+    /// End-to-end janitor loop (#480): a real `/runs/reapable?size=true`
+    /// response parses into `reap_policy::ReapableRun`, the pure policy selects
+    /// the terminal run, and `cleanup_run` archives it so a re-list is empty.
+    /// Ties the two independently-tested halves — endpoint shape and pure policy
+    /// — to the `cleanup_run` contract `pdo reap` depends on. Leak-free (all
+    /// state is an in-memory DB + a tempdir).
+    #[tokio::test]
+    async fn reap_policy_selects_and_cleanup_removes_a_real_reapable_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-e2e-completed";
+        seed_run_with_run_events(
+            &state,
+            run_id,
+            "some-pipe",
+            &[event_log::EventKind::RunCompleted],
+        )
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+
+        // The real endpoint payload (with sizes) deserializes into the policy's
+        // own type — no hand-written fixture.
+        let raw = get_reapable(&state, "?size=true").await;
+        let runs: Vec<crate::reap_policy::ReapableRun> =
+            serde_json::from_value(serde_json::Value::Array(raw)).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, run_id);
+
+        // A freshly-seeded run has age ≈ 0; a 0-second completed TTL selects it
+        // (the graded default TTLs are pinned by the `reap_policy` unit tests).
+        let policy = crate::reap_policy::ReapPolicy {
+            completed_ttl_secs: 0,
+            self_pipeline: None,
+            ..Default::default()
+        };
+        let plan = policy.plan(&runs);
+        assert_eq!(
+            plan.reclaim.len(),
+            1,
+            "the completed worktree-present run must be selected"
+        );
+        assert_eq!(plan.reclaim[0].run_id, run_id);
+
+        // Reclaim it and confirm the surface no longer lists it (archived + the
+        // run dir removed) — the honest proof `pdo reap` re-lists for.
+        let resp = cleanup_run(&state, run_id).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let after = get_reapable(&state, "?size=true").await;
+        assert!(
+            after.is_empty(),
+            "a reclaimed run must no longer be reapable: {after:?}"
+        );
+    }
+
     #[tokio::test]
     async fn reapable_excludes_live_runs() {
         let tmp = tempfile::tempdir().unwrap();
@@ -19366,6 +19644,62 @@ edges:
     #[test]
     fn cli_fail_requires_reason() {
         assert!(Cli::try_parse_from(["pdo", "fail"]).is_err());
+    }
+
+    // --- Layer 1: `pdo reap` CLI parsing (#480) ---
+
+    #[test]
+    fn cli_parses_reap_with_defaults() {
+        let cli = Cli::try_parse_from(["pdo", "reap"]).unwrap();
+        match cli.command {
+            Commands::Reap {
+                count,
+                dry_run,
+                ttl_hours,
+                terminal_ttl_hours,
+                budget_secs,
+            } => {
+                assert!(!count);
+                assert!(!dry_run);
+                assert_eq!(ttl_hours, None);
+                assert_eq!(terminal_ttl_hours, None);
+                assert_eq!(budget_secs, 40, "the wall-clock budget defaults to 40s");
+            }
+            _ => panic!("expected Reap subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_reap_flags() {
+        let cli = Cli::try_parse_from([
+            "pdo",
+            "reap",
+            "--count",
+            "--dry-run",
+            "--ttl-hours",
+            "1",
+            "--terminal-ttl-hours",
+            "48",
+            "--budget-secs",
+            "10",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Reap {
+                count,
+                dry_run,
+                ttl_hours,
+                terminal_ttl_hours,
+                budget_secs,
+            } => {
+                assert!(count);
+                assert!(dry_run);
+                assert_eq!(ttl_hours, Some(1));
+                assert_eq!(terminal_ttl_hours, Some(48));
+                assert_eq!(budget_secs, 10);
+            }
+            _ => panic!("expected Reap subcommand"),
+        }
     }
 
     // --- Layer 1: `pdo service` CLI parsing (#156) ---

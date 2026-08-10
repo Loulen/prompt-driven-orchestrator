@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.10.0
+## 1.12.0
 
 Rien de cassant. Un nouveau réglage d'instance **purement additif** (application directe d'ADR-0015,
 pas de nouvel ADR).

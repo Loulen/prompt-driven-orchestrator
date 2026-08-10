@@ -70,21 +70,21 @@ const SYNTHETIC: &str = "<synthetic>";
 /// The only schema marker `fetched.json` is read under. A document carrying
 /// anything else is ENTIRELY inert — never a row read under a schema we do not
 /// recognise (precedent: `hash_algo: "semantic-v1"`, `library_store.rs:259-269`).
-pub const FETCHED_SCHEMA: &str = "prices-v1";
+pub(crate) const FETCHED_SCHEMA: &str = "prices-v1";
 
 /// Default price source (ADR-0034): models.dev, `anthropic` provider only.
-pub const PRICE_SOURCE_URL_DEFAULT: &str = "https://models.dev/api.json";
+pub(crate) const PRICE_SOURCE_URL_DEFAULT: &str = "https://models.dev/api.json";
 
 /// Hard ceiling on one fetch. 10 s, not the 3 s of `DOCKER_PROBE_TIMEOUT`: the
 /// payload is ~3.3 MB.
-pub const PRICE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const PRICE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Guard against a hostile or aberrant body.
-pub const PRICE_FETCH_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const PRICE_FETCH_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// Age past which the boot refresh re-fetches an EXISTING cache. It never
 /// creates one (ADR-0034: no egress before the first explicit click).
-pub const PRICE_REFRESH_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
+pub(crate) const PRICE_REFRESH_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 
 /// Drop a trailing 8-digit date segment so a dated id resolves to its family
 /// key: `claude-sonnet-4-5-20250929` → `claude-sonnet-4-5`. A version-only id is
@@ -102,7 +102,7 @@ pub(crate) fn strip_date_suffix(model: &str) -> &str {
 /// Per-MTok `(input, output)` list price. `PartialEq` and not `Eq` — these are
 /// `f64` (same reason as `CostStat`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Price {
+pub(crate) struct Price {
     pub input: f64,
     pub output: f64,
 }
@@ -110,7 +110,7 @@ pub struct Price {
 /// Which tier decided a family key. ADR-0015's vocabulary, transposed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum PriceTier {
+pub(crate) enum PriceTier {
     Manual,
     Fetched,
     Embedded,
@@ -119,7 +119,7 @@ pub enum PriceTier {
 /// A refused row and why — the material of BOTH the `warn!` and the
 /// `GET /settings` `reason`, so the two can never drift.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RejectedRow {
+pub(crate) struct RejectedRow {
     pub key: String,
     pub why: String,
 }
@@ -127,7 +127,7 @@ pub struct RejectedRow {
 /// Where a fetched document came from and when. `None` for the manual tier: the
 /// human's file carries no provenance, by design (PDO never writes it).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Provenance {
+pub(crate) struct Provenance {
     pub source: String,
     pub fetched_at: String,
 }
@@ -136,7 +136,7 @@ pub struct Provenance {
 /// An unparseable document yields `unparseable: Some(err)` and NO rows — never an
 /// `Err`, because a bad price file must not be able to fail a cost read.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct ParsedTier {
+pub(crate) struct ParsedTier {
     pub rows: BTreeMap<String, Price>,
     pub rejected: Vec<RejectedRow>,
     pub unparseable: Option<String>,
@@ -171,7 +171,7 @@ impl ParsedTier {
 /// third component of `run_cost`'s memo key, without which a sync would stay
 /// invisible on `/stats/cost` until the daemon restarted.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PriceTable {
+pub(crate) struct PriceTable {
     resolved: BTreeMap<String, (Price, PriceTier)>,
     manual: ParsedTier,
     fetched: ParsedTier,
@@ -191,7 +191,7 @@ impl Default for PriceTable {
 
 impl PriceTable {
     /// The floor alone. Pure, no IO, no `$HOME`. `fingerprint() == 0`.
-    pub fn builtin() -> Self {
+    pub(crate) fn builtin() -> Self {
         Self::resolve(ParsedTier::default(), ParsedTier::default(), 0)
     }
 
@@ -199,7 +199,7 @@ impl PriceTable {
     /// `sandbox_profile::resolve_entry_list`: ONE resolver shared by the cost
     /// computation and by the `GET /settings` view, so what the UI shows can
     /// never drift from what actually prices (the lesson of #373).
-    pub fn resolve(manual: ParsedTier, fetched: ParsedTier, fingerprint: u64) -> Self {
+    pub(crate) fn resolve(manual: ParsedTier, fetched: ParsedTier, fingerprint: u64) -> Self {
         let mut resolved: BTreeMap<String, (Price, PriceTier)> = BTreeMap::new();
         // Lowest precedence first, so a higher tier simply overwrites.
         for (k, i, o) in PRICES {
@@ -234,7 +234,7 @@ impl PriceTable {
 
     /// `<home_root>/.pdo/prices/{models.yaml, fetched.json}` — path arithmetic
     /// only, like `sandbox_image::default_dockerfile_path(sandbox_root)`.
-    pub fn paths(home_root: &Path) -> (PathBuf, PathBuf) {
+    pub(crate) fn paths(home_root: &Path) -> (PathBuf, PathBuf) {
         let dir = home_root.join(".pdo").join("prices");
         (dir.join("models.yaml"), dir.join("fetched.json"))
     }
@@ -244,7 +244,7 @@ impl PriceTable {
     /// Unparseable, or an unknown `schema` → the tier is ENTIRELY inert plus a
     /// diagnostic. Emits AT MOST ONE `warn!` per distinct fingerprint, so a
     /// polled `/stats/cost` cannot produce one log line per request.
-    pub fn load(home_root: &Path) -> Self {
+    pub(crate) fn load(home_root: &Path) -> Self {
         let (manual_path, fetched_path) = Self::paths(home_root);
         let manual_bytes = std::fs::read(&manual_path).ok();
         let fetched_bytes = std::fs::read(&fetched_path).ok();
@@ -273,7 +273,7 @@ impl PriceTable {
     /// Moving the lookup first would let a price file turn the sentinel into a
     /// real cost, and would break the `Some((0,0))` / `None` distinction that
     /// keeps `partial` honest.
-    pub fn price_for(&self, model: &str) -> Option<Price> {
+    pub(crate) fn price_for(&self, model: &str) -> Option<Price> {
         if model == SYNTHETIC {
             return Some(Price {
                 input: 0.0,
@@ -285,33 +285,33 @@ impl PriceTable {
 
     /// Which tier decides a family key, or `None` if no tier knows it. For the
     /// view and for the sync report.
-    pub fn tier_of(&self, key: &str) -> Option<PriceTier> {
+    pub(crate) fn tier_of(&self, key: &str) -> Option<PriceTier> {
         self.resolved.get(key).map(|(_, t)| *t)
     }
 
-    pub fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
     }
 
     /// The keys the manual tier actually decided — the `GET /settings` signal
     /// that a hand edit is shadowing a sync.
-    pub fn manual_keys(&self) -> &[String] {
+    pub(crate) fn manual_keys(&self) -> &[String] {
         &self.manual_keys
     }
 
     /// Rows accepted from `fetched.json` (0 when the file is absent or inert).
-    pub fn fetched_rows(&self) -> usize {
+    pub(crate) fn fetched_rows(&self) -> usize {
         self.fetched.rows.len()
     }
 
     /// The fetched tier's rows, for the sync's added/updated/unchanged diff.
-    pub fn fetched_prices(&self) -> &BTreeMap<String, Price> {
+    pub(crate) fn fetched_prices(&self) -> &BTreeMap<String, Price> {
         &self.fetched.rows
     }
 
     /// Vintage of the fetched tier — D14 pt 2: the table's date is readable, not
     /// guessed.
-    pub fn fetched_at(&self) -> Option<&str> {
+    pub(crate) fn fetched_at(&self) -> Option<&str> {
         self.fetched
             .provenance
             .as_ref()
@@ -319,7 +319,7 @@ impl PriceTable {
     }
 
     /// URL of the last successful fetch.
-    pub fn source(&self) -> Option<&str> {
+    pub(crate) fn source(&self) -> Option<&str> {
         self.fetched.provenance.as_ref().map(|p| p.source.as_str())
     }
 
@@ -327,7 +327,7 @@ impl PriceTable {
     /// nothing is wrong. PURE, so a unit test can pin it instead of a terminal
     /// (modelled on `retired_sandbox_settings_warning`). ADR-0015:44: two lines
     /// for one problem read as two problems.
-    pub fn diagnostic(&self) -> Option<String> {
+    pub(crate) fn diagnostic(&self) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         for (tier, parsed, path) in [
             ("manual", &self.manual, self.manual_path.as_ref()),
@@ -450,7 +450,7 @@ fn reject_sentinel_key(key: &str) -> Option<String> {
 ///
 /// An unknown *field* stays ignored (no `deny_unknown_fields` anywhere in this
 /// crate; ADR-0015 #471 says an unknown field is simply ignored by serde).
-pub fn parse_manual(text: &str) -> ParsedTier {
+pub(crate) fn parse_manual(text: &str) -> ParsedTier {
     #[derive(serde::Deserialize)]
     struct Doc {
         #[serde(default)]
@@ -514,7 +514,7 @@ pub fn parse_manual(text: &str) -> ParsedTier {
 
 /// Parse the fetched tier (`fetched.json`). Requires `schema == "prices-v1"`;
 /// anything else leaves the tier ENTIRELY inert. PURE.
-pub fn parse_fetched(text: &str) -> ParsedTier {
+pub(crate) fn parse_fetched(text: &str) -> ParsedTier {
     #[derive(serde::Deserialize)]
     struct Doc {
         schema: Option<String>,
@@ -587,7 +587,7 @@ pub fn parse_fetched(text: &str) -> ParsedTier {
 /// the runtime context, including from a `spawn_blocking` thread (those carry the
 /// context) — `main.rs:18-20` documents this for the CLI paths. This is the
 /// crate's first async reqwest call, so there is no precedent to copy.
-pub async fn fetch_source(url: &str) -> Result<String, String> {
+pub(crate) async fn fetch_source(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(PRICE_FETCH_TIMEOUT)
         .connect_timeout(PRICE_FETCH_TIMEOUT)
@@ -636,7 +636,7 @@ pub async fn fetch_source(url: &str) -> Result<String, String> {
 /// - an EMPTY harvest is an `Err`: an upstream schema drift would otherwise write
 ///   an empty `fetched.json` and destroy the last known table
 #[allow(clippy::type_complexity)]
-pub fn normalize_models_dev(
+pub(crate) fn normalize_models_dev(
     text: &str,
 ) -> Result<(BTreeMap<String, Price>, Vec<RejectedRow>), String> {
     let root: serde_json::Value =
@@ -715,7 +715,7 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 ///
 /// **Never writes an empty table** — the one path by which this feature could
 /// destroy something.
-pub fn write_fetched(
+pub(crate) fn write_fetched(
     path: &Path,
     source: &str,
     fetched_at: &str,

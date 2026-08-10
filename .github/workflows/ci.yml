@@ -45,6 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Layout ratchet (#494, ADR-0039): fails fast if a watched directory's
+      # flat file list grows past its baseline. See docs/agents/module-layout.md.
+      - run: bash scripts/layout-ratchet.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

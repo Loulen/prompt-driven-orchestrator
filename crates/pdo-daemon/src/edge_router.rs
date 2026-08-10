@@ -18,7 +18,7 @@ use crate::pipeline::EdgeDef;
 /// Returns the subset of `outgoing` edges that fire for the producing node,
 /// in input order. `outgoing` must be exactly the edges whose `source.node` is
 /// the producing node.
-pub fn fired_edges<'a>(
+pub(crate) fn fired_edges<'a>(
     outgoing: &'a [&'a EdgeDef],
     frontmatter: &HashMap<String, serde_yaml::Value>,
     vars: &HashMap<String, serde_yaml::Value>,

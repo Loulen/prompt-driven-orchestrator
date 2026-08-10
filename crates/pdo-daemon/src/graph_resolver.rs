@@ -6,7 +6,7 @@ use crate::pipeline::{NodeType, PipelineDef};
 /// Returns the IDs of nodes that are ready to be spawned: all upstream
 /// dependencies completed, node not yet started, and not a control-flow
 /// construct (Start, End, Loop, Switch).
-pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> {
+pub(crate) fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> {
     let mut ready = Vec::new();
 
     for node in &pipeline.nodes {
@@ -95,7 +95,7 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum BodyResolutionError {
+pub(crate) enum BodyResolutionError {
     #[error("loop node '{0}' not found in pipeline")]
     LoopNotFound(String),
     #[error("loop '{0}' has an empty body (body port wired to nothing)")]
@@ -108,7 +108,7 @@ pub enum BodyResolutionError {
 /// from the loop's "body" output port, collecting all reachable nodes until
 /// hitting the loop's own break/done ports. Nested loops are treated as opaque
 /// (included but their internals are not traversed).
-pub fn compute_body_subgraph(
+pub(crate) fn compute_body_subgraph(
     pipeline: &PipelineDef,
     loop_node_id: &str,
 ) -> Result<HashSet<String>, BodyResolutionError> {
@@ -189,7 +189,7 @@ pub fn compute_body_subgraph(
 ///
 /// This is the topological signature a bounded loop region is auto-materialized
 /// from, so that no cycle is ever accidentally unbounded.
-pub fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
+pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
     // Index nodes for stable ordering and adjacency by id.
     let order: HashMap<&str, usize> = pipeline
         .nodes
@@ -305,7 +305,7 @@ pub fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
 ///
 /// Returns the first such member in `members` order, or `None` if no member is
 /// fed from outside (a closed island — degenerate, no defined entry).
-pub fn region_entry(pipeline: &PipelineDef, members: &[String]) -> Option<String> {
+pub(crate) fn region_entry(pipeline: &PipelineDef, members: &[String]) -> Option<String> {
     let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
     members
         .iter()
@@ -320,7 +320,7 @@ pub fn region_entry(pipeline: &PipelineDef, members: &[String]) -> Option<String
 
 /// Returns the set of all nodes transitively reachable from `node_id` by
 /// following outgoing edges. The starting node is NOT included in the result.
-pub fn downstream_subgraph(pipeline: &PipelineDef, node_id: &str) -> HashSet<String> {
+pub(crate) fn downstream_subgraph(pipeline: &PipelineDef, node_id: &str) -> HashSet<String> {
     let mut visited = HashSet::new();
     visited.insert(node_id.to_string());
     let mut queue = vec![node_id.to_string()];
@@ -342,7 +342,9 @@ pub fn downstream_subgraph(pipeline: &PipelineDef, node_id: &str) -> HashSet<Str
 
 /// Returns the number of pipeline nodes that are not yet completed.
 /// Excludes Start and End control-flow nodes from the count.
-pub fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> usize {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> usize {
     pipeline
         .nodes
         .iter()

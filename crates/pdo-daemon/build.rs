@@ -15,9 +15,23 @@ fn main() {
         "../../frontend/tsconfig.node.json",
         "../../frontend/components.json",
     ] {
+        // A missing `rerun-if-changed` target produces neither a warning nor an
+        // error: cargo silently re-runs this script — and therefore
+        // `npm run build` — on EVERY cargo build, forever. We fail loudly
+        // instead of paying that cost. Paths are relative to crates/pdo-daemon/.
+        assert!(
+            std::path::Path::new(path).exists(),
+            "build.rs: rerun-if-changed target `{path}` is missing (paths are \
+             relative to crates/pdo-daemon/). A missing target silently re-runs \
+             this script and `npm run build` on EVERY cargo build. If the file \
+             was moved or renamed, update the path list in build.rs."
+        );
         println!("cargo:rerun-if-changed={path}");
     }
 
+    // `../../frontend/dist` is generated (gitignored), created by this script,
+    // and absent on a fresh clone — so it stays out of the assert above.
+    // rust_embed already fails the compile downstream if dist is missing.
     println!("cargo:rerun-if-changed=../../frontend/dist");
 
     if std::env::var_os("PDO_SKIP_FRONTEND_BUILD").is_some() {

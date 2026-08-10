@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::pipeline;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct LibraryEntry {
+pub(crate) struct LibraryEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub node_type: pipeline::NodeType,
@@ -40,7 +40,9 @@ pub struct LibraryEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum SyncState {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) enum SyncState {
     Outline,
     Synced,
     Diverged,
@@ -80,7 +82,7 @@ fn resolve_slug(dir: &Path, name: &str) -> String {
     }
 }
 
-pub fn list() -> Vec<LibraryEntry> {
+pub(crate) fn list() -> Vec<LibraryEntry> {
     let Some(dir) = library_dir() else {
         return Vec::new();
     };
@@ -103,7 +105,7 @@ pub fn list() -> Vec<LibraryEntry> {
     entries
 }
 
-pub fn get(name: &str) -> Option<LibraryEntry> {
+pub(crate) fn get(name: &str) -> Option<LibraryEntry> {
     let dir = library_dir()?;
     let slug = slugify(name);
     let path = dir.join(format!("{slug}.yaml"));
@@ -134,7 +136,7 @@ fn find_by_name(dir: &Path, name: &str) -> Option<LibraryEntry> {
     None
 }
 
-pub fn save(entry: &LibraryEntry) -> Result<(), String> {
+pub(crate) fn save(entry: &LibraryEntry) -> Result<(), String> {
     let dir = library_dir().ok_or("HOME not set")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create library dir: {e}"))?;
 
@@ -149,7 +151,7 @@ pub fn save(entry: &LibraryEntry) -> Result<(), String> {
     Ok(())
 }
 
-pub fn delete(name: &str) -> Result<bool, String> {
+pub(crate) fn delete(name: &str) -> Result<bool, String> {
     let dir = library_dir().ok_or("HOME not set")?;
     if let Some(path) = find_path_by_name(&dir, name) {
         std::fs::remove_file(&path).map_err(|e| format!("delete error: {e}"))?;
@@ -188,7 +190,9 @@ fn find_path_by_name(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
     LibraryEntry {
         name: node.name.clone(),
         node_type: node.node_type.clone(),
@@ -206,7 +210,9 @@ pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
     }
 }
 
-pub fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
+// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+#[allow(dead_code)]
+pub(crate) fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
     let Some(entry) = get(&node.name) else {
         return SyncState::Outline;
     };
@@ -218,7 +224,7 @@ pub fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
     }
 }
 
-pub mod pipelines {
+pub(crate) mod pipelines {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
@@ -227,14 +233,14 @@ pub mod pipelines {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
-    pub enum Scope {
+    pub(crate) enum Scope {
         Repo,
         User,
         Library,
     }
 
     impl Scope {
-        pub fn parse(s: &str) -> Option<Scope> {
+        pub(crate) fn parse(s: &str) -> Option<Scope> {
             match s {
                 "repo" => Some(Scope::Repo),
                 "user" => Some(Scope::User),
@@ -242,7 +248,7 @@ pub mod pipelines {
                 _ => None,
             }
         }
-        pub fn as_str(self) -> &'static str {
+        pub(crate) fn as_str(self) -> &'static str {
             match self {
                 Scope::Repo => "repo",
                 Scope::User => "user",
@@ -252,7 +258,7 @@ pub mod pipelines {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct PromotedFrom {
+    pub(crate) struct PromotedFrom {
         pub repo: String,
         pub path: String,
         pub content_hash: String,
@@ -266,7 +272,7 @@ pub mod pipelines {
     }
 
     /// Marker for the semantic-projection digest (#395).
-    pub const HASH_ALGO_SEMANTIC: &str = "semantic-v1";
+    pub(crate) const HASH_ALGO_SEMANTIC: &str = "semantic-v1";
 
     /// Domain tags keeping the two digest shapes in disjoint spaces, so a pipeline
     /// that stops parsing can never accidentally hash equal to its own projection.
@@ -274,7 +280,7 @@ pub mod pipelines {
     const DOMAIN_UNPARSABLE: &str = "pdo/pipeline-bytes/v1";
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-    pub struct PipelineMeta {
+    pub(crate) struct PipelineMeta {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub promoted_from: Option<PromotedFrom>,
     }
@@ -292,7 +298,7 @@ pub mod pipelines {
     /// reporting it synced, its bytes are hashed under a separate domain tag: the
     /// digest still moves when the file moves, and a pipeline that breaks after a
     /// promote reads as drifted (which it is).
-    pub fn content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
+    pub(crate) fn content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
         match crate::pipeline::parse_pipeline(yaml)
             .ok()
             .and_then(|parsed| crate::pipeline_semantics::canonical_form(&parsed.pipeline).ok())
@@ -399,7 +405,7 @@ pub mod pipelines {
         Some(true)
     }
 
-    pub fn user_pipelines_dir() -> Option<PathBuf> {
+    pub(crate) fn user_pipelines_dir() -> Option<PathBuf> {
         std::env::var_os("HOME").map(|h| {
             PathBuf::from(h)
                 .join(".pdo")
@@ -408,7 +414,7 @@ pub mod pipelines {
         })
     }
 
-    pub fn repo_pipelines_dir(repo_root: &Path) -> PathBuf {
+    pub(crate) fn repo_pipelines_dir(repo_root: &Path) -> PathBuf {
         repo_root.join(".pdo").join("library").join("pipelines")
     }
 
@@ -435,7 +441,7 @@ pub mod pipelines {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct PipelineLibraryEntry {
+    pub(crate) struct PipelineLibraryEntry {
         pub id: String,
         pub name: String,
         pub scope: Scope,
@@ -528,7 +534,7 @@ pub mod pipelines {
         entries
     }
 
-    pub fn list(repo_root: &Path) -> Vec<PipelineLibraryEntry> {
+    pub(crate) fn list(repo_root: &Path) -> Vec<PipelineLibraryEntry> {
         let mut entries: Vec<PipelineLibraryEntry> = Vec::new();
         entries.extend(list_scope(&repo_pipelines_dir(repo_root), Scope::Repo));
         if let Some(user_dir) = user_pipelines_dir() {
@@ -552,16 +558,16 @@ pub mod pipelines {
         None
     }
 
-    pub fn get_yaml(repo_root: &Path, id: &str) -> Option<String> {
+    pub(crate) fn get_yaml(repo_root: &Path, id: &str) -> Option<String> {
         let (path, _) = locate(repo_root, id)?;
         std::fs::read_to_string(&path).ok()
     }
 
-    pub fn get_path(repo_root: &Path, id: &str) -> Option<PathBuf> {
+    pub(crate) fn get_path(repo_root: &Path, id: &str) -> Option<PathBuf> {
         locate(repo_root, id).map(|(p, _)| p)
     }
 
-    pub fn get_scope(repo_root: &Path, id: &str) -> Option<Scope> {
+    pub(crate) fn get_scope(repo_root: &Path, id: &str) -> Option<Scope> {
         locate(repo_root, id).map(|(_, s)| s)
     }
 
@@ -573,7 +579,7 @@ pub mod pipelines {
     ///   (with a numeric suffix on slug collision).
     /// - `scope` picks the on-disk directory. If `id` resolves to an existing file in
     ///   a *different* scope, the file is moved to the requested scope.
-    pub fn save(
+    pub(crate) fn save(
         repo_root: &Path,
         id: Option<&str>,
         name: &str,
@@ -638,7 +644,7 @@ pub mod pipelines {
         Ok(final_id)
     }
 
-    pub fn delete(repo_root: &Path, id: &str) -> Result<bool, String> {
+    pub(crate) fn delete(repo_root: &Path, id: &str) -> Result<bool, String> {
         let Some((path, _)) = locate(repo_root, id) else {
             return Ok(false);
         };
@@ -653,7 +659,7 @@ pub mod pipelines {
         Ok(true)
     }
 
-    pub fn promote(repo_root: &Path, pipeline_id: &str) -> Result<String, String> {
+    pub(crate) fn promote(repo_root: &Path, pipeline_id: &str) -> Result<String, String> {
         let repo_dir = repo_root.join(".pdo").join("pipelines");
         let source_path = repo_dir.join(format!("{pipeline_id}.yaml"));
         let yaml = std::fs::read_to_string(&source_path)
@@ -798,7 +804,7 @@ pub mod pipelines {
     /// The source YAML is rewritten **verbatim except its top-level `name:`
     /// line** (never re-serialized) so unknown top-level keys, comments, and
     /// formatting survive a round-trip — see `rewrite_top_level_name`.
-    pub fn duplicate(repo_root: &Path, id: &str) -> Result<String, String> {
+    pub(crate) fn duplicate(repo_root: &Path, id: &str) -> Result<String, String> {
         // 1. Locate source (repo OR user) — one call yields path + scope.
         let (source_path, scope) =
             locate(repo_root, id).ok_or_else(|| format!("pipeline not found: {id}"))?;
@@ -833,7 +839,7 @@ pub mod pipelines {
         save(repo_root, None, &new_name, &rewritten, &prompts, scope)
     }
 
-    pub fn check_drift(library_id: &str) -> Option<bool> {
+    pub(crate) fn check_drift(library_id: &str) -> Option<bool> {
         let lib_dir = user_pipelines_dir()?;
         let lib_path = lib_dir.join(format!("{library_id}.yaml"));
         let meta = read_meta(&lib_path);
@@ -842,7 +848,9 @@ pub mod pipelines {
             .and_then(|pf| compute_drift(&lib_path, pf))
     }
 
-    pub fn get_meta(library_id: &str) -> Option<PipelineMeta> {
+    // #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+    #[allow(dead_code)]
+    pub(crate) fn get_meta(library_id: &str) -> Option<PipelineMeta> {
         let lib_dir = user_pipelines_dir()?;
         let lib_path = lib_dir.join(format!("{library_id}.yaml"));
         if lib_path.exists() {

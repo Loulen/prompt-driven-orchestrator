@@ -540,7 +540,7 @@ NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event),
 - Reprendre la main directement sur la branche.
 - Débloquer via le **Pipeline Manager** : conversation au cours de laquelle le user peut, par exemple, demander *"continue le cycle pour 3 itérations de plus"*. Le manager dispose des commandes pour modifier l'état runtime.
 - Éditer le graphe à chaud (ADR-0007) — ajouter un Reviewer, déconnecter une edge bloquante, etc.
-- Automatiser le cleanup **sans réintroduire l'auto-cleanup runtime** : `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux dont le worktree traîne encore ; une pipeline janitor + Trigger cron exécute la récupération via `cleanup_run`. Recette : `docs/recipes/disk-janitor.md` (#128, Track A). L'origine de la suppression reste *dans le pipeline*, jamais le runtime.
+- Automatiser le cleanup **sans réintroduire l'auto-cleanup runtime** : `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux dont le worktree traîne encore ; le pipeline **`disk-janitor`** (livré : `.pdo/pipelines/disk-janitor.yaml`, un nœud `script` qui lance `pdo reap`) + un Trigger cron exécute la récupération via `cleanup_run`. `pdo reap` applique une politique TTL graduée pure (`reap_policy`) et n'échoue jamais son propre Run sur un lot partiel. Recette : `docs/recipes/disk-janitor.md` (#128 Track A, #480). L'origine de la suppression reste *dans le pipeline*, jamais le runtime.
 
 ### Parallélisation entre Runs
 

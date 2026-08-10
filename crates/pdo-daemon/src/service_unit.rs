@@ -23,10 +23,10 @@
 use std::path::{Path, PathBuf};
 
 /// launchd label / plist basename for the macOS LaunchAgent (#156, D6).
-pub const LAUNCHD_LABEL: &str = "com.pdo.daemon";
+pub(crate) const LAUNCHD_LABEL: &str = "com.pdo.daemon";
 
 /// systemd unit name written under `<config_home>/systemd/user/`.
-pub const SYSTEMD_UNIT_NAME: &str = "pdo.service";
+pub(crate) const SYSTEMD_UNIT_NAME: &str = "pdo.service";
 
 /// Render the Linux `systemd --user` unit (#156, D3).
 ///
@@ -42,7 +42,12 @@ pub const SYSTEMD_UNIT_NAME: &str = "pdo.service";
 ///   a unit without `WorkingDirectory` would run from `/` and resolve the wrong
 ///   repo root. Load-bearing.
 /// * `path_env` — the `Environment=PATH=` value (see [`build_path_env`]).
-pub fn render_systemd_unit(exe: &Path, port: u16, working_dir: &Path, path_env: &str) -> String {
+pub(crate) fn render_systemd_unit(
+    exe: &Path,
+    port: u16,
+    working_dir: &Path,
+    path_env: &str,
+) -> String {
     format!(
         "[Unit]\n\
          Description=PDO (Prompt-Driven Orchestrator) daemon\n\
@@ -76,7 +81,7 @@ pub fn render_systemd_unit(exe: &Path, port: u16, working_dir: &Path, path_env: 
 /// setsid'd child tmux server alive across a stop/restart. `WorkingDirectory`
 /// and `EnvironmentVariables/PATH` are load-bearing for the same reasons as the
 /// systemd unit (repo-root resolution; finding `node`/`claude`/`git`/`tmux`).
-pub fn render_launchd_plist(
+pub(crate) fn render_launchd_plist(
     exe: &Path,
     port: u16,
     working_dir: &Path,
@@ -127,7 +132,7 @@ pub fn render_launchd_plist(
 /// this pure and golden-testable. When `None` (node not found) the node segment
 /// is omitted — `run_service` warns loudly in that case, since a missing node
 /// dir is the single most likely silent-spawn-failure on a shipped unit.
-pub fn build_path_env(exe: &Path, node_dir: Option<&Path>) -> String {
+pub(crate) fn build_path_env(exe: &Path, node_dir: Option<&Path>) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(5);
     if let Some(dir) = exe.parent() {
         parts.push(dir.display().to_string());
@@ -147,7 +152,7 @@ pub fn build_path_env(exe: &Path, node_dir: Option<&Path>) -> String {
 /// `config_home` is **injected** (resolved by [`resolve_config_home`] in prod)
 /// so tests point it at a `TempDir` and never touch the real `~/.config` — the
 /// same determinism trick as `resolve_browse_root`.
-pub fn systemd_unit_path(config_home: &Path) -> PathBuf {
+pub(crate) fn systemd_unit_path(config_home: &Path) -> PathBuf {
     config_home
         .join("systemd")
         .join("user")
@@ -156,7 +161,7 @@ pub fn systemd_unit_path(config_home: &Path) -> PathBuf {
 
 /// Path the launchd LaunchAgent plist is written to:
 /// `<home>/Library/LaunchAgents/com.pdo.daemon.plist` (#156, D6).
-pub fn launchd_plist_path(home: &Path) -> PathBuf {
+pub(crate) fn launchd_plist_path(home: &Path) -> PathBuf {
     home.join("Library")
         .join("LaunchAgents")
         .join(format!("{LAUNCHD_LABEL}.plist"))
@@ -167,7 +172,7 @@ pub fn launchd_plist_path(home: &Path) -> PathBuf {
 /// Impure (reads env); the pure [`systemd_unit_path`] takes the result as a
 /// parameter so tests stay hermetic. Returns `None` only if neither
 /// `XDG_CONFIG_HOME` nor `HOME` is set (a broken environment).
-pub fn resolve_config_home() -> Option<PathBuf> {
+pub(crate) fn resolve_config_home() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
             return Some(PathBuf::from(xdg));
@@ -181,7 +186,7 @@ pub fn resolve_config_home() -> Option<PathBuf> {
 /// `dirname $(command -v node)`. Impure (reads `$PATH`, stats files); returns
 /// `None` when node is not on `$PATH`, so callers can warn instead of silently
 /// shipping a unit whose daemon can't spawn Claude.
-pub fn resolve_node_dir() -> Option<PathBuf> {
+pub(crate) fn resolve_node_dir() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join("node");

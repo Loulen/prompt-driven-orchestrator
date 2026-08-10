@@ -10,6 +10,30 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.14.0
+
+Rien de cassant. Un champ **purement additif** sur l'estimation de coût (périmètre AC#4 de #425,
+dans le cadre d'ADR-0034 — pas de nouvel ADR).
+
+### L'estimation de coût nomme désormais le modèle non tarifé (#425)
+
+Jusqu'ici, un Run (ou un bucket de la modale Stats) dont une session avait tourné sur un modèle
+qu'aucun tier ne tarife affichait `~$0 †` — ou, pire, un nombre plausible mais faux-bas — avec un
+tooltip générique « an unpriced model was excluded ». Le `†` seul ne disait **jamais quel** modèle,
+si bien que `claude-fable-5` (le plus cher) a pu rester invisible des semaines dans `/stats/cost`.
+
+Désormais `CostStat` porte `unpriced_models: Vec<String>` (clés de famille **dé-datées**, triées,
+uniques) ; `partial` en est **dérivé** (`partial ⟺ !unpriced_models.is_empty()`). Le champ voyage
+sur `GET /runs/:id` et, unioné par bucket, sur `GET /stats/cost` ; l'UI nomme le(s) modèle(s) dans le
+tooltip du `†`. La clé du memo de coût est **inchangée** (l'information voyage dans la valeur), donc
+aucune régression du chemin `/stats/cost`.
+
+Ce qui **n'est pas** dans cette version : amorcer le plancher embarqué avec la gen-5 (opus-5,
+sonnet-5, fable-5) — cela réviserait le principe de membership d'ADR-0034 et relève d'une décision du
+propriétaire (#527). Sur une instance non-syncée, le modèle par défaut du compte continue donc de
+contribuer $0 ; la différence est qu'il est maintenant **nommé**, donc actionnable (un clic « Sync
+coûts » ou une ligne dans `~/.pdo/prices/models.yaml`).
+
 ## 1.13.0
 
 **Cassant** (`feat(#516)!`) : le champ de réponse `stale_git_lock` disparaît, remplacé par

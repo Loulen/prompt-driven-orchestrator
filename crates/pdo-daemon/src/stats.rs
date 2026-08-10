@@ -236,6 +236,11 @@ pub(crate) struct CostPeriodBucket {
     pub null_count: i64,
     /// Total runs folded into this bucket (priced + partial + null).
     pub runs: i64,
+    /// The union of every unpriced model family key seen across the bucket's
+    /// partial runs — sorted, de-duplicated (#425 AC#4). Empty ⟺ `partial == 0`.
+    /// Lets the chart name *which* models are dragging the bucket to a lower
+    /// bound, not just how many runs were affected.
+    pub unpriced_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -246,6 +251,9 @@ pub(crate) struct CostKeyBucket {
     #[serde(rename = "null")]
     pub null_count: i64,
     pub runs: i64,
+    /// Union of unpriced model family keys across this bucket's partial runs
+    /// (#425 AC#4). See [`CostPeriodBucket::unpriced_models`].
+    pub unpriced_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -270,6 +278,9 @@ struct CostAcc {
     partial: i64,
     null_count: i64,
     runs: i64,
+    /// De-dated model keys no tier priced, unioned across the bucket's runs. A
+    /// `BTreeSet` so the emitted `Vec` is sorted + unique for free (#425 AC#4).
+    unpriced: std::collections::BTreeSet<String>,
 }
 
 impl CostAcc {
@@ -281,6 +292,9 @@ impl CostAcc {
                 if c.partial {
                     self.partial += 1;
                 }
+                // Already de-dated by `run_cost::aggregate`; union names across
+                // the bucket so the chart can say which models, not just how many.
+                self.unpriced.extend(c.unpriced_models.iter().cloned());
             }
             None => self.null_count += 1,
         }
@@ -311,6 +325,7 @@ fn fold_cost(rows: &[CostRow]) -> StatsCost {
             partial: a.partial,
             null_count: a.null_count,
             runs: a.runs,
+            unpriced_models: a.unpriced.iter().cloned().collect(),
         })
         .collect();
     period.sort_by(|a, b| a.bucket.cmp(&b.bucket));
@@ -324,6 +339,7 @@ fn fold_cost(rows: &[CostRow]) -> StatsCost {
                 partial: a.partial,
                 null_count: a.null_count,
                 runs: a.runs,
+                unpriced_models: a.unpriced.iter().cloned().collect(),
             })
             .collect();
         v.sort_by(|a, b| {
@@ -711,6 +727,7 @@ mod tests {
                 cost: Some(CostStat {
                     usd: 1.0,
                     partial: false,
+                    unpriced_models: vec![],
                 }),
             },
             CostRow {
@@ -720,6 +737,7 @@ mod tests {
                 cost: Some(CostStat {
                     usd: 2.0,
                     partial: true,
+                    unpriced_models: vec!["claude-sonnet-5".into()],
                 }),
             },
             CostRow {
@@ -742,6 +760,9 @@ mod tests {
         assert_eq!(d15.partial, 1);
         assert_eq!(d15.null_count, 0);
         assert_eq!(d15.runs, 2);
+        // #425 AC#4: the unpriced model of the one partial run is named on the
+        // bucket, not just counted.
+        assert_eq!(d15.unpriced_models, vec!["claude-sonnet-5".to_string()]);
         let d16 = c
             .by_period
             .iter()
@@ -764,13 +785,59 @@ mod tests {
         assert!((c.by_pipeline[0].usd - 3.0).abs() < 1e-9);
         assert_eq!(c.by_pipeline[0].partial, 1);
         assert_eq!(c.by_pipeline[0].runs, 2);
+        assert_eq!(
+            c.by_pipeline[0].unpriced_models,
+            vec!["claude-sonnet-5".to_string()]
+        );
         let beta = c.by_pipeline.iter().find(|b| b.key == "beta").unwrap();
         assert_eq!(beta.usd, 0.0);
         assert_eq!(beta.null_count, 1);
+        // A wholly-null bucket names nothing.
+        assert!(beta.unpriced_models.is_empty());
 
         // by_project mirrors the pipeline split here.
         assert_eq!(c.by_project[0].key, "/proj/A");
         assert!((c.by_project[0].usd - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fold_cost_unions_and_dedups_unpriced_model_names_across_runs() {
+        // #425 AC#4: two partial runs in one bucket, sharing one offender and each
+        // bringing one of its own → the bucket names the UNION, sorted and unique.
+        let rows = vec![
+            CostRow {
+                bucket: "d".into(),
+                pipeline: "p".into(),
+                project: "/proj".into(),
+                cost: Some(CostStat {
+                    usd: 0.0,
+                    partial: true,
+                    unpriced_models: vec!["claude-sonnet-5".into(), "claude-fable-5".into()],
+                }),
+            },
+            CostRow {
+                bucket: "d".into(),
+                pipeline: "p".into(),
+                project: "/proj".into(),
+                cost: Some(CostStat {
+                    usd: 0.0,
+                    partial: true,
+                    unpriced_models: vec!["claude-fable-5".into(), "claude-opus-5".into()],
+                }),
+            },
+        ];
+        let c = fold_cost(&rows);
+        let d = c.by_period.iter().find(|b| b.bucket == "d").unwrap();
+        assert_eq!(d.partial, 2);
+        assert_eq!(
+            d.unpriced_models,
+            vec![
+                "claude-fable-5".to_string(),
+                "claude-opus-5".to_string(),
+                "claude-sonnet-5".to_string(),
+            ],
+            "union across the bucket, de-duplicated and sorted"
+        );
     }
 
     #[test]

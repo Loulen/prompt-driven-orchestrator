@@ -28,6 +28,12 @@ Cargo.lock.*
 !.pdo/pipelines/review-loop.yaml
 !.pdo/pipelines/simple-bugfix.yaml
 !.pdo/pipelines/planner.yaml
+# disk-janitor (#480) is a `script` node whose body lives in a `.prompts/`
+# sidecar — a script node with an empty body fails to launch, so the sidecar
+# MUST be tracked alongside its YAML (re-include the dir before the file).
+!.pdo/pipelines/disk-janitor.yaml
+!.pdo/pipelines/disk-janitor.prompts/
+!.pdo/pipelines/disk-janitor.prompts/reap.md
 
 # Playwright artefacts
 frontend/test-results/

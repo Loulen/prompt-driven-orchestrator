@@ -27,7 +27,7 @@ use sqlx::{Row, SqlitePool};
 /// The persisted singleton config row. Each field is `None` when unset (the
 /// resolver then falls through to env → default).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstanceConfig {
+pub(crate) struct InstanceConfig {
     /// Stored global session cap, or `None` when unset.
     pub session_cap: Option<i64>,
     /// Stored tmux reaper TTL in seconds, or `None` when unset.
@@ -77,7 +77,7 @@ pub struct InstanceConfig {
 /// default). This keeps the double-`Option` still deferred while giving the UI
 /// a "Default" (unset) affordance.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct UpdateInstanceConfig {
+pub(crate) struct UpdateInstanceConfig {
     pub session_cap: Option<i64>,
     pub reaper_ttl_secs: Option<i64>,
     pub guard_timeout_secs: Option<i64>,
@@ -113,7 +113,7 @@ impl UpdateInstanceConfig {
 /// Future knobs are added via an idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` (precedent: `max_concurrent` #239 in
 /// `trigger_store`), never a migration runner.
-pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
+pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS instance_config (
             id                 INTEGER PRIMARY KEY CHECK (id = 1),
@@ -219,7 +219,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
 }
 
 /// Fetch the singleton config row. Always present after [`init`].
-pub async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
+pub(crate) async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM instance_config WHERE id = 1")
         .fetch_optional(db)
         .await?;
@@ -230,7 +230,7 @@ pub async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
 
 /// Apply a partial config edit and return the updated row. A no-op edit (no
 /// field set) returns the current row unchanged and does not bump `updated_at`.
-pub async fn update(
+pub(crate) async fn update(
     db: &SqlitePool,
     edit: UpdateInstanceConfig,
 ) -> Result<InstanceConfig, sqlx::Error> {
@@ -309,7 +309,7 @@ pub async fn update(
 /// the per-field settings view would only add noise. It rides the same
 /// singleton `instance_config` row purely for storage — the first knob on that
 /// table excluded from the settings resolver.
-pub async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
+pub(crate) async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
     let v: Option<i64> =
         sqlx::query_scalar("SELECT triggers_paused FROM instance_config WHERE id = 1")
             .fetch_optional(db)
@@ -321,7 +321,7 @@ pub async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
 /// Set (or clear) the global Trigger pause flag (#348). Unpausing stores SQL
 /// `NULL` (≡ not paused) rather than `0`, keeping the "unset ≡ off" convention
 /// the rest of the table follows. Bumps `updated_at` like [`update`].
-pub async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
+pub(crate) async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE instance_config SET triggers_paused = ?, updated_at = ? WHERE id = 1")
         .bind(if paused { Some(1_i64) } else { None })
         .bind(crate::event_log::now_iso())
@@ -335,7 +335,7 @@ pub async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sq
 ///
 /// Ordered as the boot warning should read them, and paired with the env var that survived — the
 /// only remaining instance-wide way to move that same knob.
-pub const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
+pub(crate) const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
     ("image_source", crate::sandbox_image::IMAGE_SOURCE_ENV),
     ("dockerfile_path", crate::sandbox_image::DOCKERFILE_PATH_ENV),
 ];
@@ -354,7 +354,7 @@ pub const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
 /// one created after does NOT. An absent column must be silence, not an error.
 ///
 /// Empty strings are skipped: `""` was the clear sentinel, so it never meant a value.
-pub async fn retired_sandbox_image_values(
+pub(crate) async fn retired_sandbox_image_values(
     db: &SqlitePool,
 ) -> Result<Vec<(&'static str, String)>, sqlx::Error> {
     let mut found = Vec::new();

@@ -14,7 +14,7 @@ use crate::event_log::{Event, EventKind, NodeStatus, RunState, RunStatus};
 
 /// Outcome of validating a lifecycle event against the projected state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
+pub(crate) enum Verdict {
     /// The transition is legal: append it.
     Allow,
     /// The transition is a legal duplicate (e.g. a second completion of an
@@ -72,7 +72,7 @@ fn live_iteration(state: &RunState, node_id: &str) -> Option<i64> {
 /// Non-lifecycle kinds are always allowed: the guard governs node lifecycle
 /// transitions (`NodeStarted`, `NodeWaiting`, `NodeCompleted`,
 /// `NodeAutoCompleted`, `NodeStale`), not control-flow bookkeeping.
-pub fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
+pub(crate) fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
     let Some(state) = state else {
         // No projected state yet (run not started): nothing to validate
         // against. The first RunStarted event creates the state.
@@ -126,7 +126,7 @@ fn is_open_collection_lap(state: &RunState, node_id: &str, iter: i64) -> bool {
 /// live iteration) — or when the proposed iteration has already completed.
 ///
 /// Returns the human-readable reason when the proposal should be skipped.
-pub fn spawn_superfluous(state: &RunState, node_id: &str, iter: i64) -> Option<String> {
+pub(crate) fn spawn_superfluous(state: &RunState, node_id: &str, iter: i64) -> Option<String> {
     if let Some(live_iter) = live_iteration(state, node_id) {
         // #453: a sibling item lap of an open collection region is concurrent
         // work by design, never a redundant proposal. Only a proposal for the

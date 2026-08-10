@@ -323,7 +323,7 @@ impl<'de> Deserialize<'de> for SandboxMode {
 /// Env var overriding the stored instance default (optional tier). Read ONCE at the
 /// edge (create-run chokepoint + `build_settings_view` disclosure), never in the
 /// resolver core — mirror of [`crate::sandbox_image::IMAGE_SOURCE_ENV`] (#410).
-pub const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
+pub(crate) const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
 
 /// Env tier for the settings disclosure / resolver: `Some(mode)` if a valid
 /// `PDO_DEFAULT_SANDBOX` is set, else `None` (unset/invalid).
@@ -343,7 +343,7 @@ fn env_default_sandbox() -> Option<SandboxMode> {
 /// A stored name that does not *exist* is no longer demoted to `off` at all: it wins the
 /// tier, and the create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent
 /// fallback toward less isolation).
-pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
+pub(crate) fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
     stored
         .filter(|s| !s.is_empty())
         .as_deref()
@@ -357,7 +357,7 @@ pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
 /// this is the layer-1 unit the "précédence testée" AC pins. `explicit` and `trigger`
 /// are mutually exclusive in production (a Run has one origin), but the 3-arg form is
 /// the canonical statement of the chain and keeps every arm exercised by the test.
-pub fn effective_sandbox(
+pub(crate) fn effective_sandbox(
     explicit: Option<SandboxMode>,
     trigger: Option<SandboxMode>,
     instance_default: SandboxMode,
@@ -953,7 +953,7 @@ fn upsert_iteration(iterations: &mut Vec<IterationInfo>, new: IterationInfo) {
     }
 }
 
-pub fn project(events: &[Event]) -> Option<RunState> {
+pub(crate) fn project(events: &[Event]) -> Option<RunState> {
     if events.is_empty() {
         return None;
     }
@@ -1988,7 +1988,7 @@ fn finalize(state: &mut RunState) {
 /// in the very same sweep — 27 ms after the `node_stale`, on the Run that
 /// produced #469. Two mechanisms contradicted each other, the terminal one won,
 /// and the doc described the other.
-pub fn is_stalled(run: &RunState) -> bool {
+pub(crate) fn is_stalled(run: &RunState) -> bool {
     if run.status != RunStatus::Running {
         return false;
     }
@@ -2008,11 +2008,11 @@ pub fn is_stalled(run: &RunState) -> bool {
     run.nodes.values().any(|n| n.status == NodeStatus::Stale)
 }
 
-pub fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-pub fn generate_run_id() -> String {
+pub(crate) fn generate_run_id() -> String {
     let now = chrono::Utc::now();
     let ts = now.format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
@@ -2025,7 +2025,7 @@ pub fn generate_run_id() -> String {
 /// completion). Both are issued as `CommandIssued` events; this is their
 /// projection onto a single region.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RegionRoute {
+pub(crate) struct RegionRoute {
     /// Extra iterations the manager added on top of the region's `max_iter`
     /// (sum of every `bump_region` command for this id).
     pub bumped_by: i64,
@@ -2038,7 +2038,7 @@ pub struct RegionRoute {
 /// id from the event log: `bump_region` accumulates `additional_iter`,
 /// `end_region` flips `ended`. The result drives `resume_run` continuation of an
 /// exhausted-unrouted region without restarting the daemon.
-pub fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
+pub(crate) fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
     let mut routes: HashMap<String, RegionRoute> = HashMap::new();
     for event in events {
         if event.kind != EventKind::CommandIssued {
@@ -2068,7 +2068,7 @@ pub fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
     routes
 }
 
-pub fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
+pub(crate) fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
     let mut extensions: HashMap<String, i64> = HashMap::new();
     for event in events {
         if event.kind != EventKind::CommandIssued {

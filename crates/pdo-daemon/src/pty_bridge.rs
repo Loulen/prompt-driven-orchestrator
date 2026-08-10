@@ -23,7 +23,7 @@ use tracing::{error, info, warn};
 
 /// Validate the Origin header against the daemon's own address to prevent
 /// DNS-rebinding attacks. Returns `true` if the origin is acceptable.
-pub fn check_origin(headers: &HeaderMap, daemon_port: u16) -> bool {
+pub(crate) fn check_origin(headers: &HeaderMap, daemon_port: u16) -> bool {
     // No Origin header — e.g. same-origin requests, curl, or non-browser
     // clients. Allow these; the browser always sends Origin on WS upgrade.
     let Some(origin_header) = headers.get("origin") else {
@@ -47,7 +47,7 @@ pub fn check_origin(headers: &HeaderMap, daemon_port: u16) -> bool {
 
 /// A resize message sent from the xterm.js client.
 #[derive(Debug, Deserialize, PartialEq)]
-pub struct ResizeMsg {
+pub(crate) struct ResizeMsg {
     #[serde(rename = "type")]
     pub msg_type: String,
     pub cols: u16,
@@ -55,7 +55,7 @@ pub struct ResizeMsg {
 }
 
 /// Try to decode a text WS frame as a resize message.
-pub fn decode_resize(text: &str) -> Option<ResizeMsg> {
+pub(crate) fn decode_resize(text: &str) -> Option<ResizeMsg> {
     let msg: ResizeMsg = serde_json::from_str(text).ok()?;
     if msg.msg_type == "resize" && msg.cols > 0 && msg.rows > 0 {
         Some(msg)

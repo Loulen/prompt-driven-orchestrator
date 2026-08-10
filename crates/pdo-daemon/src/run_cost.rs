@@ -166,7 +166,7 @@ fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat
 /// Delegates to [`crate::stale_detector::encode_working_dir`], the single source
 /// of truth for this encoding. (Historically this reimplemented the mapping to
 /// route around a bug in that function; #373 fixed and unified them.)
-pub fn cc_project_dirname(path: &Path) -> String {
+pub(crate) fn cc_project_dirname(path: &Path) -> String {
     crate::stale_detector::encode_working_dir(path)
 }
 
@@ -207,7 +207,7 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
 /// NOT the read root.
 /// `prices` is the table resolved at the request edge (#427) — mandatory; see the
 /// module header on why there is no defaulting wrapper.
-pub fn compute_run_cost(
+pub(crate) fn compute_run_cost(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,
@@ -306,7 +306,11 @@ fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
 /// `0` when no transcript dir/file exists yet (so a later write bumps the key and
 /// invalidates the memo). A pure `stat` walk: no file contents are read, so it is
 /// far cheaper than the aggregate it guards.
-pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_id: &str) -> i64 {
+pub(crate) fn max_transcript_mtime_millis(
+    projects_root: &Path,
+    repo_root: &Path,
+    run_id: &str,
+) -> i64 {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
     let Ok(entries) = std::fs::read_dir(projects_root) else {
@@ -327,7 +331,7 @@ pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_i
 /// above). Used only by the `/stats/cost` aggregate (period-bounded fan-out);
 /// `get_run`'s single-run path is deliberately left calling [`compute_run_cost`]
 /// directly so ADR-0022's per-read contract is unchanged.
-pub fn compute_run_cost_cached(
+pub(crate) fn compute_run_cost_cached(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,

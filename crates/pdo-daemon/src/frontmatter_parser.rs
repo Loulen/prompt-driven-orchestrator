@@ -3,20 +3,20 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct FrontmatterSchema {
+pub(crate) struct FrontmatterSchema {
     pub fields: HashMap<String, FieldSchema>,
 }
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct FieldSchema {
+pub(crate) struct FieldSchema {
     pub field_type: FieldType,
     pub allowed_values: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum FieldType {
+pub(crate) enum FieldType {
     String,
     Int,
     Float,
@@ -25,7 +25,7 @@ pub enum FieldType {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum FrontmatterError {
+pub(crate) enum FrontmatterError {
     #[error("malformed YAML frontmatter: {0}")]
     MalformedYaml(String),
     #[error("field '{field}' has value '{value}' not in allowed values: {allowed:?}")]
@@ -37,7 +37,7 @@ pub enum FrontmatterError {
     },
 }
 
-pub fn parse_frontmatter(
+pub(crate) fn parse_frontmatter(
     content: &str,
 ) -> Result<HashMap<String, serde_yaml::Value>, FrontmatterError> {
     let trimmed = content.trim_start();
@@ -77,7 +77,7 @@ pub fn parse_frontmatter(
     Ok(fields)
 }
 
-pub fn parse_frontmatter_from_file(
+pub(crate) fn parse_frontmatter_from_file(
     path: &Path,
 ) -> Result<HashMap<String, serde_yaml::Value>, FrontmatterError> {
     match std::fs::read_to_string(path) {
@@ -87,7 +87,7 @@ pub fn parse_frontmatter_from_file(
 }
 
 #[allow(dead_code)]
-pub fn validate_against_schema(
+pub(crate) fn validate_against_schema(
     fields: &HashMap<String, serde_yaml::Value>,
     schema: &FrontmatterSchema,
 ) -> Result<(), FrontmatterError> {

@@ -56,7 +56,7 @@ const MAX_NODES: usize = 512;
 
 /// The outcome of importing a workflow `.js`.
 #[derive(Debug)]
-pub struct ImportResult {
+pub(crate) struct ImportResult {
     /// Pipeline display name (from `meta.name`, else the suggested/stem name).
     pub name: String,
     /// The constructed pipeline serialized to YAML (a fresh draft — not a source
@@ -71,7 +71,10 @@ pub struct ImportResult {
 /// Parse a Claude Code workflow `.js` into a draft [`PipelineDef`] (never runs the
 /// JS). `suggested_name` is the fallback pipeline name (typically the file stem)
 /// used when the workflow declares no `meta.name`.
-pub fn import_workflow_js(source: &str, suggested_name: &str) -> Result<ImportResult, String> {
+pub(crate) fn import_workflow_js(
+    source: &str,
+    suggested_name: &str,
+) -> Result<ImportResult, String> {
     let allocator = Allocator::default();
     // Module JS so top-level `export const meta = …` parses (Script mode rejects
     // `export`). `.mjs()` is module JavaScript; no path needed.

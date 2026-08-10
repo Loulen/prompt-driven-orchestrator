@@ -16,7 +16,7 @@ use sqlx::{Row, SqlitePool};
 
 /// A persisted Trigger row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Trigger {
+pub(crate) struct Trigger {
     pub id: String,
     pub name: String,
     /// Library pipeline id the Trigger fires.
@@ -66,7 +66,7 @@ pub struct Trigger {
 
 /// The fields supplied at creation time; scheduling state is derived/initial.
 #[derive(Debug, Clone)]
-pub struct NewTrigger {
+pub(crate) struct NewTrigger {
     pub name: String,
     pub pipeline_id: String,
     pub pipeline_name: String,
@@ -87,7 +87,7 @@ pub struct NewTrigger {
 
 /// One audit row in `trigger_fires`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TriggerFire {
+pub(crate) struct TriggerFire {
     pub id: i64,
     pub trigger_id: String,
     pub ts: String,
@@ -114,7 +114,7 @@ pub struct TriggerFire {
 
 /// What happened on a tick, persisted to the audit table.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FireRecord {
+pub(crate) struct FireRecord {
     pub outcome: String,
     pub reason: Option<String>,
     pub run_id: Option<String>,
@@ -127,7 +127,7 @@ pub struct FireRecord {
 }
 
 /// Create the `triggers` and `trigger_fires` tables if they do not exist.
-pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
+pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS triggers (
             id TEXT PRIMARY KEY,
@@ -251,14 +251,14 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
 }
 
 /// Generate a Trigger id (`trg-<ts>-<short uuid>`).
-pub fn generate_trigger_id() -> String {
+pub(crate) fn generate_trigger_id() -> String {
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
     format!("trg-{ts}-{short}")
 }
 
 /// Insert a new Trigger, returning the stored row.
-pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
+pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
     let id = generate_trigger_id();
     let now = crate::event_log::now_iso();
     let variables_str = serde_json::to_string(&new.variables).unwrap_or_else(|_| "{}".to_string());
@@ -316,7 +316,7 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
 }
 
 /// Fetch one Trigger by id.
-pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Error> {
+pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM triggers WHERE id = ?")
         .bind(id)
         .fetch_optional(db)
@@ -325,7 +325,7 @@ pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Err
 }
 
 /// List all Triggers, newest first.
-pub async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
+pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query("SELECT * FROM triggers ORDER BY created_at DESC")
         .fetch_all(db)
         .await?;
@@ -333,7 +333,7 @@ pub async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
 }
 
 /// Delete a Trigger by id; returns whether a row was removed.
-pub async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("DELETE FROM triggers WHERE id = ?")
         .bind(id)
         .execute(db)
@@ -352,7 +352,7 @@ pub async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
 /// and would silently go dormant for hours. `julianday()` parses `Z`/`±HH:MM`/
 /// fractional-second RFC3339 to a UTC instant, so any offset compares correctly.
 /// `now` is a canonical-UTC RFC3339-millis now-string (`…Z`).
-pub async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
+pub(crate) async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT * FROM triggers
          WHERE enabled = 1 AND next_fire_at IS NOT NULL
@@ -367,7 +367,7 @@ pub async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sq
 
 /// Record a fire-audit row and roll up `last_fired_at`/`last_outcome` onto the
 /// Trigger. `last_fired_at` is only advanced for an actual fire.
-pub async fn record_fire(
+pub(crate) async fn record_fire(
     db: &SqlitePool,
     trigger_id: &str,
     record: &FireRecord,
@@ -409,7 +409,7 @@ pub async fn record_fire(
 }
 
 /// Fire history for a Trigger, newest first.
-pub async fn fire_history(
+pub(crate) async fn fire_history(
     db: &SqlitePool,
     trigger_id: &str,
 ) -> Result<Vec<TriggerFire>, sqlx::Error> {
@@ -442,7 +442,7 @@ pub async fn fire_history(
 }
 
 /// Update the next scheduled fire.
-pub async fn set_next_fire(
+pub(crate) async fn set_next_fire(
     db: &SqlitePool,
     trigger_id: &str,
     next_fire_at: Option<&str>,
@@ -460,7 +460,7 @@ pub async fn set_next_fire(
 /// distinguish "leave alone" (`None`) from "set to NULL" (`Some(None)`); the
 /// route recomputes it whenever the schedule changes.
 #[derive(Debug, Clone, Default)]
-pub struct UpdateTrigger {
+pub(crate) struct UpdateTrigger {
     pub name: Option<String>,
     /// Repoint the Trigger to a different library pipeline (#230). The route is
     /// responsible for validating the target exists; both `pipeline_id` and the
@@ -511,7 +511,7 @@ impl UpdateTrigger {
 }
 
 /// Apply a partial config edit to a Trigger. A no-op when no field is set.
-pub async fn update(
+pub(crate) async fn update(
     db: &SqlitePool,
     trigger_id: &str,
     edit: UpdateTrigger,

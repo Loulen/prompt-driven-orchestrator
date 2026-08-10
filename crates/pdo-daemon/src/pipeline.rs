@@ -4,14 +4,14 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Severity {
+pub(crate) enum Severity {
     Warning,
     #[allow(dead_code)]
     Error,
 }
 
 #[derive(Debug, Clone)]
-pub struct Diagnostic {
+pub(crate) struct Diagnostic {
     #[allow(dead_code)]
     pub severity: Severity,
     pub message: String,
@@ -19,7 +19,7 @@ pub struct Diagnostic {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum NodeType {
+pub(crate) enum NodeType {
     DocOnly,
     CodeMutating,
     Start,
@@ -42,7 +42,7 @@ impl NodeType {
     /// loop/merge) keep their required, declared input ports. A `script`
     /// node consumes whole artifacts by edge just like a work node, so its inputs
     /// are emergent too (#248).
-    pub fn has_emergent_inputs(&self) -> bool {
+    pub(crate) fn has_emergent_inputs(&self) -> bool {
         matches!(
             self,
             NodeType::DocOnly | NodeType::CodeMutating | NodeType::Script
@@ -51,7 +51,7 @@ impl NodeType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FrontmatterFieldDecl {
+pub(crate) struct FrontmatterFieldDecl {
     #[serde(rename = "type")]
     pub field_type: String,
     #[serde(default)]
@@ -60,7 +60,7 @@ pub struct FrontmatterFieldDecl {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PortType {
+pub(crate) enum PortType {
     #[default]
     Markdown,
     Image,
@@ -71,9 +71,9 @@ pub enum PortType {
     Html,
 }
 
-pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
 
-pub fn is_image_file(path: &std::path::Path) -> bool {
+pub(crate) fn is_image_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
@@ -81,7 +81,7 @@ pub fn is_image_file(path: &std::path::Path) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum PortSide {
+pub(crate) enum PortSide {
     Left,
     Right,
     Top,
@@ -100,7 +100,7 @@ impl std::fmt::Display for PortSide {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Port {
+pub(crate) struct Port {
     pub name: String,
     #[serde(default)]
     pub repeated: bool,
@@ -117,13 +117,13 @@ pub struct Port {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewPosition {
+pub(crate) struct ViewPosition {
     pub x: f64,
     pub y: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeDef {
+pub(crate) struct NodeDef {
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -163,7 +163,7 @@ pub struct NodeDef {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EdgeEndpoint {
+pub(crate) struct EdgeEndpoint {
     pub node: String,
     pub port: String,
 }
@@ -175,20 +175,20 @@ pub struct EdgeEndpoint {
 /// its arrows) but is excluded from the semantic pipeline-diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EdgeRouteMode {
+pub(crate) enum EdgeRouteMode {
     Auto,
     Manual,
 }
 
 /// A pinned waypoint on a manually-routed edge — absolute canvas coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct EdgeWaypoint {
+pub(crate) struct EdgeWaypoint {
     pub x: f64,
     pub y: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EdgeDef {
+pub(crate) struct EdgeDef {
     pub source: EdgeEndpoint,
     pub target: EdgeEndpoint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,7 +230,7 @@ fn is_false(b: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-pub enum VariableType {
+pub(crate) enum VariableType {
     Int,
     Float,
     String,
@@ -239,7 +239,7 @@ pub enum VariableType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VariableDef {
+pub(crate) struct VariableDef {
     #[serde(rename = "type")]
     pub var_type: VariableType,
     pub default: serde_yaml::Value,
@@ -253,7 +253,7 @@ pub struct VariableDef {
 /// item) and their outgoing edges fire once on the barrier (all items finished).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LoopKind {
+pub(crate) enum LoopKind {
     Bounded,
     Collection,
 }
@@ -267,7 +267,7 @@ pub enum LoopKind {
 /// fans the member(s) out in parallel, one lap per item of the named list, and
 /// barriers — its outgoing edges fire once when all items finish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoopRegion {
+pub(crate) struct LoopRegion {
     pub id: String,
     pub kind: LoopKind,
     pub members: Vec<String>,
@@ -288,7 +288,7 @@ pub struct LoopRegion {
 /// `PipelineDef`, never the raw YAML — without this field serde would drop the
 /// note silently and it would vanish on reload (#307 / lesson #296).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Note {
+pub(crate) struct Note {
     pub id: String,
     pub content: String,
     /// Canvas position. Absent ⇒ not yet placed; reuses `ViewPosition` like
@@ -298,7 +298,7 @@ pub struct Note {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineDef {
+pub(crate) struct PipelineDef {
     pub name: String,
     pub version: Option<String>,
     #[serde(default, deserialize_with = "deserialize_variables")]
@@ -375,7 +375,7 @@ where
 }
 
 impl PipelineDef {
-    pub fn variable_defaults(&self) -> HashMap<String, serde_yaml::Value> {
+    pub(crate) fn variable_defaults(&self) -> HashMap<String, serde_yaml::Value> {
         self.variables
             .iter()
             .map(|(k, v)| (k.clone(), v.default.clone()))
@@ -384,13 +384,13 @@ impl PipelineDef {
 }
 
 #[derive(Debug)]
-pub struct ParseResult {
+pub(crate) struct ParseResult {
     pub pipeline: PipelineDef,
     pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ParseError {
+pub(crate) enum ParseError {
     #[error("invalid YAML: {0}")]
     InvalidYaml(#[from] serde_yaml::Error),
     #[error("missing required field: {0}")]
@@ -419,7 +419,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
 /// The node `type` strings the parser accepts verbatim. Anything else is coerced
 /// to `doc-only` with a warning (see `normalize_node_value`); `for-each`/`foreach`
 /// are refused outright (retired in ADR-0011).
-pub const VALID_NODE_TYPES: &[&str] = &[
+pub(crate) const VALID_NODE_TYPES: &[&str] = &[
     "doc-only",
     "code-mutating",
     "start",
@@ -445,7 +445,7 @@ pub const VALID_NODE_TYPES: &[&str] = &[
 /// - a known type (incl. legacy `switch`/`loop`) → left untouched, no warning.
 ///
 /// A non-mapping value (e.g. a stray scalar in the `nodes:` list) is a no-op.
-pub fn normalize_node_value(
+pub(crate) fn normalize_node_value(
     node_val: &mut serde_yaml::Value,
 ) -> Result<Vec<Diagnostic>, ParseError> {
     let mut diagnostics = Vec::new();
@@ -490,7 +490,7 @@ pub fn normalize_node_value(
     Ok(diagnostics)
 }
 
-pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     let mut raw: serde_yaml::Value = serde_yaml::from_str(yaml)?;
 
     if raw
@@ -758,7 +758,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 /// so rejecting it is a runtime-coherence invariant, not prescriptive
 /// validation. Each message names the edge (both endpoints) and the missing
 /// node or port.
-pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
+pub(crate) fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
     let node_ids: HashSet<&str> = pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
     let check = |edge: &EdgeDef,
@@ -875,7 +875,7 @@ fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError
 /// declared on the upstream output port connected to the switch's `in` port.
 /// Returns `None` if: the node isn't a switch, no edge connects to `in`,
 /// or the upstream output port has no frontmatter schema.
-pub fn resolve_switch_upstream_schema(
+pub(crate) fn resolve_switch_upstream_schema(
     pipeline: &PipelineDef,
     switch_node_id: &str,
 ) -> Option<HashMap<String, FrontmatterFieldDecl>> {
@@ -895,7 +895,7 @@ pub fn resolve_switch_upstream_schema(
     source_port.frontmatter.clone()
 }
 
-pub fn canonical_prompt_path(pipeline_path: &Path, node_id: &str) -> std::path::PathBuf {
+pub(crate) fn canonical_prompt_path(pipeline_path: &Path, node_id: &str) -> std::path::PathBuf {
     let dir = pipeline_path.parent().unwrap_or(std::path::Path::new("."));
     let stem = pipeline_path
         .file_stem()

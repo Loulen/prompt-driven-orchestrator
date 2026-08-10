@@ -55,7 +55,7 @@ use crate::pipeline::{
 /// exists so `layout_fields_match_frontend_owner` can compare the two partitions,
 /// and so a reader can see the classification without tracing every `let _layout`.
 #[allow(dead_code)]
-pub const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
+pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
     ("pipeline", &["notes"]),
     ("node", &["view"]),
     ("inputPort", &[]),
@@ -72,7 +72,7 @@ pub const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
 /// `Err` is reachable only in theory (`canon_yaml` leaves nothing serde_json can
 /// reject); callers treat it like an unprojectable pipeline rather than papering
 /// over it with a constant, which would make two different failures hash equal.
-pub fn canonical_form(pipeline: &PipelineDef) -> Result<String, serde_json::Error> {
+pub(crate) fn canonical_form(pipeline: &PipelineDef) -> Result<String, serde_json::Error> {
     serde_json::to_string(&PipelineProjection::of(pipeline))
 }
 

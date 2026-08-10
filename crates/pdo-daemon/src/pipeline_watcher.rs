@@ -27,7 +27,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Every watched path is small (a pipelines dir, a run dir, a prompts dir),
 /// so polling them is cheap; each path is registered with exactly one
 /// backend, so no event is ever delivered twice.
-pub struct PipelineDebouncer {
+pub(crate) struct PipelineDebouncer {
     native: Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>,
     poll: Option<notify_debouncer_mini::Debouncer<notify::PollWatcher>>,
 }
@@ -59,13 +59,13 @@ impl PipelineDebouncer {
 }
 
 #[derive(Debug, Clone)]
-pub struct RunPipelineModified {
+pub(crate) struct RunPipelineModified {
     pub run_id: String,
     pub kind: &'static str, // "yaml" or "prompt"
     pub path: PathBuf,
 }
 
-pub fn spawn_watcher(
+pub(crate) fn spawn_watcher(
     repo_root: PathBuf,
     event_tx: broadcast::Sender<serde_json::Value>,
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
@@ -248,7 +248,7 @@ pub fn spawn_watcher(
 /// `max_user_watches` limit and silently breaking every other watcher on the
 /// machine (including freshly spawned daemons, whose `watch()` calls then
 /// fail with ENOSPC).
-pub fn watch_run_dir(debouncer: &mut PipelineDebouncer, run_dir: &Path) {
+pub(crate) fn watch_run_dir(debouncer: &mut PipelineDebouncer, run_dir: &Path) {
     if let Err(e) = debouncer.watch(run_dir, notify::RecursiveMode::NonRecursive) {
         warn!("Failed to watch run dir {}: {e}", run_dir.display());
         return;

@@ -195,7 +195,11 @@ async fn put_settings(daemon: &TestDaemon, body: serde_json::Value) {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "PUT /settings should succeed for {body}");
+    assert_eq!(
+        resp.status(),
+        200,
+        "PUT /settings should succeed for {body}"
+    );
 }
 
 /// #338: an explicit `auto_name:false` with a name keeps that name — the same as

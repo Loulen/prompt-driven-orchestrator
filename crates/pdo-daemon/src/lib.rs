@@ -21533,13 +21533,19 @@ edges:
             .await
             .unwrap();
             let view = build_settings_view(&state).await.unwrap();
-            assert_eq!(view["default_auto_name"]["effective"], serde_json::json!(on));
+            assert_eq!(
+                view["default_auto_name"]["effective"],
+                serde_json::json!(on)
+            );
             assert_eq!(
                 view["default_auto_name"]["stored"],
                 serde_json::json!(on),
                 "the stored tier is disclosed as a bool, not as 0/1"
             );
-            assert_eq!(view["default_auto_name"]["source"], serde_json::json!("stored"));
+            assert_eq!(
+                view["default_auto_name"]["source"],
+                serde_json::json!("stored")
+            );
         }
     }
 
@@ -26682,7 +26688,10 @@ edges:
         // With auto-naming ON the pre-#338 behaviour holds, gated on input only.
         // No (meaningful) input → deterministic placeholder, renamed best-effort later.
         assert_eq!(run_name_hint(true, None, ""), RunNameHint::Placeholder);
-        assert_eq!(run_name_hint(true, None, "   \n\t "), RunNameHint::Placeholder);
+        assert_eq!(
+            run_name_hint(true, None, "   \n\t "),
+            RunNameHint::Placeholder
+        );
         assert_eq!(run_name_hint(true, Some(""), ""), RunNameHint::Placeholder);
         // Real input → manager derives the name from `_input` immediately.
         assert_eq!(

@@ -1505,7 +1505,10 @@ mod tests {
                 .fetch_optional(&db)
                 .await
                 .unwrap();
-        assert!(before.is_none(), "precondition: legacy table lacks the column");
+        assert!(
+            before.is_none(),
+            "precondition: legacy table lacks the column"
+        );
 
         init(&db).await.unwrap();
         init(&db).await.unwrap(); // idempotent

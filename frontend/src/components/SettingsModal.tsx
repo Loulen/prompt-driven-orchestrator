@@ -266,6 +266,11 @@ function SettingsForm({
   const [autocompleteTurnEnd, setAutocompleteTurnEnd] = useState<boolean>(
     () => settings.autocomplete_turn_end.effective,
   );
+  // Default Run auto-naming (#338). Seeded from `effective` like the other bool knobs;
+  // both directions persist as a stored decision (see the PUT note below).
+  const [defaultAutoName, setDefaultAutoName] = useState<boolean>(
+    () => settings.default_auto_name.effective,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -330,6 +335,13 @@ function SettingsForm({
     // stored `0` so unticking overrides a `PDO_AUTOCOMPLETE_TURN_END=1`.
     if (autocompleteTurnEnd !== settings.autocomplete_turn_end.effective) {
       patch.autocomplete_turn_end = autocompleteTurnEnd;
+    }
+
+    // Default Run auto-naming (#338): same discipline as the turn-end flag — a plain bool,
+    // sent only when changed; `false` persists as a stored `0` so unticking overrides a
+    // `PDO_DEFAULT_AUTO_NAME=1`.
+    if (defaultAutoName !== settings.default_auto_name.effective) {
+      patch.default_auto_name = defaultAutoName;
     }
 
     // Nothing changed → close without a round-trip.
@@ -445,6 +457,43 @@ function SettingsForm({
             data-testid="setting-source-autocomplete-turn-end"
           >
             {autocompleteSourceNote(settings.autocomplete_turn_end)}
+          </div>
+        </div>
+
+        {/* Default Run auto-naming (#338): whether a Run created with no name is named by
+            the Pipeline Manager. The New Run box and a new Trigger seed their choice from
+            this. On by default — the pre-#338 behaviour. */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="setting-default-auto-name"
+            className="flex cursor-pointer items-start gap-2"
+          >
+            <input
+              id="setting-default-auto-name"
+              data-testid="setting-default-auto-name"
+              type="checkbox"
+              checked={defaultAutoName}
+              onChange={(e) => setDefaultAutoName(e.target.checked)}
+              className="mt-0.5 shrink-0 accent-acc"
+            />
+            <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+              Let the manager auto-name a Run created without a name
+            </span>
+          </label>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            When a Run starts with no name — from the New Run dialog with "Auto-generated"
+            left on, or from a Trigger — the Pipeline Manager gives it a short descriptive
+            name (from the input, or a placeholder it renames once the run's purpose is
+            clear). Turn this off and such a Run keeps a stable{" "}
+            <span className="font-mono">Untitled run …</span> placeholder instead. This is
+            only the <strong>default</strong>: the New Run box and each Trigger can override it.
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-default-auto-name"
+          >
+            {defaultAutoNameSourceNote(settings.default_auto_name)}
           </div>
         </div>
 
@@ -762,6 +811,24 @@ function autocompleteSourceNote(field: BoolSettingField): string {
   }
   if (field.source === "env") {
     return `Source: env ${envDisplay ?? "PDO_AUTOCOMPLETE_TURN_END"}.`;
+  }
+  return `Source: built-in default (${onOff(field.default)}).`;
+}
+
+/** Which tier the instance default_auto_name comes from (#338). Same shape as
+ *  {@link autocompleteSourceNote} — a real built-in default (`on`), and both directions
+ *  of a save are a stored decision, so "stored (off)" reads differently from the default. */
+function defaultAutoNameSourceNote(field: BoolSettingField): string {
+  const onOff = (v: boolean) => (v ? "on" : "off");
+  const envDisplay = field.env != null ? `PDO_DEFAULT_AUTO_NAME=${onOff(field.env)}` : null;
+  if (field.source === "stored") {
+    const base = `Source: stored value (${onOff(field.effective)}).`;
+    return envDisplay
+      ? `${base} Env ${envDisplay} is set but overridden.`
+      : `${base} Overrides env and default.`;
+  }
+  if (field.source === "env") {
+    return `Source: env ${envDisplay ?? "PDO_DEFAULT_AUTO_NAME"}.`;
   }
   return `Source: built-in default (${onOff(field.default)}).`;
 }

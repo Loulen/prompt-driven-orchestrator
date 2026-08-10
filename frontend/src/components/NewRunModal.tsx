@@ -109,6 +109,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [settingsFailed, setSettingsFailed] = useState(false);
   const [sandbox, setSandbox] = useState<string>("");
   const sandboxSeeded = useRef(false);
+  const autoNameSeeded = useRef(false);
 
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
   const refreshRecentRepos = useRecentReposStore((s) => s.refresh);
@@ -371,6 +372,32 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setSandbox(openIntent.kind === "edit-trigger" ? (openIntent.trigger.sandbox ?? "") : "");
   }, [open, openIntent]);
 
+  // #338: seed the "Auto-generated" box once per open, ref-gated (same anti-reseed guard as
+  // the sandbox selector, so a `settings` state surviving a close cannot re-seed a REOPEN
+  // from a stale value — the #452 trap). An `edit-trigger` seeds SYNCHRONOUSLY from the
+  // Trigger's own frozen choice; a run / new-trigger seeds from the instance default once
+  // `settings` arrives. If settings never load the box keeps its optimistic `true` initial —
+  // the pre-#338 behaviour, a safe fallback.
+  useEffect(() => {
+    if (!open) {
+      autoNameSeeded.current = false;
+      return;
+    }
+    if (autoNameSeeded.current) return;
+    const isEdit = openIntent.kind === "edit-trigger";
+    // A non-edit intent seeds from the instance default, so wait until `settings`
+    // has arrived; an edit-trigger seeds synchronously from its own frozen choice.
+    if (!isEdit && !settings) return;
+    // One-shot seeding gated by the ref: bounded, does not re-fire. Unlike the sandbox
+    // seed (which reads a prop), this derives from `settings` (async React state), which
+    // trips `set-state-in-effect` — but a one-shot seed of a user-editable control from a
+    // late-arriving fetch is exactly what an effect is for, and the ref makes it bounded.
+    // Same disciplined exception the open-intent reset effect takes above.
+    autoNameSeeded.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoName(isEdit ? openIntent.trigger.auto_name : settings!.default_auto_name.effective);
+  }, [open, openIntent, settings]);
+
   const repoPipelines = useMemo(
     () => pipelines.filter((p) => p.scope === "repo"),
     [pipelines],
@@ -564,6 +591,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         target_repo: targetRepo.trim() || undefined,
         source_branch: sourceBranch || undefined,
         name: autoName ? undefined : runName.trim() || undefined,
+        // #338: always send the explicit choice so it wins the create-chokepoint
+        // resolution (the daemon never has to guess from `name` presence for a UI create).
+        auto_name: autoName,
         // #410/#452: the explicit run-level choice — `off` or a staging profile name — sent
         // so it wins the create-chokepoint precedence. `""` means the user did not choose,
         // and OMITS the key: only an absent `sandbox` lets the daemon apply
@@ -574,7 +604,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       onCreated(resp.run_id);
       refreshRecentRepos();
       setRunName("");
-      setAutoName(true);
+      // #338: re-seed from the instance default, not a hard `true`. The modal closes here
+      // and a reopen re-seeds via the ref-gated effect, but this avoids a wrong-state flash.
+      setAutoName(settings?.default_auto_name.effective ?? true);
       setInput("");
       setOverrides({});
       setImages([]);
@@ -584,7 +616,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, sandbox, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, sandbox, settings, refreshRecentRepos]);
 
   const canLaunch =
     repoValid && selectedPipeline && hasRequiredPrompt && !missingProfile && !sandboxDoomed;
@@ -658,6 +690,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           // #410: `""` (Use instance default) clears back to inheriting (`null`);
           // `off` or a staging profile name sets it.
           sandbox: sandbox || null,
+          // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
+          auto_name: autoName,
           variables,
         });
       } else {
@@ -673,6 +707,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
           // #410: `""` (Use instance default) → `null` (inherit); `off` or a profile sets it.
           sandbox: sandbox || null,
+          // #338: freeze the auto-naming choice on the new Trigger (seeded from the
+          // instance default when the modal opened).
+          auto_name: autoName,
           variables,
         });
       }
@@ -711,6 +748,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     targetRepo,
     sourceBranch,
     sandbox,
+    autoName,
     flushPendingSaves,
     onTriggerSaved,
     onClose,
@@ -802,24 +840,31 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         {/* Body */}
         <div className="flex flex-col gap-0 overflow-y-auto px-4 py-4">
 
-          {/* Run name */}
+          {/* Run name (#184) + auto-naming toggle (#338). The name field only makes sense
+              in run mode — a Trigger fires many Runs, so there is no single name to type;
+              the checkbox, however, IS meaningful for a Trigger (it freezes whether each
+              fired Run is auto-named), so it shows in both modes. */}
           <div className="flex flex-col gap-3 pb-4 border-b border-line">
             <div className="flex flex-col gap-1.5">
-              <label
-                className="font-medium text-fg-2"
-                style={{ fontSize: "11.5px" }}
-              >
-                Name
-              </label>
-              <input
-                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none disabled:opacity-50"
-                style={{ fontSize: "12px" }}
-                placeholder="e.g. Fix auth bug"
-                value={runName}
-                onChange={(e) => setRunName(e.target.value)}
-                disabled={autoName}
-                data-testid="run-name-input"
-              />
+              {mode === "run" && (
+                <>
+                  <label
+                    className="font-medium text-fg-2"
+                    style={{ fontSize: "11.5px" }}
+                  >
+                    Name
+                  </label>
+                  <input
+                    className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none disabled:opacity-50"
+                    style={{ fontSize: "12px" }}
+                    placeholder="e.g. Fix auth bug"
+                    value={runName}
+                    onChange={(e) => setRunName(e.target.value)}
+                    disabled={autoName}
+                    data-testid="run-name-input"
+                  />
+                </>
+              )}
               <label
                 className="flex items-center gap-1.5 text-fg-3"
                 style={{ fontSize: "10.5px" }}
@@ -831,7 +876,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   className="accent-acc"
                   data-testid="auto-name-checkbox"
                 />
-                Auto-generated by manager
+                {mode === "trigger"
+                  ? "Auto-name each fired run"
+                  : "Auto-generated by manager"}
               </label>
             </div>
           </div>

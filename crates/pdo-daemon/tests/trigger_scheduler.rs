@@ -1544,6 +1544,108 @@ async fn pause_flag_round_trips_through_health() {
     assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(false));
 }
 
+// --- #338: per-Trigger auto-naming ------------------------------------------
+
+/// Create a Trigger with an explicit `auto_name`, returning the parsed row.
+async fn create_trigger_with_auto_name(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    auto_name: bool,
+) -> serde_json::Value {
+    let body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "input_template": "audit the codebase",
+        "target_repo": daemon.target_repo(),
+        "auto_name": auto_name,
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /triggers should succeed");
+    resp.json().await.unwrap()
+}
+
+/// #338: the Trigger's `auto_name` round-trips on create/GET, defaulting to true
+/// when the field is omitted (the pre-#338 behaviour).
+#[tokio::test]
+async fn trigger_auto_name_round_trips_and_defaults_on() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Omitted → defaults to true.
+    let default_on = create_trigger(&daemon, "default-on", "0 9 * * *").await;
+    assert_eq!(
+        default_on["auto_name"].as_bool(),
+        Some(true),
+        "an omitted auto_name must default to true"
+    );
+
+    // Explicit false round-trips.
+    let off = create_trigger_with_auto_name(&daemon, "named-off", "0 9 * * *", false).await;
+    assert_eq!(off["auto_name"].as_bool(), Some(false));
+    let fetched = get_trigger(&daemon, off["id"].as_str().unwrap()).await;
+    assert_eq!(fetched["auto_name"].as_bool(), Some(false));
+}
+
+/// #338: a Trigger with `auto_name:false` fires a Run that carries a STABLE
+/// per-id placeholder name — the manager is not instructed to rename it — whereas
+/// the default (`auto_name:true`) leaves the Run unnamed so the manager derives it
+/// from the input. Covers cron fire; the manual path shares the same chokepoint.
+#[tokio::test]
+async fn trigger_auto_name_false_fires_a_run_with_a_stable_placeholder() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // auto_name:false → the born Run gets a stable placeholder.
+    let off = create_trigger_with_auto_name(&daemon, "quiet", "* * * * *", false).await;
+    let off_id = off["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&off_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    let run = runs
+        .iter()
+        .find(|r| r["triggered_by"].as_str() == Some(off_id.as_str()))
+        .expect("the auto_name:false trigger must have fired a run");
+    let run_id = run["run_id"].as_str().unwrap();
+    assert_eq!(
+        run["name"].as_str(),
+        Some(format!("Untitled run {}", &run_id[..15]).as_str()),
+        "auto_name:false fire must carry a stable placeholder, not a derived/absent name"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #338 control: the default (`auto_name:true`) Trigger fires a Run left unnamed,
+/// so the manager derives the name from the input — the pre-#338 behaviour.
+#[tokio::test]
+async fn trigger_auto_name_true_fires_an_unnamed_run_for_manager_to_derive() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let on = create_trigger(&daemon, "loud", "* * * * *").await;
+    let on_id = on["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&on_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    let run = runs
+        .iter()
+        .find(|r| r["triggered_by"].as_str() == Some(on_id.as_str()))
+        .expect("the default trigger must have fired a run");
+    assert!(
+        run.get("name").is_none() || run["name"].is_null(),
+        "auto_name:true fire (with input) must leave the Run unnamed for the manager, got {:?}",
+        run.get("name")
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
 /// Best-effort: kill any tmux sessions the runs spawned so a `sleep 60` doesn't
 /// leak past the test.
 async fn cleanup_runs(daemon: &TestDaemon) {

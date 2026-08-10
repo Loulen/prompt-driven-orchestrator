@@ -546,6 +546,9 @@ export interface CreateRunRequest {
   /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
    *  server defers to the trigger/instance default at the create chokepoint. */
   sandbox?: string;
+  /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
+   *  the server resolves back-compat by the presence of `name`, then the instance default. */
+  auto_name?: boolean;
   images?: File[];
 }
 
@@ -569,6 +572,10 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     // sandboxed Run created WITH attached images keeps its mode (the daemon's
     // multipart parser reads this field).
     if (req.sandbox) form.append("sandbox", req.sandbox);
+    // #338: thread the explicit auto-naming choice through the multipart path too, so an
+    // unchecked "Auto-generated" box is honoured on a create WITH attached images. Sent as
+    // a stringified bool; only when the caller made a choice (it always does from the modal).
+    if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
@@ -597,6 +604,9 @@ export interface CreateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/omit to
    *  inherit the instance default. */
   sandbox?: string | null;
+  /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
+   *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
+  auto_name?: boolean;
 }
 
 export function fetchTriggers(): Promise<Trigger[]> {
@@ -633,6 +643,9 @@ export interface UpdateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): a value sets it, `null` clears back to
    *  inheriting the instance default, `undefined` leaves it unchanged. */
   sandbox?: string | null;
+  /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
+   *  bool (no clear state) — mirror of `enabled`. */
+  auto_name?: boolean;
 }
 
 export function updateTrigger(

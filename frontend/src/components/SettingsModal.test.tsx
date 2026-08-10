@@ -67,6 +67,14 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: false,
     },
+    // Default Run auto-naming (#338): ON by default (the pre-#338 behaviour), nothing stored/env.
+    default_auto_name: {
+      effective: true,
+      source: "default",
+      stored: null,
+      env: null,
+      default: true,
+    },
     // Price table (#427): the default state of every instance — neither file exists,
     // never synced, nothing inert. The paths are reported all the same.
     price_table: {
@@ -660,6 +668,78 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
     const note = await screen.findByTestId("setting-source-autocomplete-turn-end");
     expect(note).toHaveTextContent(/stored value \(off\)/i);
     expect(note).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
+    expect(note).toHaveTextContent(/overridden/i);
+  });
+});
+
+describe("SettingsModal — default Run auto-naming (#338)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    browseFsMock.mockReset();
+    browseFsMock.mockResolvedValue(BROWSE_HOME);
+    resetProfileMocks();
+  });
+
+  it("is checked on a fresh instance (default is ON — pre-#338 behaviour)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+  });
+
+  it("seeds from the effective value when a stored off overrides the default", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_auto_name: { effective: false, source: "stored", stored: false, env: null, default: true },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(screen.getByTestId("setting-source-default-auto-name")).toHaveTextContent(
+      /stored value \(off\)/i,
+    );
+  });
+
+  it("sends `false` when unticked — never a clear sentinel", async () => {
+    fetchSettingsMock.mockResolvedValue(sample()); // default ON
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        default_auto_name: { effective: false, source: "stored", stored: false, env: null, default: true },
+      }),
+    );
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+
+    fireEvent.click(await screen.findByTestId("setting-default-auto-name"));
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ default_auto_name: false });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("does not send the flag when left unchanged", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsModal open onClose={onClose} />);
+    await screen.findByTestId("setting-default-auto-name");
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("discloses a shadowed env var", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_auto_name: { effective: false, source: "stored", stored: false, env: true, default: true },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const note = await screen.findByTestId("setting-source-default-auto-name");
+    expect(note).toHaveTextContent(/stored value \(off\)/i);
+    expect(note).toHaveTextContent("PDO_DEFAULT_AUTO_NAME=on");
     expect(note).toHaveTextContent(/overridden/i);
   });
 });

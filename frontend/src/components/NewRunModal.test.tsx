@@ -34,6 +34,8 @@ vi.mock("../api", () => ({
     home: "/home/user",
     // #469: required on InstanceSettings; this modal does not read it.
     autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
     // #427: required on InstanceSettings; this modal does not read it.
     price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
     updated_at: "2026-07-01T10:00:00.000Z",
@@ -785,6 +787,111 @@ describe("NewRunModal run name field", () => {
   });
 });
 
+describe("NewRunModal — auto-naming default (#338)", () => {
+  function settingsWithAutoName(effective: boolean): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [{ name: "full", virtual: true }, { name: "minimal", virtual: true }],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      default_auto_name: { effective, source: effective ? "default" : "stored", stored: effective ? null : false, env: null, default: true },
+      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+    };
+  }
+
+  it("seeds the checkbox OFF (and enables the name input) when the instance default is off", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(false));
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    const input = screen.getByTestId("run-name-input") as HTMLInputElement;
+    // Seed is async (waits on fetchSettings): the box starts optimistic-true, then flips.
+    await waitFor(() => expect(checkbox.checked).toBe(false));
+    expect(input.disabled).toBe(false);
+  });
+
+  it("keeps the checkbox ON when the instance default is on", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+  });
+
+  it("launches with auto_name:true by default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ auto_name: true }));
+    });
+  });
+
+  it("unchecking sends auto_name:false with the typed name", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    // Wait for the async seed to settle before unchecking, else it would overwrite us.
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    fireEvent.click(checkbox);
+    fireEvent.change(screen.getByTestId("run-name-input"), { target: { value: "Fix bug" } });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ auto_name: false, name: "Fix bug" }),
+      );
+    });
+  });
+
+  it("carries the auto_name choice into a created Trigger", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    // Wait for the seed so the box is deterministically ON before we uncheck it.
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), { target: { value: "Nightly" } });
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+    // Turn auto-naming off for the fired runs.
+    fireEvent.click(screen.getByTestId("auto-name-checkbox"));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Nightly", auto_name: false }),
+      );
+    });
+  });
+});
+
 describe("NewRunModal — Trigger mode (#160)", () => {
   async function selectPipelineAndRepo() {
     vi.mocked(fetchPipelines).mockResolvedValue([
@@ -1152,6 +1259,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     cron: "*/15 * * * *",
     guard_command: null,
     overlap_policy: "allow",
+    auto_name: true,
     enabled: true,
     next_fire_at: null,
     last_fired_at: null,
@@ -1310,6 +1418,7 @@ describe("NewRunModal — open-intent reset (#386)", () => {
     cron: "*/15 * * * *",
     guard_command: null,
     overlap_policy: "allow",
+    auto_name: true,
     enabled: true,
     next_fire_at: null,
     last_fired_at: null,
@@ -1441,6 +1550,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       home: "/home/user",
       // #469: required on InstanceSettings; this modal does not read it.
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
       price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
@@ -1553,6 +1664,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       guard_command: null,
       overlap_policy: "skip",
       sandbox: "minimal",
+      auto_name: true,
       enabled: true,
       next_fire_at: null,
       last_fired_at: null,
@@ -1641,6 +1753,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       overlap_policy: "skip",
       // Materialised once, deleted since — the only way to get a dangling reference.
       sandbox: "full-no-mcp",
+      auto_name: true,
       enabled: true,
       next_fire_at: null,
       last_fired_at: null,
@@ -1719,6 +1832,8 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       home: "/home/user",
       // #469: required on InstanceSettings; this modal does not read it.
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
       price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
@@ -1927,6 +2042,8 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       ],
       home: "/home/user",
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
       price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
@@ -1946,6 +2063,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
     cron: "*/15 * * * *",
     guard_command: null,
     overlap_policy: "skip",
+    auto_name: true,
     enabled: true,
     next_fire_at: null,
     last_fired_at: null,

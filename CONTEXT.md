@@ -561,6 +561,9 @@ _Éviter_ : nom temporaire, titre par défaut.
 **Nom descriptif (descriptive name)** :
 Nom lisible posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que
 fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom).
+Ce nommage descriptif est **désactivable par-Run et par-Trigger**, avec un défaut d'instance
+`default_auto_name` (booléen, résolu `stored → env PDO_DEFAULT_AUTO_NAME → défaut true`, ADR-0015, #338) :
+désactivé, le Run garde son *nom placeholder* et le manager n'est pas instruit de renommer.
 _Éviter_ : nom final, nom auto, rename automatique.
 
 ### Statistiques de Run

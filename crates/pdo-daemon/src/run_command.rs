@@ -1357,6 +1357,13 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Side effect, intended: a profile deleted since makes the retry 400,
                 // loudly, instead of quietly running something else.
                 sandbox: Some(run_state.sandbox.clone()),
+                // #338: pin the historical retry behaviour exactly. A retry has always
+                // set `name: None` and re-derived the name (placeholder or from input);
+                // `Some(true)` reproduces that regardless of the instance default, so a
+                // changed `default_auto_name` cannot silently alter how a retried Run is
+                // named. Not carried from the original (no such field is projected from
+                // RunStarted) — same reasoning as the `sandbox_entries` note above.
+                auto_name: Some(true),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 

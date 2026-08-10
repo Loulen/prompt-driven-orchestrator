@@ -24,6 +24,7 @@ function trigger(overrides: Partial<Trigger> = {}): Trigger {
     cron: "0 9 * * *",
     guard_command: null,
     overlap_policy: "skip",
+    auto_name: true,
     enabled: true,
     next_fire_at: "2026-06-07T09:00:00.000Z",
     last_fired_at: null,

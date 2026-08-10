@@ -2318,6 +2318,46 @@ nodes:
 
     // --- Script node tests (#248 / ADR-0017) ---
 
+    /// The shipped `disk-janitor` pipeline (#480, #128 Track A) must always parse
+    /// cleanly: the `reap` node stays a `script` node (a silent degrade to
+    /// `doc-only` would spend an LLM turn and lose determinism) and no diagnostic
+    /// is error-severity. `serializer_round_trip` only asserts *if* a pipeline is
+    /// valid (it `continue`s past a non-200 GET); this pins that it *is*.
+    #[test]
+    fn shipped_disk_janitor_pipeline_is_valid() {
+        let yaml = include_str!("../../../.pdo/pipelines/disk-janitor.yaml");
+        let result = parse_pipeline(yaml).expect("disk-janitor.yaml must parse");
+
+        let reap = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "reap")
+            .expect("disk-janitor.yaml must have a `reap` node");
+        assert_eq!(
+            reap.node_type,
+            NodeType::Script,
+            "the janitor's reap node must stay a `script` node (deterministic, no LLM turn)"
+        );
+
+        assert!(
+            result.pipeline.nodes.iter().any(|n| n.node_type == NodeType::Start),
+            "must have a start node"
+        );
+        assert!(
+            result.pipeline.nodes.iter().any(|n| n.node_type == NodeType::End),
+            "must have an end node"
+        );
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "shipped pipeline must have no error-severity diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
     #[test]
     fn parses_script_node() {
         let yaml = with_start_end(

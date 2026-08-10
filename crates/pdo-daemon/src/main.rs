@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
-    run_complete, run_daemon, run_fail, run_migrate, run_service, run_skip, Cli, Commands,
+    run_complete, run_daemon, run_fail, run_migrate, run_reap, run_service, run_skip, Cli, Commands,
 };
 use std::process::ExitCode;
 
@@ -45,6 +45,14 @@ fn main() -> ExitCode {
         Commands::Service { action } => run_service(action),
         // Blocking one-shot as well (#269): pure fs + YAML rewriting.
         Commands::Migrate { dir, dry_run } => run_migrate(dir, dry_run),
+        // Blocking one-shot (#480): HTTP to the daemon, no tokio runtime.
+        Commands::Reap {
+            count,
+            dry_run,
+            ttl_hours,
+            terminal_ttl_hours,
+            budget_secs,
+        } => run_reap(count, dry_run, ttl_hours, terminal_ttl_hours, budget_secs),
     };
 
     if let Err(e) = res {

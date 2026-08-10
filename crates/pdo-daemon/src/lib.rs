@@ -22810,7 +22810,11 @@ edges:
         );
         assert_eq!(parsed["reused_sub_worktree"], false, "got {body}");
         assert!(parsed["base_sha"].is_null(), "got {body}");
-        assert!(parsed["stale_git_lock"].is_null(), "got {body}");
+        assert_eq!(
+            parsed["interrupted_git_ops"],
+            serde_json::json!([]),
+            "got {body}"
+        );
 
         let events = load_events(&state.db, run_id).await.unwrap();
         let cmd = events

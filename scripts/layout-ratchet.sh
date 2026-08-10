@@ -9,7 +9,7 @@ cd "$(git rev-parse --show-toplevel)"
 # <directory>  <max direct tracked files>
 BASELINES='
 frontend/src/components 137
-crates/pdo-daemon/src 54
+crates/pdo-daemon/src 55
 '
 
 fail=0

@@ -2341,11 +2341,19 @@ nodes:
         );
 
         assert!(
-            result.pipeline.nodes.iter().any(|n| n.node_type == NodeType::Start),
+            result
+                .pipeline
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::Start),
             "must have a start node"
         );
         assert!(
-            result.pipeline.nodes.iter().any(|n| n.node_type == NodeType::End),
+            result
+                .pipeline
+                .nodes
+                .iter()
+                .any(|n| n.node_type == NodeType::End),
             "must have an end node"
         );
         assert!(

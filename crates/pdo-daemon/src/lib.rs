@@ -1068,8 +1068,7 @@ pub fn run_reap(
     }
 
     // Reclaim within the wall-clock budget.
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(budget_secs.max(1));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(budget_secs.max(1));
     let mut reclaimed_ids: Vec<String> = Vec::new();
     let mut deferred = 0usize;
     let mut errors = 0usize;

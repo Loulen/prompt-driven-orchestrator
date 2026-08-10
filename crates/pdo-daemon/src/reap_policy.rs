@@ -31,48 +31,48 @@ use serde::Deserialize;
 /// One entry of `GET /runs/reapable` — the subset the policy consumes. Extra
 /// fields in the payload (e.g. `effective_repo`, `worktree_present`) are ignored.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ReapableRun {
-    pub run_id: String,
+pub(crate) struct ReapableRun {
+    pub(crate) run_id: String,
     #[serde(default)]
-    pub pipeline_name: String,
-    pub status: RunStatus,
+    pub(crate) pipeline_name: String,
+    pub(crate) status: RunStatus,
     /// Seconds since the terminal transition, computed by the daemon at list
     /// time. `None` when the timestamp was absent/unparseable — such a Run is
     /// never reaped (no defensible age to compare a TTL against).
     #[serde(default)]
-    pub age_secs: Option<i64>,
+    pub(crate) age_secs: Option<i64>,
     /// Present only when the listing was requested with `?size=true`.
     #[serde(default)]
-    pub approx_disk_bytes: Option<u64>,
+    pub(crate) approx_disk_bytes: Option<u64>,
 }
 
 /// TTLs (in seconds) a janitor applies before reclaiming a Run, by category.
 #[derive(Debug, Clone)]
-pub struct ReapPolicy {
+pub(crate) struct ReapPolicy {
     /// `completed` Runs older than this are reclaimed. Pure residue.
-    pub completed_ttl_secs: i64,
+    pub(crate) completed_ttl_secs: i64,
     /// `failed` / `halted` / `skipped` Runs older than this are reclaimed.
     /// Longer than `completed_ttl_secs` (debugging evidence), but bounded.
-    pub terminal_ttl_secs: i64,
+    pub(crate) terminal_ttl_secs: i64,
     /// Runs whose `pipeline_name` equals this get `self_ttl_secs` instead of the
     /// per-status TTL, so the janitor reclaims its own past Runs quickly. `None`
     /// disables the fast lane.
-    pub self_pipeline: Option<String>,
+    pub(crate) self_pipeline: Option<String>,
     /// TTL for `self_pipeline` Runs (any terminal status).
-    pub self_ttl_secs: i64,
+    pub(crate) self_ttl_secs: i64,
 }
 
 /// 24 h — a `completed` Run is residue; reclaim it a day after it finished.
-pub const DEFAULT_COMPLETED_TTL_SECS: i64 = 24 * 3600;
+pub(crate) const DEFAULT_COMPLETED_TTL_SECS: i64 = 24 * 3600;
 /// 72 h — `failed`/`halted`/`skipped` are post-mortem evidence; hold them longer
 /// (still more conservative than the measured human archive latency), but bound
 /// the leak.
-pub const DEFAULT_TERMINAL_TTL_SECS: i64 = 72 * 3600;
+pub(crate) const DEFAULT_TERMINAL_TTL_SECS: i64 = 72 * 3600;
 /// 1 h — the janitor's own past Runs are boring; tidy them fast so hourly fires
 /// do not accumulate worktrees + immortal manager sessions.
-pub const DEFAULT_SELF_TTL_SECS: i64 = 3600;
+pub(crate) const DEFAULT_SELF_TTL_SECS: i64 = 3600;
 /// The name of the shipped janitor pipeline, used as the default self fast-lane.
-pub const DEFAULT_SELF_PIPELINE: &str = "disk-janitor";
+pub(crate) const DEFAULT_SELF_PIPELINE: &str = "disk-janitor";
 
 impl Default for ReapPolicy {
     fn default() -> Self {
@@ -87,25 +87,25 @@ impl Default for ReapPolicy {
 
 /// One reclaim the policy selected, with the reason it qualified.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReapDecision {
-    pub run_id: String,
-    pub status: RunStatus,
-    pub age_secs: i64,
-    pub approx_disk_bytes: Option<u64>,
-    pub reason: String,
+pub(crate) struct ReapDecision {
+    pub(crate) run_id: String,
+    pub(crate) status: RunStatus,
+    pub(crate) age_secs: i64,
+    pub(crate) approx_disk_bytes: Option<u64>,
+    pub(crate) reason: String,
 }
 
 /// The ordered set of reclaims plus a rollup.
 #[derive(Debug, Clone, Default)]
-pub struct ReapPlan {
+pub(crate) struct ReapPlan {
     /// Runs to reclaim, **biggest-first** (so a wall-clock-bounded reclaim frees
     /// the most disk per second). Ties broken by `run_id` for determinism.
-    pub reclaim: Vec<ReapDecision>,
+    pub(crate) reclaim: Vec<ReapDecision>,
     /// Terminal Runs that were listed but did not meet their TTL (too young, or
     /// no parseable age).
-    pub retained: usize,
+    pub(crate) retained: usize,
     /// Sum of `approx_disk_bytes` over `reclaim` (0 when sizes were not fetched).
-    pub reclaim_bytes: u64,
+    pub(crate) reclaim_bytes: u64,
 }
 
 impl ReapPolicy {
@@ -129,7 +129,10 @@ impl ReapPolicy {
         // Self fast-lane: the janitor's own past Runs, any terminal status.
         if let Some(self_pipe) = &self.self_pipeline {
             if !run.pipeline_name.is_empty() && &run.pipeline_name == self_pipe {
-                return Some((self_ttl_or(self.self_ttl_secs), format!("self-pipeline:{base}")));
+                return Some((
+                    self_ttl_or(self.self_ttl_secs),
+                    format!("self-pipeline:{base}"),
+                ));
             }
         }
 
@@ -142,7 +145,7 @@ impl ReapPolicy {
     }
 
     /// Compute the reclaim plan for a listing.
-    pub fn plan(&self, runs: &[ReapableRun]) -> ReapPlan {
+    pub(crate) fn plan(&self, runs: &[ReapableRun]) -> ReapPlan {
         let mut reclaim = Vec::new();
         let mut retained = 0usize;
 
@@ -195,7 +198,13 @@ fn self_ttl_or(secs: i64) -> i64 {
 mod tests {
     use super::*;
 
-    fn run(id: &str, pipeline: &str, status: RunStatus, age: Option<i64>, bytes: Option<u64>) -> ReapableRun {
+    fn run(
+        id: &str,
+        pipeline: &str,
+        status: RunStatus,
+        age: Option<i64>,
+        bytes: Option<u64>,
+    ) -> ReapableRun {
         ReapableRun {
             run_id: id.to_string(),
             pipeline_name: pipeline.to_string(),
@@ -230,12 +239,24 @@ mod tests {
         let ttl = p.completed_ttl_secs;
 
         // age == ttl → reclaimed (boundary inclusive).
-        let at = p.plan(&[run("r", "some-pipe", RunStatus::Completed, Some(ttl), Some(10))]);
+        let at = p.plan(&[run(
+            "r",
+            "some-pipe",
+            RunStatus::Completed,
+            Some(ttl),
+            Some(10),
+        )]);
         assert_eq!(at.reclaim.len(), 1, "age == ttl must reclaim");
         assert_eq!(at.retained, 0);
 
         // age == ttl - 1 → retained.
-        let below = p.plan(&[run("r", "some-pipe", RunStatus::Completed, Some(ttl - 1), Some(10))]);
+        let below = p.plan(&[run(
+            "r",
+            "some-pipe",
+            RunStatus::Completed,
+            Some(ttl - 1),
+            Some(10),
+        )]);
         assert_eq!(below.reclaim.len(), 0, "age < ttl must retain");
         assert_eq!(below.retained, 1);
     }
@@ -244,22 +265,58 @@ mod tests {
     fn failed_uses_terminal_ttl_not_completed_ttl() {
         let p = no_self_policy();
         // 25 h: past the 24 h completed TTL, but well under the 72 h evidence TTL.
-        let young = p.plan(&[run("f", "some-pipe", RunStatus::Failed, Some(25 * 3600), Some(1))]);
-        assert_eq!(young.reclaim.len(), 0, "failed evidence must survive the completed TTL");
+        let young = p.plan(&[run(
+            "f",
+            "some-pipe",
+            RunStatus::Failed,
+            Some(25 * 3600),
+            Some(1),
+        )]);
+        assert_eq!(
+            young.reclaim.len(),
+            0,
+            "failed evidence must survive the completed TTL"
+        );
         assert_eq!(young.retained, 1);
 
         // 72 h: reclaimed — the leak is bounded, not infinite.
-        let old = p.plan(&[run("f", "some-pipe", RunStatus::Failed, Some(72 * 3600), Some(1))]);
-        assert_eq!(old.reclaim.len(), 1, "failed evidence is reclaimed once past the evidence TTL");
+        let old = p.plan(&[run(
+            "f",
+            "some-pipe",
+            RunStatus::Failed,
+            Some(72 * 3600),
+            Some(1),
+        )]);
+        assert_eq!(
+            old.reclaim.len(),
+            1,
+            "failed evidence is reclaimed once past the evidence TTL"
+        );
     }
 
     #[test]
     fn halted_and_skipped_route_to_terminal_ttl() {
         let p = no_self_policy();
         for status in [RunStatus::Halted, RunStatus::Skipped] {
-            let young = p.plan(&[run("x", "some-pipe", status.clone(), Some(48 * 3600), Some(1))]);
-            assert_eq!(young.reclaim.len(), 0, "{status:?} at 48h < 72h evidence TTL must retain");
-            let old = p.plan(&[run("x", "some-pipe", status.clone(), Some(72 * 3600), Some(1))]);
+            let young = p.plan(&[run(
+                "x",
+                "some-pipe",
+                status.clone(),
+                Some(48 * 3600),
+                Some(1),
+            )]);
+            assert_eq!(
+                young.reclaim.len(),
+                0,
+                "{status:?} at 48h < 72h evidence TTL must retain"
+            );
+            let old = p.plan(&[run(
+                "x",
+                "some-pipe",
+                status.clone(),
+                Some(72 * 3600),
+                Some(1),
+            )]);
             assert_eq!(old.reclaim.len(), 1, "{status:?} at 72h must reclaim");
         }
     }
@@ -276,7 +333,10 @@ mod tests {
         ] {
             let plan = p.plan(&[run("l", "some-pipe", status.clone(), ancient, Some(999))]);
             assert_eq!(plan.reclaim.len(), 0, "{status:?} must never be reaped");
-            assert_eq!(plan.retained, 0, "{status:?} is not a reap candidate, not residue");
+            assert_eq!(
+                plan.retained, 0,
+                "{status:?} is not a reap candidate, not residue"
+            );
         }
     }
 
@@ -284,29 +344,59 @@ mod tests {
     fn missing_age_is_never_reaped() {
         let p = no_self_policy();
         let plan = p.plan(&[run("n", "some-pipe", RunStatus::Completed, None, Some(10))]);
-        assert_eq!(plan.reclaim.len(), 0, "no parseable age → cannot apply a TTL");
+        assert_eq!(
+            plan.reclaim.len(),
+            0,
+            "no parseable age → cannot apply a TTL"
+        );
         assert_eq!(plan.retained, 1);
     }
 
     #[test]
     fn self_pipeline_fast_lane_reaps_own_runs_early() {
         let p = ReapPolicy::default(); // self fast-lane on: disk-janitor @ 1h
-        // A janitor's own completed Run at 2h: under the 24h completed TTL, but
-        // past the 1h self TTL → reclaimed.
-        let own = p.plan(&[run("own", "disk-janitor", RunStatus::Completed, Some(2 * 3600), Some(11))]);
-        assert_eq!(own.reclaim.len(), 1, "the janitor tidies its own runs on the short self TTL");
+                                       // A janitor's own completed Run at 2h: under the 24h completed TTL, but
+                                       // past the 1h self TTL → reclaimed.
+        let own = p.plan(&[run(
+            "own",
+            "disk-janitor",
+            RunStatus::Completed,
+            Some(2 * 3600),
+            Some(11),
+        )]);
+        assert_eq!(
+            own.reclaim.len(),
+            1,
+            "the janitor tidies its own runs on the short self TTL"
+        );
         assert!(own.reclaim[0].reason.starts_with("self-pipeline:"));
 
         // A different pipeline's completed Run at 2h: normal completed TTL → retained.
-        let other = p.plan(&[run("other", "some-pipe", RunStatus::Completed, Some(2 * 3600), Some(11))]);
-        assert_eq!(other.reclaim.len(), 0, "other pipelines keep the full completed TTL");
+        let other = p.plan(&[run(
+            "other",
+            "some-pipe",
+            RunStatus::Completed,
+            Some(2 * 3600),
+            Some(11),
+        )]);
+        assert_eq!(
+            other.reclaim.len(),
+            0,
+            "other pipelines keep the full completed TTL"
+        );
     }
 
     #[test]
     fn self_fast_lane_still_respects_liveness() {
         // Even the janitor's own live Run must never be reaped (it is running).
         let p = ReapPolicy::default();
-        let plan = p.plan(&[run("live", "disk-janitor", RunStatus::Running, Some(999_999), Some(11))]);
+        let plan = p.plan(&[run(
+            "live",
+            "disk-janitor",
+            RunStatus::Running,
+            Some(999_999),
+            Some(11),
+        )]);
         assert_eq!(plan.reclaim.len(), 0);
     }
 
@@ -315,10 +405,34 @@ mod tests {
         let p = no_self_policy();
         let ttl = p.completed_ttl_secs;
         let runs = vec![
-            run("small", "some-pipe", RunStatus::Completed, Some(ttl), Some(100)),
-            run("big", "some-pipe", RunStatus::Completed, Some(ttl), Some(5000)),
-            run("mid-b", "some-pipe", RunStatus::Completed, Some(ttl), Some(1000)),
-            run("mid-a", "some-pipe", RunStatus::Completed, Some(ttl), Some(1000)),
+            run(
+                "small",
+                "some-pipe",
+                RunStatus::Completed,
+                Some(ttl),
+                Some(100),
+            ),
+            run(
+                "big",
+                "some-pipe",
+                RunStatus::Completed,
+                Some(ttl),
+                Some(5000),
+            ),
+            run(
+                "mid-b",
+                "some-pipe",
+                RunStatus::Completed,
+                Some(ttl),
+                Some(1000),
+            ),
+            run(
+                "mid-a",
+                "some-pipe",
+                RunStatus::Completed,
+                Some(ttl),
+                Some(1000),
+            ),
         ];
         let plan = p.plan(&runs);
         let order: Vec<&str> = plan.reclaim.iter().map(|d| d.run_id.as_str()).collect();
@@ -340,7 +454,13 @@ mod tests {
         // Tighten the completed TTL to 1h: a 2h completed Run now reclaims.
         let mut p = no_self_policy();
         p.completed_ttl_secs = 3600;
-        let plan = p.plan(&[run("r", "some-pipe", RunStatus::Completed, Some(2 * 3600), Some(1))]);
+        let plan = p.plan(&[run(
+            "r",
+            "some-pipe",
+            RunStatus::Completed,
+            Some(2 * 3600),
+            Some(1),
+        )]);
         assert_eq!(plan.reclaim.len(), 1);
     }
 
@@ -367,6 +487,10 @@ mod tests {
         assert_eq!(runs[0].approx_disk_bytes, Some(10066329));
 
         let plan = no_self_policy().plan(&runs);
-        assert_eq!(plan.reclaim.len(), 1, "a 4-day-old completed run is well past a 24h TTL");
+        assert_eq!(
+            plan.reclaim.len(),
+            1,
+            "a 4-day-old completed run is well past a 24h TTL"
+        );
     }
 }

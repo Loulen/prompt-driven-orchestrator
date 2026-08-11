@@ -285,9 +285,12 @@ slot qu'un restart throttlé attend, et `retry_waiting_nodes` n'a aucun timer.
 - **Les corps d'erreur `text/plain`** (Run absent, pipeline illisible/inparsable) restent tels quels.
   Les normaliser est le périmètre de **#491**, et le faire ici mélangerait une rupture et un nettoyage
   sous un seul bump.
-- **`retry_waiting_nodes` n'a toujours aucun timer**, et deux autres libérateurs de slot ne le
+- ~~**`retry_waiting_nodes` n'a toujours aucun timer**, et deux autres libérateurs de slot ne le
   réveillent pas (les bras halt/pause, et `boot_recovery` qui échoue les `Running` orphelins). #489
-  ferme `kill_node` seul ; le reste est fiché.
+  ferme `kill_node` seul ; le reste est fiché.~~ **Fermé par #509** : `re_evaluate_after_command`
+  re-drive la file d'admission quand une commande rend un Run terminal (`Halted`/`Completed`), et
+  `run_boot_recovery` la re-drive une fois en fin de passe. Toujours pas de timer — le fix reste
+  événementiel, même posture que `kill_node` (#489-C).
 - **Le comptage d'admission reste par nœud, pas par itération** (#453) : N laps parallèles d'un nœud
   consomment **un** slot. Pré-existant ; l'exclusion ne se construit pas sur une hypothèse contraire.
 

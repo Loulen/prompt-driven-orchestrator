@@ -55,13 +55,25 @@ export default function MarkdownArtifactModal({
     setIter(newIter);
   }, []);
 
+  // #369: key the fetch effect on the primitive fields it actually reads, NOT
+  // on the `source` object reference. The parent (NodeDetailPanel) polls node
+  // I/O and re-renders on every tick; if it hands us a fresh-but-equivalent
+  // `source` object, depending on its identity would re-run this effect each
+  // tick — re-fetching and calling `setFiles(new array)` + `setFileIndex(0)`,
+  // which momentarily blanks the body and remounts the mermaid diagram (the
+  // reported flicker). These primitives only change when the iter-nav target
+  // genuinely does, so the effect (and file pagination) stays put under polling.
+  const isIterNav = source.kind === "iter-nav";
+  const navNodeId = source.kind === "iter-nav" ? source.nodeId : null;
+  const navPortKind = source.kind === "iter-nav" ? source.portKind : null;
+
   useEffect(() => {
-    if (source.kind !== "iter-nav") return;
+    if (!isIterNav || navNodeId == null || navPortKind == null) return;
     let cancelled = false;
-    fetchNodeIO(runId, source.nodeId, iter)
+    fetchNodeIO(runId, navNodeId, iter)
       .then((io) => {
         if (cancelled) return;
-        const ports = source.portKind === "input" ? io.inputs : io.outputs;
+        const ports = navPortKind === "input" ? io.inputs : io.outputs;
         const port = ports.find((p) => p.port === portName);
         setFiles(port?.files ?? []);
         setFileIndex(0);
@@ -76,7 +88,7 @@ export default function MarkdownArtifactModal({
     return () => {
       cancelled = true;
     };
-  }, [source, runId, iter, portName]);
+  }, [isIterNav, navNodeId, navPortKind, runId, iter, portName]);
 
   const file = files[fileIndex];
   const total = files.length;

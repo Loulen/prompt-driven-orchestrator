@@ -18,7 +18,10 @@
 //! linear sequence of guarded `append_event` calls and must never call the
 //! scheduler or re-enter itself. The shared `reconcile_run_level_stall` (used by
 //! both boot recovery and the stale sweep) stays in `lib.rs`; this module calls
-//! up into it.
+//! up into it. #509: it likewise calls up into `retry_waiting_nodes` **once,
+//! after the whole pass**, to redistribute the admission slots that failing
+//! orphaned `Running` nodes just freed (same "call up into `lib.rs`" pattern as
+//! `reconcile_run_level_stall`, never the scheduler directly).
 
 use tracing::{error, warn};
 
@@ -26,7 +29,7 @@ use crate::worktree_ops::sub_worktree_branch;
 use crate::{admission, event_log, tmux_session_manager};
 use crate::{
     append_event, effective_repo_root, find_node_type, load_all_run_ids, load_events,
-    reconcile_run_level_stall, AppState,
+    reconcile_run_level_stall, retry_waiting_nodes, AppState,
 };
 
 /// Reconcile persisted run state against the live process world at daemon boot.
@@ -249,6 +252,22 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         // sees any orphan failure appended in (1).
         reconcile_run_level_stall(state, run_id).await;
     }
+
+    // (4) #509: failing an orphaned `Running` node in (1) frees its admission
+    // slot — a `Failed` node no longer counts in
+    // `admission::count_live_node_sessions`. `reconcile_run_level_stall` above
+    // already re-drives the throttled queue, but ONLY for a Run it reconciles
+    // terminal; a Run whose orphan died while a SIBLING node is still `Running`
+    // never stalls at the run level (`run_stall_reason` returns `None` while any
+    // node is live), so its freed slot was never redistributed. The queued nodes
+    // of OTHER runs would then starve indefinitely across the restart, invisible
+    // to both `run_stall_reason` (the live sibling suppresses it) and
+    // `stale_detector` (it inspects `Running` nodes only). `retry_waiting_nodes`
+    // has no timer of its own — all its callers are event-driven (#159) — so this
+    // one restart-time sweep is what closes the gap. It is a global, idempotent
+    // admission pass (guard-superfluous dedup); running it once after the whole
+    // recovery loop redistributes every slot freed above.
+    retry_waiting_nodes(state).await;
 }
 
 /// Detect sub-worktree branches whose work was merged into the pipeline branch

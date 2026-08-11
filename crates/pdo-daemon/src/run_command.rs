@@ -880,8 +880,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // thing that should have released it. Same posture as `node_stop`, which
             // has called this since #159.
             //
-            // The halt/pause arms and `boot_recovery` (which fails orphaned `Running`
-            // nodes) have the same hole; they are out of #489's scope and filed.
+            // The halt/pause arms (via `re_evaluate_after_command`) and
+            // `boot_recovery` (which fails orphaned `Running` nodes) had the same
+            // hole; #509 closed both — see the re-drive in `re_evaluate_after_command`
+            // and at the tail of `run_boot_recovery`.
             retry_waiting_nodes(&state).await;
 
             info!("kill_node: node {node_id} iter {iter} in run {run_id}");
@@ -1437,12 +1439,34 @@ impl ReEvalSummary {
     }
 }
 
-/// Re-evaluate the scheduler after a command (resume_run, extend_cycle).
-/// Loads the pipeline and run state, resolves variables (including cycle extensions),
-/// then re-evaluates outgoing edges of all completed nodes to find newly ready spawns.
-/// Returns what actually happened so command handlers can tell the truth
-/// (ADR-0025 / #327).
+/// Post-command re-evaluation (ADR-0025 / #327) that also re-drives the
+/// admission queue when the command drove the run to a **terminal** state.
+///
+/// #509: a run going `Halted`/`Completed` here stops counting its
+/// still-session-holding nodes against the global session cap
+/// (`admission::count_live_node_sessions` excludes terminal runs — see
+/// `excludes_halted_run_with_a_running_node`), so a slot frees. But the three
+/// command arms that reach this function (`extend_cycle`, `Region`
+/// bump/end, `resume_run`) never re-drove the nodes throttled into `waiting` in
+/// *other* runs. `retry_waiting_nodes` has no timer of its own — every one of its
+/// callers is event-driven (#159) — so a queued node could starve until an
+/// unrelated event happened to re-drive it. Same posture as the `kill_node` arm
+/// (#489-C): the site that frees a slot re-drives the queue. The sweep is global
+/// and idempotent (guard-superfluous dedup), so a single call after a terminal
+/// re-evaluation is correct.
 async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSummary {
+    let summary = re_evaluate_after_command_inner(state, run_id).await;
+    if summary.terminal.is_some() {
+        retry_waiting_nodes(state).await;
+    }
+    summary
+}
+
+/// The re-evaluation proper. Loads the pipeline and run state, resolves variables
+/// (including cycle extensions), then re-evaluates outgoing edges of all completed
+/// nodes to find newly ready spawns. Returns what actually happened so command
+/// handlers can tell the truth (ADR-0025 / #327).
+async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEvalSummary {
     let mut summary = ReEvalSummary::default();
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,

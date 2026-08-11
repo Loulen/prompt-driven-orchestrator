@@ -160,7 +160,13 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
 
 /** One labelled cost row carrying the honesty vocabulary (`~$` / `†` / `—`). */
 function CostRow({ label, bucket }: { label: string; bucket: StatsCostBucket }) {
-  const c = formatBucketCost(bucket.usd, bucket.partial, bucket.null, bucket.runs);
+  const c = formatBucketCost(
+    bucket.usd,
+    bucket.partial,
+    bucket.null,
+    bucket.runs,
+    bucket.unpriced_models,
+  );
   return (
     <div
       className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"

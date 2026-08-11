@@ -33,6 +33,24 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.dagger).toBe(true);
     expect(c.title).toMatch(/lower bound/i);
   });
+
+  it("names the excluded model(s) in the tooltip when known (#425)", () => {
+    const one = formatEstCost(2.5, true, ["claude-sonnet-5"]);
+    expect(one.dagger).toBe(true);
+    expect(one.title).toMatch(/lower bound/i);
+    expect(one.title).toContain("claude-sonnet-5");
+    expect(one.title).toMatch(/unpriced model excluded/);
+
+    const many = formatEstCost(2.5, true, ["claude-fable-5", "claude-sonnet-5"]);
+    expect(many.title).toContain("claude-fable-5");
+    expect(many.title).toContain("claude-sonnet-5");
+    expect(many.title).toMatch(/unpriced models excluded/);
+  });
+
+  it("falls back to the generic note when partial but no names are given", () => {
+    const c = formatEstCost(2.5, true, []);
+    expect(c.title).toMatch(/an unpriced model was excluded/);
+  });
 });
 
 describe("formatBucketCost (aggregate, #377)", () => {
@@ -52,6 +70,15 @@ describe("formatBucketCost (aggregate, #377)", () => {
     expect(c.text).toBe("~$5.00");
     expect(c.title).toMatch(/lower bound/i);
     expect(c.title).toMatch(/1 partial run\b/);
+  });
+
+  it("names the unioned unpriced models alongside the partial-run count (#425)", () => {
+    const c = formatBucketCost(5.0, 2, 0, 4, ["claude-fable-5", "claude-sonnet-5"]);
+    expect(c.dagger).toBe(true);
+    expect(c.title).toMatch(/lower bound/i);
+    expect(c.title).toContain("claude-fable-5");
+    expect(c.title).toContain("claude-sonnet-5");
+    expect(c.title).toMatch(/2 partial runs/);
   });
 
   it("pluralises partial run count", () => {

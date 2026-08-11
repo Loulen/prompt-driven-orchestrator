@@ -110,16 +110,10 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
     // manager/node terminal then shows that error instead of the session.
     cmd.env("TERM", "xterm-256color");
 
-    let _child = match pair.slave.spawn_command(cmd) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to spawn tmux attach for {session_id}: {e}");
-            return;
-        }
-    };
-
-    drop(pair.slave);
-
+    // Acquire the master-side reader and writer BEFORE spawning the child.
+    // Both are fallible; taking them first means that once the child exists the
+    // only path out of this function is the select!/reap below — no early
+    // return can drop an unreaped child (#495).
     let mut pty_reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
         Err(e) => {
@@ -134,6 +128,16 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
             return;
         }
     };
+
+    let mut child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to spawn tmux attach for {session_id}: {e}");
+            return;
+        }
+    };
+
+    drop(pair.slave);
 
     let master = pair.master;
     let (mut ws_sink, mut ws_stream) = socket.split();
@@ -212,6 +216,22 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
         _ = ws_send_handle => {}
         _ = ws_recv_handle => {}
     }
+
+    // Reap the `tmux attach` child (#495). portable_pty's Child, like std's,
+    // does NOT wait() on drop, so before this every closed pane leaked a
+    // `[tmux: client] <defunct>` for the daemon's whole lifetime. A bare wait()
+    // here is NOT enough: try_clone_reader()/take_writer() each dup() the master
+    // fd, so on a plain socket close the reader task still holds one open, the
+    // client has NOT received SIGHUP, and wait() would block forever. kill()
+    // signals the client PID directly (SIGHUP, then SIGKILL after a ~250ms
+    // grace) regardless of fd state; wait() then reaps it. Killing the client
+    // also closes the slave, unblocking the reader task. Run on a blocking
+    // thread so the grace period can't stall the async runtime.
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = child.kill();
+        let _ = child.wait();
+    })
+    .await;
 
     info!("PTY WebSocket closed for session {session_id}");
 }

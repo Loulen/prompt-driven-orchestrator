@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle,
   AlertCircle,
@@ -36,6 +36,7 @@ import {
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
 
@@ -290,6 +291,28 @@ export default function NodeDetailPanel({
   const isStaleIter = selectedIter !== node.iter;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
   const showTerminal = node.status !== "pending";
+
+  // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
+  // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
+  // object literal handed the child a fresh reference on every one of those
+  // re-renders; the modal keyed a fetch effect on that reference, so it re-ran
+  // `fetchNodeIO` + `setFiles(new array)` + `setFileIndex(0)` on every tick,
+  // which momentarily emptied the body and unmounted/remounted the rendered
+  // markdown (mermaid diagram → back to its empty `aria-busy` state → flicker).
+  // Memoize on the structural keys so the reference stays stable across ticks
+  // and only changes when the underlying identity actually does.
+  const modalSource = useMemo<ArtifactSource | null>(() => {
+    if (!modal) return null;
+    return node.iterations && node.iterations.length > 1
+      ? {
+          kind: "iter-nav",
+          nodeId: node.node_id,
+          portKind: modal.portKind,
+          iterations: node.iterations,
+          initialIter: selectedIter,
+        }
+      : { kind: "static", files: modal.files };
+  }, [modal, node.iterations, node.node_id, selectedIter]);
 
   // #315: the per-iter *rendered* prompt lives in the node's working dir, which
   // is destroyed on archive and is not among the preserved set (ADR-0020 keeps
@@ -822,22 +845,12 @@ export default function NodeDetailPanel({
         );
       })()}
 
-      {modal && (
+      {modal && modalSource && (
         <MarkdownArtifactModal
           runId={runId}
           portName={modal.portName}
           portType={modal.portType}
-          source={
-            node.iterations && node.iterations.length > 1
-              ? {
-                  kind: "iter-nav",
-                  nodeId: node.node_id,
-                  portKind: modal.portKind,
-                  iterations: node.iterations,
-                  initialIter: selectedIter,
-                }
-              : { kind: "static", files: modal.files }
-          }
+          source={modalSource}
           onClose={() => setModal(null)}
         />
       )}

@@ -39,12 +39,24 @@ echo "[smoke] Using port $PORT, working dir $TMPDIR"
 # Run daemon from the tempdir so its .pdo lives there, not in the repo.
 # PDO_PRICE_SYNC=off (#427): the smoke test polls /runs for up to 30 s, so a boot
 # price fetch waiting on a DNS timeout would pass anyway while masking exactly that.
-( cd "$TMPDIR" && PDO_PRICE_SYNC=off "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
+#
+# exec (#514): without it, the subshell runs two commands (cd && pdo), so bash
+# forks pdo as a child and blocks in wait — $! then names the *subshell*, not pdo.
+# cleanup would kill the subshell; the real daemon, re-adopted by init, kept its
+# port and tmux socket — one orphan daemon leaked per CI run. The leak was invisible
+# because the subshell stays alive while pdo runs, so kill -0 and the HTTP poll both
+# passed. exec replaces the subshell with pdo so $! is the daemon's real PID.
+( cd "$TMPDIR" && PDO_PRICE_SYNC=off exec "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
 DAEMON_PID=$!
 
 cleanup() {
   if kill -0 "$DAEMON_PID" 2>/dev/null; then
-    kill "$DAEMON_PID" 2>/dev/null || true
+    kill "$DAEMON_PID" 2>/dev/null || true            # SIGTERM (daemon has no handler → immediate exit)
+    for _ in $(seq 1 20); do                           # bounded wait ~2 s
+      kill -0 "$DAEMON_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$DAEMON_PID" 2>/dev/null || true          # SIGKILL backstop (future graceful-shutdown)
     wait "$DAEMON_PID" 2>/dev/null || true
   fi
   rm -rf "$TMPDIR"
@@ -80,6 +92,18 @@ fail() {
   cat "$LOG" >&2 || true
   exit 1
 }
+
+# Non-regression guard (#514): DAEMON_PID must name the pdo daemon, not the
+# wrapping subshell. Checked after the readiness gate so exec has certainly
+# replaced the subshell. `comm` (basename), not `args`: the subshell's argv
+# contains pdo's path and would be a false positive. Linux comm=pdo, macOS
+# comm=/…/pdo; both match *pdo*. Had this been in place, the original bug
+# (comm=bash) would have failed loudly instead of leaking silently.
+DAEMON_COMM=$(ps -p "$DAEMON_PID" -o comm= 2>/dev/null || true)
+case "$DAEMON_COMM" in
+  *pdo*) : ;;
+  *) fail "DAEMON_PID=$DAEMON_PID does not name the pdo daemon (comm='$DAEMON_COMM'); cleanup would kill the wrong process and leak the daemon" ;;
+esac
 
 # 1. GET /runs returns JSON
 CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/runs")

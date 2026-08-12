@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, Star, X } from "lucide-react";
-import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
+import type { InstanceSettings, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
-import { createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, promotePipeline, validateRepo, listBranches, testGuard } from "../api";
+import { createRun, createTrigger, updateTrigger, fetchSettings, promotePipeline, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
@@ -11,7 +11,10 @@ import SecondaryRepoRow, {
   type SecondaryRepo,
 } from "./SecondaryRepoRow";
 import GuardTestResult from "./GuardTestResult";
-import { CRON_PRESETS, presetToCron, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
+import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
+import { useLaunchTargets } from "../hooks/useLaunchTargets";
+import { useRepoValidation } from "../hooks/useRepoValidation";
+import * as newRunForm from "../lib/newRunForm";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -51,8 +54,37 @@ interface Props {
 }
 
 export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved }: Props) {
-  const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
-  const [selectedPipelineId, setSelectedPipelineId] = useState("");
+  // What this Run/Trigger can be launched against: the instance's pipelines and the
+  // target repo's branches, both served by the daemon (#359).
+  const {
+    pipelines,
+    repoPipelines,
+    libraryPipelines,
+    userPipelines,
+    selectedPipeline,
+    selectedPipelineId,
+    setSelectedPipelineId,
+    loadPipelines,
+    branches,
+    branchesLoading,
+    sourceBranch,
+    setSourceBranch,
+    loadBranches,
+    clearBranches,
+  } = useLaunchTargets(open);
+
+  // Multi-repo state: the target repo field, its debounced verdict, and the border it
+  // paints. Hands a validated path over to the branch loader above (#359).
+  const {
+    targetRepo,
+    repoValid,
+    repoError,
+    repoValidating,
+    repoBorderClass,
+    handleRepoChange,
+    resetRepo,
+  } = useRepoValidation({ open, loadBranches, clearBranches });
+
   const [runName, setRunName] = useState("");
   const [autoName, setAutoName] = useState(true);
   const [input, setInput] = useState("");
@@ -84,16 +116,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Multi-repo state
-  const [targetRepo, setTargetRepo] = useState("");
-  const [repoValid, setRepoValid] = useState<boolean | null>(null);
-  const [repoError, setRepoError] = useState<string | null>(null);
-  const [repoValidating, setRepoValidating] = useState(false);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [sourceBranch, setSourceBranch] = useState("");
-  const [branchesLoading, setBranchesLoading] = useState(false);
   // #465 (ADR-0042): read-only secondary repos. The primary stays `targetRepo` /
-  // `sourceBranch` above (row 0), untouched — these are the extra `[1..]` lines.
+  // `sourceBranch` (from the hooks above, row 0), untouched — these are the extra
+  // `[1..]` lines.
   const [secondaryRepos, setSecondaryRepos] = useState<SecondaryRepo[]>([]);
 
   const [images, setImages] = useState<File[]>([]);
@@ -121,20 +146,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
   const refreshRecentRepos = useRecentReposStore((s) => s.refresh);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prefillDone = useRef(false);
   const openPrefillDone = useRef(false);
-
-  const handleRepoChange = useCallback((value: string) => {
-    setTargetRepo(value);
-    if (!value.trim()) {
-      setRepoValid(null);
-      setRepoError(null);
-      setBranches([]);
-      setSourceBranch("");
-    }
-  }, []);
 
   // #465: stable secondary-row mutators (functional setState → empty deps, so the
   // row's validation effect never re-fires from a new callback identity).
@@ -206,11 +220,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setSelectedPipelineId("");
       setInput("");
       setOverrides({});
-      setTargetRepo("");
-      setRepoValid(null);
-      setRepoError(null);
-      setBranches([]);
-      setSourceBranch("");
+      resetRepo("");
+      clearBranches();
       setSecondaryRepos([]); // #465: secondaries belong to the cleared draft
     };
 
@@ -234,15 +245,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         setMode("trigger");
         setEditingTriggerId(trigger.id);
         setSelectedPipelineId(trigger.pipeline_id);
-        setTargetRepo(trigger.target_repo ?? "");
         // #470: reset the validity verdict with the field. The modal stays
         // mounted (#386), so a `repoValid === true` left over from a previous
         // open would survive next to an EMPTY repo field — reachable by opening
         // New Run with a valid repo, closing it, then editing a legacy Trigger
         // whose target repo is null. `canLaunch` would then be true with no
         // repo, which is exactly the case the daemon now 400s.
-        setRepoValid(null);
-        setRepoError(null);
+        resetRepo(trigger.target_repo ?? "");
         setSourceBranch(trigger.source_branch ?? "");
         // #465: round-trip the stored secondaries (raw JSON `[{repo, base_branch?}]`
         // with `[0]` = primary). Drop `[0]` — it prefills `targetRepo` above.
@@ -305,69 +314,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       prefillDone.current = false;
     }
   }, [open, recentRepos, targetRepo, handleRepoChange, openIntent]);
-
-  useEffect(() => {
-    if (!open || !targetRepo.trim()) return;
-
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setRepoValidating(true);
-      setRepoError(null);
-      try {
-        const result = await validateRepo(targetRepo.trim());
-        setRepoValid(result.valid);
-        if (!result.valid) {
-          setRepoError(result.error ?? "Not a valid git repository");
-          setBranches([]);
-          setSourceBranch("");
-        } else {
-          setBranchesLoading(true);
-          try {
-            const branchList = await listBranches(targetRepo.trim());
-            setBranches(branchList);
-            // #454: re-select whenever the held branch is not one THIS repo has.
-            // The old `!sourceBranch` guard only ever seeded an empty field, so
-            // switching repos kept a branch the new one lacks — and a `<select>`
-            // whose value matches no option renders its FIRST option, so the field
-            // DISPLAYED `master` while the state still held `main`. The launch then
-            // failed with `branch 'main' does not exist`, blaming the daemon for a
-            // value the UI never showed. Testing membership instead subsumes the
-            // empty case and still preserves a deliberate choice the new repo honours.
-            if (branchList.length > 0 && !branchList.includes(sourceBranch)) {
-              const main = branchList.find((b) => b === "main")
-                ?? branchList.find((b) => b === "master")
-                ?? branchList[0];
-              setSourceBranch(main);
-            }
-          } catch {
-            setBranches([]);
-          } finally {
-            setBranchesLoading(false);
-          }
-        }
-      } catch {
-        setRepoValid(false);
-        setRepoError("Failed to validate repository");
-        setBranches([]);
-        setSourceBranch("");
-      } finally {
-        setRepoValidating(false);
-      }
-    }, 400);
-
-    return () => clearTimeout(debounceRef.current);
-  }, [targetRepo, open]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const loadPipelines = useCallback(() => {
-    if (!open) return;
-    fetchPipelines()
-      .then((list) => setPipelines(list))
-      .catch(() => {});
-  }, [open]);
-
-  useEffect(() => {
-    loadPipelines();
-  }, [loadPipelines]);
 
   // #410: fetch instance settings on open — the `default_sandbox` label AND the
   // `sandbox_docker` availability probe arrive in one round-trip (the modal did not
@@ -445,24 +391,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setAutoName(isEdit ? openIntent.trigger.auto_name : settings!.default_auto_name.effective);
   }, [open, openIntent, settings]);
 
-  const repoPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "repo"),
-    [pipelines],
-  );
-  const libraryPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "library"),
-    [pipelines],
-  );
-  const userPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "user"),
-    [pipelines],
-  );
-
-  const selectedPipeline = useMemo(
-    () => pipelines.find((p) => p.id === selectedPipelineId),
-    [pipelines, selectedPipelineId],
-  );
-
   // Auto-select first repo pipeline when available
   const shouldAutoSelect = open && repoValid && pipelines.length > 0 && !selectedPipelineId;
   if (shouldAutoSelect) {
@@ -477,14 +405,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     );
   }, [selectedPipeline]);
 
-  const overrideCount = useMemo(() => {
-    if (!selectedPipeline) return 0;
-    return Object.entries(overrides).filter(([key, val]) => {
-      const decl = selectedPipeline.variables[key];
-      if (!decl) return false;
-      return val !== String(decl.default);
-    }).length;
-  }, [overrides, selectedPipeline]);
+  const overrideCount = useMemo(
+    () => newRunForm.overrideCount(overrides, selectedPipeline),
+    [overrides, selectedPipeline],
+  );
 
   const handlePipelineChange = useCallback(
     (value: string) => {
@@ -492,7 +416,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setOverrides({});
       setVarsOpen(false);
     },
-    [],
+    [setSelectedPipelineId],
   );
 
   const flushPendingSaves = useEditStore((s) => s.flushPendingSaves);
@@ -550,70 +474,29 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     }
   }, [loadPipelines]);
 
-  // A prompt-optional pipeline (#158) may launch with an empty prompt; the
-  // entry node sources its own work. Prompt-required (the default) still demands
-  // non-empty input.
-  const promptOptional = selectedPipeline?.prompt_required === false;
-  const hasRequiredPrompt = promptOptional || Boolean(input.trim());
+  // Whether this pipeline may launch with an empty prompt (#158) — see `newRunForm`.
+  const promptOptional = newRunForm.promptOptional(selectedPipeline);
+  const hasRequiredPrompt = newRunForm.hasRequiredPrompt(promptOptional, input);
 
-  // #410: advisory Docker greying. Only gate the sandboxed options once we KNOW Docker is
-  // unavailable (settings loaded && probe false); while settings load, stay
-  // optimistic. `sandboxReason` explains the greying (title + help text).
-  const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
-  const sandboxReason = settings?.sandbox_docker.reason ?? undefined;
-
-  // #432: the options come from the daemon's profile list. Sorted server-side.
-  const sandboxProfiles = settings?.sandbox_profiles ?? [];
-
-  /**
-   * THE PHANTOM-PROFILE RULE. A seeded value is **never** silently rewritten: a
-   * non-empty, non-`off` value that is absent from the list gets a tombstone option and
-   * blocks Save/Launch.
-   *
-   * Without the tombstone React sets `selectedIndex = -1`, the field renders blank, and
-   * saving would PATCH `sandbox: null` — a **silent fallback to the instance default**,
-   * exactly what ADR-0031 §7 forbids. Deliberately separate from the Docker clamp above:
-   * clamping to `off` is legitimate for an unavailable Docker, and would be a silent
-   * fallback for a missing profile.
-   */
-  const missingProfile = Boolean(
-    settings &&
-      sandbox &&
-      sandbox !== "off" &&
-      !sandboxProfiles.some((p) => p.name === sandbox),
+  // The sandbox selector's whole derived state (#410/#432/#452) — the Docker greying, the
+  // phantom-profile tombstone, the inherited default and the doomed-launch refusal.
+  // Memoized so its destructured fields (`missingProfile`, `sandboxDoomed`, …)
+  // are stable deps for the trigger memos below — a fresh object every render
+  // would otherwise trip `react-hooks/preserve-manual-memoization`. Pure over
+  // (settings, sandbox, mode), so the value is unchanged between recomputes.
+  const {
+    dockerUnavailable,
+    sandboxReason,
+    sandboxProfiles,
+    missingProfile,
+    instanceDefaultSandbox,
+    effectiveSandbox,
+    sandboxDoomed,
+    inheritedDefaultReason,
+  } = useMemo(
+    () => newRunForm.sandboxState({ settings, sandbox, mode }),
+    [settings, sandbox, mode],
   );
-
-  // #452: the instance default, used to LABEL the inherit option — never to seed the value.
-  // `null` while settings are unknown, which is the honest rendering: we do not know yet.
-  const instanceDefaultSandbox = settings ? (settings.default_sandbox.effective ?? "off") : null;
-
-  // #452: what will actually apply to the Run being created. `""` is not a value — it means
-  // the key is omitted and the instance default decides — so the checks below have to
-  // resolve it to say anything true about the Run.
-  const effectiveSandbox = sandbox === "" ? instanceDefaultSandbox : sandbox;
-
-  /**
-   * #452, the Docker clamp, relocated. A Run whose effective sandbox is a profile while the
-   * daemon reports Docker unavailable is born condemned, so #410 clamped the SELECTOR to
-   * `off`. That protection was right and is kept; the way it was applied was not — it wrote
-   * a business verdict into the field, indistinguishable from a user picking `off`, and
-   * posted it explicitly.
-   *
-   * So refuse the launch and say why, instead of quietly substituting an answer. Same rule
-   * as the phantom-profile tombstone above, for the same reason: the app never demotes a
-   * sandbox behind the user's back (ADR-0031 §7).
-   *
-   * Run mode only. A Trigger resolves its sandbox when it FIRES, and today's Docker probe
-   * says nothing about that moment.
-   */
-  const sandboxDoomed = Boolean(
-    mode === "run" && dockerUnavailable && effectiveSandbox && effectiveSandbox !== "off",
-  );
-
-  // #452: `default_sandbox` carries a `reason` when the winning tier names a profile that
-  // does not resolve. Inheriting is now the default path in run mode, so that dangling name
-  // is worth showing here — the create chokepoint 400s on it rather than falling back.
-  const inheritedDefaultReason = sandbox === "" ? (settings?.default_sandbox.reason ?? null) : null;
 
   // #465: every non-empty secondary row must have resolved to a valid repo before a
   // launch (mirror of the primary `repoValid` gate). An empty row is incomplete.
@@ -639,37 +522,26 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setSubmitting(true);
     setError(null);
 
-    const variables: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(overrides)) {
-      const decl = selectedPipeline.variables[key];
-      if (!decl) continue;
-      if (val === String(decl.default)) continue;
-      variables[key] = parseVariableValue(val, decl.var_type);
-    }
+    const variables = newRunForm.buildVariables(overrides, selectedPipeline);
 
     try {
       await flushPendingSaves();
-      const resp = await createRun({
-        pipeline: selectedPipeline.name,
-        input: input.trim(),
-        variables,
-        pipeline_id: selectedPipeline.id,
-        target_repo: targetRepo.trim() || undefined,
-        // #465: send the full list ([0] = primary, [1..] = secondaries) only when
-        // there is ≥1 secondary — a mono-repo Run keeps the request byte-identical.
-        target_repos: buildTargetRepos(),
-        source_branch: sourceBranch || undefined,
-        name: autoName ? undefined : runName.trim() || undefined,
-        // #338: always send the explicit choice so it wins the create-chokepoint
-        // resolution (the daemon never has to guess from `name` presence for a UI create).
-        auto_name: autoName,
-        // #410/#452: the explicit run-level choice — `off` or a staging profile name — sent
-        // so it wins the create-chokepoint precedence. `""` means the user did not choose,
-        // and OMITS the key: only an absent `sandbox` lets the daemon apply
-        // `default_sandbox`, because it reads a present `off` as final.
-        sandbox: sandbox || undefined,
-        images: images.length > 0 ? images : undefined,
-      });
+      const resp = await createRun(
+        newRunForm.buildRunPayload({
+          selectedPipeline,
+          input,
+          variables,
+          targetRepo,
+          sourceBranch,
+          autoName,
+          runName,
+          sandbox,
+          images,
+          // #465: full list ([0] = primary, [1..] = secondaries), or undefined
+          // for a mono-repo Run (keeps the request byte-identical).
+          targetRepos: buildTargetRepos(),
+        }),
+      );
       onCreated(resp.run_id);
       refreshRecentRepos();
       setRunName("");
@@ -687,45 +559,59 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     }
   }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, settings, refreshRecentRepos]);
 
-  const canLaunch =
-    repoValid &&
-    selectedPipeline &&
-    hasRequiredPrompt &&
-    !missingProfile &&
-    !sandboxDoomed &&
-    secondariesReady;
+  const canLaunch = newRunForm.canLaunch({
+    repoValid,
+    selectedPipeline,
+    hasRequiredPrompt,
+    missingProfile,
+    sandboxDoomed,
+    // #465: every non-empty secondary must have resolved before Launch.
+    secondariesReady,
+  });
 
-  // The cron expression the Trigger will be created with: a compiled preset or
-  // the raw escape-hatch expression.
-  const resolvedCron =
-    cronPresetId === "custom"
-      ? rawCron.trim()
-      : presetToCron(cronPresetId, { hour: dailyHour, minute: dailyMinute });
+  // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
+  // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can
+  // keep it as a stable dep of `handleCreateTrigger` — an object-literal call
+  // result is otherwise a fresh value each render, which trips
+  // `react-hooks/preserve-manual-memoization`. Value is byte-identical to the
+  // former inline expression.
+  const resolvedCron = useMemo(
+    () => newRunForm.resolvedCron({ cronPresetId, rawCron, dailyHour, dailyMinute }),
+    [cronPresetId, rawCron, dailyHour, dailyMinute],
+  );
 
-  // The fire_decision reject rule, mirrored client-side: a prompt-required
-  // pipeline whose resolved input would be empty (no guard, no input template)
-  // is a misconfiguration. We pre-block Create and explain why, in addition to
-  // the authoritative server-side reject (CONTEXT.md → Trigger; #161).
-  const triggerInputRejectReason =
-    mode === "trigger" &&
-    selectedPipeline &&
-    !promptOptional &&
-    guardCommand.trim().length === 0 &&
-    input.trim().length === 0
-      ? "This pipeline requires a prompt. Add a guard command, an input template, or mark the pipeline prompt-not-required."
-      : null;
+  // The fire_decision reject rule, mirrored client-side (#161) — see `newRunForm`.
+  const triggerInputRejectReason = useMemo(
+    () =>
+      newRunForm.triggerInputRejectReason({
+        mode,
+        selectedPipeline,
+        promptOptional,
+        guardCommand,
+        input,
+      }),
+    [mode, selectedPipeline, promptOptional, guardCommand, input],
+  );
 
-  // Trigger creation needs a name, a pipeline, a valid repo and a cron, and a
-  // resolvable input when the pipeline requires a prompt.
-  const canCreateTrigger = Boolean(
-    repoValid &&
-      selectedPipeline &&
-      triggerName.trim().length > 0 &&
-      resolvedCron.length > 0 &&
-      !triggerInputRejectReason &&
-      // #432: a Trigger pointing at a vanished profile must not be re-saved as-is; the
-      // user picks a real one (or `off`) first.
-      !missingProfile,
+  // Name + pipeline + valid repo + cron + a resolvable input — see `newRunForm`.
+  const canCreateTrigger = useMemo(
+    () =>
+      newRunForm.canCreateTrigger({
+        repoValid,
+        selectedPipeline,
+        triggerName,
+        resolvedCron,
+        triggerInputRejectReason,
+        missingProfile,
+      }),
+    [
+      repoValid,
+      selectedPipeline,
+      triggerName,
+      resolvedCron,
+      triggerInputRejectReason,
+      missingProfile,
+    ],
   );
 
   const handleCreateTrigger = useCallback(async () => {
@@ -733,63 +619,32 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setSubmitting(true);
     setError(null);
 
-    const variables: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(overrides)) {
-      const decl = selectedPipeline.variables[key];
-      if (!decl) continue;
-      if (val === String(decl.default)) continue;
-      variables[key] = parseVariableValue(val, decl.var_type);
-    }
+    const variables = newRunForm.buildVariables(overrides, selectedPipeline);
+    const fields = {
+      selectedPipeline,
+      triggerName,
+      resolvedCron,
+      input,
+      guardCommand,
+      targetRepo,
+      sourceBranch,
+      allowOverlap,
+      maxConcurrent,
+      sandbox,
+      autoName,
+      variables,
+      // #465: full list ([0] = primary, [1..] = secondaries), or undefined for
+      // mono-repo. The create builder omits it; the update builder maps it to
+      // `null` (clear back to mono-repo).
+      targetRepos: buildTargetRepos(),
+    };
 
     try {
       await flushPendingSaves();
       if (editingTriggerId) {
-        // Edit (#162): PATCH the existing Trigger's editable fields. `Some(None)`
-        // semantics: an emptied guard clears it. `pipeline_id` repoints the
-        // trigger to a different pipeline (#230) — previously the editable
-        // dropdown was a phantom control whose change was silently dropped.
-        await updateTrigger(editingTriggerId, {
-          name: triggerName.trim(),
-          pipeline_id: selectedPipeline.id,
-          cron: resolvedCron,
-          input_template: input.trim(),
-          guard_command: guardCommand.trim() || null,
-          target_repo: targetRepo.trim() || null,
-          // #465: an array sets the secondaries; `null` clears back to mono-repo.
-          target_repos: buildTargetRepos() ?? null,
-          source_branch: sourceBranch || null,
-          // Round-trip the real overlap policy (#239). Previously hard-coded to
-          // `undefined`, which silently reset every edited trigger toward skip.
-          // `null` clears a stale cap when overlap is off or the input is blank.
-          overlap_policy: allowOverlap ? "allow" : "skip",
-          max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : null,
-          // #410: `""` (Use instance default) clears back to inheriting (`null`);
-          // `off` or a staging profile name sets it.
-          sandbox: sandbox || null,
-          // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
-          auto_name: autoName,
-          variables,
-        });
+        await updateTrigger(editingTriggerId, newRunForm.buildTriggerUpdatePayload(fields));
       } else {
-        await createTrigger({
-          name: triggerName.trim(),
-          pipeline_id: selectedPipeline.id,
-          cron: resolvedCron,
-          input_template: input.trim() || undefined,
-          guard_command: guardCommand.trim() || undefined,
-          target_repo: targetRepo.trim() || undefined,
-          // #465: send the secondaries only when there is ≥1 (else omit → mono-repo).
-          target_repos: buildTargetRepos(),
-          source_branch: sourceBranch || undefined,
-          overlap_policy: allowOverlap ? "allow" : "skip",
-          max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
-          // #410: `""` (Use instance default) → `null` (inherit); `off` or a profile sets it.
-          sandbox: sandbox || null,
-          // #338: freeze the auto-naming choice on the new Trigger (seeded from the
-          // instance default when the modal opened).
-          auto_name: autoName,
-          variables,
-        });
+        await createTrigger(newRunForm.buildTriggerCreatePayload(fields));
       }
       onTriggerSaved?.();
       setTriggerName("");
@@ -847,10 +702,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setGuardTesting(false);
     }
   }, [guardCommand, targetRepo]);
-
-  let repoBorderClass = "border-line-strong focus:border-acc";
-  if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
-  else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
 
   if (!open) return null;
 
@@ -1738,26 +1589,4 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       </div>
     </div>
   );
-}
-
-function parseVariableValue(raw: string, varType: string): unknown {
-  switch (varType) {
-    case "int":
-      return parseInt(raw, 10) || 0;
-    case "float":
-      return parseFloat(raw) || 0;
-    case "bool":
-      return raw === "true";
-    case "list":
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return raw
-          .replace(/^\[|\]$/g, "")
-          .split(",")
-          .map((s) => s.trim());
-      }
-    default:
-      return raw;
-  }
 }

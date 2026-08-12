@@ -670,9 +670,15 @@ export interface RunState {
    * Estimated USD cost (#272) — local Claude Code token usage × public list
    * prices, an estimate, not an invoice. Null/absent when no transcripts are
    * found (UI "—"). `partial` = an unpriced model was seen → the number is a
-   * lower bound.
+   * lower bound; `unpriced_models` names which family keys were excluded (#425),
+   * so the UI can say *which* model rather than an anonymous "an unpriced model".
+   * Invariant: `partial ⟺ unpriced_models.length > 0`.
    */
-  cost?: { usd: number; partial: boolean } | null;
+  cost?: {
+    usd: number;
+    partial: boolean;
+    unpriced_models: string[];
+  } | null;
 }
 
 export interface DaemonEvent {
@@ -948,6 +954,9 @@ export interface StatsCostBucket {
   null: number;
   /** Total runs folded here (priced + partial + null). */
   runs: number;
+  /** Union of the family keys no tier priced across this bucket's partial runs,
+   *  sorted + de-duplicated (#425 AC#4). Empty ⟺ `partial === 0`. */
+  unpriced_models: string[];
 }
 
 export interface StatsCostPeriodBucket extends StatsCostBucket {

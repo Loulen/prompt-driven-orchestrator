@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Star, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { groupByRepo } from "../lib/groupByRepo";
+import { cascadableTwin, isStarred, libraryOnly } from "../lib/libraryTwins";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
+import LibraryRow from "./LibraryRow";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, runMatchesFilter } from "./runFilter";
 import RunShellModal from "./RunShellModal";
@@ -24,12 +26,6 @@ const STATUS_STYLES: Record<RunStatus, { dot: string }> = {
   halted: { dot: "bg-st-blocked" },
   paused: { dot: "bg-st-paused" },
   archived: { dot: "bg-st-archived" },
-};
-
-const SCOPE_BADGE: Record<PipelineScope, { label: string; cls: string }> = {
-  repo: { label: "repo", cls: "border-acc text-acc" },
-  user: { label: "user", cls: "border-st-await text-st-await" },
-  library: { label: "library", cls: "border-st-await text-st-await" },
 };
 
 interface Props {
@@ -175,19 +171,18 @@ export default function UnifiedLeftPanel({
 
   async function handleConfirmDelete(cascade: boolean) {
     if (!deleteTarget) return;
-    // Match on `name`, never id: the Library copy's id is an independently
-    // derived slug that can diverge from the repo pipeline's file-stem id, and
-    // the whole star/twin model is name-keyed (#227).
-    const twins = libraryPipelines.filter((lp) => lp.name === deleteTarget.name);
-    const cascadable = deleteTarget.scope !== "library" && twins.length === 1;
+    // The twin rule (name-keyed, unique-only) lives in `lib/libraryTwins` — the
+    // same call the checkbox's visibility uses, so what the user was offered and
+    // what runs here cannot drift (#227).
+    const twin = cascadableTwin(deleteTarget, libraryPipelines);
     try {
       // Forward scope so a `library` entry deletes from the library store, not
       // the same-named repo pipeline file (#216).
       await removePipeline(deleteTarget.id, deleteTarget.scope);
-      if (cascade && cascadable) {
+      if (cascade && twin) {
         // #227: also remove the durable Library copy the star created.
         try {
-          await deleteLibraryPipeline(twins[0].id);
+          await deleteLibraryPipeline(twin.id);
         } catch {
           /* non-fatal: the working pipeline is already gone */
         }
@@ -649,157 +644,61 @@ export default function UnifiedLeftPanel({
               No pipelines found
             </div>
           )}
-          {pipelines.map((p) => {
-            const badge = SCOPE_BADGE[p.scope];
-            const isSelected = p.id === activeTabId;
-            // A pipeline counts as "starred" when a library entry exists with
-            // the same name. This is the visible link the user expects when
-            // they click the canvas star: their pipeline gets a star badge
-            // here, confirming the action had effect.
-            const starred = libraryPipelines.some((lp) => lp.name === p.name);
-            return (
-              <button
-                key={`${p.scope}-${p.id}`}
-                onClick={() => openPipeline(p.id, p.scope)}
-                className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-                  isSelected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
-                }`}
-                style={{ fontSize: "11.5px" }}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    {starred && (
-                      <Star
-                        size={10}
-                        className="shrink-0 fill-acc text-acc"
-                        data-testid="left-panel-star"
-                      />
-                    )}
-                    <span className="truncate font-medium">{p.name}</span>
-                  </div>
-                  <div
-                    className="mt-0.5 flex items-center gap-1.5 text-fg-4"
-                    style={{ fontSize: "10px" }}
-                  >
-                    <span>{p.node_count} nodes</span>
-                  </div>
-                </div>
-                <span
-                  className={`shrink-0 rounded border px-1 py-px group-hover:hidden ${badge.cls}`}
-                  style={{ fontSize: "9px", fontWeight: 500 }}
-                >
-                  {badge.label}
-                </span>
-                {/* #273: scope:"library" rows now appear here in block 1 (the
-                    /pipelines scope-merge from #216 means they no longer fall
-                    through to the library-only block below). Surface the same
-                    Copy affordance #224 shipped, gated on identity (scope), not
-                    the name-absence filter that block 2 uses. `p.id` is the HOME
-                    library file-stem — duplicateLibraryPipeline resolves it. */}
-                {p.scope === "library" && (
-                  <span
-                    className="hidden shrink-0 group-hover:inline-flex"
-                    data-testid="library-duplicate-button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDuplicate(p.id);
-                    }}
-                    role="button"
-                    title="Duplicate pipeline"
-                  >
-                    <Copy
-                      size={14}
-                      className="text-fg-4 transition-colors hover:text-acc"
-                    />
-                  </span>
-                )}
-                <span
-                  className="hidden shrink-0 group-hover:inline-flex"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteTarget(p);
-                  }}
-                  role="button"
-                  title="Delete pipeline"
-                >
-                  <Trash2
-                    size={14}
-                    className="text-fg-4 transition-colors hover:text-st-failed"
-                  />
-                </span>
-              </button>
-            );
-          })}
+          {pipelines.map((p) => (
+            <LibraryRow
+              key={`${p.scope}-${p.id}`}
+              name={p.name}
+              scope={p.scope}
+              nodeCount={p.node_count}
+              // A pipeline counts as "starred" when a library entry exists with
+              // the same name. This is the visible link the user expects when
+              // they click the canvas star: their pipeline gets a star badge
+              // here, confirming the action had effect.
+              starred={isStarred(p, libraryPipelines)}
+              selected={p.id === activeTabId}
+              // #273: scope:"library" rows now appear here in block 1 (the
+              // /pipelines scope-merge from #216 means they no longer fall
+              // through to the library-only block below). Surface the same Copy
+              // affordance #224 shipped, gated on identity (scope), not the
+              // name-absence filter that block 2 uses. `p.id` is the HOME
+              // library file-stem — duplicateLibraryPipeline resolves it.
+              showDuplicate={p.scope === "library"}
+              onOpen={() => openPipeline(p.id, p.scope)}
+              onDuplicate={() => handleDuplicate(p.id)}
+              // Confirm-gated, because this row is a working pipeline file and
+              // the delete may cascade to its Library twin (#227).
+              onDelete={() => setDeleteTarget(p)}
+              deleteTitle="Delete pipeline"
+            />
+          ))}
           {/* Library-only entries (no matching name in /pipelines). These
               previously only showed up in the New Run dropdown — surfacing
               them here means starring a brand-new pipeline yields a visible
               entry in the sidebar, matching the user's mental model that
-              starred == in the library. */}
-          {libraryPipelines
-            .filter((lp) => !pipelines.some((p) => p.name === lp.name))
-            .map((lp) => (
-              <div
-                key={`lib-only-${lp.scope}-${lp.id}`}
-                className="group flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left text-fg-2 transition-colors hover:bg-bg-3/50"
-                style={{ fontSize: "11.5px" }}
-                data-testid="library-only-entry"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <Star
-                      size={10}
-                      className="shrink-0 fill-acc text-acc"
-                      data-testid="left-panel-star"
-                    />
-                    <span className="truncate font-medium">{lp.name}</span>
-                  </div>
-                  <div
-                    className="mt-0.5 flex items-center gap-1.5 text-fg-4"
-                    style={{ fontSize: "10px" }}
-                  >
-                    <span>{lp.node_count} nodes</span>
-                  </div>
-                </div>
-                <span
-                  className={`shrink-0 rounded border px-1 py-px group-hover:hidden ${SCOPE_BADGE[lp.scope].cls}`}
-                  style={{ fontSize: "9px", fontWeight: 500 }}
-                >
-                  {SCOPE_BADGE[lp.scope].label}
-                </span>
-                <span
-                  className="hidden shrink-0 group-hover:inline-flex"
-                  data-testid="library-duplicate-button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDuplicate(lp.id);
-                  }}
-                  role="button"
-                  title="Duplicate pipeline"
-                >
-                  <Copy
-                    size={14}
-                    className="text-fg-4 transition-colors hover:text-acc"
-                  />
-                </span>
-                <span
-                  className="hidden shrink-0 group-hover:inline-flex"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    try {
-                      await deleteLibraryPipeline(lp.id);
-                      onLibraryPipelinesChanged();
-                    } catch { /* ignore */ }
-                  }}
-                  role="button"
-                  title="Remove from library"
-                >
-                  <Trash2
-                    size={14}
-                    className="text-fg-4 transition-colors hover:text-st-failed"
-                  />
-                </span>
-              </div>
-            ))}
+              starred == in the library. No `onOpen`: there is no working
+              pipeline behind them to open. */}
+          {libraryOnly(libraryPipelines, pipelines).map((lp) => (
+            <LibraryRow
+              key={`lib-only-${lp.scope}-${lp.id}`}
+              name={lp.name}
+              scope={lp.scope}
+              nodeCount={lp.node_count}
+              // Unconditional: these rows come straight out of the library.
+              starred
+              showDuplicate
+              onDuplicate={() => handleDuplicate(lp.id)}
+              // Direct, no confirm modal: nothing cascades from a row that only
+              // exists in the library (#227 d).
+              onDelete={async () => {
+                try {
+                  await deleteLibraryPipeline(lp.id);
+                  onLibraryPipelinesChanged();
+                } catch { /* ignore */ }
+              }}
+              deleteTitle="Remove from library"
+              testId="library-only-entry"
+            />
+          ))}
         </div>
         </div>
       )}
@@ -836,28 +735,23 @@ export default function UnifiedLeftPanel({
         />
       )}
 
-      {(() => {
-        // Show the cascade checkbox only when the target has exactly one
-        // same-name Library copy and isn't itself the library row (#227).
-        const twins = deleteTarget
-          ? libraryPipelines.filter((lp) => lp.name === deleteTarget.name)
-          : [];
-        const cascadable =
-          deleteTarget != null &&
-          deleteTarget.scope !== "library" &&
-          twins.length === 1;
-        return (
-          <ConfirmDeleteModal
-            // Remount per target so the checkbox resets to OFF each open (#227).
-            key={deleteTarget?.id ?? "none"}
-            open={deleteTarget !== null}
-            onClose={() => setDeleteTarget(null)}
-            onConfirm={handleConfirmDelete}
-            name={deleteTarget?.name ?? ""}
-            cascadeLabel={cascadable ? "Also remove the Library copy" : undefined}
-          />
-        );
-      })()}
+      {/* Show the cascade checkbox only when the target has exactly one same-name
+          Library copy and isn't itself the library row (#227) — the SAME
+          `cascadableTwin` call `handleConfirmDelete` acts on, so the offer and
+          the deed can never disagree. */}
+      <ConfirmDeleteModal
+        // Remount per target so the checkbox resets to OFF each open (#227).
+        key={deleteTarget?.id ?? "none"}
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+        name={deleteTarget?.name ?? ""}
+        cascadeLabel={
+          cascadableTwin(deleteTarget, libraryPipelines)
+            ? "Also remove the Library copy"
+            : undefined
+        }
+      />
 
       {showNewModal && (
         <NewPipelineModal onClose={() => setShowNewModal(false)} />

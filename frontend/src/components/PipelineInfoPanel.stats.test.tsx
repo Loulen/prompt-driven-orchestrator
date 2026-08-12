@@ -31,7 +31,7 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     foreach_states: {},
     sessions_spawned: 1234,
     loc: { insertions: 10, deletions: 3, files_changed: 2 },
-    cost: { usd: 1.2345, partial: false },
+    cost: { usd: 1.2345, partial: false, unpriced_models: [] },
     ...overrides,
   };
 }
@@ -178,18 +178,23 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
   });
 
   it("uses 4 decimals for sub-dollar estimates", () => {
-    renderPanel(makeRun({ cost: { usd: 0.0525, partial: false } }));
+    renderPanel(makeRun({ cost: { usd: 0.0525, partial: false, unpriced_models: [] } }));
     expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$0.0525");
   });
 
-  it("marks a partial estimate as a lower bound with a dagger", () => {
-    renderPanel(makeRun({ cost: { usd: 2.5, partial: true } }));
+  it("marks a partial estimate as a lower bound with a dagger, naming the model (#425)", () => {
+    renderPanel(
+      makeRun({
+        cost: { usd: 2.5, partial: true, unpriced_models: ["claude-sonnet-5"] },
+      }),
+    );
     const cost = screen.getByTestId("stat-cost");
     expect(cost).toHaveTextContent("~$2.50");
     expect(cost).toHaveTextContent("†");
-    expect(cost.querySelector("[title]")?.getAttribute("title")).toMatch(
-      /lower bound/i,
-    );
+    const title = cost.querySelector("[title]")?.getAttribute("title") ?? "";
+    expect(title).toMatch(/lower bound/i);
+    // The offender is named, not left as an anonymous "an unpriced model".
+    expect(title).toContain("claude-sonnet-5");
   });
 
   it("renders '—' for Est. cost when cost is null (no transcripts), not '$0'", () => {

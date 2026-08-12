@@ -293,6 +293,13 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.run_id,
             &params.run_state.target_repos,
         ),
+        // #516: constant by construction on this path. `start_node` passes
+        // `previous_base_sha=None` and `has_node_started_event` already returned
+        // `AlreadyDone` for any started iteration, so the `Reusable` arm of
+        // `ensure_sub_worktree` is unreachable here — this site only ever creates or
+        // recycles, never reuses. No interrupted-op notice is routed.
+        reused_sub_worktree: false,
+        interrupted_git_ops: &[],
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);

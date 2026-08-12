@@ -578,8 +578,15 @@ pub struct CostStat {
     pub usd: f64,
     /// True when ≥1 session used a model absent from the price table: its tokens
     /// are excluded, so `usd` is a **lower bound**. Drives the UI "(lower bound)"
-    /// affordance.
+    /// affordance. Derived: `partial ⟺ !unpriced_models.is_empty()` (#425 AC#4).
     pub partial: bool,
+    /// The family keys (de-dated) of every model no tier could price — the
+    /// offenders `partial` used to hide (#425). Sorted and de-duplicated. Lets the
+    /// UI name *which* model was excluded instead of the anonymous "an unpriced
+    /// model": that anonymity is exactly how `claude-fable-5` — the priciest model
+    /// — stayed invisible on `/stats/cost` for weeks. Empty ⟺ `partial == false`.
+    #[serde(default)]
+    pub unpriced_models: Vec<String>,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).

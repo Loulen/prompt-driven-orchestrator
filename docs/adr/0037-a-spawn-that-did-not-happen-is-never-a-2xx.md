@@ -13,6 +13,11 @@
 > On garde une section `## Relations`, comme 0033 et 0035 — pas comme 0036, qui s'en passe. Ce n'est
 > pas le gabarit majoritaire du dépôt ; c'est celui qui convient à une décision dont la moitié de la
 > valeur est d'amender trois ADR voisines, et dans ce dépôt la relation s'écrit des deux côtés.
+>
+> **Amendé par #516** (1.13.0) : l'opération git interrompue laissée dans un sous-worktree réutilisé est
+> désormais **inventoriée en entier** et **routée** — vers le corps de réponse *et* le préambule du nœud
+> re-spawné (consigne différenciée), plus seulement signalée au manager. Le champ filaire `stale_git_lock`
+> (`string|null`) devient `interrupted_git_ops` (`array`, `[]` si rien). Cf. §7 et « Limites acceptées ».
 
 ## Contexte
 
@@ -139,8 +144,9 @@ classe en **quatre** états — trois ne suffisent pas :
 | `Occupied` | branche checkoutée dans un autre worktree vivant, ou répertoire non-worktree non vide | on refuse et on **nomme** ce qui le tient |
 
 Le quatrième état est la décision. Un découpage à trois (`Absent` / `Reusable` / « bloqué, donc
-reap ») rend `restart_node` destructeur : un verrou git périmé sur un arbre **sale** n'est pas
-« déjà inutilisable », c'est précisément le travail que #489 existe pour sauver. Il faut séparer
+reap ») rend `restart_node` destructeur : une opération git interrompue (un `index.lock`, un
+`MERGE_HEAD`) sur un arbre **sale** n'est pas « déjà inutilisable », c'est précisément le travail que
+#489 existe pour sauver. Il faut séparer
 *recyclable* (rien à perdre) d'*occupé* (tenu par un tiers).
 
 Le prédicat de réutilisation est « worktree **enregistré** sur la bonne branche », jamais « la branche
@@ -176,9 +182,10 @@ itération. Les deux autres réponses évidentes sont pires que le bug :
 commentaire d'invariant de `merge_action.rs` (« `restart_node` re-cuts the sub-worktree from wherever
 the branch is then ») est corrigé en conséquence — il décrivait le comportement d'avant.
 
-### §7 — Deux corrections que la réutilisation rend obligatoires
+### §7 — Trois corrections que la réutilisation rend obligatoires
 
-Elles ne sont pas des à-côtés : la tranche B promeut deux bugs latents en bugs systématiques.
+Elles ne sont pas des à-côtés : la réutilisation promeut des bugs latents en bugs systématiques. Les
+deux premières sont livrées en tranche B (#489) ; la troisième par #516 (1.13.0).
 
 - **`reap_orphan_sub_worktree` était cassé.** Le `if sub_worktree_dir.exists()` sautait le
   `worktree remove --force` quand le répertoire avait déjà disparu, et un `branch -D` sur une branche
@@ -191,6 +198,14 @@ Elles ne sont pas des à-côtés : la tranche B promeut deux bugs latents en bug
   **100 % du travail perdu**, sans conflit, sans événement, sans trace. Exactement la perte silencieuse
   qu'ADR-0004 interdit, et rien de #503 ne se déclenche. Le statut est désormais vérifié et l'échec
   `bail!`e — il ressort en `CompletionRefusal::MergeFailed`, un `500` déjà géré.
+- **Le scanner ne remontait que le premier marqueur (#516).** Il retournait au premier des quatre
+  (`index.lock`, `MERGE_HEAD`, `rebase-merge`, `rebase-apply`), donc un `index.lock` **masquait** un
+  `MERGE_HEAD` coexistant. L'agent retirait le verrou dont on l'avait averti, lançait `pdo complete`, et
+  le merge-back faisait un `git commit` avec le `MERGE_HEAD` resté en place → un commit de merge à deux
+  parents que personne n'a voulu, en silence (`MergeResult::Success`). Le filet de la puce précédente est
+  **en aval du commit** : il ne l'attrape pas. La correction transforme un masquage latent en inventaire
+  complet — `interrupted_git_ops` remonte **tous** les marqueurs, routés jusque dans le préambule du nœud
+  re-spawné. Zéro suppression : PDO informe, l'agent frais résout.
 
 ### §8 — Le slot qu'un spawn reprend ne se compte pas contre lui
 
@@ -238,12 +253,18 @@ slot qu'un restart throttlé attend, et `retry_waiting_nodes` n'a aucun timer.
 
 ## Limites acceptées
 
-- **Un verrou git périmé est signalé, pas supprimé.** `stale_git_lock` remonte dans le corps et dans
-  un `warn!`, et le worktree reste réutilisable. Refuser supprimerait le dernier levier de récupération
-  sur un état que le restart peut améliorer (un agent frais peut retirer le verrou lui-même) ; le
-  supprimer nous-mêmes est l'opération contre laquelle git met en garde, et PDO ne peut pas prouver que
-  l'écrivain est mort — #485 est le précédent qui coûte cher. Le filet est §7 : la panne, si elle
-  survient, est désormais bruyante.
+- **Une opération git interrompue est inventoriée et routée, jamais supprimée (amendé #516).** Ce n'est
+  plus « signalé » comme simple limite : c'est un **contrat de routage**. Tous les marqueurs présents
+  remontent — `interrupted_git_ops` (un tableau, `[]` si rien), jamais un seul — et la consigne
+  différenciée (retirer `index.lock` d'abord ; inspecter puis finir **ou** avorter un `MERGE_HEAD`/rebase)
+  arrive **dans le préambule du nœud re-spawné**, pas seulement dans le corps que voit le manager. Le
+  worktree reste réutilisable. **Pourquoi l'inventaire complet** : le scanner 1.12.0 remontait le premier
+  marqueur seul, donc un `index.lock` **masquait** un `MERGE_HEAD` coexistant — l'agent retirait le verrou
+  dont on l'avait averti, lançait `pdo complete`, et le merge-back prenait un commit à deux parents que
+  personne n'a voulu, en silence (le filet §7 est en aval du commit, il ne l'attrape pas). Refuser la
+  réutilisation supprimerait le dernier levier de récupération sur un état que le restart peut améliorer ;
+  supprimer les marqueurs nous-mêmes est l'opération contre laquelle git met en garde, et PDO ne peut pas
+  prouver que l'écrivain est mort — #485 est le précédent qui coûte cher.
 - **La base n'est pas rafraîchie**, cf. ci-dessus. `base_moved` est calculé et remonté ; rien de plus.
 - **La vérité filaire livrée ici n'est observable par aucun humain via l'UI.** `api.ts` appelle
   `restartNode` en `responseMode:"void"` + `catch {}` — le corps *et* l'erreur sont jetés — et le seul
@@ -264,9 +285,12 @@ slot qu'un restart throttlé attend, et `retry_waiting_nodes` n'a aucun timer.
 - **Les corps d'erreur `text/plain`** (Run absent, pipeline illisible/inparsable) restent tels quels.
   Les normaliser est le périmètre de **#491**, et le faire ici mélangerait une rupture et un nettoyage
   sous un seul bump.
-- **`retry_waiting_nodes` n'a toujours aucun timer**, et deux autres libérateurs de slot ne le
+- ~~**`retry_waiting_nodes` n'a toujours aucun timer**, et deux autres libérateurs de slot ne le
   réveillent pas (les bras halt/pause, et `boot_recovery` qui échoue les `Running` orphelins). #489
-  ferme `kill_node` seul ; le reste est fiché.
+  ferme `kill_node` seul ; le reste est fiché.~~ **Fermé par #509** : `re_evaluate_after_command`
+  re-drive la file d'admission quand une commande rend un Run terminal (`Halted`/`Completed`), et
+  `run_boot_recovery` la re-drive une fois en fin de passe. Toujours pas de timer — le fix reste
+  événementiel, même posture que `kill_node` (#489-C).
 - **Le comptage d'admission reste par nœud, pas par itération** (#453) : N laps parallèles d'un nœud
   consomment **un** slot. Pré-existant ; l'exclusion ne se construit pas sur une hypothèse contraire.
 

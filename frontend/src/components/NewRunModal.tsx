@@ -6,6 +6,10 @@ import { createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings,
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
+import SecondaryRepoRow, {
+  SecondaryRepoLabel,
+  type SecondaryRepo,
+} from "./SecondaryRepoRow";
 import GuardTestResult from "./GuardTestResult";
 import { CRON_PRESETS, presetToCron, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 
@@ -88,6 +92,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [branches, setBranches] = useState<string[]>([]);
   const [sourceBranch, setSourceBranch] = useState("");
   const [branchesLoading, setBranchesLoading] = useState(false);
+  // #465 (ADR-0042): read-only secondary repos. The primary stays `targetRepo` /
+  // `sourceBranch` above (row 0), untouched — these are the extra `[1..]` lines.
+  const [secondaryRepos, setSecondaryRepos] = useState<SecondaryRepo[]>([]);
 
   const [images, setImages] = useState<File[]>([]);
 
@@ -127,6 +134,26 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setBranches([]);
       setSourceBranch("");
     }
+  }, []);
+
+  // #465: stable secondary-row mutators (functional setState → empty deps, so the
+  // row's validation effect never re-fires from a new callback identity).
+  const updateSecondary = useCallback(
+    (index: number, patch: Partial<SecondaryRepo>) => {
+      setSecondaryRepos((prev) =>
+        prev.map((r, i) => (i === index ? { ...r, ...patch } : r)),
+      );
+    },
+    [],
+  );
+  const removeSecondary = useCallback((index: number) => {
+    setSecondaryRepos((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+  const addSecondary = useCallback(() => {
+    setSecondaryRepos((prev) => [
+      ...prev,
+      { path: "", baseBranch: "", valid: null },
+    ]);
   }, []);
 
   // #386: the modal is always-mounted (`if (!open) return null` below), so its
@@ -184,6 +211,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setRepoError(null);
       setBranches([]);
       setSourceBranch("");
+      setSecondaryRepos([]); // #465: secondaries belong to the cleared draft
     };
 
     switch (openIntent.kind) {
@@ -216,6 +244,25 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         setRepoValid(null);
         setRepoError(null);
         setSourceBranch(trigger.source_branch ?? "");
+        // #465: round-trip the stored secondaries (raw JSON `[{repo, base_branch?}]`
+        // with `[0]` = primary). Drop `[0]` — it prefills `targetRepo` above.
+        try {
+          const parsed = trigger.target_repos
+            ? (JSON.parse(trigger.target_repos) as Array<{
+                repo?: string;
+                base_branch?: string;
+              }>)
+            : [];
+          setSecondaryRepos(
+            (Array.isArray(parsed) ? parsed.slice(1) : []).map((r) => ({
+              path: r.repo ?? "",
+              baseBranch: r.base_branch ?? "",
+              valid: null,
+            })),
+          );
+        } catch {
+          setSecondaryRepos([]);
+        }
         setInput(trigger.input_template ?? "");
         setOverrides(
           Object.fromEntries(
@@ -568,6 +615,25 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // is worth showing here — the create chokepoint 400s on it rather than falling back.
   const inheritedDefaultReason = sandbox === "" ? (settings?.default_sandbox.reason ?? null) : null;
 
+  // #465: every non-empty secondary row must have resolved to a valid repo before a
+  // launch (mirror of the primary `repoValid` gate). An empty row is incomplete.
+  const secondariesReady = secondaryRepos.every(
+    (r) => r.path.trim() !== "" && r.valid === true,
+  );
+
+  // #465: the wire list — `[0]` = primary, `[1..]` = secondaries — built ONLY when
+  // there is ≥1 secondary, so a mono-repo create omits `target_repos` entirely.
+  const buildTargetRepos = useCallback(() => {
+    if (secondaryRepos.length === 0) return undefined;
+    return [
+      { repo: targetRepo.trim(), base_branch: sourceBranch || undefined },
+      ...secondaryRepos.map((r) => ({
+        repo: r.path.trim(),
+        base_branch: r.baseBranch || undefined,
+      })),
+    ];
+  }, [secondaryRepos, targetRepo, sourceBranch]);
+
   const handleLaunch = useCallback(async () => {
     if (!repoValid || !selectedPipeline || !hasRequiredPrompt) return;
     setSubmitting(true);
@@ -589,6 +655,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         variables,
         pipeline_id: selectedPipeline.id,
         target_repo: targetRepo.trim() || undefined,
+        // #465: send the full list ([0] = primary, [1..] = secondaries) only when
+        // there is ≥1 secondary — a mono-repo Run keeps the request byte-identical.
+        target_repos: buildTargetRepos(),
         source_branch: sourceBranch || undefined,
         name: autoName ? undefined : runName.trim() || undefined,
         // #338: always send the explicit choice so it wins the create-chokepoint
@@ -616,10 +685,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, autoName, runName, images, sandbox, settings, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, settings, refreshRecentRepos]);
 
   const canLaunch =
-    repoValid && selectedPipeline && hasRequiredPrompt && !missingProfile && !sandboxDoomed;
+    repoValid &&
+    selectedPipeline &&
+    hasRequiredPrompt &&
+    !missingProfile &&
+    !sandboxDoomed &&
+    secondariesReady;
 
   // The cron expression the Trigger will be created with: a compiled preset or
   // the raw escape-hatch expression.
@@ -681,6 +755,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           input_template: input.trim(),
           guard_command: guardCommand.trim() || null,
           target_repo: targetRepo.trim() || null,
+          // #465: an array sets the secondaries; `null` clears back to mono-repo.
+          target_repos: buildTargetRepos() ?? null,
           source_branch: sourceBranch || null,
           // Round-trip the real overlap policy (#239). Previously hard-coded to
           // `undefined`, which silently reset every edited trigger toward skip.
@@ -702,6 +778,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           input_template: input.trim() || undefined,
           guard_command: guardCommand.trim() || undefined,
           target_repo: targetRepo.trim() || undefined,
+          // #465: send the secondaries only when there is ≥1 (else omit → mono-repo).
+          target_repos: buildTargetRepos(),
           source_branch: sourceBranch || undefined,
           overlap_policy: allowOverlap ? "allow" : "skip",
           max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
@@ -747,6 +825,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     maxConcurrent,
     targetRepo,
     sourceBranch,
+    buildTargetRepos,
     sandbox,
     autoName,
     flushPendingSaves,
@@ -889,7 +968,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               Where
             </span>
 
-            {/* Target repository */}
+            {/* Target repository (primary — target_repos[0], #465) */}
             <div className="flex flex-col gap-1.5">
               <label
                 htmlFor="target-repo"
@@ -898,6 +977,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               >
                 <FolderGit2 size={12} className="text-fg-3" />
                 Target repository
+                {secondaryRepos.length > 0 && (
+                  <span
+                    className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
+                    style={{ fontSize: "9.5px" }}
+                    data-testid="primary-repo-badge"
+                  >
+                    PRIMARY
+                  </span>
+                )}
               </label>
               <RepoCombobox
                 value={targetRepo}
@@ -942,6 +1030,34 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {/* Secondary repositories (read-only, #465 / ADR-0042). Shown once a
+                primary is chosen; each row self-validates and carries its own
+                base-branch select. */}
+            {repoValid && (
+              <div className="flex flex-col gap-2">
+                {secondaryRepos.length > 0 && <SecondaryRepoLabel />}
+                {secondaryRepos.map((repo, i) => (
+                  <SecondaryRepoRow
+                    key={i}
+                    index={i}
+                    repo={repo}
+                    recentRepos={recentRepos}
+                    onChange={updateSecondary}
+                    onRemove={removeSecondary}
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={addSecondary}
+                  className="self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-fg-3 transition-colors hover:border-acc hover:text-acc"
+                  style={{ fontSize: "11.5px" }}
+                  data-testid="add-secondary-repo"
+                >
+                  + Add repository
+                </button>
               </div>
             )}
           </div>

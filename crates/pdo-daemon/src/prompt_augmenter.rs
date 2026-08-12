@@ -29,6 +29,39 @@ pub(crate) struct ForEachContext {
     pub total: i64,
 }
 
+/// A read-only secondary repo made visible to a node (#465, ADR-0042), already
+/// resolved to its **absolute snapshot path** so this pure module never touches
+/// the run-dir path math. The absolute path is identical on host and in the
+/// sandbox (invariant D3), so the same string is valid from either.
+pub(crate) struct SecondaryRepoContext {
+    pub alias: String,
+    pub abs_path: String,
+    pub sha: String,
+}
+
+/// Build the per-node secondary-repo view from the Run's frozen pins (#465).
+///
+/// The nodes' sub-worktrees do NOT inherit the snapshots (they are siblings under
+/// the run dir and `.pdo/` is gitignored, so `git worktree add` materialises none
+/// of those files) — a node can only reach a secondary by **absolute path**, which
+/// is why the daemon resolves it here and injects it. Shared by both spawn sites
+/// so the preamble and the script env can never disagree.
+pub(crate) fn secondary_repo_contexts(
+    repo_root: &Path,
+    run_id: &str,
+    pins: &[crate::event_log::RepoPin],
+) -> Vec<SecondaryRepoContext> {
+    pins.iter()
+        .map(|pin| SecondaryRepoContext {
+            alias: pin.alias.clone(),
+            abs_path: crate::worktree_ops::secondary_snapshot_path(repo_root, run_id, &pin.alias)
+                .to_string_lossy()
+                .to_string(),
+            sha: pin.sha.clone(),
+        })
+        .collect()
+}
+
 pub(crate) struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
@@ -64,6 +97,12 @@ pub(crate) struct AugmentContext<'a> {
     /// failed iterations are quarantined, and no raw `iter-*` glob is ever
     /// handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
+    /// Read-only secondary repos visible to this node (#465, ADR-0042), each with
+    /// its absolute snapshot path and pinned SHA. Empty for a mono-repo Run. The
+    /// nodes reach these ONLY by absolute path (their sub-worktrees do not inherit
+    /// the snapshot files), so `build_preamble` prints the paths and
+    /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS`.
+    pub secondary_repos: Vec<SecondaryRepoContext>,
 }
 
 pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
@@ -258,6 +297,20 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
             format!("PDO_OUTPUT_{}", env_name_suffix(&output.port_name)),
             output.path.to_string_lossy().into_owned(),
         ));
+    }
+
+    // #465 (ADR-0042): read-only secondary repos as `alias=abspath` lines,
+    // `\n`-separated (same convention as a `repeated` input). Only set when there is
+    // at least one, so a mono-repo script's env is byte-identical to pre-#465. A
+    // script reads them with `readarray -t repos <<< "$PDO_SECONDARY_REPOS"`.
+    if !ctx.secondary_repos.is_empty() {
+        let value = ctx
+            .secondary_repos
+            .iter()
+            .map(|s| format!("{}={}", s.alias, s.abs_path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        env.push(("PDO_SECONDARY_REPOS".to_string(), value));
     }
 
     // HashMap iteration order is non-deterministic; sort so the emitted script
@@ -486,6 +539,28 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                     ));
                 }
             }
+        }
+        preamble.push('\n');
+    }
+
+    // #465 (ADR-0042): read-only secondary repositories. Injected by ABSOLUTE path
+    // because a node's sub-worktree does not inherit the snapshot files (they are
+    // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
+    // host and in the sandbox (invariant D3). Read-only by convention: writing to a
+    // tracked file trips the `secondary_repo_dirtied` guard (409).
+    if !ctx.secondary_repos.is_empty() {
+        preamble.push_str("## Secondary repositories (read-only)\n\n");
+        preamble.push_str(
+            "These repositories are associated with this Run as **read-only context** \
+             (#465). Read their files by **absolute path** (your sub-worktree does not \
+             contain them). Each is pinned to a fixed commit — do **not** modify, commit \
+             in, or open MRs against them; writing to a tracked file will be refused.\n\n",
+        );
+        for sec in &ctx.secondary_repos {
+            preamble.push_str(&format!(
+                "- `{}` (pinned @ `{}`): `{}`\n",
+                sec.alias, sec.sha, sec.abs_path
+            ));
         }
         preamble.push('\n');
     }
@@ -868,6 +943,7 @@ mod tests {
             start_prompt_present: false,
             source_iters: HashMap::new(),
             repeated_iters: HashMap::new(),
+            secondary_repos: Vec::new(),
         }
     }
 

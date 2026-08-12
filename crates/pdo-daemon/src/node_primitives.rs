@@ -286,6 +286,13 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.run_state,
             params.node_id,
         ),
+        // #465: read-only secondary repos, resolved to absolute snapshot paths for
+        // injection (the sub-worktree does not inherit the snapshot files).
+        secondary_repos: crate::prompt_augmenter::secondary_repo_contexts(
+            params.repo_root,
+            params.run_id,
+            &params.run_state.target_repos,
+        ),
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);

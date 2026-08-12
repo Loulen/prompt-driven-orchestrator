@@ -33,6 +33,14 @@ pub(crate) struct Trigger {
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042),
+    /// stored as raw JSON TEXT (a `[{repo, base_branch?}]` array) so `trigger_store`
+    /// stays decoupled from lib's request types. `None`/blank → mono-repo fire.
+    /// Forwarded to the create request at fire time; the create chokepoint re-freezes
+    /// each secondary's SHA. Clearable back to `None` via the double-`Option`
+    /// `UpdateTrigger.target_repos` (mirror of `sandbox`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_repos: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
     #[serde(default)]
@@ -85,6 +93,8 @@ pub(crate) struct NewTrigger {
     pub pipeline_id: String,
     pub pipeline_name: String,
     pub target_repo: Option<String>,
+    /// Read-only secondary repos as raw JSON TEXT (#465); `None` → mono-repo.
+    pub target_repos: Option<String>,
     pub source_branch: Option<String>,
     pub input_template: String,
     pub variables: serde_json::Value,
@@ -152,6 +162,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             pipeline_id TEXT NOT NULL,
             pipeline_name TEXT NOT NULL DEFAULT '',
             target_repo TEXT,
+            target_repos TEXT,
             source_branch TEXT,
             input_template TEXT NOT NULL DEFAULT '',
             variables JSON NOT NULL DEFAULT '{}',
@@ -217,6 +228,21 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .is_some();
     if !has_sandbox {
         sqlx::query("ALTER TABLE triggers ADD COLUMN sandbox TEXT")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration (#465): per-Trigger read-only secondary repos, as raw JSON
+    // TEXT. Same PRAGMA-guarded `ALTER` precedent as `sandbox` above — a pre-#465
+    // `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`, a no-op there,
+    // so the column must be added out-of-band. NULLABLE: a NULL row fires mono-repo.
+    let has_target_repos =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'target_repos'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_target_repos {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN target_repos TEXT")
             .execute(db)
             .await?;
     }
@@ -299,16 +325,17 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
 
     sqlx::query(
         "INSERT INTO triggers
-            (id, name, pipeline_id, pipeline_name, target_repo, source_branch,
+            (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
              max_concurrent, sandbox, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
     .bind(&new.pipeline_id)
     .bind(&new.pipeline_name)
     .bind(&new.target_repo)
+    .bind(&new.target_repos)
     .bind(&new.source_branch)
     .bind(&new.input_template)
     .bind(&variables_str)
@@ -335,6 +362,8 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         pipeline_id: row.get("pipeline_id"),
         pipeline_name: row.get("pipeline_name"),
         target_repo: row.get("target_repo"),
+        // #465: tolerant of a legacy-NULL / pre-migration read — absence fires mono-repo.
+        target_repos: row.try_get("target_repos").unwrap_or(None),
         source_branch: row.get("source_branch"),
         input_template: row.get("input_template"),
         variables,
@@ -507,6 +536,10 @@ pub(crate) struct UpdateTrigger {
     pub pipeline_id: Option<String>,
     pub pipeline_name: Option<String>,
     pub target_repo: Option<Option<String>>,
+    /// Read-only secondary repos as raw JSON TEXT (#465), double-wrapped like
+    /// `target_repo`: `None` leaves it, `Some(None)` clears to NULL (mono-repo),
+    /// `Some(Some(json))` sets the list.
+    pub target_repos: Option<Option<String>>,
     pub source_branch: Option<Option<String>>,
     pub input_template: Option<String>,
     pub variables: Option<serde_json::Value>,
@@ -539,6 +572,7 @@ impl UpdateTrigger {
             && self.pipeline_id.is_none()
             && self.pipeline_name.is_none()
             && self.target_repo.is_none()
+            && self.target_repos.is_none()
             && self.source_branch.is_none()
             && self.input_template.is_none()
             && self.variables.is_none()
@@ -577,6 +611,9 @@ pub(crate) async fn update(
     }
     if edit.target_repo.is_some() {
         sets.push("target_repo = ?");
+    }
+    if edit.target_repos.is_some() {
+        sets.push("target_repos = ?");
     }
     if edit.source_branch.is_some() {
         sets.push("source_branch = ?");
@@ -624,6 +661,10 @@ pub(crate) async fn update(
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repo {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.target_repos {
+        // `Some(None)` → SQL NULL (mono-repo); `Some(Some(json))` → the JSON list.
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.source_branch {
@@ -688,6 +729,7 @@ mod tests {
             pipeline_id: "lib-pipe-1".to_string(),
             pipeline_name: "Auditor".to_string(),
             target_repo: Some("/repos/foo".to_string()),
+            target_repos: None,
             source_branch: Some("main".to_string()),
             input_template: "audit the codebase".to_string(),
             variables: serde_json::json!({"depth": "full"}),

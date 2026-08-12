@@ -35,7 +35,7 @@ use crate::{
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
     retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
     scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest,
+    CreateRunRequest, TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because `run_command` is —
@@ -1319,6 +1319,24 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_owned(),
             );
             let source_branch = run_state.source_branch.clone();
+            // #465 (ADR-0042): preserve the original Run's read-only secondaries so the
+            // retry runs in the same multi-repo context. Rebuild the full list with the
+            // primary at [0] (the create chokepoint re-freezes each secondary's SHA
+            // against its recorded base branch). Empty for a mono-repo original, keeping
+            // the retry byte-identical to pre-#465.
+            let target_repos: Vec<TargetRepoInput> = if run_state.target_repos.is_empty() {
+                Vec::new()
+            } else {
+                let mut v = vec![TargetRepoInput {
+                    repo: target_repo.clone().unwrap_or_default(),
+                    base_branch: source_branch.clone(),
+                }];
+                v.extend(run_state.target_repos.iter().map(|p| TargetRepoInput {
+                    repo: p.repo.clone(),
+                    base_branch: p.base_branch.clone(),
+                }));
+                v
+            };
 
             // Archive the current run (cleanup disk resources, keep events)
             let archive_resp = cleanup_run(&state, &run_id).await;
@@ -1340,6 +1358,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // stats bucket rather than falling back to the name.
                 pipeline_id: run_state.pipeline_id.clone(),
                 target_repo,
+                target_repos,
                 source_branch,
                 name: None,
                 triggered_by: None,

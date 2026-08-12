@@ -94,8 +94,10 @@ use tracing::{error, info, warn};
 #[cfg(test)]
 use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
-    commit_and_merge_sub_worktree_inner, create_worktree, sub_worktree_branch, sub_worktree_path,
-    validate_merge_resolution, worktree_dir_for_run, worktree_has_tracked_changes, MergeResult,
+    commit_and_merge_sub_worktree_inner, create_secondary_snapshot, create_worktree,
+    remove_secondary_snapshot, rev_parse_verified, secondary_snapshot_path, sub_worktree_branch,
+    sub_worktree_path, validate_merge_resolution, worktree_dir_for_run,
+    worktree_has_tracked_changes, MergeResult,
 };
 // #356: spawn primitive carved into `node_spawn`. Imported unqualified here so
 // the many construction sites (`SpawnContext { .. }`) need no per-site path
@@ -429,6 +431,14 @@ struct CreateRunRequest {
     pipeline_id: Option<String>,
     #[serde(default)]
     target_repo: Option<String>,
+    /// Secondary repos to associate with this Run in read-only (#465, ADR-0042).
+    /// `#[serde(default)]` → an omitted field means "mono-repo", which is every
+    /// legacy client. When present, `target_repos[0]` is the **primary** and must
+    /// agree with `target_repo`; `[1..]` are the read-only secondaries. Absent list
+    /// with a `target_repo` set is normalised to `[{target_repo}]` at the create
+    /// chokepoint, so downstream always sees `[0]` = primary.
+    #[serde(default)]
+    target_repos: Vec<TargetRepoInput>,
     #[serde(default)]
     source_branch: Option<String>,
     #[serde(default)]
@@ -454,6 +464,18 @@ struct CreateRunRequest {
     /// default — see [`prompt_augmenter::default_auto_name_with`].
     #[serde(default)]
     auto_name: Option<bool>,
+}
+
+/// One repo line of a multi-repo create request (#465, ADR-0042).
+///
+/// The wire shape the front sends per row: a `repo` path plus an optional
+/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch). Index `[0]`
+/// is the primary; `[1..]` become read-only secondary snapshots.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct TargetRepoInput {
+    repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_branch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1809,6 +1831,7 @@ impl DaemonHandle {
                 pipeline_id: pipeline_id.to_string(),
                 pipeline_name: pipeline_id.to_string(),
                 target_repo: None,
+                target_repos: None,
                 source_branch: None,
                 input_template: "seeded input".to_string(),
                 variables: serde_json::json!({}),
@@ -2768,6 +2791,11 @@ struct CreateTriggerRequest {
     pipeline_id: String,
     #[serde(default)]
     target_repo: Option<String>,
+    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042).
+    /// Stored on the Trigger as raw JSON TEXT and forwarded at fire time. Absent →
+    /// mono-repo fire.
+    #[serde(default)]
+    target_repos: Vec<TargetRepoInput>,
     #[serde(default)]
     source_branch: Option<String>,
     #[serde(default)]
@@ -3101,6 +3129,12 @@ async fn create_trigger(
         pipeline_id: req.pipeline_id,
         pipeline_name,
         target_repo: Some(target_repo),
+        // #465: persist the secondary list as raw JSON TEXT (empty → NULL/mono-repo).
+        target_repos: if req.target_repos.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&req.target_repos).ok()
+        },
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables,
@@ -3255,6 +3289,11 @@ struct PatchTriggerRequest {
     /// sending exactly that on every Trigger save (`NewRunModal.tsx`).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     target_repo: Option<Option<String>>,
+    /// #465: the read-only secondary list, double-wrapped like `target_repo`: absent
+    /// = leave, present `null`/`[]` = clear to mono-repo, an array = set. Stored on the
+    /// row as raw JSON TEXT; forwarded and re-frozen at fire time.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    target_repos: Option<Option<Vec<TargetRepoInput>>>,
     #[serde(default)]
     source_branch: Option<Option<String>>,
     #[serde(default)]
@@ -3497,6 +3536,14 @@ async fn patch_trigger(
         // #470: the trimmed, validated path — never the raw field. `None` here
         // means "absent from the body", i.e. leave the stored value alone.
         target_repo: validated_target_repo,
+        // #465: map the request's `Option<Option<Vec<..>>>` to the stored raw-JSON
+        // `Option<Option<String>>`. Absent → leave; present `null`/`[]` → clear to
+        // mono-repo (`Some(None)`); a non-empty array → the serialized JSON.
+        target_repos: req.target_repos.map(|inner| {
+            inner
+                .filter(|list| !list.is_empty())
+                .and_then(|list| serde_json::to_string(&list).ok())
+        }),
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables: req
@@ -4552,6 +4599,16 @@ async fn fire_one_trigger(
                 variables: trigger_variables(trigger),
                 pipeline_id: Some(trigger.pipeline_id.clone()),
                 target_repo: trigger.target_repo.clone(),
+                // #465 (ADR-0042): forward the Trigger's frozen secondary list. Stored
+                // as raw JSON TEXT (trigger_store stays decoupled from lib types); a
+                // blank/absent/malformed value defers to a mono-repo fire. `[0]` still
+                // being the primary, the chokepoint reconciles it with `target_repo`.
+                target_repos: trigger
+                    .target_repos
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .and_then(|s| serde_json::from_str::<Vec<TargetRepoInput>>(s).ok())
+                    .unwrap_or_default(),
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
@@ -6361,6 +6418,10 @@ async fn parse_multipart_create_run(
     let mut variables: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut pipeline_id = None;
     let mut target_repo = None;
+    // #465: the multi-repo list rides the multipart create (browser create with
+    // attached images) as a single JSON field, mirroring `variables`. Empty/absent →
+    // mono-repo. Parsed into the same `Vec<TargetRepoInput>` the JSON path deserializes.
+    let mut target_repos: Vec<TargetRepoInput> = Vec::new();
     let mut source_branch = None;
     let mut name = None;
     // #410: an explicit sandbox mode may ride the multipart (browser) create when
@@ -6420,6 +6481,18 @@ async fn parse_multipart_create_run(
                     .map_err(|e| format!("bad field target_repo: {e}"))?;
                 if !v.is_empty() {
                     target_repo = Some(v);
+                }
+            }
+            "target_repos" => {
+                // #465: a JSON array of {repo, base_branch?}. Empty string → leave the
+                // default empty Vec (mono-repo). Malformed JSON is a 400, like `variables`.
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field target_repos: {e}"))?;
+                if !text.is_empty() {
+                    target_repos = serde_json::from_str(&text)
+                        .map_err(|e| format!("invalid target_repos JSON: {e}"))?;
                 }
             }
             "source_branch" => {
@@ -6492,6 +6565,7 @@ async fn parse_multipart_create_run(
         variables,
         pipeline_id,
         target_repo,
+        target_repos,
         source_branch,
         name,
         triggered_by: None,
@@ -6638,21 +6712,62 @@ async fn create_run_inner(
     // prompts) but is never again an implicit Run target — a Run must not mutate
     // code in a repository nobody named. Read-side resolution keeps its fallback
     // for historical runs (`effective_repo_root`); see ADR-0033.
-    let run_repo_root = match required_target_repo(req.target_repo.as_deref()) {
+    // #465 (ADR-0042): the primary is `target_repos[0]` when the client speaks the
+    // multi-repo shape, else the legacy scalar `target_repo`. We normalise to the
+    // scalar here so the ENTIRE downstream primary path (worktree, merge-back, cost,
+    // ADR-0033) is byte-for-byte unchanged — the array only ever ADDS secondaries.
+    let effective_target_repo: Option<String> = req
+        .target_repo
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            req.target_repos
+                .first()
+                .map(|r| r.repo.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
+    let run_repo_root = match required_target_repo(effective_target_repo.as_deref()) {
         Ok(p) => p,
         Err(msg) => {
             return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
     };
 
-    // Validate source_branch if provided
-    let source_ref = if let Some(ref branch) = req.source_branch {
+    // Validate source_branch if provided. The primary's base branch is the scalar
+    // `source_branch` when present, else `target_repos[0].base_branch` (#465): row 0
+    // of the multi-repo modal carries the primary's branch in the same field the
+    // secondaries use.
+    let effective_source_branch: Option<String> = req
+        .source_branch
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            req.target_repos
+                .first()
+                .and_then(|r| r.base_branch.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
+    let source_ref = if let Some(ref branch) = effective_source_branch {
         if let Err(msg) = validate_source_branch(&run_repo_root, branch) {
             return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
         branch.as_str()
     } else {
         "HEAD"
+    };
+
+    // #465 (ADR-0042): resolve the read-only secondary repos into frozen pins. The
+    // request's `target_repos` list is `[0]` = primary (already validated above as
+    // `run_repo_root`), `[1..]` = secondaries. Absent/primary-only → mono-repo, empty
+    // Vec, and the payload/events stay byte-identical to a legacy create. Each
+    // secondary is validated (absolute + git) and its base ref resolved to a single
+    // commit NOW — no fetch, so the base is the operator's LOCAL ref (default HEAD).
+    // Resolving before `append_event`/`create_worktree` keeps "a bad repo → no Run".
+    let secondary_pins = match resolve_secondary_pins(&run_repo_root, &req.target_repos) {
+        Ok(pins) => pins,
+        Err(msg) => {
+            return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
+        }
     };
 
     let (yaml, pipeline_path) = if let Some(ref lib_id) = req.pipeline_id {
@@ -6870,6 +6985,14 @@ async fn create_run_inner(
     // rather than the raw field. Historical events keep their legitimate
     // `null`; the read side resolves those (ADR-0033).
     run_payload["target_repo"] = serde_json::json!(run_repo_root.to_string_lossy());
+    // #465 (ADR-0042): carry the frozen secondary pins, but ONLY when there is at
+    // least one — a mono-repo Run writes no `target_repos` key, keeping its payload
+    // byte-identical to the historical (and absent-key → empty-Vec) shape. Each pin
+    // is {repo, alias, sha, base_branch}; the snapshots are materialised on disk
+    // just after `create_worktree`, below.
+    if !secondary_pins.is_empty() {
+        run_payload["target_repos"] = serde_json::json!(secondary_pins);
+    }
     // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
     // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
     // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
@@ -6904,7 +7027,7 @@ async fn create_run_inner(
             run_payload["sandbox_image"] = serde_json::json!(image);
         }
     }
-    if let Some(ref branch) = req.source_branch {
+    if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
     // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
@@ -7000,6 +7123,26 @@ async fn create_run_inner(
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": format!("worktree creation failed: {e}") }),
         ));
+    }
+
+    // #465 (ADR-0042): materialise each secondary as a detached, pinned snapshot,
+    // a THIRD sibling of `worktree/`/`nodes/` under the Run dir. Done at Run start
+    // (not per-node spawn) → the reap surface stays minimal (no secondary analogue
+    // of `reap_orphan_sub_worktree`). Living under `run_repo_root` means the sandbox
+    // sees them at an identical path with no new mount. A failure here fails the Run
+    // loud (the pin is already in `RunStarted`; a Run whose secondary snapshot is
+    // missing would silently starve every node that reads it).
+    for pin in &secondary_pins {
+        let dest = secondary_snapshot_path(&run_repo_root, &run_id, &pin.alias);
+        if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
+            error!("failed to create secondary snapshot for {}: {e}", pin.repo);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": format!("secondary snapshot creation failed for {}: {e}", pin.repo)
+                }),
+            ));
+        }
     }
 
     // Copy pipeline YAML + prompts to run-scoped location (always in target repo)
@@ -10748,6 +10891,52 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
 /// `MERGE_RESOLVER_NODE_ID` is **not** handled here any more: #490 (ADR-0035 §6)
 /// hoisted it into [`node_done`], because it was the one branch whose "stopped
 /// short" was in fact a complete success. The sweep never reaches it either way.
+/// #465 (ADR-0042): the read-only guard for secondary repos, as a pure probe.
+///
+/// Returns the FIRST secondary whose snapshot has uncommitted **tracked** changes,
+/// as a non-terminal [`completion_refusal::CompletionRefusal::SecondaryRepoDirtied`]
+/// (409). `worktree_has_tracked_changes` ignores `??`, so untracked scratch files are
+/// tolerated (the tester relies on this polarity). A transient git error fails OPEN
+/// (warn + skip) rather than blocking a legitimate completion. `None` (and no work)
+/// for a mono-repo Run. Called at the completion edge, never from `transition_guard`.
+fn secondary_repos_dirtied_refusal(
+    repo_root: &Path,
+    run_id: &str,
+    run_state: &event_log::RunState,
+) -> Option<completion_refusal::CompletionRefusal> {
+    for pin in &run_state.target_repos {
+        let snapshot = secondary_snapshot_path(repo_root, run_id, &pin.alias);
+        if !snapshot.exists() {
+            continue;
+        }
+        match worktree_has_tracked_changes(&snapshot) {
+            Ok(true) => {
+                return Some(
+                    completion_refusal::CompletionRefusal::SecondaryRepoDirtied {
+                        alias: pin.alias.clone(),
+                        message: format!(
+                            "the read-only secondary repo '{}' ({}) has uncommitted changes to \
+                         tracked files; revert them (git checkout) before completing — a \
+                         secondary is read-only (#465)",
+                            pin.alias,
+                            snapshot.display()
+                        ),
+                    },
+                );
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!(
+                    "could not check secondary snapshot cleanliness for '{}' in run {run_id}: \
+                     {e}; allowing the completion",
+                    pin.alias
+                );
+            }
+        }
+    }
+    None
+}
+
 async fn complete_node_iteration(
     state: &Arc<AppState>,
     run_id: String,
@@ -10826,6 +11015,17 @@ async fn complete_node_iteration(
             CompletionHeadStop::NoOp { reason } => CompletionAttempt::NoOp { reason },
             CompletionHeadStop::Refused { refusal } => CompletionAttempt::refused(refusal),
         };
+    }
+
+    // #465 (ADR-0042): read-only guard for secondary repos. A node that wrote to a
+    // TRACKED file of a secondary snapshot is refused 409 `secondary_repo_dirtied`
+    // HERE — at the completion edge, after the transition gate but BEFORE any merge
+    // or terminal event. Non-terminal by design: the node stays alive, so once the
+    // agent reverts the tracked change (`git checkout`) and re-completes, the guard
+    // passes. Untracked scratch is tolerated (the probe ignores `??`). No-op for a
+    // mono-repo Run. Deliberately NOT in `transition_guard` (which is pure/IO-free).
+    if let Some(refusal) = secondary_repos_dirtied_refusal(&repo_root, &run_id, &pre_run_state) {
+        return CompletionAttempt::refused(refusal);
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -12300,6 +12500,18 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
+    // #465 (ADR-0042): tear down each secondary snapshot BEFORE `remove_dir_all` —
+    // and, critically, from inside the SECONDARY repo. The `--detach` registration
+    // lives in the secondary's `.git`, OUTSIDE `repo_root`, so `remove_dir_all(run_dir)`
+    // below cannot clear it; without the per-secondary `prune`, every multi-repo Run
+    // leaks a dangling registration (the #498 class) and a future `worktree add` at the
+    // same path fails 255. Best-effort, but `remove_secondary_snapshot` never skips the
+    // prune. `cleanup_run` today prunes NOTHING, hence the dedicated helper.
+    for pin in &run_state.target_repos {
+        let snapshot_dir = secondary_snapshot_path(&repo_root, run_id, &pin.alias);
+        remove_secondary_snapshot(Path::new(&pin.repo), &snapshot_dir);
+    }
+
     if run_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&run_dir) {
             warn!("failed to remove run dir {}: {e}", run_dir.display());
@@ -12566,6 +12778,99 @@ fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
             Err(format!("git branch --list failed: {stderr}"))
         }
         Err(e) => Err(format!("failed to run git: {e}")),
+    }
+}
+
+/// Validate and freeze the read-only secondary repos of a multi-repo create
+/// (#465, ADR-0042).
+///
+/// `inputs` is the full `target_repos` list as the client sent it: `[0]` is the
+/// primary (already validated as `primary_root`; only cross-checked here for
+/// self-reference), `[1..]` the secondaries. Returns one [`event_log::RepoPin`]
+/// per secondary, each with `sha` resolved NOW against the local `base_branch`
+/// (default `HEAD`, no fetch) and an `alias` disambiguated on basename collision.
+/// An empty or primary-only list yields an empty Vec — the Run is mono-repo.
+///
+/// Fails the whole create (400) on the first bad secondary — resolving here, before
+/// `RunStarted` and `create_worktree`, keeps the "a bad repo → no Run" guarantee.
+fn resolve_secondary_pins(
+    primary_root: &Path,
+    inputs: &[TargetRepoInput],
+) -> Result<Vec<event_log::RepoPin>, String> {
+    if inputs.len() <= 1 {
+        return Ok(Vec::new());
+    }
+    // Compare by canonical path so a trailing slash / symlink cannot smuggle the
+    // primary (or a duplicate) back in as a "different" repo. `validate_target_repo`
+    // already proved each dir exists, so canonicalize should succeed; fall back to the
+    // validated path if it somehow does not.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let primary_canon = canon(primary_root);
+
+    let mut pins: Vec<event_log::RepoPin> = Vec::new();
+    let mut seen_canon: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut used_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for input in &inputs[1..] {
+        let repo = validate_target_repo(input.repo.trim())?;
+        let repo_canon = canon(&repo);
+        // A repo cannot be its own secondary: a self-snapshot registers a detached
+        // worktree inside the repo it snapshots and buys nothing (the nodes already
+        // work in the primary).
+        if repo_canon == primary_canon {
+            return Err(format!(
+                "secondary repo {} is the same as the primary; a repo cannot be its own secondary",
+                repo.display()
+            ));
+        }
+        // Two identical secondaries would produce two snapshots of the same repo and
+        // fight over the alias — a mistake, not a use case in slice 1.
+        if !seen_canon.insert(repo_canon) {
+            return Err(format!("secondary repo {} is listed twice", repo.display()));
+        }
+        let base = input
+            .base_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let rev = base.unwrap_or("HEAD");
+        let sha = rev_parse_verified(&repo, rev).map_err(|e| {
+            format!(
+                "cannot resolve base branch '{rev}' in secondary {}: {e}",
+                repo.display()
+            )
+        })?;
+        let alias = disambiguate_alias(&repo, &mut used_aliases);
+        pins.push(event_log::RepoPin {
+            repo: repo.to_string_lossy().to_string(),
+            alias,
+            sha,
+            base_branch: base.map(str::to_string),
+        });
+    }
+    Ok(pins)
+}
+
+/// A filesystem-safe, collision-free directory name for a secondary snapshot
+/// (#465). Starts from the repo's basename and appends `-2`, `-3`, … until unused.
+/// `used` accumulates across the call so two secondaries of the same basename get
+/// distinct aliases — the snapshot paths (`.pdo/runs/<id>/repos/<alias>/`) must
+/// never collide, or one snapshot would clobber another.
+fn disambiguate_alias(repo: &Path, used: &mut std::collections::HashSet<String>) -> String {
+    let base = repo
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("repo");
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
     }
 }
 

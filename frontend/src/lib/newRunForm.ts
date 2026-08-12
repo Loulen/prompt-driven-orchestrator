@@ -1,0 +1,416 @@
+import type { CreateRunRequest, CreateTriggerRequest, UpdateTriggerRequest } from "../api";
+import type { InstanceSettings, PipelineListEntry, SandboxProfileRef } from "../types";
+import { presetToCron, type CronPresetId } from "../cronPresets";
+
+/**
+ * The New Run / Trigger form's pure logic (#359), lifted out of `NewRunModal.tsx`.
+ *
+ * Everything here is a function of the form's values — no state, no fetch, no React — so
+ * the decisions the dialog makes can be read and tested without rendering it: what a
+ * variable override parses to, what the sandbox selector actually resolves to, whether
+ * Launch / Create is allowed, and the exact request bodies that get posted.
+ *
+ * The modal keeps the JSX shell, the `mode` toggle and the wiring.
+ */
+
+/** What the override inputs hold: the raw typed text, keyed by variable name. */
+type VariableOverrides = Record<string, string>;
+
+export function parseVariableValue(raw: string, varType: string): unknown {
+  switch (varType) {
+    case "int":
+      return parseInt(raw, 10) || 0;
+    case "float":
+      return parseFloat(raw) || 0;
+    case "bool":
+      return raw === "true";
+    case "list":
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return raw
+          .replace(/^\[|\]$/g, "")
+          .split(",")
+          .map((s) => s.trim());
+      }
+    default:
+      return raw;
+  }
+}
+
+/**
+ * The variables a submit sends: only the overrides the selected pipeline actually
+ * DECLARES, and only those that differ from the declared default — an override equal to
+ * the default is not an override, so it stays out of the payload rather than pinning a
+ * value the pipeline may later change.
+ *
+ * Run mode and Trigger mode had a byte-identical copy of this loop each (#359); they now
+ * share this one, so the two can no longer drift apart.
+ */
+export function buildVariables(
+  overrides: VariableOverrides,
+  pipeline: PipelineListEntry,
+): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(overrides)) {
+    const decl = pipeline.variables[key];
+    if (!decl) continue;
+    if (val === String(decl.default)) continue;
+    variables[key] = parseVariableValue(val, decl.var_type);
+  }
+  return variables;
+}
+
+/** How many of the typed overrides are real overrides — the accordion's badge. */
+export function overrideCount(
+  overrides: VariableOverrides,
+  pipeline: PipelineListEntry | undefined,
+): number {
+  if (!pipeline) return 0;
+  return Object.entries(overrides).filter(([key, val]) => {
+    const decl = pipeline.variables[key];
+    if (!decl) return false;
+    return val !== String(decl.default);
+  }).length;
+}
+
+/**
+ * The cron expression the Trigger will be created with: a compiled preset or the raw
+ * escape-hatch expression.
+ */
+export function resolvedCron({
+  cronPresetId,
+  rawCron,
+  dailyHour,
+  dailyMinute,
+}: {
+  cronPresetId: CronPresetId;
+  rawCron: string;
+  dailyHour: number;
+  dailyMinute: number;
+}): string {
+  return cronPresetId === "custom"
+    ? rawCron.trim()
+    : presetToCron(cronPresetId, { hour: dailyHour, minute: dailyMinute });
+}
+
+/**
+ * A prompt-optional pipeline (#158) may launch with an empty prompt; the entry node
+ * sources its own work. Prompt-required (the default) still demands non-empty input.
+ */
+export function promptOptional(pipeline: PipelineListEntry | undefined): boolean {
+  return pipeline?.prompt_required === false;
+}
+
+/** @see promptOptional */
+export function hasRequiredPrompt(promptOptional: boolean, input: string): boolean {
+  return promptOptional || Boolean(input.trim());
+}
+
+/**
+ * The fire_decision reject rule, mirrored client-side: a prompt-required pipeline whose
+ * resolved input would be empty (no guard, no input template) is a misconfiguration. We
+ * pre-block Create and explain why, in addition to the authoritative server-side reject
+ * (CONTEXT.md → Trigger; #161).
+ */
+export function triggerInputRejectReason({
+  mode,
+  selectedPipeline,
+  promptOptional,
+  guardCommand,
+  input,
+}: {
+  mode: "run" | "trigger";
+  selectedPipeline: PipelineListEntry | undefined;
+  promptOptional: boolean;
+  guardCommand: string;
+  input: string;
+}): string | null {
+  return mode === "trigger" &&
+    selectedPipeline &&
+    !promptOptional &&
+    guardCommand.trim().length === 0 &&
+    input.trim().length === 0
+    ? "This pipeline requires a prompt. Add a guard command, an input template, or mark the pipeline prompt-not-required."
+    : null;
+}
+
+export function canLaunch({
+  repoValid,
+  selectedPipeline,
+  hasRequiredPrompt,
+  missingProfile,
+  sandboxDoomed,
+}: {
+  repoValid: boolean | null;
+  selectedPipeline: PipelineListEntry | undefined;
+  hasRequiredPrompt: boolean;
+  missingProfile: boolean;
+  sandboxDoomed: boolean;
+}): boolean {
+  return Boolean(
+    repoValid && selectedPipeline && hasRequiredPrompt && !missingProfile && !sandboxDoomed,
+  );
+}
+
+/**
+ * Trigger creation needs a name, a pipeline, a valid repo and a cron, and a resolvable
+ * input when the pipeline requires a prompt.
+ */
+export function canCreateTrigger({
+  repoValid,
+  selectedPipeline,
+  triggerName,
+  resolvedCron,
+  triggerInputRejectReason,
+  missingProfile,
+}: {
+  repoValid: boolean | null;
+  selectedPipeline: PipelineListEntry | undefined;
+  triggerName: string;
+  resolvedCron: string;
+  triggerInputRejectReason: string | null;
+  missingProfile: boolean;
+}): boolean {
+  return Boolean(
+    repoValid &&
+      selectedPipeline &&
+      triggerName.trim().length > 0 &&
+      resolvedCron.length > 0 &&
+      !triggerInputRejectReason &&
+      // #432: a Trigger pointing at a vanished profile must not be re-saved as-is; the
+      // user picks a real one (or `off`) first.
+      !missingProfile,
+  );
+}
+
+/** Everything the sandbox selector derives from `settings` + the selected value (ADR-0031). */
+export interface SandboxState {
+  dockerUnavailable: boolean;
+  sandboxReason: string | undefined;
+  sandboxProfiles: SandboxProfileRef[];
+  missingProfile: boolean;
+  instanceDefaultSandbox: string | null;
+  effectiveSandbox: string | null;
+  sandboxDoomed: boolean;
+  inheritedDefaultReason: string | null;
+}
+
+/**
+ * The sandbox cluster (#410/#432/#452, ADR-0031 §7). `sandbox` is the selector value in
+ * BOTH modes: `""` = "the user did not choose", `off`, or a staging profile name.
+ */
+export function sandboxState({
+  settings,
+  sandbox,
+  mode,
+}: {
+  settings: InstanceSettings | null;
+  sandbox: string;
+  mode: "run" | "trigger";
+}): SandboxState {
+  // #410: advisory Docker greying. Only gate the sandboxed options once we KNOW Docker is
+  // unavailable (settings loaded && probe false); while settings load, stay
+  // optimistic. `sandboxReason` explains the greying (title + help text).
+  const dockerUnavailable = settings != null && !settings.sandbox_docker.available;
+  const sandboxReason = settings?.sandbox_docker.reason ?? undefined;
+
+  // #432: the options come from the daemon's profile list. Sorted server-side.
+  const sandboxProfiles = settings?.sandbox_profiles ?? [];
+
+  /**
+   * THE PHANTOM-PROFILE RULE. A seeded value is **never** silently rewritten: a
+   * non-empty, non-`off` value that is absent from the list gets a tombstone option and
+   * blocks Save/Launch.
+   *
+   * Without the tombstone React sets `selectedIndex = -1`, the field renders blank, and
+   * saving would PATCH `sandbox: null` — a **silent fallback to the instance default**,
+   * exactly what ADR-0031 §7 forbids. Deliberately separate from the Docker clamp above:
+   * clamping to `off` is legitimate for an unavailable Docker, and would be a silent
+   * fallback for a missing profile.
+   */
+  const missingProfile = Boolean(
+    settings &&
+      sandbox &&
+      sandbox !== "off" &&
+      !sandboxProfiles.some((p) => p.name === sandbox),
+  );
+
+  // #452: the instance default, used to LABEL the inherit option — never to seed the value.
+  // `null` while settings are unknown, which is the honest rendering: we do not know yet.
+  const instanceDefaultSandbox = settings ? (settings.default_sandbox.effective ?? "off") : null;
+
+  // #452: what will actually apply to the Run being created. `""` is not a value — it means
+  // the key is omitted and the instance default decides — so the checks below have to
+  // resolve it to say anything true about the Run.
+  const effectiveSandbox = sandbox === "" ? instanceDefaultSandbox : sandbox;
+
+  /**
+   * #452, the Docker clamp, relocated. A Run whose effective sandbox is a profile while the
+   * daemon reports Docker unavailable is born condemned, so #410 clamped the SELECTOR to
+   * `off`. That protection was right and is kept; the way it was applied was not — it wrote
+   * a business verdict into the field, indistinguishable from a user picking `off`, and
+   * posted it explicitly.
+   *
+   * So refuse the launch and say why, instead of quietly substituting an answer. Same rule
+   * as the phantom-profile tombstone above, for the same reason: the app never demotes a
+   * sandbox behind the user's back (ADR-0031 §7).
+   *
+   * Run mode only. A Trigger resolves its sandbox when it FIRES, and today's Docker probe
+   * says nothing about that moment.
+   */
+  const sandboxDoomed = Boolean(
+    mode === "run" && dockerUnavailable && effectiveSandbox && effectiveSandbox !== "off",
+  );
+
+  // #452: `default_sandbox` carries a `reason` when the winning tier names a profile that
+  // does not resolve. Inheriting is now the default path in run mode, so that dangling name
+  // is worth showing here — the create chokepoint 400s on it rather than falling back.
+  const inheritedDefaultReason = sandbox === "" ? (settings?.default_sandbox.reason ?? null) : null;
+
+  return {
+    dockerUnavailable,
+    sandboxReason,
+    sandboxProfiles,
+    missingProfile,
+    instanceDefaultSandbox,
+    effectiveSandbox,
+    sandboxDoomed,
+    inheritedDefaultReason,
+  };
+}
+
+/** The form values `POST /runs` reads. */
+export interface RunPayloadInput {
+  selectedPipeline: PipelineListEntry;
+  input: string;
+  variables: Record<string, unknown>;
+  targetRepo: string;
+  sourceBranch: string;
+  autoName: boolean;
+  runName: string;
+  sandbox: string;
+  images: File[];
+}
+
+export function buildRunPayload({
+  selectedPipeline,
+  input,
+  variables,
+  targetRepo,
+  sourceBranch,
+  autoName,
+  runName,
+  sandbox,
+  images,
+}: RunPayloadInput): CreateRunRequest {
+  return {
+    pipeline: selectedPipeline.name,
+    input: input.trim(),
+    variables,
+    pipeline_id: selectedPipeline.id,
+    target_repo: targetRepo.trim() || undefined,
+    source_branch: sourceBranch || undefined,
+    name: autoName ? undefined : runName.trim() || undefined,
+    // #338: always send the explicit choice so it wins the create-chokepoint
+    // resolution (the daemon never has to guess from `name` presence for a UI create).
+    auto_name: autoName,
+    // #410/#452: the explicit run-level choice — `off` or a staging profile name — sent
+    // so it wins the create-chokepoint precedence. `""` means the user did not choose,
+    // and OMITS the key: only an absent `sandbox` lets the daemon apply
+    // `default_sandbox`, because it reads a present `off` as final.
+    sandbox: sandbox || undefined,
+    images: images.length > 0 ? images : undefined,
+  };
+}
+
+/** The form values a Trigger create / edit reads. */
+export interface TriggerPayloadInput {
+  selectedPipeline: PipelineListEntry;
+  triggerName: string;
+  resolvedCron: string;
+  input: string;
+  guardCommand: string;
+  targetRepo: string;
+  sourceBranch: string;
+  allowOverlap: boolean;
+  maxConcurrent: string;
+  sandbox: string;
+  autoName: boolean;
+  variables: Record<string, unknown>;
+}
+
+/**
+ * Edit (#162): PATCH the existing Trigger's editable fields. `Some(None)`
+ * semantics: an emptied guard clears it. `pipeline_id` repoints the
+ * trigger to a different pipeline (#230) — previously the editable
+ * dropdown was a phantom control whose change was silently dropped.
+ */
+export function buildTriggerUpdatePayload({
+  selectedPipeline,
+  triggerName,
+  resolvedCron,
+  input,
+  guardCommand,
+  targetRepo,
+  sourceBranch,
+  allowOverlap,
+  maxConcurrent,
+  sandbox,
+  autoName,
+  variables,
+}: TriggerPayloadInput): UpdateTriggerRequest {
+  return {
+    name: triggerName.trim(),
+    pipeline_id: selectedPipeline.id,
+    cron: resolvedCron,
+    input_template: input.trim(),
+    guard_command: guardCommand.trim() || null,
+    target_repo: targetRepo.trim() || null,
+    source_branch: sourceBranch || null,
+    // Round-trip the real overlap policy (#239). Previously hard-coded to
+    // `undefined`, which silently reset every edited trigger toward skip.
+    // `null` clears a stale cap when overlap is off or the input is blank.
+    overlap_policy: allowOverlap ? "allow" : "skip",
+    max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : null,
+    // #410: `""` (Use instance default) clears back to inheriting (`null`);
+    // `off` or a staging profile name sets it.
+    sandbox: sandbox || null,
+    // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
+    auto_name: autoName,
+    variables,
+  };
+}
+
+export function buildTriggerCreatePayload({
+  selectedPipeline,
+  triggerName,
+  resolvedCron,
+  input,
+  guardCommand,
+  targetRepo,
+  sourceBranch,
+  allowOverlap,
+  maxConcurrent,
+  sandbox,
+  autoName,
+  variables,
+}: TriggerPayloadInput): CreateTriggerRequest {
+  return {
+    name: triggerName.trim(),
+    pipeline_id: selectedPipeline.id,
+    cron: resolvedCron,
+    input_template: input.trim() || undefined,
+    guard_command: guardCommand.trim() || undefined,
+    target_repo: targetRepo.trim() || undefined,
+    source_branch: sourceBranch || undefined,
+    overlap_policy: allowOverlap ? "allow" : "skip",
+    max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
+    // #410: `""` (Use instance default) → `null` (inherit); `off` or a profile sets it.
+    sandbox: sandbox || null,
+    // #338: freeze the auto-naming choice on the new Trigger (seeded from the
+    // instance default when the modal opened).
+    auto_name: autoName,
+    variables,
+  };
+}

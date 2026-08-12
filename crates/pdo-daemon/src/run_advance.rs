@@ -335,7 +335,11 @@ pub(crate) fn evaluate_completion_head(
         payload: None,
     };
     match transition_guard::validate_transition(run_state, &probe) {
-        transition_guard::Verdict::Reject { reason } => CompletionHead::Reject { reason },
+        transition_guard::Verdict::Reject { reason } => CompletionHead::Reject {
+            // #515: `CompletionHead::Reject` stays `String` — convert the typed
+            // cause to its prose at this boundary (blast radius kept to #515).
+            reason: reason.to_string(),
+        },
         transition_guard::Verdict::NoOp { reason } => CompletionHead::NoOp { reason },
         transition_guard::Verdict::Allow => CompletionHead::Allow,
     }

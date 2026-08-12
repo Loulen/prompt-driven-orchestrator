@@ -368,8 +368,9 @@ async fn a_paused_run_refuses_the_restart_before_the_kill() {
 }
 
 /// Guard refusal #2 — a newer iteration of the same node is live. Same slug, and
-/// that is the point: `Verdict::Reject` carries no discriminant, so #489 copies
-/// #490's settled shape (one slug + prose) rather than inventing three.
+/// that is the point: `Verdict::Reject` **now carries a typed cause**
+/// (`RejectReason`, #515), but this route flattens it to #490's settled shape
+/// (one slug + prose) — discrimination on the retry route is #487.
 ///
 /// It also kills a slug that would have been FALSE: the guard tests
 /// `live_iter != iter`, so a restart of iter 5 while iter 1 lives lands in the same

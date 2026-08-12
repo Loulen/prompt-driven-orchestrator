@@ -185,8 +185,14 @@ pub(crate) async fn spawn_node(
     let projected = loaded.as_ref().map(|(_, s)| s);
     match transition_guard::validate_transition(projected, &started_probe) {
         transition_guard::Verdict::Allow => {}
-        transition_guard::Verdict::NoOp { reason }
-        | transition_guard::Verdict::Reject { reason } => {
+        transition_guard::Verdict::NoOp { reason } => {
+            warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
+            return SpawnOutcome::Refused { reason };
+        }
+        transition_guard::Verdict::Reject { reason } => {
+            // #515: the cause is typed now; forward its historical prose (the
+            // `Refused` outcome carries a `String`, unchanged).
+            let reason = reason.to_string();
             warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
             return SpawnOutcome::Refused { reason };
         }

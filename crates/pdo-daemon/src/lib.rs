@@ -11627,11 +11627,18 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     };
     match transition_guard::validate_transition(Some(&run_state), &started_probe) {
         transition_guard::Verdict::Allow => {}
-        transition_guard::Verdict::NoOp { reason }
-        | transition_guard::Verdict::Reject { reason } => {
+        transition_guard::Verdict::NoOp { reason } => {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::Reject { reason } => {
+            // #515: the typed cause renders to the same prose in the body.
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": reason.to_string() })),
             )
                 .into_response();
         }

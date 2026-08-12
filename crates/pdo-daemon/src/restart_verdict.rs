@@ -68,9 +68,10 @@ pub(crate) enum RestartRefusal {
     ///
     /// Trois raisons du garde y atterrissent (Run non vivant, itération concurrente
     /// vivante, itération déjà complétée) et elles ne sont **pas** discriminées :
-    /// `Verdict::Reject` n'a aucun discriminant, ses dix sites de construction
-    /// passent tous par un helper privé qui ne porte qu'une `String`, et #490 a déjà
-    /// tranché ce cas exact sur cette forme exacte. Ne jamais sniffer la prose au
+    /// depuis #515, `Verdict::Reject` **porte** une cause typée (`RejectReason`),
+    /// mais **ce consommateur l'aplatit** sur un seul slug (`restart_refused`), la
+    /// prose dans `message` — comme `CompletionRefusal::CompletionRejected` (#490).
+    /// Discriminer sur la route de retry est #487. Ne jamais sniffer la prose au
     /// `contains()`.
     RestartRejected {
         message: String,

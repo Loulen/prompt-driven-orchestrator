@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import NewRunModal from "./NewRunModal";
 import { useEditStore } from "../stores/editStore";
 import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
@@ -2137,5 +2137,111 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
     await waitFor(() => {
       expect(screen.getByTestId("launch-error")).toHaveTextContent(/target_repo is required/i);
     });
+  });
+});
+
+// #465 (ADR-0042): multi-repo create. The primary stays `target_repo`; each added
+// row appends a secondary. `createRun` must receive `target_repos` with `[0]` =
+// primary and `[1..]` = secondaries — asserted on the API call, never the DOM
+// `select.value` (which reports option[0] on a desync and cannot fail; see #454).
+describe("NewRunModal — multi-repo (#465)", () => {
+  it("sends target_repos of length 2 with [0]=primary when a secondary is added", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    // Add a secondary row and fill it.
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    const secInput = within(secRow).getByTestId("target-repo-input");
+    fireEvent.change(secInput, { target: { value: "/home/user/secondary" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/secondary");
+    });
+    // The secondary's own branch select must resolve (proves per-row listBranches).
+    await waitFor(() => {
+      expect(
+        within(secRow).getByTestId("secondary-branch-select-0"),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target_repo: "/home/user/primary",
+          target_repos: [
+            expect.objectContaining({ repo: "/home/user/primary" }),
+            expect.objectContaining({ repo: "/home/user/secondary" }),
+          ],
+        }),
+      );
+    });
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos).toHaveLength(2);
+    expect(call.target_repos![0].repo).toBe("/home/user/primary");
+  });
+
+  it("omits target_repos for a mono-repo launch (no secondary rows)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/only");
+
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalled();
+    });
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos).toBeUndefined();
+  });
+
+  it("keeps Launch disabled while a secondary row is invalid", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    // An added-but-empty secondary row is incomplete → Launch blocked.
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    await screen.findByTestId("secondary-repo-row-0");
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+
+    // A secondary that fails validation stays blocking.
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "not a git repository" });
+    const secInput = within(screen.getByTestId("secondary-repo-row-0")).getByTestId(
+      "target-repo-input",
+    );
+    fireEvent.change(secInput, { target: { value: "/home/user/bad" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/bad");
+    });
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
   });
 });

@@ -445,22 +445,31 @@ pub(crate) async fn spawn_node(
         // pools from the SAME fresh projection — one artifact per COMPLETED
         // source iteration, so a failed iter's artifact is never pooled and no
         // raw `iter-*` glob reaches the agent/script.
-        let (source_iters, repeated_iters) = match reload_run_state_with(deps.db, run_id).await {
-            Some((_, fresh_state)) => (
-                input_resolution::resolved_source_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                    iter,
+        // #465: the secondary repos come from the SAME fresh projection, resolved to
+        // absolute snapshot paths for injection (the sub-worktree does not inherit
+        // the snapshot files).
+        let (source_iters, repeated_iters, secondary_repos) =
+            match reload_run_state_with(deps.db, run_id).await {
+                Some((_, fresh_state)) => (
+                    input_resolution::resolved_source_iters(
+                        spawn_ctx.pipeline,
+                        &fresh_state,
+                        &node.id,
+                        iter,
+                    ),
+                    input_resolution::resolved_repeated_iters(
+                        spawn_ctx.pipeline,
+                        &fresh_state,
+                        &node.id,
+                    ),
+                    prompt_augmenter::secondary_repo_contexts(
+                        spawn_ctx.repo_root,
+                        run_id,
+                        &fresh_state.target_repos,
+                    ),
                 ),
-                input_resolution::resolved_repeated_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                ),
-            ),
-            None => (HashMap::new(), HashMap::new()),
-        };
+                None => (HashMap::new(), HashMap::new(), Vec::new()),
+            };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
         // stays pure (#274). Gate on `!prompt_required` (the only branch that
@@ -502,6 +511,7 @@ pub(crate) async fn spawn_node(
             start_prompt_present,
             source_iters,
             repeated_iters,
+            secondary_repos,
             // #516: both computed above (outside this span), borrowed read-only
             // here so `build_preamble` can route the interrupted-git-op notice. The
             // `Vec` is moved into `SpawnOutcome::Spawned` only after this span is

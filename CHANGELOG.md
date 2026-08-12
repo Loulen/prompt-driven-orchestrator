@@ -10,6 +10,36 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.18.0
+
+Rien de cassant. Une capacité **purement additive** : un Run peut désormais lire plusieurs dépôts
+(#465, ADR-0042). Bump posé contre `origin/main` (1.17.0) ; à re-poser au next-free si un autre Run
+livre entre-temps.
+
+### Multi-repo par Run — dépôts secondaires en lecture seule (#465, ADR-0042)
+
+Un Run pouvait ne cibler qu'**un** dépôt (`target_repo`, ADR-0033). Cette slice ouvre le
+**multi-repo par Run** dans son incrément le plus étroit : **lecture multi-repo, écriture
+mono-repo**.
+
+- On sélectionne, à la création du Run, N **dépôts secondaires** en plus du **primaire**
+  (`target_repos[0]` = le primaire, sémantique de `target_repo` inchangée). Chaque secondaire porte
+  une *target branch* (défaut : la ref **locale**, pas `origin/main` — il n'y a aucun `git fetch`).
+- Chaque secondaire est figé à un **SHA au démarrage** (`git worktree add --detach`), sous
+  `<primaire>/.pdo/runs/<id>/repos/<alias>/`. Reproductible : muter le checkout local du secondaire
+  ne bouge plus le Run.
+- Les nœuds **lisent** les secondaires par **chemin absolu** (injecté au préambule + env
+  `PDO_SECONDARY_REPOS`) — les sous-worktrees n'héritent pas des fichiers du snapshot.
+- Garde **409 `secondary_repo_dirtied`** si un nœud salit un fichier **suivi** d'un secondaire (les
+  *untracked* sont tolérés) ; non terminale (revert + re-complétion passent).
+- Nettoyage : `git worktree remove --force` **+ `prune`** dans **chaque** secondaire au teardown
+  (sans le prune, registration `--detach` fantôme — classe #498).
+- Les Triggers portent la liste (colonne `target_repos`, forwardée au fire).
+
+Différé (slices ultérieures) : écriture/MR dans un secondaire, édition mid-run de la liste,
+`git` in-sandbox sur un secondaire, merge-back multi-repo (rejeté définitivement), sélecteur
+`repo:` par nœud, grouping list/cost multi-bucket.
+
 ## 1.14.0
 
 Rien de cassant. Un champ **purement additif** sur l'estimation de coût (périmètre AC#4 de #425,

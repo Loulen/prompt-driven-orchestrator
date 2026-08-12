@@ -555,6 +555,9 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
       input_template: "audit the codebase",
       guard_command: "gh issue list",
       target_repo: "/home/user/project",
+      // #465: a fixture with no secondaries patches `target_repos` to `null`, clearing
+      // any stored list back to mono-repo (a create simply omits the key).
+      target_repos: null,
       source_branch: "dev",
       overlap_policy: "allow",
       max_concurrent: 2,

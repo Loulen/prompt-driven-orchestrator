@@ -302,6 +302,7 @@ mod tests {
             pipeline_id: "p".to_string(),
             pipeline_name: "P".to_string(),
             target_repo: None,
+            target_repos: None,
             source_branch: None,
             input_template: "do it".to_string(),
             variables: serde_json::json!({}),

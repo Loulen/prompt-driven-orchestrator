@@ -648,6 +648,23 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **`effective_repo` (résolu) ≠ `target_repo` (brut).** Le champ brut `target_repo` (nullable) reste la valeur saisie par l'utilisateur — il pilote le badge repo de la ligne Trigger, le panneau détail, le pré-remplissage Run-now. Le champ résolu `effective_repo` (toujours concret, exposé par les *endpoints de liste* uniquement) ne sert qu'à la clé de regroupement. **On ne réécrit jamais `target_repo` côté serveur** : sinon badge/détail/pré-remplissage afficheraient un repo jamais saisi en mono-repo (régression). Le regroupement vit **côté client** (UI réversible) ; le serveur se contente de résoudre la clé. Même posture pour le **filtrage** de la liste Runs (#336) : trois filtres client-side (repo cible résolu, nom de pipeline snapshotté, trigger — dont « Manual » pour `triggered_by` absent), combinés en ET, options dérivées des runs eux-mêmes (un pipeline renommé/supprimé ou un trigger supprimé reste filtrable), sans paramètre de requête ajouté à `GET /runs`.
 - **Repos récents (`GET /repos/recent`).** Projection *à la lecture* des `target_repo` portés par les événements `RunStarted` : jusqu'à 5 chemins distincts, plus récent d'abord. Comparaison **verbatim** (cohérent avec la règle jamais-canonicaliser ci-dessus : `/a/repo` et `/a/repo/` comptent comme deux entrées). Les Runs **historiques** lancés sans `target_repo` ne contribuent pas aux récents ; depuis #470 tout nouveau Run en porte un, donc l'exclusion ne concerne plus que l'antériorité.
 
+### Multi-repo par Run (#465, ADR-0042)
+
+- **Dépôt primaire** (*primary repo*) — le dépôt sur lequel un Run écrit et mène ses MR ;
+  `target_repos[0]`. Porte exactement la sémantique de l'ancien `target_repo` (ADR-0033), et **reste**
+  dans `target_repo` (il n'est pas matérialisé comme `RepoPin`).
+- **Dépôt secondaire** (*secondary repo*) — un dépôt associé à un Run en **lecture seule**, offert
+  aux nœuds comme contexte. Matérialisé par un **snapshot** figé à un SHA au démarrage. N'a ni
+  worktree pipeline, ni comptabilité d'archive/coût, ni MR. En list/cost, un Run multi-repo se range
+  sous le primaire `[0]`. Voir ADR-0042.
+- **Snapshot secondaire** (*secondary snapshot*) — worktree détaché (`git worktree add --detach`)
+  d'un dépôt secondaire, pinné au SHA enregistré dans `RunStarted`, vivant sous
+  `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Read-only par
+  convention, garde `secondary_repo_dirtied` (409, fichiers *suivis* seulement). Injecté aux nœuds
+  par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`) car les sous-worktrees n'héritent pas
+  de ses fichiers. Récupéré au teardown par `worktree remove --force` **+ `prune`** dans le dépôt
+  secondaire (sans le prune : registration dangling, classe #498).
+
 ### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
 
 L'**explorateur de fichiers** est la brique unique de sélection de chemin à la souris : une route de listing à **un niveau** (`GET /fs/browse?path=&files=&hidden=`) et **un** composant (`FsExplorerModal`). Deux consommateurs aujourd'hui — le **sélecteur de repo** du New-Run modal (`mode="dir"`) et le **sélecteur de Dockerfile** des Settings (`mode="file" showHidden`) — zéro duplication. Né repo-spécifique (#131, `/repos/browse` cloué dans `RepoCombobox`), généralisé et **renommé franchement, sans alias**, en #431.

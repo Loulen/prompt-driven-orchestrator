@@ -1,4 +1,9 @@
-import type { CreateRunRequest, CreateTriggerRequest, UpdateTriggerRequest } from "../api";
+import type {
+  CreateRunRequest,
+  CreateTriggerRequest,
+  TargetRepoInput,
+  UpdateTriggerRequest,
+} from "../api";
 import type { InstanceSettings, PipelineListEntry, SandboxProfileRef } from "../types";
 import { presetToCron, type CronPresetId } from "../cronPresets";
 
@@ -141,15 +146,25 @@ export function canLaunch({
   hasRequiredPrompt,
   missingProfile,
   sandboxDoomed,
+  // #465: every non-empty secondary repo row must have resolved to a valid repo
+  // (mirror of the primary `repoValid` gate). Defaults to `true` — a mono-repo Run
+  // has no secondaries to gate on.
+  secondariesReady = true,
 }: {
   repoValid: boolean | null;
   selectedPipeline: PipelineListEntry | undefined;
   hasRequiredPrompt: boolean;
   missingProfile: boolean;
   sandboxDoomed: boolean;
+  secondariesReady?: boolean;
 }): boolean {
   return Boolean(
-    repoValid && selectedPipeline && hasRequiredPrompt && !missingProfile && !sandboxDoomed,
+    repoValid &&
+      selectedPipeline &&
+      hasRequiredPrompt &&
+      !missingProfile &&
+      !sandboxDoomed &&
+      secondariesReady,
   );
 }
 
@@ -291,6 +306,8 @@ export interface RunPayloadInput {
   runName: string;
   sandbox: string;
   images: File[];
+  /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Run. */
+  targetRepos?: TargetRepoInput[];
 }
 
 export function buildRunPayload({
@@ -303,6 +320,7 @@ export function buildRunPayload({
   runName,
   sandbox,
   images,
+  targetRepos,
 }: RunPayloadInput): CreateRunRequest {
   return {
     pipeline: selectedPipeline.name,
@@ -310,6 +328,9 @@ export function buildRunPayload({
     variables,
     pipeline_id: selectedPipeline.id,
     target_repo: targetRepo.trim() || undefined,
+    // #465: send the full list only when there is ≥1 secondary — a mono-repo Run
+    // keeps the request byte-identical (the key is omitted).
+    target_repos: targetRepos,
     source_branch: sourceBranch || undefined,
     name: autoName ? undefined : runName.trim() || undefined,
     // #338: always send the explicit choice so it wins the create-chokepoint
@@ -338,6 +359,8 @@ export interface TriggerPayloadInput {
   sandbox: string;
   autoName: boolean;
   variables: Record<string, unknown>;
+  /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Trigger. */
+  targetRepos?: TargetRepoInput[];
 }
 
 /**
@@ -359,6 +382,7 @@ export function buildTriggerUpdatePayload({
   sandbox,
   autoName,
   variables,
+  targetRepos,
 }: TriggerPayloadInput): UpdateTriggerRequest {
   return {
     name: triggerName.trim(),
@@ -367,6 +391,8 @@ export function buildTriggerUpdatePayload({
     input_template: input.trim(),
     guard_command: guardCommand.trim() || null,
     target_repo: targetRepo.trim() || null,
+    // #465: an array sets the secondaries; `null` clears back to mono-repo.
+    target_repos: targetRepos ?? null,
     source_branch: sourceBranch || null,
     // Round-trip the real overlap policy (#239). Previously hard-coded to
     // `undefined`, which silently reset every edited trigger toward skip.
@@ -395,6 +421,7 @@ export function buildTriggerCreatePayload({
   sandbox,
   autoName,
   variables,
+  targetRepos,
 }: TriggerPayloadInput): CreateTriggerRequest {
   return {
     name: triggerName.trim(),
@@ -403,6 +430,8 @@ export function buildTriggerCreatePayload({
     input_template: input.trim() || undefined,
     guard_command: guardCommand.trim() || undefined,
     target_repo: targetRepo.trim() || undefined,
+    // #465: send the secondaries only when there is ≥1 (else omit → mono-repo).
+    target_repos: targetRepos,
     source_branch: sourceBranch || undefined,
     overlap_policy: allowOverlap ? "allow" : "skip",
     max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,

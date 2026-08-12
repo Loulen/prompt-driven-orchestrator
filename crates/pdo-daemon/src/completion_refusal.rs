@@ -49,6 +49,13 @@ pub(crate) enum CompletionRefusal {
     ScriptValidationFailed { detail: serde_json::Value },
     /// Mismatch de frontmatter, message correctif envoyé, node toujours `running`.
     FrontmatterRetryPending { violations: Vec<serde_json::Value> },
+    /// Un nœud a modifié un fichier **suivi** d'un dépôt secondaire read-only
+    /// (#465, ADR-0042). Garde de complétion, **pas** une panne : aucun événement
+    /// terminal n'est appendé (contrairement à `DocImmutabilityViolated`), le nœud
+    /// reste vivant, l'agent nettoie le secondaire (`git checkout`) et re-complète.
+    /// `recoverable:false` par choix de #465 — le read-only d'un secondaire est un
+    /// contrat, non un retry de sortie ; le slug (jamais le seul statut) discrimine.
+    SecondaryRepoDirtied { alias: String, message: String },
     /// Mismatch après l'unique retry ; `NodeFailed` + `RunFailed` appendés.
     FrontmatterRetryExhausted { violations: Vec<serde_json::Value> },
     /// L'événement terminal n'a pas pu être appendé — panne, `500`.
@@ -84,6 +91,7 @@ impl CompletionRefusal {
             Self::ScriptValidationFailed { .. } => "script_validation_failed",
             Self::FrontmatterRetryPending { .. } => "frontmatter_retry_pending",
             Self::FrontmatterRetryExhausted { .. } => "frontmatter_retry_exhausted",
+            Self::SecondaryRepoDirtied { .. } => "secondary_repo_dirtied",
             Self::AppendFailed { .. } => "append_failed",
             Self::MergeResolutionFailed { .. } => "merge_resolution_failed",
             Self::MergeResolverSpawned { .. } => "merge_resolver_spawned",
@@ -127,6 +135,7 @@ impl CompletionRefusal {
             | Self::ScriptValidationFailed { .. }
             | Self::FrontmatterRetryPending { .. }
             | Self::FrontmatterRetryExhausted { .. }
+            | Self::SecondaryRepoDirtied { .. }
             | Self::MergeResolutionFailed { .. }
             | Self::MergeResolverSpawned { .. }
             | Self::MergeResolverFailed { .. } => StatusCode::CONFLICT,
@@ -158,6 +167,10 @@ impl CompletionRefusal {
             | Self::FrontmatterRetryExhausted { violations } => {
                 serde_json::json!({ "violations": violations })
             }
+            Self::SecondaryRepoDirtied { alias, message } => serde_json::json!({
+                "alias": alias,
+                "message": message,
+            }),
             Self::MergeResolutionFailed { reason } | Self::MergeResolverFailed { reason } => {
                 serde_json::json!({ "reason": reason })
             }
@@ -193,6 +206,9 @@ impl CompletionRefusal {
                 "output frontmatter mismatch — corrective message sent, awaiting retry".into()
             }
             Self::FrontmatterRetryExhausted { .. } => "output validation failed after retry".into(),
+            Self::SecondaryRepoDirtied { alias, message } => {
+                format!("secondary repo '{alias}' dirtied: {message}")
+            }
             Self::AppendFailed { error } => {
                 format!("failed to append the terminal event: {error}")
             }
@@ -274,6 +290,10 @@ mod tests {
             CompletionRefusal::FrontmatterRetryExhausted {
                 violations: vec![violation()],
             },
+            CompletionRefusal::SecondaryRepoDirtied {
+                alias: "repoB".into(),
+                message: "tracked files modified in the read-only snapshot".into(),
+            },
             CompletionRefusal::AppendFailed {
                 error: "disk full".into(),
             },
@@ -304,6 +324,7 @@ mod tests {
                 CompletionRefusal::ScriptValidationFailed { .. } => "ScriptValidationFailed",
                 CompletionRefusal::FrontmatterRetryPending { .. } => "FrontmatterRetryPending",
                 CompletionRefusal::FrontmatterRetryExhausted { .. } => "FrontmatterRetryExhausted",
+                CompletionRefusal::SecondaryRepoDirtied { .. } => "SecondaryRepoDirtied",
                 CompletionRefusal::AppendFailed { .. } => "AppendFailed",
                 CompletionRefusal::MergeResolutionFailed { .. } => "MergeResolutionFailed",
                 CompletionRefusal::MergeResolverSpawned { .. } => "MergeResolverSpawned",

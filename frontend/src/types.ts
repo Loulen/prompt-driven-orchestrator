@@ -415,6 +415,12 @@ export interface Trigger {
   pipeline_name: string;
   target_repo?: string | null;
   /**
+   * Read-only secondary repos as raw JSON TEXT (#465, ADR-0042): a
+   * `[{repo, base_branch?}]` array with `[0]` = primary. Null/absent → mono-repo.
+   * Forwarded and re-frozen at fire time.
+   */
+  target_repos?: string | null;
+  /**
    * Resolved target repo for "group by project" (#258): the raw `target_repo`,
    * or the daemon's `repo_root` when unset. Sent only by the list endpoint
    * (`GET /triggers`); the row badge / detail still read raw `target_repo`.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   CheckCircle,
   AlertCircle,
@@ -10,20 +10,11 @@ import {
   Maximize2,
 } from "lucide-react";
 import type { IterationInfo, NodeState, NodeStatus } from "../types";
-import {
-  markNodeDone,
-  killNode,
-  restartNode,
-  startNode,
-  stopNode,
-  retryNode,
-  retryNodePreview,
-  fetchPrompt,
-  fetchNodeIO,
-  artifactUrl,
-} from "../api";
-import type { PortIO, FileInfo, MarkNodeDoneOutcome } from "../api";
+import { artifactUrl } from "../api";
+import type { PortIO, FileInfo } from "../api";
 import type { PortType } from "../types";
+import { useNodeRun } from "../hooks/useNodeRun";
+import type { MarkVerdict } from "../hooks/useNodeRun";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -50,21 +41,6 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
   stale: "Stale",
 };
 
-function pollInterval(status: NodeStatus): number | null {
-  switch (status) {
-    case "running":
-    case "awaiting_user":
-    case "stale":
-      return 1000;
-    case "completed":
-    case "failed":
-    case "stopped":
-      return 5000;
-    case "pending":
-      return null;
-  }
-}
-
 interface Props {
   node: NodeState;
   runId: string;
@@ -81,19 +57,6 @@ interface Props {
 // An enum (not two orthogonal booleans) makes the illegal
 // `{minimized + expanded}` state unrepresentable.
 type TerminalView = "minimized" | "split" | "expanded";
-
-/**
- * What the last *Mark complete* click produced (#490, ADR-0035).
- *
- * `pending` exists so the verdict region always has a tenant: the handler no longer
- * clears before awaiting, so there is no window in which a previous verdict has been
- * erased and no new one written. `error` is the transport breakdown, which the
- * pre-#490 code swallowed into `console.error` and rendered as nothing.
- */
-type MarkVerdict =
-  | { kind: "pending" }
-  | MarkNodeDoneOutcome
-  | { kind: "error"; message: string };
 
 /**
  * Three tones, because the three answers demand three different reactions:
@@ -241,21 +204,7 @@ export default function NodeDetailPanel({
   nodeName,
   initialTerminalExpanded,
 }: Props) {
-  const [promptText, setPromptText] = useState<string | null>(null);
-  const [inputs, setInputs] = useState<PortIO[]>([]);
-  const [outputs, setOutputs] = useState<PortIO[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
-  // #490: a VERDICT object, not `string[] | null`. The old shape was
-  // *structurally incapable* of expressing "refused for a reason that has no port
-  // list" — which is the bug: the transition guard's refusal ("resume the run
-  // first") arrived with an empty list and the banner was gated on `length > 0`, so
-  // the most frequent refusal of all rendered nothing.
-  //
-  // Scoped by `iter` on the `userSelectedIter` idiom of this file, which also kills
-  // a latent second bug: a verdict from iter 3 surviving a switch back to iter 1.
-  const [markVerdict, setMarkVerdict] = useState<
-    ({ iter: number } & MarkVerdict) | null
-  >(null);
   // Seed at mount only (no reactive effect on status): the issue trigger is
   // "clicking the node" (= selection / mount), not a live transition. A node
   // is `key`-ed by node_id at both mount sites, so selecting another terminated
@@ -270,9 +219,6 @@ export default function NodeDetailPanel({
     nodeId: string;
     iter: number;
   } | null>(null);
-  const [retryConfirm, setRetryConfirm] = useState<{
-    affectedCount: number;
-  } | null>(null);
 
   const selectedIter =
     userSelectedIter?.nodeId === node.node_id
@@ -286,9 +232,35 @@ export default function NodeDetailPanel({
     [node.node_id],
   );
 
+  // The retry handlers used to call `setTerminalView("split")` inline. The mode
+  // stays presentational state here; it travels into `useNodeRun` as a *stable*
+  // callback (`useCallback` with no deps, exactly as stable as the `setTerminalView`
+  // setter it replaces), so the retry callbacks keep the identity they had.
+  const showTerminalSplit = useCallback(() => setTerminalView("split"), []);
+
+  // Every read and command of this panel is iter-scoped, so the resolved
+  // `selectedIter` is an argument: the panel owns the IterSelector's state and the
+  // hook owns the orchestration. One owner, no second copy to keep in sync.
+  const {
+    promptText,
+    inputs,
+    outputs,
+    markVerdict,
+    retryConfirm,
+    stop,
+    retry,
+    confirmRetry,
+    cancelRetry,
+    start,
+    markComplete,
+    killStale,
+    restartStale,
+  } = useNodeRun(runId, node, selectedIter, {
+    isArchived,
+    onRetryStarted: showTerminalSplit,
+  });
+
   const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
-  const interval = pollInterval(node.status);
-  const isStaleIter = selectedIter !== node.iter;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
   const showTerminal = node.status !== "pending";
 
@@ -313,138 +285,6 @@ export default function NodeDetailPanel({
         }
       : { kind: "static", files: modal.files };
   }, [modal, node.iterations, node.node_id, selectedIter]);
-
-  // #315: the per-iter *rendered* prompt lives in the node's working dir, which
-  // is destroyed on archive and is not among the preserved set (ADR-0020 keeps
-  // artifacts + pipeline.yaml + pipeline.prompts/). So the fetch would always
-  // 404 for an archived run — skip it and show an honest note instead of a
-  // stuck "Loading prompt..." spinner.
-  const shouldFetchPrompt =
-    !isArchived && (node.status !== "pending" || isStaleIter);
-
-  useEffect(() => {
-    if (!shouldFetchPrompt) return;
-
-    let cancelled = false;
-
-    fetchPrompt(runId, node.node_id, selectedIter)
-      .then((text) => {
-        if (!cancelled) setPromptText(text);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, node.node_id, selectedIter, shouldFetchPrompt]);
-
-  useEffect(() => {
-    const oneShot = isStaleIter || (interval === null && node.status === "pending");
-
-    if (oneShot) {
-      let cancelled = false;
-      fetchNodeIO(runId, node.node_id, selectedIter)
-        .then((io) => {
-          if (!cancelled) {
-            setInputs(io.inputs);
-            setOutputs(io.outputs);
-          }
-        })
-        .catch(() => {});
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (interval === null) return;
-
-    let cancelled = false;
-
-    async function pollIO() {
-      try {
-        const io = await fetchNodeIO(runId, node.node_id, selectedIter);
-        if (!cancelled) {
-          setInputs(io.inputs);
-          setOutputs(io.outputs);
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    pollIO();
-    const timer = setInterval(pollIO, interval);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [interval, node.node_id, selectedIter, runId, isStaleIter, node.status]);
-
-  const handleStop = useCallback(async () => {
-    try {
-      await stopNode(runId, node.node_id);
-    } catch {
-      // best-effort
-    }
-  }, [runId, node.node_id]);
-
-  const handleRetry = useCallback(async () => {
-    try {
-      const preview = await retryNodePreview(runId, node.node_id);
-      if (preview.affected_count > 0) {
-        setRetryConfirm({ affectedCount: preview.affected_count });
-        return; // not retried yet → leave terminalView untouched
-      }
-      await retryNode(runId, node.node_id);
-      // Session revives (status → running once refreshRun lands the NodeStarted
-      // event); re-show the terminal beside the details rather than full-frame.
-      setTerminalView("split");
-    } catch {
-      // best-effort
-    }
-  }, [runId, node.node_id]);
-
-  const handleRetryConfirmed = useCallback(async () => {
-    setRetryConfirm(null);
-    try {
-      await retryNode(runId, node.node_id);
-      setTerminalView("split");
-    } catch {
-      // best-effort
-    }
-  }, [runId, node.node_id]);
-
-  // #204: force-spawn a pending node out of dependency order. The daemon owns
-  // the run-status gate (a non-spawnable run returns 409), so a click on a
-  // pending node in a terminal run just no-ops with a caught error.
-  const handleStart = useCallback(async () => {
-    try {
-      await startNode(runId, node.node_id);
-    } catch {
-      // best-effort
-    }
-  }, [runId, node.node_id]);
-
-  const handleMarkComplete = useCallback(async () => {
-    // #490: NO `setMarkVerdict(null)` preamble. Clearing before awaiting is what
-    // made the banner flicker — on a lying `200` nothing was written back, so a
-    // verdict from a previous click vanished and never returned. The region always
-    // has a tenant: `pending` occupies it, and every exit writes a verdict.
-    const iter = selectedIter;
-    setMarkVerdict({ iter, kind: "pending" });
-    try {
-      const outcome: MarkNodeDoneOutcome = await markNodeDone(runId, node.node_id, iter);
-      setMarkVerdict({ iter, ...outcome });
-    } catch (e) {
-      // No longer swallowed into `console.error`: a POST that never lands must not
-      // look like a success.
-      setMarkVerdict({
-        iter,
-        kind: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }, [runId, node.node_id, selectedIter]);
 
   return (
     <aside className="flex h-full flex-col bg-bg-2">
@@ -494,7 +334,7 @@ export default function NodeDetailPanel({
           <button
             data-testid="stop-btn"
             disabled={node.status !== "running"}
-            onClick={node.status === "running" ? handleStop : undefined}
+            onClick={node.status === "running" ? stop : undefined}
             className={
               node.status === "running"
                 ? "flex cursor-pointer items-center gap-1 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-0.5 text-st-failed transition-colors hover:bg-st-failed/20"
@@ -508,7 +348,7 @@ export default function NodeDetailPanel({
           {node.status === "pending" && (
             <button
               data-testid="start-btn"
-              onClick={handleStart}
+              onClick={start}
               className={RETRY_BUTTON_CLASS}
               style={RETRY_BUTTON_STYLE}
             >
@@ -516,7 +356,7 @@ export default function NodeDetailPanel({
               Start
             </button>
           )}
-          <RetryPlayButton status={node.status} onClick={handleRetry} />
+          <RetryPlayButton status={node.status} onClick={retry} />
         </div>
       )}
 
@@ -560,9 +400,7 @@ export default function NodeDetailPanel({
             <div className="flex items-center gap-1">
               <button
                 data-testid="stale-stop-btn"
-                onClick={async () => {
-                  try { await killNode(runId, node.node_id, selectedIter); } catch { /* best-effort */ }
-                }}
+                onClick={killStale}
                 className="flex cursor-pointer items-center gap-1 rounded border border-st-stale/40 bg-st-stale/10 px-1.5 py-0.5 text-st-stale transition-colors hover:bg-st-stale/20"
                 style={{ fontSize: "10.5px", fontWeight: 500 }}
               >
@@ -571,9 +409,7 @@ export default function NodeDetailPanel({
               </button>
               <button
                 data-testid="stale-retry-btn"
-                onClick={async () => {
-                  try { await restartNode(runId, node.node_id, selectedIter); } catch { /* best-effort */ }
-                }}
+                onClick={restartStale}
                 className="flex cursor-pointer items-center gap-1 rounded border border-st-stale/40 bg-st-stale/10 px-1.5 py-0.5 text-st-stale transition-colors hover:bg-st-stale/20"
                 style={{ fontSize: "10.5px", fontWeight: 500 }}
               >
@@ -722,7 +558,7 @@ export default function NodeDetailPanel({
               {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed" || node.status === "stale") && !isArchived && (
                 <>
                   <button
-                    onClick={handleMarkComplete}
+                    onClick={markComplete}
                     data-testid="mark-complete-btn"
                     className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
                     style={{ fontSize: "11.5px", fontWeight: 500 }}
@@ -859,7 +695,7 @@ export default function NodeDetailPanel({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           data-testid="retry-confirm-backdrop"
-          onClick={() => setRetryConfirm(null)}
+          onClick={cancelRetry}
         >
           <div
             className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
@@ -877,7 +713,7 @@ export default function NodeDetailPanel({
             <div className="mt-4 flex justify-end gap-2">
               <button
                 data-testid="retry-confirm-cancel"
-                onClick={() => setRetryConfirm(null)}
+                onClick={cancelRetry}
                 className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
                 style={{ fontSize: "11.5px" }}
               >
@@ -885,7 +721,7 @@ export default function NodeDetailPanel({
               </button>
               <button
                 data-testid="retry-confirm-ok"
-                onClick={handleRetryConfirmed}
+                onClick={confirmRetry}
                 className="rounded-md bg-accent px-3 py-1.5 text-white transition-colors hover:bg-accent/80"
                 style={{ fontSize: "11.5px" }}
               >

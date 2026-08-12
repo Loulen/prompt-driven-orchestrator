@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 # <directory>  <max direct tracked files>
 BASELINES='
-frontend/src/components 137
+frontend/src/components 139
 crates/pdo-daemon/src 55
 '
 

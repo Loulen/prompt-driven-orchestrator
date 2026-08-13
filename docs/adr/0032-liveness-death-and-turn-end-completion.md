@@ -10,6 +10,12 @@
 > observait ensuite fidèlement, sous un `session_died` parfaitement crédible. Le verdict terminal
 > reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
 >
+> **Amendé par ADR-0043 (#433).** La complétion sur fin de tour (§2) gagne un substrat de livraison
+> **primaire, event-driven, côté agent** : un hook `Stop` de Claude Code, injecté par le runtime, qui
+> exécute `pdo complete --auto` à chaque fin de tour. Le balayage daemon décrit ci-dessous en devient
+> le **repli**. Politique (opt-in, décochée par défaut), les deux gardes et le chemin partagé sont
+> inchangés — seule la *livraison* gagne un second substrat, gaté sur le même réglage.
+>
 > **Amendé par #473 (résolution du transcript par identité de session, 1.22.0).** Le §2 lisait « *son*
 > transcript » ; le code lisait en réalité le `.jsonl` le plus récent du dossier projet CC, résolu par
 > **cwd**. Or un nœud ni `code-mutating` ni `merge` tourne dans le worktree du Run, qui est **aussi** le
@@ -61,6 +67,13 @@ producteur, et ils doivent le rester.
 `validate_completion` accepte le `node_done` tardif. Les quatre verrous de #469 tombent ensemble.
 
 ### 2. La complétion automatique se déclenche sur une fin de tour constatée, jamais sur une durée
+
+> **Livraison (ADR-0043).** Cette politique a désormais **deux substrats**, gatés sur le même
+> réglage : un hook `Stop` côté agent (`pdo complete --auto`) — **primaire**, event-driven, sans
+> lecture de transcript — et le balayage daemon décrit ci-dessous — **repli**. Les deux passent par
+> le chemin partagé et sont idempotents entre eux (qui arrive second obtient un no-op). Ce qui suit
+> décrit le substrat de repli et la politique commune (gardes, états, réglage) ; les deux gardes
+> valent identiquement pour le hook.
 
 Le danger n°1 (« l'agent a fini sans appeler `pdo complete` ») n'est **pas** un cas de mort :
 `claude --dangerously-skip-permissions "<prompt>"` ne sort pas à la fin d'un tour, il reste dans le

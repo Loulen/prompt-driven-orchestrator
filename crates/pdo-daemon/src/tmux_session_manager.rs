@@ -276,15 +276,29 @@ fn wrap_with_env(
     format!("exec bash -c {}", sh_single_quote(&inner))
 }
 
+/// The settings injected via `claude --settings` to arm a turn-end `Stop` hook
+/// (#433, ADR-0043). On every turn end the hook runs `pdo complete --auto` and
+/// then `exit 0` **unconditionally**: a `Stop` hook only forces the turn to
+/// continue on `exit 2` / `{"decision":"block"}`, so the `; exit 0` swallows the
+/// recoverable `exit 3` of a still-missing output (ADR-0035 — nothing recorded)
+/// and the hook can never loop or complete prematurely. `--settings` MERGES
+/// additively over `~/.claude` (confirmed against the pinned CLI: "load
+/// additional settings"), so this clobbers no user hook. `pdo` is on the session
+/// PATH (host and container) and the hook inherits the `PDO_*`/`PDO_DAEMON_URL`
+/// exports `wrap_with_env` set, so no env has to be threaded into the JSON.
+pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto; exit 0"}]}]}}"#;
+
 /// Build the `exec claude …` tail for an agent node. A non-empty `model`
 /// inserts `--model '<m>'`, a non-empty `effort` inserts `--effort '<lvl>'`
-/// after it, and a non-empty `session_id` inserts `--session-id '<uuid>'` last;
-/// `None` *or* an empty string on all three reproduces the legacy command
+/// after it, then a `Some` `settings_path` inserts `--settings '<file>'` (#433),
+/// and a non-empty `session_id` inserts `--session-id '<uuid>'` last (#473);
+/// `None` *or* an empty string on all of them reproduces the legacy command
 /// byte-for-byte (the state infra sessions launch in).
 fn build_agent_tail(
     prompt_path: &Path,
     model: Option<&str>,
     effort: Option<&str>,
+    settings_path: Option<&Path>,
     session_id: Option<&str>,
 ) -> String {
     // A non-empty `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing
@@ -306,9 +320,17 @@ fn build_agent_tail(
         Some(e) if !e.is_empty() => format!("--effort {} ", sh_single_quote(e)),
         _ => String::new(),
     };
+    // #433: `--settings '<file>'` arms the turn-end `Stop` hook. Placed AFTER
+    // `--effort` — the position that leaves every model/effort substring test
+    // untouched. `None` ⇒ empty fragment, so the hook-off tail stays
+    // byte-identical to the legacy launch.
+    let settings_flag = match settings_path {
+        Some(p) => format!("--settings {} ", sh_single_quote(&p.to_string_lossy())),
+        None => String::new(),
+    };
     // #473: pin the Claude Code session id so its transcript is `<uuid>.jsonl` and
     // the liveness sweep resolves it by identity, never by newest-mtime in a shared
-    // cwd. Placed LAST (after model/effort) so the model/effort byte-identity
+    // cwd. Placed LAST (after model/effort/settings) so the model/effort byte-identity
     // substrings the #296/#424 tests pin stay contiguous. `None` OR `Some("")` ⇒
     // empty fragment (infra sessions): the tail then reproduces the legacy launch
     // byte-for-byte, so the pre-#473 "no id" behaviour is what `None` still means.
@@ -317,9 +339,10 @@ fn build_agent_tail(
         _ => String::new(),
     };
     format!(
-        "exec claude --dangerously-skip-permissions {}{}{}\"$(cat {})\"",
+        "exec claude --dangerously-skip-permissions {}{}{}{}\"$(cat {})\"",
         model_flag,
         effort_flag,
+        settings_flag,
         session_flag,
         sh_single_quote(&prompt_path.to_string_lossy())
     )
@@ -380,6 +403,7 @@ pub fn build_tmux_script(
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
     sandbox: Option<&SandboxWrap<'_>>,
+    settings_path: Option<&Path>,
 ) -> String {
     const NO_ENV: &[(String, String)] = &[];
     let (tail_cmd, extra_env): (String, &[(String, String)]) = match tail {
@@ -416,9 +440,13 @@ pub fn build_tmux_script(
             effort,
             session_id,
         } => {
+            // #433: `settings_path` (the turn-end `Stop` hook) is honoured ONLY on
+            // the agent tail — a `Script`/`Shell` tail runs bash, never `claude`,
+            // so it structurally cannot carry `--settings`. #473: `session_id` pins
+            // the transcript identity, threaded through the enum variant.
             let cmd = match tmux_cmd_override {
                 Some(cmd) => cmd.to_string(),
-                None => build_agent_tail(prompt_path, model, effort, session_id),
+                None => build_agent_tail(prompt_path, model, effort, settings_path, session_id),
             };
             (cmd, NO_ENV)
         }
@@ -461,16 +489,19 @@ pub fn build_tmux_script(
 /// the transcript was saved" (https://code.claude.com/docs/en/model-config).
 /// So resuming never silently downgrades the per-node model.
 ///
-/// `--effort` IS threaded here (#424), because that guarantee covers the model
 /// and nothing else. Measured on claude 2.1.220: `--effort xhigh` then a resume
 /// reports `auto (currently high)` — the level is lost, and the transcript stores
 /// no `effort` field for anything to read back. So the level is re-posed from the
 /// `NodeStarted` payload (launch-time value, not the current YAML — ADR-0007: an
 /// edit has no effect on a live node's current iter). `None` or an empty string ⇒
 /// no `--effort`.
+///
+/// `settings_path` (#433 / ADR-0043 D7) re-arms the turn-end `Stop` hook so a
+/// resurrected session does not silently lose it; `None` ⇒ no `--settings`.
 // Every argument is an irreducible input to the resume script (identity, working
-// context, launch selectors, sandbox wrap); bundling them into a struct would only
-// move the list, not shorten it — same rationale as `resume` / `spawn`.
+// context, launch selectors, sandbox wrap, settings path); bundling them into a
+// struct would only move the list, not shorten it — same rationale as
+// `resume` / `spawn` / `build_tmux_script`.
 #[allow(clippy::too_many_arguments)]
 fn build_resume_script(
     run_id: &str,
@@ -481,6 +512,7 @@ fn build_resume_script(
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
+    settings_path: Option<&Path>,
 ) -> String {
     let effort_flag = match effort {
         Some(e) if !e.is_empty() => format!(" --effort {}", sh_single_quote(e)),
@@ -492,11 +524,19 @@ fn build_resume_script(
         Some(s) if !s.is_empty() => format!("--resume {}", sh_single_quote(s)),
         _ => "--continue".to_string(),
     };
+    // #433 / ADR-0043 (D7): re-arm the `Stop` hook on resume, or a resurrected
+    // session silently loses it — the daemon sweep still covers the node, but the
+    // PRIMARY substrate must survive resurrection. Leading space matches this
+    // function's local `effort_flag` convention; `None` ⇒ byte-identical tail.
+    let settings_flag = match settings_path {
+        Some(p) => format!(" --settings {}", sh_single_quote(&p.to_string_lossy())),
+        None => String::new(),
+    };
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
-        None => {
-            format!("exec claude --dangerously-skip-permissions {resume_flag}{effort_flag}")
-        }
+        None => format!(
+            "exec claude --dangerously-skip-permissions {resume_flag}{effort_flag}{settings_flag}"
+        ),
     };
 
     // #407: the 6th tail path (`claude --continue`) is wrapped identically — a
@@ -555,11 +595,26 @@ pub fn spawn(
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
     sandbox: Option<&SandboxWrap<'_>>,
+    inject_hook: bool,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
     let prompt_path = prompt_dir.join(format!("{node_id}-iter-{iter}.md"));
     std::fs::write(&prompt_path, prompt)?;
+
+    // #433 / ADR-0043: when turn-end auto-completion is enabled, drop a settings
+    // file beside the prompt and reference it via `claude --settings`, so a `Stop`
+    // hook runs `pdo complete --auto` at every turn end. Same lifecycle as the
+    // prompt (gitignored under `.pdo/`, resolves identically host and container).
+    // Callers pass `false` for `script`/manager/merge-resolver sessions; the tail
+    // selector in `build_tmux_script` is the belt-and-suspenders guard.
+    let settings_path = if inject_hook {
+        let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
+        std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
+        Some(p)
+    } else {
+        None
+    };
 
     let script = build_tmux_script(
         run_id,
@@ -570,6 +625,7 @@ pub fn spawn(
         tmux_cmd_override,
         tail,
         sandbox,
+        settings_path.as_deref(),
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -615,6 +671,8 @@ pub fn spawn_shell(
         None,
         SessionTail::Shell,
         sandbox,
+        // An ad-hoc shell runs `bash -i`, never `claude` — no `Stop` hook (#433).
+        None,
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -659,7 +717,22 @@ pub fn resume(
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
+    inject_hook: bool,
 ) -> Result<()> {
+    // #433 / ADR-0043 (D7): a resumed session must re-carry the `Stop` hook.
+    // Re-write the settings file (idempotent; same path `spawn` used) and
+    // reference it. `create_dir_all` covers the rare case where the prompt dir was
+    // pruned since spawn. `false` (setting off, or a `script` node) ⇒ no file, and
+    // `build_resume_script` emits a byte-identical `--continue` tail.
+    let settings_path = if inject_hook {
+        let prompt_dir = working_dir.join(".pdo").join("prompts");
+        std::fs::create_dir_all(&prompt_dir)?;
+        let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
+        std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
+        Some(p)
+    } else {
+        None
+    };
     let script = build_resume_script(
         run_id,
         node_id,
@@ -669,6 +742,7 @@ pub fn resume(
         session_id,
         tmux_cmd_override,
         sandbox,
+        settings_path.as_deref(),
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -1747,6 +1821,7 @@ mod tests {
                 session_id: None,
             },
             None,
+            None,
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
@@ -1767,6 +1842,7 @@ mod tests {
                 effort: None,
                 session_id: None,
             },
+            None,
             None,
         );
         assert!(script.contains("exec sleep 60"));
@@ -1792,6 +1868,7 @@ mod tests {
                 effort: None,
                 session_id: None,
             },
+            None,
             None,
         );
         assert!(
@@ -1827,6 +1904,7 @@ mod tests {
                 effort: None,
                 session_id: None,
             },
+            None,
             None,
         );
         assert!(script.contains("--model"), "model flag present: {script}");
@@ -1867,6 +1945,7 @@ mod tests {
                 session_id: None,
             },
             None,
+            None,
         );
         assert!(
             !script.contains("--model"),
@@ -1894,6 +1973,7 @@ mod tests {
                 effort,
                 session_id: None,
             },
+            None,
             None,
         )
     }
@@ -1966,6 +2046,26 @@ mod tests {
         assert!(!script.contains("--model"), "{script}");
     }
 
+    /// #433 helper: build an agent tail with a `Some` settings path, no
+    /// model/effort, no sandbox.
+    fn agent_script_with_settings(settings: &Path) -> String {
+        build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            Path::new("/tmp/test-prompt.md"),
+            None,
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            Some(settings),
+        )
+    }
+
     /// #473 helper: build an agent tail with model/effort/session_id.
     fn agent_script_with_session(
         model: Option<&str>,
@@ -1985,7 +2085,76 @@ mod tests {
                 session_id,
             },
             None,
+            None,
         )
+    }
+
+    #[test]
+    fn stop_hook_settings_json_is_valid_and_wraps_with_exit_zero() {
+        // #433 / ADR-0043: the injected settings must be valid JSON that arms a
+        // `Stop` hook whose command swallows any non-zero exit with `; exit 0`
+        // (so the recoverable `exit 3` of a missing output can never force-loop
+        // the turn or complete prematurely).
+        let v: serde_json::Value =
+            serde_json::from_str(STOP_HOOK_SETTINGS_JSON).expect("settings JSON must parse");
+        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .expect("the Stop hook must carry a command");
+        assert_eq!(cmd, "pdo complete --auto; exit 0");
+        assert_eq!(
+            v["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
+            Some("command")
+        );
+    }
+
+    #[test]
+    fn build_script_omits_settings_when_none() {
+        // Off path: no settings ⇒ no `--settings`, byte-identical legacy tail.
+        let script = agent_script(None, None);
+        assert!(
+            !script.contains("--settings"),
+            "no settings flag when unset: {script}"
+        );
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions \"$(cat "),
+            "legacy tail must stay byte-identical when the hook is off: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_inserts_settings_after_effort_before_cat() {
+        // #433: `--settings '<file>'` sits AFTER `--model`/`--effort` and before the
+        // prompt `cat` — the position that keeps every model/effort substring test
+        // green. Single-quoted, hence `'\''` after `wrap_with_env` re-wraps in
+        // `bash -c '…'`.
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            Path::new("/tmp/test-prompt.md"),
+            None,
+            SessionTail::Agent {
+                model: Some("opus"),
+                effort: Some("low"),
+                session_id: None,
+            },
+            None,
+            Some(Path::new("/wd/.pdo/prompts/solo-iter-1.settings.json")),
+        );
+        assert!(
+            script.contains(
+                r"--effort '\''low'\'' --settings '\''/wd/.pdo/prompts/solo-iter-1.settings.json'\'' "
+            ),
+            "settings must follow effort, single-quoted: {script}"
+        );
+        let effort_at = script.find("--effort").unwrap();
+        let settings_at = script.find("--settings").unwrap();
+        let cat_at = script.find("$(cat").unwrap();
+        assert!(
+            effort_at < settings_at && settings_at < cat_at,
+            "order must be --effort, --settings, then the prompt cat: {script}"
+        );
     }
 
     #[test]
@@ -2026,6 +2195,123 @@ mod tests {
         assert!(
             effort_at < session_at && session_at < cat_at,
             "order must be --model, --effort, --session-id, then the prompt cat: {script}"
+        );
+    }
+
+    #[test]
+    fn build_script_settings_hugs_the_base_flag_without_model_or_effort() {
+        // The hook can be armed on a node with no model and no effort — the
+        // fragments are independent, so `--settings` lands right after the base
+        // flag with no double space.
+        let script = agent_script_with_settings(Path::new("/wd/s.json"));
+        assert!(
+            script.contains(
+                r#"--dangerously-skip-permissions --settings '\''/wd/s.json'\'' "$(cat "#
+            ),
+            "settings-only tail must leave no gap: {script}"
+        );
+        assert!(
+            !script.contains("--model") && !script.contains("--effort"),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn build_script_settings_survives_the_docker_exec_wrap() {
+        // #433 + #407: a sandboxed agent tail carries `--settings` INSIDE the
+        // `docker exec … bash -lc '<tail>'`, at the same path (the container mounts
+        // the repo at the identical host path).
+        let wrap = SandboxWrap {
+            docker_bin: "docker",
+            uid: 1000,
+            gid: 1000,
+            marker: "pdo-run-abc-solo-iter-1",
+            workdir: Path::new("/wd"),
+        };
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            Path::new("/tmp/test-prompt.md"),
+            None,
+            SessionTail::Agent {
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            Some(&wrap),
+            Some(Path::new("/wd/.pdo/prompts/solo-iter-1.settings.json")),
+        );
+        assert!(
+            script.contains("--settings")
+                && script.contains("/wd/.pdo/prompts/solo-iter-1.settings.json"),
+            "the sandboxed tail must still reference the settings file: {script}"
+        );
+        assert!(
+            script.contains("docker") && script.contains("bash"),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn script_tail_never_receives_settings() {
+        // #433 immunity: a `script` node runs bash, never `claude` — even if a
+        // settings path is threaded (it never is in production), the Script arm
+        // ignores it, so no `--settings` and no `claude` reach the tail.
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            Path::new("/tmp/body.sh"),
+            None,
+            SessionTail::Script {
+                timeout_secs: 60,
+                env: &[],
+            },
+            None,
+            Some(Path::new("/wd/.pdo/prompts/solo-iter-1.settings.json")),
+        );
+        assert!(
+            !script.contains("--settings"),
+            "a script tail must never carry --settings: {script}"
+        );
+        assert!(!script.contains("claude"), "{script}");
+    }
+
+    #[test]
+    fn build_resume_script_omits_settings_when_none() {
+        // D7 off path: a resume with no hook is byte-identical to the legacy
+        // `--continue` tail.
+        let script = build_resume_script("r1", "solo", 1, 6172, None, None, None, None, None);
+        assert!(!script.contains("--settings"), "{script}");
+        assert!(
+            script.contains("exec claude --dangerously-skip-permissions --continue"),
+            "legacy continue tail must be byte-identical: {script}"
+        );
+    }
+
+    #[test]
+    fn build_resume_script_reinjects_settings_on_resume() {
+        // D7: a resumed session must re-carry the `Stop` hook, or it is lost at
+        // resurrection. `--settings` follows `--effort` on the `--continue` tail.
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            Some("low"),
+            None,
+            None,
+            None,
+            Some(Path::new("/wd/.pdo/prompts/solo-iter-1.settings.json")),
+        );
+        assert!(
+            script.contains(
+                r"--continue --effort '\''low'\'' --settings '\''/wd/.pdo/prompts/solo-iter-1.settings.json'\''"
+            ),
+            "resume tail must re-inject --settings after --effort: {script}"
         );
     }
 
@@ -2152,6 +2438,7 @@ mod tests {
                 env: &[],
             },
             None,
+            None,
         );
         assert!(script.starts_with("exec bash -c "));
         assert!(
@@ -2253,6 +2540,7 @@ mod tests {
                 env: &[],
             },
             None,
+            None,
         );
         assert!(
             !script.contains("sleep 99"),
@@ -2292,6 +2580,7 @@ mod tests {
                 env: &env,
             },
             None,
+            None,
         );
         assert!(
             script.contains("export PDO_INPUT_TASK="),
@@ -2326,6 +2615,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Shell,
+            None,
             None,
         );
         assert!(script.starts_with("exec bash -c "));
@@ -2362,6 +2652,7 @@ mod tests {
             prompt_path,
             Some("exec sleep 600"),
             SessionTail::Shell,
+            None,
             None,
         );
         assert!(
@@ -2455,6 +2746,7 @@ mod tests {
                 session_id: None,
             },
             Some(&wrap),
+            None,
         );
         // Host wrapper preserved.
         assert!(script.starts_with("exec bash -c "), "{script}");
@@ -2513,6 +2805,7 @@ mod tests {
                 env: &env,
             },
             Some(&wrap),
+            None,
         );
         assert!(
             script.contains("-e PDO_ARTIFACTS_DIR=/repo/.pdo/runs/r1/worktree/.pdo/artifacts"),
@@ -2553,6 +2846,7 @@ mod tests {
             None,
             SessionTail::Shell,
             Some(&wrap),
+            None,
         );
         assert!(
             script.contains("-e PDO_SBX_SESSION=pdo-shell-r1"),
@@ -2582,6 +2876,7 @@ mod tests {
                 session_id: None,
             },
             None,
+            None,
         );
         assert!(
             !with_none.contains("docker"),
@@ -2600,7 +2895,8 @@ mod tests {
         // here (#473) ⇒ the legacy `--continue` fallback.
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/solo/iter-1");
         let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
-        let wrapped = build_resume_script("r1", "solo", 1, 6172, None, None, None, Some(&wrap));
+        let wrapped =
+            build_resume_script("r1", "solo", 1, 6172, None, None, None, Some(&wrap), None);
         assert!(
             wrapped.contains("docker exec -i -t -e PDO_SBX_SESSION=pdo-r1-solo-iter-1"),
             "{wrapped}"
@@ -2608,7 +2904,7 @@ mod tests {
         assert!(wrapped.contains("pdo-sbx-r1 bash -lc"), "{wrapped}");
         assert!(wrapped.contains("--continue"), "{wrapped}");
         // off path unchanged.
-        let off = build_resume_script("r1", "solo", 1, 6172, None, None, None, None);
+        let off = build_resume_script("r1", "solo", 1, 6172, None, None, None, None, None);
         assert!(!off.contains("docker"), "{off}");
         assert!(
             off.contains("exec claude --dangerously-skip-permissions --continue"),
@@ -2624,7 +2920,7 @@ mod tests {
         // cwd is the shared Run worktree). The uuid is single-quoted, hence `'\''`
         // once `wrap_with_env` re-wraps the tail in `bash -c '…'`.
         let sid = "11111111-2222-3333-4444-555555555555";
-        let off = build_resume_script("r1", "solo", 1, 6172, None, Some(sid), None, None);
+        let off = build_resume_script("r1", "solo", 1, 6172, None, Some(sid), None, None, None);
         assert!(
             off.contains(&format!(r"--resume '\''{sid}'\''")),
             "resume must target the pinned session id: {off}"
@@ -2648,6 +2944,7 @@ mod tests {
             Some(sid),
             None,
             Some(&wrap),
+            None,
         );
         assert!(wrapped.contains("pdo-sbx-r1 bash -lc"), "{wrapped}");
         assert!(wrapped.contains("--resume"), "{wrapped}");
@@ -2663,7 +2960,7 @@ mod tests {
     fn build_resume_script_falls_back_to_continue_for_empty_session_id() {
         // #473: an empty pinned id behaves exactly like `None` (a pre-#473 row) —
         // the legacy positional `--continue`, byte-identical.
-        let script = build_resume_script("r1", "solo", 1, 6172, None, Some(""), None, None);
+        let script = build_resume_script("r1", "solo", 1, 6172, None, Some(""), None, None, None);
         assert!(!script.contains("--resume"), "{script}");
         assert!(
             script.contains(r"exec claude --dangerously-skip-permissions --continue'"),
@@ -2677,7 +2974,7 @@ mod tests {
         // byte-identical to the legacy tail. `Some("")` behaves like `None` — the
         // same last-resort guard as the spawn tail.
         for effort in [None, Some("")] {
-            let script = build_resume_script("r1", "solo", 1, 6172, effort, None, None, None);
+            let script = build_resume_script("r1", "solo", 1, 6172, effort, None, None, None, None);
             assert!(
                 !script.contains("--effort"),
                 "no effort flag when unset ({effort:?}): {script}"
@@ -2699,7 +2996,8 @@ mod tests {
         // the transcript stores no effort field to read back. So the level is
         // re-posed here, from the `NodeStarted` payload. Still no `--model`: that
         // one really is restored.
-        let script = build_resume_script("r1", "solo", 1, 6172, Some("low"), None, None, None);
+        let script =
+            build_resume_script("r1", "solo", 1, 6172, Some("low"), None, None, None, None);
         assert!(
             script.contains(r"--continue --effort '\''low'\''"),
             "effort must be re-posed right after --continue: {script}"
@@ -2724,6 +3022,7 @@ mod tests {
             Some("low"),
             Some("11111111-2222-3333-4444-555555555555"),
             Some("exec sleep 60"),
+            None,
             None,
         );
         assert!(script.contains("exec sleep 60"), "{script}");

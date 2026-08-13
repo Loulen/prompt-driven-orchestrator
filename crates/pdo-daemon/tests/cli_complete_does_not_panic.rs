@@ -178,6 +178,109 @@ async fn pdo_complete_does_not_panic_and_marks_node_done() {
     );
 }
 
+/// #433 / ADR-0043: `pdo complete --auto` — the body the injected `Stop` hook
+/// runs. It must honour the SAME exit-code contract as a bare `pdo complete`
+/// (exit `0` on a granted completion) AND record the completion as **automatic**
+/// (`node_auto_completed`), so the log never claims the agent decided.
+#[tokio::test]
+async fn pdo_complete_auto_exits_0_and_records_auto_completed() {
+    let daemon = TestDaemon::spawn_with_override(seed, Some("true".to_string()))
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let run_id = resp.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let port_dir = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/artifacts/solo/iter-1/out");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
+
+    let url = daemon.url();
+    let run_id_clone = run_id.clone();
+    let bin = env!("CARGO_BIN_EXE_pdo");
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(bin)
+            .args(["complete", "--auto"])
+            .env("PDO_RUN_ID", &run_id_clone)
+            .env("PDO_NODE_ID", NODE_ID)
+            .env("PDO_NODE_ITER", "1")
+            .env("PDO_DAEMON_URL", &url)
+            .output()
+            .expect("failed to spawn pdo complete --auto")
+    })
+    .await
+    .expect("blocking task panicked");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "stderr=\n{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a granted auto-completion exits 0 like the manual path; stderr=\n{stderr}"
+    );
+
+    let events: Vec<serde_json::Value> =
+        reqwest::get(format!("{}/runs/{run_id}/events", daemon.url()))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let kinds: Vec<&str> = events.iter().filter_map(|e| e["kind"].as_str()).collect();
+    assert!(
+        kinds.contains(&"node_auto_completed"),
+        "--auto must record an AUTOMATIC completion; saw {kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&"node_completed"),
+        "--auto must not record a plain node_completed; saw {kinds:?}"
+    );
+}
+
+/// `pdo complete --auto` on a node with its output still missing is a recoverable
+/// refusal → exit `3`, exactly like the manual path — the exit the hook's
+/// `; exit 0` swallows so a missing-output turn end never wedges the node.
+#[tokio::test]
+async fn pdo_complete_auto_exits_3_on_a_recoverable_refusal() {
+    let (daemon, run_id) = daemon_with_run().await;
+    let url = daemon.url();
+    let run_id_clone = run_id.clone();
+    let bin = env!("CARGO_BIN_EXE_pdo");
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(bin)
+            .args(["complete", "--auto"])
+            .env("PDO_RUN_ID", &run_id_clone)
+            .env("PDO_NODE_ID", NODE_ID)
+            .env("PDO_NODE_ITER", "1")
+            .env("PDO_DAEMON_URL", &url)
+            .output()
+            .expect("failed to spawn pdo complete --auto")
+    })
+    .await
+    .expect("blocking task panicked");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr=\n{stderr}");
+    assert!(stderr.contains("REFUSED"), "stderr=\n{stderr}");
+}
+
 /// Boot a daemon + a run, and hand back everything the CLI needs. The tmux override
 /// is `true`, so the node session exits instantly and neither claude nor a live tmux
 /// is required — the trick that makes the whole exit-code matrix testable in CI.

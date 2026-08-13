@@ -144,7 +144,14 @@ pub enum Commands {
         port: u16,
     },
     /// Signal that the current NodeRun has completed successfully
-    Complete,
+    Complete {
+        /// Runtime-initiated completion on turn end (#433, ADR-0043): set by the
+        /// injected `Stop` hook, never by an agent typing `pdo complete`. Records
+        /// `NodeAutoCompleted` (source `StopHook`) so the log says the completion
+        /// was automatic. Additive — the `0/3/4/1` exit-code contract is unchanged.
+        #[arg(long)]
+        auto: bool,
+    },
     /// Signal that the current NodeRun has failed
     Fail {
         #[arg(long)]
@@ -556,6 +563,13 @@ struct PipelineVariableInfo {
 struct NodeDoneRequest {
     #[serde(default)]
     iter: Option<i64>,
+    /// #433: `true` when the completion was initiated by the injected `Stop` hook
+    /// on turn end rather than by the agent (`pdo complete --auto`). Selects
+    /// [`CompletionSource::StopHook`] → `NodeAutoCompleted`. `#[serde(default)]`
+    /// keeps the legacy body (`{ "iter": … }`) and an older `pdo complete`
+    /// deserialising as `false`.
+    #[serde(default)]
+    auto: bool,
 }
 
 #[derive(Deserialize)]
@@ -639,7 +653,7 @@ pub const EXIT_REFUSED_TERMINAL: u8 = 4;
 /// Deliberately **not** `std::process::exit`: that skips the `reqwest` client's
 /// destructors and breaks the symmetry with the other subcommands. Returning the
 /// code lets `main` stay a dispatcher.
-pub fn run_complete() -> std::process::ExitCode {
+pub fn run_complete(auto: bool) -> std::process::ExitCode {
     let rid = match cli_run_id() {
         Ok(v) => v,
         Err(e) => return complete_breakdown(&format!("{e:#}")),
@@ -655,7 +669,7 @@ pub fn run_complete() -> std::process::ExitCode {
     let client = reqwest::blocking::Client::new();
     let resp = match client
         .post(&endpoint)
-        .json(&serde_json::json!({ "iter": iter }))
+        .json(&serde_json::json!({ "iter": iter, "auto": auto }))
         .send()
     {
         Ok(r) => r,
@@ -4287,6 +4301,20 @@ async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
     tmux_session_manager::default_model_with(stored)
 }
 
+/// Resolve turn-end auto-completion the way the liveness sweep does, from a
+/// *fresh* read of `instance_config` (#433, ADR-0043). Consulted at every agent
+/// spawn/resume seam so injecting the `Stop` hook tracks a `PUT /settings` with
+/// no restart — parity with [`stored_default_model`]. The hook and the sweep are
+/// one policy, one setting (ADR-0043): there is deliberately no second toggle. A
+/// DB read error resolves through the env/default tiers (never fails a spawn).
+async fn stored_autocomplete_turn_end(db: &sqlx::SqlitePool) -> bool {
+    let stored = instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.autocomplete_turn_end);
+    stale_detector::autocomplete_turn_end_with(stored)
+}
+
 // --- Trigger scheduler ---
 
 /// How many of the Trigger's *own* Runs are still live (#239). Scans projected
@@ -7523,6 +7551,9 @@ fn spawn_manager_session(
             session_id: None,
         },
         sandbox_wrap.as_ref(),
+        // #433 / ADR-0043: the manager is an infra session, not a pipeline node —
+        // it never calls `pdo complete`, so it gets no turn-end `Stop` hook.
+        false,
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -10283,6 +10314,11 @@ async fn node_pane(
             // own transcript. A pre-#473 row (no id) falls back to a bare
             // `--continue`, which is the very collision this issue fixes.
             let launch_session_id = find_launch_session_id(&events, &node_id, iter);
+            // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH — it
+            // may have toggled since spawn — so a resurrected session re-carries
+            // the `Stop` hook. A `script` node returned early above, so this tail is
+            // an agent by construction.
+            let inject_hook = stored_autocomplete_turn_end(&state.db).await;
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -10294,6 +10330,7 @@ async fn node_pane(
                 launch_session_id.as_deref(),
                 state.tmux_cmd_override.as_deref(),
                 sandbox_wrap.as_ref(),
+                inject_hook,
             ) {
                 warn!("Failed to resume session {session_name}: {e}");
                 return Json(PaneResponse {
@@ -10650,6 +10687,9 @@ async fn spawn_merge_resolver(
             session_id: None,
         },
         sandbox_wrap.as_ref(),
+        // #433 / ADR-0043: the merge resolver is an infra session (its `…/done` is
+        // handled by a distinct branch, not `complete_node_iteration`) — no hook.
+        false,
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
         let fail_event = event_log::Event {
@@ -10866,6 +10906,14 @@ pub(crate) enum CompletionSource {
     /// turn-end auto-completion is enabled. Records `NodeAutoCompleted`, so the
     /// log says the completion was automatic.
     TurnEnded,
+    /// The injected `Stop` hook ran `pdo complete --auto` on turn end (#433,
+    /// ADR-0043 — the *primary*, event-driven substrate; `TurnEnded` is the
+    /// daemon-sweep fallback). Records `NodeAutoCompleted` like `TurnEnded` — the
+    /// completion was automatic, not an agent decision — but its log label
+    /// distinguishes the hook (`auto:stop_hook`) from the sweep
+    /// (`auto:turn_ended`). The two are idempotent: whichever arrives second gets
+    /// a `NoOp`.
+    StopHook,
 }
 
 impl CompletionSource {
@@ -10876,6 +10924,9 @@ impl CompletionSource {
         match self {
             CompletionSource::Explicit => event_log::EventKind::NodeCompleted,
             CompletionSource::TurnEnded => event_log::EventKind::NodeAutoCompleted,
+            // #433: the hook completion is automatic too — reuse the SAME event
+            // kind (no new projection/transition-guard arm, no ADR-0032 regression).
+            CompletionSource::StopHook => event_log::EventKind::NodeAutoCompleted,
         }
     }
 
@@ -10884,6 +10935,7 @@ impl CompletionSource {
         match self {
             CompletionSource::Explicit => "node_done",
             CompletionSource::TurnEnded => "node_done(auto:turn_ended)",
+            CompletionSource::StopHook => "node_done(auto:stop_hook)",
         }
     }
 }
@@ -10959,7 +11011,12 @@ async fn node_done(
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     body: Option<Json<NodeDoneRequest>>,
 ) -> Response {
-    let iter = body.and_then(|b| b.iter).unwrap_or(1);
+    // #433: read `iter` and `auto` together before `body` is consumed. `auto`
+    // selects the completion source (`StopHook` ⇒ `NodeAutoCompleted`); a legacy
+    // body without the field deserialises `auto = false` ⇒ `Explicit`, unchanged.
+    let (iter, auto) = body
+        .map(|Json(b)| (b.iter.unwrap_or(1), b.auto))
+        .unwrap_or((1, false));
 
     // #490 / ADR-0035 §6: `__merge_resolver__` is handled HERE, hoisted out of the
     // shared body. It was the one site where the shared body's failure variant
@@ -10977,7 +11034,12 @@ async fn node_done(
         return merge_resolver_done(&state, &run_id).await;
     }
 
-    complete_node_iteration(&state, run_id, node_id, iter, CompletionSource::Explicit)
+    let source = if auto {
+        CompletionSource::StopHook
+    } else {
+        CompletionSource::Explicit
+    };
+    complete_node_iteration(&state, run_id, node_id, iter, source)
         .await
         .into_response()
 }
@@ -11823,6 +11885,10 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         // (wiring only one seam would leave this path at the account default —
         // a silent bug visible only on a manual force-spawn).
         default_model: stored_default_model(&state.db).await,
+        // #433 / ADR-0043: same reasoning as `default_model` — resolve turn-end
+        // auto-completion fresh so a force-spawned node arms the `Stop` hook when
+        // the setting is on, instead of silently missing it on this seam alone.
+        inject_hook: stored_autocomplete_turn_end(&state.db).await,
     };
 
     // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
@@ -12092,6 +12158,9 @@ async fn node_retry(
         docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: retry honours the instance default like the live scheduler path.
         default_model: stored_default_model(&state.db).await,
+        // #433 / ADR-0043: retry re-arms the `Stop` hook per the current setting,
+        // like the live scheduler path — not the value at the original spawn.
+        inject_hook: stored_autocomplete_turn_end(&state.db).await,
     };
 
     let start_result = node_primitives::start_node(&start_params);
@@ -20355,8 +20424,47 @@ edges:
 
     #[test]
     fn cli_parses_complete_subcommand() {
+        // #433: bare `complete` ⇒ `auto = false` (the agent-typed path, unchanged).
         let cli = Cli::try_parse_from(["pdo", "complete"]).unwrap();
-        assert!(matches!(cli.command, Commands::Complete));
+        assert!(matches!(cli.command, Commands::Complete { auto: false }));
+    }
+
+    #[test]
+    fn cli_parses_complete_auto_flag() {
+        // #433: `--auto` is the runtime-initiated (`Stop` hook) path.
+        let cli = Cli::try_parse_from(["pdo", "complete", "--auto"]).unwrap();
+        assert!(matches!(cli.command, Commands::Complete { auto: true }));
+    }
+
+    #[test]
+    fn stop_hook_source_reuses_auto_completed_with_a_distinct_label() {
+        // #433 / ADR-0043: the hook completion is AUTOMATIC — it must record the
+        // SAME `NodeAutoCompleted` event as the daemon sweep (no new EventKind, no
+        // projection/transition-guard arm, no ADR-0032 regression), and only its
+        // runtime log label distinguishes hook from sweep.
+        assert_eq!(
+            CompletionSource::StopHook.event_kind(),
+            event_log::EventKind::NodeAutoCompleted
+        );
+        assert_eq!(
+            CompletionSource::TurnEnded.event_kind(),
+            CompletionSource::StopHook.event_kind(),
+            "hook and sweep record the same kind"
+        );
+        assert_eq!(
+            CompletionSource::StopHook.label(),
+            "node_done(auto:stop_hook)"
+        );
+        assert_ne!(
+            CompletionSource::StopHook.label(),
+            CompletionSource::TurnEnded.label(),
+            "the labels must stay distinguishable in the runtime log"
+        );
+        // The explicit (agent-typed) path is unchanged.
+        assert_eq!(
+            CompletionSource::Explicit.event_kind(),
+            event_log::EventKind::NodeCompleted
+        );
     }
 
     #[test]

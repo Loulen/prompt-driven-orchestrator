@@ -49,6 +49,14 @@ pub(crate) struct StartNodeParams<'a> {
     /// / retry callers resolve it and pass it in; the node's own `model:` still
     /// wins over it via [`tmux_session_manager::resolve_node_model`].
     pub default_model: Option<String>,
+    /// Turn-end auto-completion, already resolved `stored → env → default` by the
+    /// caller (#433, ADR-0043). Same DB-less contract as [`Self::default_model`]:
+    /// the async caller reads [`crate::stored_autocomplete_turn_end`] and passes
+    /// the bare setting in; `start_node` then ANDs `!is_script` so a `script` node
+    /// never arms the `Stop` hook. Wiring this here (not only in `spawn_node`)
+    /// keeps a manual force-spawn honouring the instance default — the same
+    /// silent-bug class the `default_model` comment warns about (#347).
+    pub inject_hook: bool,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
@@ -79,6 +87,10 @@ pub(crate) struct StartNodeSpawn {
     tmux_cmd_override: Option<String>,
     tail: StartNodeTail,
     sandbox: Option<StartNodeSandbox>,
+    /// #433 / ADR-0043: arm the turn-end `Stop` hook (already ANDed with
+    /// `!is_script` in [`start_node`]). Threaded into
+    /// [`tmux_session_manager::spawn`] at [`StartNodeSpawn::execute`].
+    inject_hook: bool,
 }
 
 /// Owned mirror of [`tmux_session_manager::SessionTail`] — the borrowing enum
@@ -154,6 +166,7 @@ impl StartNodeSpawn {
             self.tmux_cmd_override.as_deref(),
             tail,
             sandbox_wrap.as_ref(),
+            self.inject_hook,
         )
     }
 }
@@ -430,6 +443,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         tmux_cmd_override: params.tmux_cmd_override.map(str::to_string),
         tail,
         sandbox,
+        // #433 / ADR-0043: the operator's setting, gated by `!is_script` — a script
+        // node runs bash, never `claude`, so it can carry no `Stop` hook.
+        inject_hook: params.inject_hook && !is_script,
     };
 
     let mut events = vec![node_started];
@@ -915,6 +931,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let result = start_node(&params);
@@ -954,10 +971,111 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let result = start_node(&params);
         assert!(matches!(result.outcome, PrimitiveOutcome::Rejected { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // start_node — turn-end Stop hook (#433 / ADR-0043)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn start_node_arms_the_stop_hook_for_an_agent_when_enabled() {
+        // An agent node started with the setting on carries the hook into its
+        // spawn intention, which `execute` threads on to `tmux_session_manager`.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_node("worker", NodeType::DocOnly, &[], &["out"])],
+            edges: vec![],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let run_state = empty_run_state();
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let params = StartNodeParams {
+            run_id: "run-1",
+            node_id: "worker",
+            iter: 1,
+            overrides: None,
+            pipeline: &pipeline,
+            run_state: &run_state,
+            artifacts_dir: &artifacts_dir,
+            worktree_dir: tmp.path(),
+            repo_root: tmp.path(),
+            pipeline_path: &tmp.path().join("pipeline.yaml"),
+            resolved_vars: &HashMap::new(),
+            daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
+            default_model: None,
+            inject_hook: true,
+        };
+        let result = start_node(&params);
+        assert_eq!(result.outcome, PrimitiveOutcome::Executed);
+        assert!(
+            result.spawn.unwrap().inject_hook,
+            "an agent node must arm the Stop hook when the setting is on"
+        );
+    }
+
+    #[test]
+    fn start_node_never_arms_the_stop_hook_for_a_script() {
+        // Immunity: even with the setting on, a `script` node (bash, no `claude`)
+        // must never carry the hook — the `params.inject_hook && !is_script` guard.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_node("builder", NodeType::Script, &[], &["out"])],
+            edges: vec![],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let run_state = empty_run_state();
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+        // A `script` node needs a non-empty body to reach `Executed` (an empty body
+        // is rejected as a silent no-op).
+        let pipeline_path = tmp.path().join("pipeline.yaml");
+        let body_file = crate::pipeline::canonical_prompt_path(&pipeline_path, "builder");
+        std::fs::create_dir_all(body_file.parent().unwrap()).unwrap();
+        std::fs::write(&body_file, "echo hi > \"$PDO_OUTPUT_OUT\"\n").unwrap();
+
+        let params = StartNodeParams {
+            run_id: "run-1",
+            node_id: "builder",
+            iter: 1,
+            overrides: None,
+            pipeline: &pipeline,
+            run_state: &run_state,
+            artifacts_dir: &artifacts_dir,
+            worktree_dir: tmp.path(),
+            repo_root: tmp.path(),
+            pipeline_path: &pipeline_path,
+            resolved_vars: &HashMap::new(),
+            daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
+            default_model: None,
+            inject_hook: true,
+        };
+        let result = start_node(&params);
+        assert_eq!(result.outcome, PrimitiveOutcome::Executed);
+        assert!(
+            !result.spawn.unwrap().inject_hook,
+            "a script node must never arm the Stop hook"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1013,6 +1131,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1071,6 +1190,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1115,6 +1235,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1183,6 +1304,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1274,6 +1396,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1338,6 +1461,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1402,6 +1526,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1662,6 +1787,7 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            inject_hook: false,
         };
 
         let result = start_node(&params);

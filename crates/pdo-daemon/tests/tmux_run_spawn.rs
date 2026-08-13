@@ -99,6 +99,8 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
             session_id: None,
         },
         None,
+        // #433: no turn-end `Stop` hook on this legacy-shape assertion.
+        None,
     );
 
     assert!(

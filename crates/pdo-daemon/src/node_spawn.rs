@@ -23,8 +23,8 @@ use crate::worktree_ops::{
 use crate::{
     admission, append_event_with, count_global_live_sessions_excluding, event_log,
     input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
-    reload_run_state_with, stored_default_model, stored_session_cap, tmux_session_manager,
-    transition_guard, AppState,
+    reload_run_state_with, stored_autocomplete_turn_end, stored_default_model, stored_session_cap,
+    tmux_session_manager, transition_guard, AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -685,6 +685,12 @@ pub(crate) async fn spawn_node(
         marker: &session_name,
         workdir: &working_dir,
     });
+    // #433 / ADR-0043: arm the turn-end `Stop` hook only when the operator has
+    // opted into turn-end auto-completion (the SAME setting as the daemon sweep,
+    // read FRESH — parity with model/effort) and never for a `script` node (bash
+    // tail, no `claude`). Resolved here, at the spawn edge, so a `PUT /settings`
+    // takes effect on the next node with no daemon restart.
+    let inject_hook = !is_script && stored_autocomplete_turn_end(deps.db).await;
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         spawn_prompt,
@@ -696,6 +702,7 @@ pub(crate) async fn spawn_node(
         deps.tmux_cmd_override,
         tail,
         sandbox_wrap.as_ref(),
+        inject_hook,
     ) {
         error!("failed to spawn tmux session: {e}");
     }

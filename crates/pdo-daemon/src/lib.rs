@@ -2068,6 +2068,22 @@ pub struct DaemonConfig {
     /// the user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
+    /// Run the ~30 s background Trigger-scheduler loop (#450). `true` in
+    /// production (the loop fires due Triggers on a heartbeat, and
+    /// `tokio::time::interval` runs its FIRST tick immediately, so boot catches
+    /// up any missed slot at once). `false` in the layer-3 test literals: those
+    /// tests drive firing deterministically through
+    /// [`DaemonHandle::run_trigger_tick`], and that immediate boot tick races the
+    /// seam — reading `paused`/`due_triggers` and firing (or not) a Run out from
+    /// under a test's `force_trigger_due` + `run_trigger_tick`, which is the
+    /// contention flake behind #450 and the whole family of trigger-scheduler
+    /// tests it poisons under load. Disabling only the background loop leaves the
+    /// deterministic seam as the sole tick; the production TOCTOU it exposed is
+    /// fixed independently in `run_trigger_scheduler_tick` (a last-moment re-read
+    /// of the pause kill-switch), so neutralising the loop here masks nothing.
+    /// Same charter as `price_refresh_at_boot`: true in prod, false in the
+    /// `tests/common/mod.rs` literals — never a process-global env read (#181).
+    pub run_trigger_scheduler_loop: bool,
 }
 
 impl DaemonConfig {
@@ -2116,6 +2132,10 @@ impl DaemonConfig {
             price_refresh_at_boot: std::env::var("PDO_PRICE_SYNC")
                 .map(|v| !v.is_empty() && v != "0" && v != "off")
                 .unwrap_or(true),
+            // #450: production always runs the background scheduler heartbeat.
+            // No env seam — the loop is core daemon behaviour, only the layer-3
+            // test literals opt out (deterministic tick seam).
+            run_trigger_scheduler_loop: true,
         }
     }
 }
@@ -2199,6 +2219,11 @@ pub async fn serve_with_config(
         Some(o) => o.into_health(),
         None => compute_service_health(),
     });
+
+    // #450: capture the background-scheduler switch before `config` is consumed
+    // into `AppState` below. `true` in prod, `false` in the layer-3 test literals
+    // (see `DaemonConfig::run_trigger_scheduler_loop`).
+    let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
 
     let state = Arc::new(AppState {
         db,
@@ -2341,8 +2366,11 @@ pub async fn serve_with_config(
     // Background task: Trigger scheduler (sibling of reaper/stale). Fires due
     // Triggers on a ~30s tick. Best-effort: only runs while the daemon lives,
     // forward-only (no backfill of missed slots). Suppressed in a nested daemon
-    // for the same reason the reaper is — a sub-claude must stay passive.
-    let _trigger_handle = if nested_daemon {
+    // for the same reason the reaper is — a sub-claude must stay passive — and in
+    // the layer-3 test harness (#450), where the immediate-first-tick boot tick
+    // would race the deterministic `run_trigger_tick` seam. Production sets
+    // `run_trigger_scheduler_loop = true`, so the boot catch-up is unchanged.
+    let _trigger_handle = if nested_daemon || !run_trigger_scheduler_loop {
         None
     } else {
         let trigger_state = state.clone();
@@ -4480,6 +4508,30 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     };
 
     for trigger in due {
+        // #450 TOCTOU close: re-read the #348 kill-switch at the last moment,
+        // just before touching any Trigger state. The tick-start read above is
+        // stale by now — `due_triggers` suspends on a DB round-trip, and neither
+        // `POST /triggers/pause` nor the `force_trigger_due` seam takes
+        // `trigger_tick_lock` (a blocking lock held across the guard subprocess
+        // would make the brake hang ~guard-timeout — a brake that hangs is no
+        // brake). So a pause that lands during that suspension is invisible to
+        // the tick-start read, and without this re-read a tick already inside
+        // its critical section would still fire a Run *after* the operator
+        // paused (the exact window the boot tick loses in
+        // `unpause_does_forward_only_one_shot_catchup` under CI contention).
+        // Bail the whole tick, mirroring the tick-start gate: `next_fire_at` is
+        // left frozen in the past (no `due_triggers`/dangling clear/fire touches
+        // it here), so the one-shot catch-up on unpause is preserved with no
+        // dedicated code. Fail-OPEN on a read error, same posture as the
+        // tick-start read. "Run now" (Manual) never reaches this Cron path, so
+        // it stays exempt from the pause.
+        if instance_config::triggers_paused(&state.db)
+            .await
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         // Debug-only fault injection (#222): prove the tick's panic is isolated.
         if state.panic_on_trigger_name.as_deref() == Some(trigger.name.as_str()) {
             panic!(

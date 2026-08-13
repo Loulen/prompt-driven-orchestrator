@@ -335,8 +335,44 @@ pub fn encode_working_dir(dir: &Path) -> String {
         .collect()
 }
 
+/// Resolve a node's transcript by its **pinned session id** (#473): Claude Code
+/// names the transcript file `<session_id>.jsonl` under the encoded-cwd project
+/// dir, so an exact-name lookup returns *this node's own* transcript regardless of
+/// how many other `.jsonl` files share the dir.
+///
+/// This is the fix for the manager-vs-node collision: a non-`code-mutating`/`merge`
+/// node's cwd is the Run worktree, which is also the manager's cwd (and every
+/// sibling non-CM node's), so one CC project dir holds several `.jsonl` and
+/// [`find_session_jsonl`]'s newest-mtime pick returns whichever was touched last —
+/// usually the manager's. Resolving by the id PDO pinned at spawn
+/// (`claude --session-id <uuid>`) is immune to that.
+///
+/// `projects_root` is the same #408 seam as [`find_session_jsonl`] (staging root
+/// for a live sandboxed Run, `~/.claude/projects/` otherwise); the cwd encoding
+/// stays the single source of truth (#373). Returns `None` when the file does not
+/// exist yet (a session that has not written its transcript), which the sweep
+/// treats as "no signal".
+pub fn session_jsonl_by_id(
+    projects_root: &Path,
+    working_dir: &Path,
+    session_id: &str,
+) -> Option<PathBuf> {
+    let encoded = encode_working_dir(working_dir);
+    let path = projects_root
+        .join(encoded)
+        .join(format!("{session_id}.jsonl"));
+    path.is_file().then_some(path)
+}
+
 /// Find the most recently modified `.jsonl` file for `working_dir` under the
 /// given Claude Code `projects/` root.
+///
+/// **Legacy fallback since #473.** The turn-end probe now resolves by pinned
+/// session id ([`session_jsonl_by_id`]) whenever the node recorded one; this
+/// newest-mtime resolution survives only for a node started before #473 (no id in
+/// its `NodeStarted`), where it is exactly the pre-#473 behaviour — including its
+/// known collision with the manager's transcript, which no historical node can now
+/// avoid but every new node does.
 ///
 /// `projects_root` is the seam that lets a sandboxed Run's transcripts be read
 /// from its staged home while it is live (#408): the caller resolves it via
@@ -499,8 +535,16 @@ pub trait NodeProbes {
     /// — see [`decide`].
     fn session_alive(&self) -> bool;
 
-    /// Trailing slice + mtime of the newest Claude Code transcript for this
-    /// node's working dir, or `None` when nothing resolves (#469 §2).
+    /// Trailing slice + mtime of *this node's* Claude Code transcript, or `None`
+    /// when nothing resolves (#469 §2).
+    ///
+    /// #473: the implementation resolves by the session id PDO pinned at spawn
+    /// ([`session_jsonl_by_id`]) — the transcript named `<uuid>.jsonl`, this node's
+    /// own — and only falls back to the newest-mtime pick ([`find_session_jsonl`])
+    /// for a pre-#473 node with no recorded id. Without that, a
+    /// non-`code-mutating`/`merge` node shares its cwd (the Run worktree) with the
+    /// manager's `claude`, so the newest `.jsonl` was usually the manager's and the
+    /// turn-end verdict was read off the wrong conversation.
     ///
     /// Called **only** when turn-end auto-completion is enabled. With the setting
     /// off this is never invoked, which is the whole of "unchecked ⇒ no transcript
@@ -1433,6 +1477,80 @@ SwapFree:         204800 kB
             "find_session_jsonl must resolve a real PDO node transcript after the #373 fix"
         );
         assert_eq!(found.unwrap().file_name().unwrap(), "session.jsonl");
+    }
+
+    // --- session_jsonl_by_id (#473: resolve by pinned identity, not mtime) ---
+
+    #[test]
+    fn session_jsonl_by_id_resolves_the_exact_named_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
+        let wd = Path::new("/home/user/project");
+        let dir = projects.join(encode_working_dir(wd));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let sid = "11111111-2222-3333-4444-555555555555";
+        std::fs::write(dir.join(format!("{sid}.jsonl")), "{}").unwrap();
+
+        let found = session_jsonl_by_id(&projects, wd, sid).expect("must resolve the pinned id");
+        assert_eq!(found.file_name().unwrap(), format!("{sid}.jsonl").as_str());
+    }
+
+    #[test]
+    fn session_jsonl_by_id_missing_file_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
+        // The dir may not even exist yet (session hasn't written a transcript).
+        assert!(
+            session_jsonl_by_id(&projects, Path::new("/home/user/project"), "no-such-id").is_none()
+        );
+    }
+
+    /// **The #473 bug, as a red/green contrast.** A single shared CC project dir
+    /// (the Run worktree, shared by the manager and a non-CM node) holds two
+    /// transcripts: the node's pinned `<uuid>.jsonl` (older) and the manager's
+    /// (newer). `find_session_jsonl` — the pre-#473 resolution — returns the
+    /// manager's (newest mtime); `session_jsonl_by_id` returns the node's own.
+    #[test]
+    fn session_jsonl_by_id_ignores_a_newer_sibling_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join(".claude").join("projects");
+        // A representative shared worktree cwd.
+        let wd = Path::new("/home/u/.pdo/runs/20260101-120000-abc/worktree");
+        let dir = projects.join(encode_working_dir(wd));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let node_sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let node_file = dir.join(format!("{node_sid}.jsonl"));
+        std::fs::write(&node_file, "node").unwrap();
+        filetime::set_file_mtime(
+            &node_file,
+            filetime::FileTime::from_system_time(SystemTime::now() - Duration::from_secs(600)),
+        )
+        .unwrap();
+
+        // The manager's transcript, in the SAME dir, touched more recently.
+        let manager_file = dir.join("00000000-0000-0000-0000-000000000000.jsonl");
+        std::fs::write(&manager_file, "manager").unwrap();
+
+        // Pre-#473: newest-mtime pick returns the MANAGER's file — the bug.
+        assert_eq!(
+            find_session_jsonl(&projects, wd)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "00000000-0000-0000-0000-000000000000.jsonl",
+            "the legacy resolution picks the newest sibling (the manager) — this is the bug"
+        );
+        // #473: identity resolution returns the NODE's own transcript.
+        assert_eq!(
+            session_jsonl_by_id(&projects, wd, node_sid)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            format!("{node_sid}.jsonl").as_str(),
+            "resolving by pinned id must return this node's transcript, not the newest sibling"
+        );
     }
 
     // --- validate_outputs (integration with outputs_validator) ---

@@ -10,7 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.22.0
+## 1.24.0
+
+Rien de cassant, aucune migration. La **complétion sur fin de tour gagne un substrat primaire,
+event-driven, côté agent** : un hook `Stop` de Claude Code (`pdo complete --auto; exit 0`), injecté
+au spawn/resume via `claude --settings`, complète le nœud dès que l'agent finit son tour ; le
+balayage daemon devient le repli (#433, ADR-0043 amendant ADR-0032 §2). Opt-in, **décoché par
+défaut** (`autocomplete_turn_end`), réutilise l'event `NodeAutoCompleted` avec un libellé distinct,
+sûr par construction (`; exit 0` avale le refus 3 des outputs manquants — jamais de boucle), immunisé
+côté `script` (bash, jamais `claude`). Bump **re-posé au next-free** (1.24.0 contre `origin/main`
+1.23.0) après collision avec #473.
+
+## 1.23.0
+
+Rien de cassant, aucune migration. Le **transcript d'un nœud est résolu par identité de session
+épinglée** (`<uuid>.jsonl`) au lieu du plus récent fichier d'un dossier projet partagé : un nœud
+non code-mutating ne collisionne plus avec le transcript de la session `__manager__` (#473). Le
+spawn d'un nœud agent épingle un `--session-id` UUID v4 (jamais pour un `script`), la veille et le
+resume résolvent par ce nom exact, les sessions infra restent sans id (donc jamais sondées ni
+reprises). ADR-0032 amendé (invariant byte-identité du tail levé pour un nœud agent, conservé pour
+`None`). Bump **re-posé au next-free** (1.23.0 contre `origin/main` 1.22.1) après collision avec
+#437/#465.
+
 
 Rien de cassant. La **liste de dépôts d'un Run devient éditable en cours de Run** — ajout/retrait de
 dépôts secondaires read-only, primaire verrouillé (#465 slice 2, ADR-0042). Bump **re-posé au

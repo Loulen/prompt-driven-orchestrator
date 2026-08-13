@@ -397,6 +397,15 @@ pub(crate) async fn spawn_node(
         default_effective.as_deref(),
     );
     let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
+    // #473: pin a Claude Code session id for an AGENT node so its transcript is
+    // `<uuid>.jsonl` and the liveness sweep resolves it by identity — never by the
+    // newest `.jsonl` in a cwd it shares with the manager and sibling non-CM nodes.
+    // Recorded on `NodeStarted` (below) so the resume path and the sweep read it
+    // back; a fresh id per spawn means a `restart_node` of the same iteration gets
+    // its own transcript. A `script` node launches no `claude`, so it gets no id
+    // (`null` in the payload) — nothing would resolve it and nothing resumes it.
+    let session_id: Option<String> =
+        (node.node_type != pipeline::NodeType::Script).then(|| uuid::Uuid::new_v4().to_string());
 
     // Panic/cancellation-isolated spawn window (#279). Everything from here to
     // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
@@ -570,6 +579,13 @@ pub(crate) async fn spawn_node(
                 // so storing the effort alone would store half a fact.
                 "model": resolved_model,
                 "effort": resolved_effort,
+                // #473: the pinned Claude Code session id the agent launches with
+                // (`claude --session-id <uuid>`). The sweep resolves this node's
+                // transcript by it (`<uuid>.jsonl`), and the resume path re-enters
+                // it (`--resume <uuid>`). `null` for a `script` node (no claude) and
+                // for every pre-#473 row (legacy newest-mtime resolution / bare
+                // `--continue`), so no migration is needed.
+                "session_id": session_id.as_deref(),
                 // #503 / ADR-0036: the sub-worktree's base commit — what the
                 // merge-back compares the pipeline tip against to decide whether a
                 // conflict is the run's own history rewritten by this node. `null`
@@ -645,10 +661,11 @@ pub(crate) async fn spawn_node(
         }
     } else {
         // Resolved above the panic span so the `NodeStarted` payload could record
-        // the same values the flags carry (#347/#424).
+        // the same values the flags carry (#347/#424/#473).
         tmux_session_manager::SessionTail::Agent {
             model: resolved_model,
             effort: resolved_effort,
+            session_id: session_id.as_deref(),
         }
     };
     // A script node executes the RAW bash body (`role_prompt`), never the

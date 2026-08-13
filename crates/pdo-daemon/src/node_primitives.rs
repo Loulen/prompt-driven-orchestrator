@@ -99,6 +99,10 @@ enum StartNodeTail {
     Agent {
         model: Option<String>,
         effort: Option<String>,
+        /// #473: the pinned Claude Code session id (owned mirror of
+        /// [`tmux_session_manager::SessionTail::Agent::session_id`]). `None` for a
+        /// script node — it launches no `claude`.
+        session_id: Option<String>,
     },
     Script {
         timeout_secs: u64,
@@ -125,9 +129,14 @@ impl StartNodeSpawn {
     /// silent failure is exchanged for a visible one. That is the right way round.
     pub(crate) fn execute(&self) -> anyhow::Result<()> {
         let tail = match &self.tail {
-            StartNodeTail::Agent { model, effort } => tmux_session_manager::SessionTail::Agent {
+            StartNodeTail::Agent {
+                model,
+                effort,
+                session_id,
+            } => tmux_session_manager::SessionTail::Agent {
                 model: model.as_deref(),
                 effort: effort.as_deref(),
+                session_id: session_id.as_deref(),
             },
             StartNodeTail::Script { timeout_secs, env } => {
                 tmux_session_manager::SessionTail::Script {
@@ -359,6 +368,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         params.default_model.as_deref(),
     );
     let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
+    // #473: pin a Claude Code session id for an agent node so the sweep resolves
+    // its transcript by identity and the resume path re-enters it. `None` for a
+    // script node (no claude) — mirrors `node_spawn`. Recorded on `NodeStarted`
+    // below and threaded into the tail.
+    let session_id: Option<String> = (!is_script).then(|| uuid::Uuid::new_v4().to_string());
     let tail = if is_script {
         StartNodeTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
@@ -368,6 +382,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         StartNodeTail::Agent {
             model: resolved_model.map(str::to_string),
             effort: resolved_effort.map(str::to_string),
+            session_id: session_id.clone(),
         }
     };
 
@@ -387,6 +402,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // recorded even though nothing reads it back yet.
             "model": resolved_model,
             "effort": resolved_effort,
+            // #473: the pinned Claude Code session id — read back by the sweep
+            // (transcript resolution) and the resume path. `null` for a script node
+            // and every pre-#473 row. Mirrors the `spawn_node` payload.
+            "session_id": session_id,
             // #503: the sub-worktree's base commit. Absent for a node with no
             // sub-worktree (`doc-only`/`script`), which never merges back.
             "base_sha": spawn_base_sha,

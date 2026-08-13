@@ -56,6 +56,8 @@ All three of these must be true:
 
 If a decision is easy to reverse, skip it — you'll just reverse it. If it's not surprising, nobody will wonder why. If there was no real alternative, there's nothing to record beyond "we did the obvious thing."
 
+A deliberate deviation **scoped to a single code site** is better served by a code comment at that site than by an ADR: the constraint sits exactly where the next editor would undo it, with zero drift. Reserve ADRs for decisions that constrain work beyond one site.
+
 ### What qualifies
 
 - **Architectural shape.** "We're using a monorepo." "The write model is event-sourced, the read model is projected into Postgres."

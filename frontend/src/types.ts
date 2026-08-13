@@ -967,8 +967,25 @@ export interface StatsCostKeyBucket extends StatsCostBucket {
   key: string;
 }
 
+/** One resolved price row (#528): a family, the tier that decides it, the price in
+ *  force. Rides on `/stats/cost` beside the "Sync costs" action — the same table
+ *  the cost fold bills with, so what the Cost tab shows can never drift (#373). */
+export interface PriceRow {
+  /** FAMILY key, un-dated (`claude-opus-4-8`), not a dated `message.model`. */
+  key: string;
+  tier: "manual" | "fetched" | "embedded";
+  /** $/MTok in — the price ACTUALLY applied (the winning tier). */
+  input: number;
+  /** $/MTok out — the price ACTUALLY applied (the winning tier). */
+  output: number;
+}
+
 export interface StatsCost {
   by_period: StatsCostPeriodBucket[];
   by_pipeline: StatsCostKeyBucket[];
   by_project: StatsCostKeyBucket[];
+  /** The resolved price table, one row per family in alphabetical order (#528).
+   *  Window-independent — a property of the price table, not the fold. Refreshed
+   *  by the "Sync costs" refetch on the Cost tab. */
+  resolved: PriceRow[];
 }

@@ -17,7 +17,10 @@
 //!   6. the manual tier wins over the fetched one, and the report **says so**;
 //!   7. `GET /settings` names both paths even when neither file exists;
 //!   8. the boot refresh never CREATES a cache — no egress before the first click —
-//!      refreshes a stale one, and survives an unreachable source.
+//!      refreshes a stale one, and survives an unreachable source;
+//!   9. `GET /stats/cost` carries the resolved table (#528): the embedded floor on
+//!      a fresh home, a manual override reported `manual`, a fetched family
+//!      `fetched`, no `<synthetic>` — the read view beside the "Sync costs" button.
 
 mod common;
 
@@ -192,6 +195,21 @@ async fn settings(daemon: &TestDaemon) -> serde_json::Value {
         .json()
         .await
         .unwrap()
+}
+
+/// `GET /stats/cost` over a window wide enough to see everything. The `resolved`
+/// price table (#528) rides on this payload, next to the "Sync costs" action in
+/// the Stats → Cost tab — window-independent, a property of the price table.
+async fn stats_cost(daemon: &TestDaemon) -> serde_json::Value {
+    reqwest::get(format!(
+        "{}/stats/cost?from=1970-01-01T00:00:00Z&to=2100-01-01T00:00:00Z&bucket=day",
+        daemon.url()
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap()
 }
 
 async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
@@ -559,6 +577,101 @@ async fn settings_names_both_price_paths_even_when_no_file_exists() {
     assert_eq!(pt["fetched_at"], serde_json::Value::Null);
     assert_eq!(pt["fetched_rows"].as_u64(), Some(0));
     assert_eq!(fixture.hits(), 0, "reading settings must not egress");
+}
+
+// --- 7b. the resolved read view on /stats/cost: winning tier + $/MTok per family (#528) ---
+//
+// The resolved table rides on `GET /stats/cost` — beside the "Sync costs" action
+// in the Stats → Cost tab, so pressing sync and reading what PDO can price happen
+// at one endpoint. It reads the SAME `PriceTable` the cost fold bills with, so the
+// view can never enumerate a set the pricer would price otherwise (#373).
+
+#[tokio::test]
+async fn stats_cost_resolved_lists_the_embedded_floor_on_a_fresh_home() {
+    // With no disk tier, `/stats/cost` still exposes what PDO can price: the fourteen
+    // embedded families (since #527 floored the current generation), every one flagged
+    // `embedded`. `resolved: []` would lie — the const prices even with no HOME state
+    // (D9). Window-independent: no runs.
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+
+    let c = stats_cost(&daemon).await;
+    let rows = c["resolved"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        14,
+        "the embedded floor is fourteen families: {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|r| r["tier"] == "embedded"),
+        "every floor row is the embedded tier: {rows:?}"
+    );
+
+    let row = |key: &str| rows.iter().find(|r| r["key"] == key).unwrap();
+    // The single most error-prone distinction: opus-4-8 at (5,25) ≠ opus-4-1 at (15,75).
+    assert_eq!(row("claude-opus-4-8")["input"].as_f64(), Some(5.0));
+    assert_eq!(row("claude-opus-4-8")["output"].as_f64(), Some(25.0));
+    assert_eq!(row("claude-opus-4-1")["input"].as_f64(), Some(15.0));
+    assert_eq!(row("claude-opus-4-1")["output"].as_f64(), Some(75.0));
+
+    // The sentinel is a `price_for` short-circuit, never a table row.
+    assert!(rows.iter().all(|r| r["key"] != "<synthetic>"));
+    assert_eq!(fixture.hits(), 0, "reading /stats/cost must not egress");
+}
+
+#[tokio::test]
+async fn stats_cost_resolved_reports_a_manual_override_as_manual() {
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+    // A hand-written enterprise discount on a floor family.
+    std::fs::create_dir_all(manual_path(&daemon).parent().unwrap()).unwrap();
+    std::fs::write(
+        manual_path(&daemon),
+        "models:\n  claude-opus-4-8: { input: 4.5, output: 22.5 }\n",
+    )
+    .unwrap();
+
+    let c = stats_cost(&daemon).await;
+    let rows = c["resolved"].as_array().unwrap();
+    let row = rows.iter().find(|r| r["key"] == "claude-opus-4-8").unwrap();
+    assert_eq!(row["tier"], "manual");
+    assert_eq!(row["input"].as_f64(), Some(4.5));
+    assert_eq!(row["output"].as_f64(), Some(22.5));
+
+    // The two endpoints must agree — a resolved `manual` row here is also named in
+    // `GET /settings`'s `manual_keys`, the other signal that a tier shadows a sync.
+    let s = settings(&daemon).await;
+    let manual_keys: Vec<String> =
+        serde_json::from_value(s["price_table"]["manual_keys"].clone()).unwrap();
+    assert!(
+        manual_keys.contains(&"claude-opus-4-8".to_string()),
+        "manual_keys and the resolved tier must not disagree: {manual_keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn stats_cost_resolved_reports_a_fetched_family_as_fetched() {
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+    // The click IS the sync: the button lives on the Cost tab, next to this view.
+    assert_eq!(sync(&daemon).await.status(), 200);
+
+    let c = stats_cost(&daemon).await;
+    let rows = c["resolved"].as_array().unwrap();
+    // `claude-opus-6` is fetch-only (beyond the #527 floor, so absent from the
+    // embedded set) → Fetched decides.
+    let row = rows.iter().find(|r| r["key"] == "claude-opus-6").unwrap();
+    assert_eq!(row["tier"], "fetched");
+    assert_eq!(row["input"].as_f64(), Some(10.0));
+    assert_eq!(row["output"].as_f64(), Some(50.0));
+    // Still no sentinel, even after a sync.
+    assert!(rows.iter().all(|r| r["key"] != "<synthetic>"));
 }
 
 #[tokio::test]

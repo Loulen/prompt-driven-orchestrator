@@ -7855,6 +7855,11 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // Both paths are ALWAYS reported, even when neither file exists — nothing is
     // ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming the paths
     // IS the entire discoverability story.
+    //
+    // The resolved read view (winning tier + `$/MTok` per family, #528) is NOT
+    // here: it lives on `/stats/cost`, beside the "Sync costs" action in the
+    // Stats → Cost tab, so pressing sync and reading what PDO can price happen in
+    // one place. See `stats::stats_cost` / `stats::ResolvedPriceRow`.
     let price_table_view = match &host_home_path {
         Some(home) => {
             let table = price_table::PriceTable::load(home);

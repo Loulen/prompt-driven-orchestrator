@@ -314,6 +314,17 @@ impl PriceTable {
         self.resolved.get(key).map(|(_, t)| *t)
     }
 
+    /// The resolved table, one `(family key, winning price, deciding tier)` per
+    /// entry, in `BTreeMap` order. The SAME map `price_for` reads, so the
+    /// `GET /settings` view can never enumerate a set the pricer would price
+    /// otherwise (#373; cf. the doc-comment on `resolve`). Yields by value:
+    /// `Price` and `PriceTier` are `Copy`. Exposes neither the container nor the
+    /// internal `(Price, PriceTier)` tuple as a `pub(crate)` contract, so the
+    /// wire JSON stays assembled in the axum layer.
+    pub(crate) fn resolved_entries(&self) -> impl Iterator<Item = (&str, Price, PriceTier)> + '_ {
+        self.resolved.iter().map(|(k, (p, t))| (k.as_str(), *p, *t))
+    }
+
     pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
     }
@@ -1118,6 +1129,93 @@ mod tests {
             1,
         );
         assert_eq!(t.price_for(SYNTHETIC), Some(p(0.0, 0.0)));
+    }
+
+    // --- resolved_entries: the read view (#528) ---
+
+    #[test]
+    fn resolved_entries_on_builtin_are_the_fourteen_embedded_families() {
+        let rows: Vec<(String, Price, PriceTier)> = PriceTable::builtin()
+            .resolved_entries()
+            .map(|(k, p, t)| (k.to_string(), p, t))
+            .collect();
+        // Exactly the floor, no more, no less — fourteen families since #527
+        // seeded the current generation into the embedded floor.
+        assert_eq!(rows.len(), PRICES.len());
+        assert_eq!(rows.len(), 14);
+        // Every floor line is the embedded tier.
+        assert!(rows.iter().all(|(_, _, t)| *t == PriceTier::Embedded));
+        // The most error-prone distinction survives round-tripping through the
+        // accessor: opus-4-8 at (5,25) is not opus-4-1 at (15,75).
+        let by = |key: &str| rows.iter().find(|(k, ..)| k == key).map(|(_, p, _)| *p);
+        assert_eq!(by("claude-opus-4-8"), Some(p(5.0, 25.0)));
+        assert_eq!(by("claude-opus-4-1"), Some(p(15.0, 75.0)));
+        assert_eq!(by("claude-haiku-4-5"), Some(p(1.0, 5.0)));
+    }
+
+    #[test]
+    fn resolved_entries_report_the_winning_tier_per_family() {
+        let t = PriceTable::resolve(
+            ParsedTier::of(&[("claude-opus-4-8", 4.5, 22.5)]),
+            ParsedTier::of(&[("claude-opus-6", 10.0, 50.0)]),
+            7,
+        );
+        let rows: Vec<(String, Price, PriceTier)> = t
+            .resolved_entries()
+            .map(|(k, p, t)| (k.to_string(), p, t))
+            .collect();
+        let row = |key: &str| rows.iter().find(|(k, ..)| k == key).cloned();
+        // Manually overridden family: winning price + Manual tier.
+        assert_eq!(
+            row("claude-opus-4-8"),
+            Some((
+                "claude-opus-4-8".to_string(),
+                p(4.5, 22.5),
+                PriceTier::Manual
+            ))
+        );
+        // Fetch-only family (beyond the #527 floor, so only the fetched tier
+        // knows it): Fetched tier.
+        assert_eq!(
+            row("claude-opus-6"),
+            Some((
+                "claude-opus-6".to_string(),
+                p(10.0, 50.0),
+                PriceTier::Fetched
+            ))
+        );
+        // Untouched family: still the embedded floor.
+        assert_eq!(
+            row("claude-opus-4-7"),
+            Some((
+                "claude-opus-4-7".to_string(),
+                p(5.0, 25.0),
+                PriceTier::Embedded
+            ))
+        );
+    }
+
+    #[test]
+    fn resolved_entries_never_emit_the_synthetic_sentinel() {
+        // The sentinel is kept out of the resolved table by the PARSERS refusing it
+        // (`resolve` inserts every tier row blindly), so a file that tries to price
+        // `<synthetic>` yields no such row — and hence no such entry in the view.
+        let manual = parse_manual("models:\n  \"<synthetic>\": { input: 99.0, output: 99.0 }\n");
+        assert!(
+            manual.rows.is_empty(),
+            "the parser must refuse the sentinel"
+        );
+        let t = PriceTable::resolve(manual, ParsedTier::default(), 1);
+        assert!(t.resolved_entries().all(|(k, ..)| k != SYNTHETIC));
+    }
+
+    #[test]
+    fn resolved_entries_come_out_in_btreemap_key_order() {
+        let table = PriceTable::builtin();
+        let keys: Vec<&str> = table.resolved_entries().map(|(k, ..)| k).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted, "the view must inherit the BTreeMap ordering");
     }
 
     // --- diagnostic ---

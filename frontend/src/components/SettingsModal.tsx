@@ -642,6 +642,9 @@ function SettingsForm({
                 ? `Last synced ${settings.price_table.fetched_at}${settings.price_table.source ? ` from ${settings.price_table.source}` : ""}`
                 : "Never synced — only the built-in prices apply."}
             </div>
+            {/* The resolved read view (winning tier + $/MTok per family, #528) is
+                NOT here — it lives on the Stats → Cost tab, beside "Sync costs",
+                fed by `/stats/cost`. Settings keeps the paths / source / vintage. */}
             {/* Server-supplied, because a hand-edited file passes through no
                 validator at all: an inert file or refused row is only visible here
                 (and in journalctl, which is this product's recurring blind spot). */}

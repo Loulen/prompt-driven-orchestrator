@@ -259,8 +259,6 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
 - **Nommer le modèle non tarifé** dans l'UI : **#425**. Sans elle, l'utilisateur reste incapable
   d'apprendre **quel** modèle manque quand aucun tier ne le connaît — et c'est ainsi que
   `claude-fable-5` est resté invisible.
-- **Un endpoint exposant le tier gagnant par modèle** — de la découvrabilité de modèles, donc le
-  territoire de #425.
 - **Un adaptateur LiteLLM** — le repli nommé ci-dessus.
 - **Le mode fast** et le **palier long-contexte > 200K** : des **paliers**, pas des prix de
   famille ; ni un multiplicateur ni une ligne de plus ne les exprime, et le premier n'a aucun
@@ -300,3 +298,16 @@ ligne au `const` reste visible. La table est un plancher, pas un miroir des prix
 le tier fetché) et se **corrige au premier sync**. Graver $2/$10 serait faux pour toute la vie
 post-31-août de chaque release. Critère fermé par des tests couche 1 sur `price_table.rs` et
 `run_cost.rs` (ADR-0004).
+
+## Amendement — La table résolue exposée en lecture (#528)
+
+Le hors-scope « un endpoint exposant le tier gagnant par modèle » est **réalisé**, et son argument de
+suffisance était faux : juxtaposer `manual_keys` et `fetched_rows` ne **rend** pas le tier **gagnant**,
+qui est un calcul de précédence par clé de famille, pas une lecture. La table **résolue** est désormais
+exposée en lecture comme un tableau **`resolved`** (une entrée par famille : tier gagnant + `$/MTok`),
+**porté par `GET /stats/cost`** et rendu dans l'onglet **Stats → Cost**, à côté de « Sync costs » : on
+synchronise et on lit ce que PDO sait tarifer au même endroit. **Pas** de route `GET /prices` dédiée —
+champ additif rétro-compatible sur un endpoint déjà consommé par cet onglet (zéro taxe proxy vite dev).
+Il lit **la même** `PriceTable` que le fold de coût, donc la vue ne peut jamais énumérer un ensemble que
+le tarificateur chiffrerait autrement (#373). Purement additif, lecture seule, dans le cadre de cet ADR —
+**pas de nouvel ADR**.

@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.21.0
+
+Rien de cassant. Un champ **purement additif, lecture seule** : `GET /stats/cost` porte désormais un
+tableau **`resolved`** — une entrée par clé de famille, avec le **tier gagnant** (`manual` / `fetched`
+/ `embedded`) et le **`$/MTok`** effectivement appliqué (#528). Rendu dans l'onglet **Stats → Cost**,
+à côté du bouton **« Sync costs »** : on synchronise les prix et on lit ce que PDO sait tarifer au
+même endroit, et le refetch déclenché par la synchro rafraîchit la table. C'est la même `PriceTable`
+que celle avec laquelle le fold de coût chiffre, donc la vue ne peut jamais diverger de ce qui tarifie
+réellement (#373). **Dans le cadre d'ADR-0034** : cette slice **amende sa hors-scope** (qui déclinait
+un `GET /prices` en le jugeant redondant avec `manual_keys` + `fetched_rows`) — **pas de nouvel ADR**,
+**pas de route dédiée** (champ additif sur un endpoint déjà consommé par l'onglet Cost, rétro-compatible,
+zéro taxe proxy vite dev, cf. *Versioning*). Bump re-posé contre `origin/main` (1.20.0, #527) après
+collision de bump : la vue `resolved` reflète désormais aussi le plancher gen-5 introduit par #527
+(quatorze familles embarquées au lieu de onze).
+
 ## 1.20.0
 
 Rien de cassant. Le **plancher de prix embarqué** amorce désormais la génération courante

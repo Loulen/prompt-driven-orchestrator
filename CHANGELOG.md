@@ -10,6 +10,118 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.18.0
+
+Rien de cassant. Une capacité **purement additive** : un Run peut désormais lire plusieurs dépôts
+(#465, ADR-0042). Bump posé contre `origin/main` (1.17.0) ; à re-poser au next-free si un autre Run
+livre entre-temps.
+
+### Multi-repo par Run — dépôts secondaires en lecture seule (#465, ADR-0042)
+
+Un Run pouvait ne cibler qu'**un** dépôt (`target_repo`, ADR-0033). Cette slice ouvre le
+**multi-repo par Run** dans son incrément le plus étroit : **lecture multi-repo, écriture
+mono-repo**.
+
+- On sélectionne, à la création du Run, N **dépôts secondaires** en plus du **primaire**
+  (`target_repos[0]` = le primaire, sémantique de `target_repo` inchangée). Chaque secondaire porte
+  une *target branch* (défaut : la ref **locale**, pas `origin/main` — il n'y a aucun `git fetch`).
+- Chaque secondaire est figé à un **SHA au démarrage** (`git worktree add --detach`), sous
+  `<primaire>/.pdo/runs/<id>/repos/<alias>/`. Reproductible : muter le checkout local du secondaire
+  ne bouge plus le Run.
+- Les nœuds **lisent** les secondaires par **chemin absolu** (injecté au préambule + env
+  `PDO_SECONDARY_REPOS`) — les sous-worktrees n'héritent pas des fichiers du snapshot.
+- Garde **409 `secondary_repo_dirtied`** si un nœud salit un fichier **suivi** d'un secondaire (les
+  *untracked* sont tolérés) ; non terminale (revert + re-complétion passent).
+- Nettoyage : `git worktree remove --force` **+ `prune`** dans **chaque** secondaire au teardown
+  (sans le prune, registration `--detach` fantôme — classe #498).
+- Les Triggers portent la liste (colonne `target_repos`, forwardée au fire).
+
+Différé (slices ultérieures) : écriture/MR dans un secondaire, édition mid-run de la liste,
+`git` in-sandbox sur un secondaire, merge-back multi-repo (rejeté définitivement), sélecteur
+`repo:` par nœud, grouping list/cost multi-bucket.
+
+## 1.14.0
+
+Rien de cassant. Un champ **purement additif** sur l'estimation de coût (périmètre AC#4 de #425,
+dans le cadre d'ADR-0034 — pas de nouvel ADR).
+
+### L'estimation de coût nomme désormais le modèle non tarifé (#425)
+
+Jusqu'ici, un Run (ou un bucket de la modale Stats) dont une session avait tourné sur un modèle
+qu'aucun tier ne tarife affichait `~$0 †` — ou, pire, un nombre plausible mais faux-bas — avec un
+tooltip générique « an unpriced model was excluded ». Le `†` seul ne disait **jamais quel** modèle,
+si bien que `claude-fable-5` (le plus cher) a pu rester invisible des semaines dans `/stats/cost`.
+
+Désormais `CostStat` porte `unpriced_models: Vec<String>` (clés de famille **dé-datées**, triées,
+uniques) ; `partial` en est **dérivé** (`partial ⟺ !unpriced_models.is_empty()`). Le champ voyage
+sur `GET /runs/:id` et, unioné par bucket, sur `GET /stats/cost` ; l'UI nomme le(s) modèle(s) dans le
+tooltip du `†`. La clé du memo de coût est **inchangée** (l'information voyage dans la valeur), donc
+aucune régression du chemin `/stats/cost`.
+
+Ce qui **n'est pas** dans cette version : amorcer le plancher embarqué avec la gen-5 (opus-5,
+sonnet-5, fable-5) — cela réviserait le principe de membership d'ADR-0034 et relève d'une décision du
+propriétaire (#527). Sur une instance non-syncée, le modèle par défaut du compte continue donc de
+contribuer $0 ; la différence est qu'il est maintenant **nommé**, donc actionnable (un clic « Sync
+coûts » ou une ligne dans `~/.pdo/prices/models.yaml`).
+
+## 1.13.0
+
+**Cassant** (`feat(#516)!`) : le champ de réponse `stale_git_lock` disparaît, remplacé par
+`interrupted_git_ops`. Amende ADR-0037, pas de nouvel ADR.
+
+### `stale_git_lock` (`string|null`) → `interrupted_git_ops` (`array`, `[]` si rien) (#516)
+
+Quand `restart_node` réutilise le sous-worktree d'un nœud `code-mutating`/`merge`, une session tuée
+**au milieu d'une opération git** y laisse des marqueurs dans le gitdir privé (`index.lock`,
+`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Le daemon les **détectait** — mais n'en remontait
+qu'**un seul**, le premier du scan. Chaîne mesurée sur le code 1.12.0 : un `index.lock` **masquait** un
+`MERGE_HEAD` coexistant, l'agent retirait le verrou dont on l'avait averti, lançait `pdo complete`, et
+le merge-back faisait un `git commit` avec le `MERGE_HEAD` resté en place → **un commit de merge à deux
+parents que personne n'a voulu, en silence** (`MergeResult::Success`, zéro événement). Le filet d'ADR-0037
+§7 est en aval du commit ; il ne l'attrape pas.
+
+Trois changements :
+
+- **Inventaire complet.** Le scanner remonte désormais **tous** les marqueurs présents, dans l'ordre du
+  scan (`index.lock` en tête), au lieu du premier seul.
+- **Migration filaire cassante.** Le corps de succès de `restart_node` remplace
+  `"stale_git_lock":"index.lock"|null` par `"interrupted_git_ops":["index.lock",…]|[]` — **toujours** un
+  tableau, jamais `null` ni absent (un client lit `body.interrupted_git_ops.length` sans garde).
+  « Stale git lock » était faux pour trois marqueurs sur quatre : un `MERGE_HEAD` ou un rebase interrompu
+  n'est pas un verrou, et le nommer ainsi a masqué le second marqueur derrière le premier. Le champ,
+  interne comme filaire, se propage du scanner (`SubWorktreeState::Reusable`) jusqu'à la réponse HTTP.
+- **Routage vers le préambule.** La consigne différenciée (retirer `index.lock` d'abord ; inspecter puis
+  finir **ou** avorter un `MERGE_HEAD`/rebase, au jugement de l'agent) arrive maintenant **dans le
+  préambule du nœud re-spawné lui-même**, plus seulement dans le corps que voit le manager. L'agent frais
+  n'attend plus qu'on la lui relaie, et le daemon ne supprime **jamais** un marqueur (il ne peut pas
+  prouver que l'écrivain est mort — #485 est le précédent qui coûte cher).
+
+Aucun travail frontend : l'UI jette déjà le corps de la réponse (`responseMode:"void"`), et le trou
+d'observabilité reste la propriété de #492.
+
+## 1.12.0
+
+Rien de cassant. Un nouveau réglage d'instance **purement additif** (application directe d'ADR-0015,
+pas de nouvel ADR).
+
+### Le nommage automatique des Runs par le manager est désormais configurable (#338)
+
+Jusqu'ici, un Run créé sans nom était **toujours** nommé par le Pipeline Manager (depuis son input,
+ou via un placeholder renommé best-effort), et les Triggers l'étaient sans réglage possible. #338
+livre trois choses, sans rien casser :
+
+- un défaut d'instance `default_auto_name` (booléen, résolu `stored → env PDO_DEFAULT_AUTO_NAME →
+  défaut **true**`), exposé dans `SettingsModal` avec la divulgation de source habituelle. Colonne
+  `instance_config.default_auto_name` NULLABLE, migration `ALTER … ADD COLUMN` PRAGMA-guardée ;
+- un override par-Run — champ optionnel `auto_name` sur `POST /runs` (JSON **et** multipart). **La
+  compat est préservée** : un appelant qui passe un `name` sans le flag garde son nom exactement
+  comme avant (le flag ne se résout sur le défaut d'instance que lorsqu'il est absent ET qu'aucun
+  nom n'est fourni) ;
+- un override par-Trigger — colonne `triggers.auto_name` (`NOT NULL DEFAULT 1`, donc les Triggers
+  existants continuent d'auto-nommer), figée à la création depuis le défaut d'instance et lue au
+  fire. Désactivée, chaque Run né du Trigger porte un *nom placeholder* stable (`Untitled run <id>`)
+  et le manager n'est pas instruit de renommer.
+
 ## 1.9.0
 
 Rien de cassant. Une note, parce qu'elle change **rétroactivement** ce qu'un opérateur peut croire de

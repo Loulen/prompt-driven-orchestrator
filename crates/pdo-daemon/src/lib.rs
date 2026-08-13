@@ -1,3 +1,8 @@
+// #494 / ADR-0039: the daemon is a single crate of sibling modules. A `pub`
+// item with no consumer outside its own file is a leak — this lint flags it so
+// `clippy -D warnings` in CI keeps the crate's surface from re-widening.
+#![warn(unreachable_pub)]
+
 pub mod admission;
 mod blackboard;
 mod boot_recovery;
@@ -11,27 +16,28 @@ mod event_log;
 #[allow(dead_code)]
 mod fire_decision;
 mod frontmatter_parser;
-pub mod graph_resolver;
+mod graph_resolver;
 mod guard_runner;
 mod input_resolution;
 mod instance_config;
-pub mod library_store;
+mod library_store;
 #[allow(dead_code)]
 mod loop_region;
 #[allow(dead_code)]
 mod merge_action;
 mod mutation_validator;
 mod node_io_resolver;
-pub mod node_primitives;
+mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
 mod pipeline;
-pub mod pipeline_migrator;
+mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
-pub mod price_table;
+mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
+mod reap_policy;
 pub(crate) mod restart_verdict;
 mod run_advance;
 mod run_command;
@@ -50,7 +56,7 @@ pub mod stale_detector;
 mod stats;
 mod switch_router;
 pub mod tmux_session_manager;
-pub mod transition_guard;
+mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
@@ -88,8 +94,10 @@ use tracing::{error, info, warn};
 #[cfg(test)]
 use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
-    commit_and_merge_sub_worktree_inner, create_worktree, sub_worktree_branch, sub_worktree_path,
-    validate_merge_resolution, worktree_dir_for_run, worktree_has_tracked_changes, MergeResult,
+    commit_and_merge_sub_worktree_inner, create_secondary_snapshot, create_worktree,
+    remove_secondary_snapshot, rev_parse_verified, secondary_snapshot_path, sub_worktree_branch,
+    sub_worktree_path, validate_merge_resolution, worktree_dir_for_run,
+    worktree_has_tracked_changes, MergeResult,
 };
 // #356: spawn primitive carved into `node_spawn`. Imported unqualified here so
 // the many construction sites (`SpawnContext { .. }`) need no per-site path
@@ -164,6 +172,40 @@ pub enum Commands {
         /// Report what would be migrated without writing anything.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Reclaim disk from old terminal Runs surfaced by `GET /runs/reapable`
+    /// (#480, #128 Track A). Applies a graded-TTL policy ([`reap_policy`]) and
+    /// archives each match via the existing `cleanup_run` command.
+    ///
+    /// A blocking one-shot (like `Complete`/`Migrate`) that talks to the daemon
+    /// over HTTP — deterministic Rust, so the shipped `disk-janitor` pipeline can
+    /// drive it from a `script` node (ADR-0017) with zero LLM turn and full CI
+    /// coverage. The deletion's *origin* stays a pipeline/CLI action, never the
+    /// runtime itself (ADR-0012a: « le runtime ne déclenche jamais d'action
+    /// durable de lui-même »).
+    Reap {
+        /// Print only the number of Runs the policy would reclaim, then exit 0.
+        /// A Trigger guard can gate on it: `[ "$(pdo reap --count)" -gt 0 ]`.
+        #[arg(long)]
+        count: bool,
+        /// Show the reclaim plan without archiving anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// TTL in hours for `completed` Runs (default 24). Tighten under disk
+        /// pressure, e.g. `--ttl-hours 1`.
+        #[arg(long)]
+        ttl_hours: Option<i64>,
+        /// TTL in hours for `failed`/`halted`/`skipped` Runs — post-mortem
+        /// evidence, held longer but bounded (default 72).
+        #[arg(long)]
+        terminal_ttl_hours: Option<i64>,
+        /// Wall-clock budget in seconds for issuing reclaims (default 40).
+        /// `cleanup_run` is synchronous and a `script` node is killed at
+        /// `SCRIPT_TIMEOUT_SECS` (60s); past the budget the janitor stops
+        /// starting new reclaims and still exits 0, leaving the rest for the next
+        /// fire rather than failing (a failed janitor Run leaks its own worktree).
+        #[arg(long, default_value_t = 40)]
+        budget_secs: u64,
     },
     /// Manage the persistent OS service unit for the daemon (#156, ADR-0019).
     ///
@@ -389,6 +431,14 @@ struct CreateRunRequest {
     pipeline_id: Option<String>,
     #[serde(default)]
     target_repo: Option<String>,
+    /// Secondary repos to associate with this Run in read-only (#465, ADR-0042).
+    /// `#[serde(default)]` → an omitted field means "mono-repo", which is every
+    /// legacy client. When present, `target_repos[0]` is the **primary** and must
+    /// agree with `target_repo`; `[1..]` are the read-only secondaries. Absent list
+    /// with a `target_repo` set is normalised to `[{target_repo}]` at the create
+    /// chokepoint, so downstream always sees `[0]` = primary.
+    #[serde(default)]
+    target_repos: Vec<TargetRepoInput>,
     #[serde(default)]
     source_branch: Option<String>,
     #[serde(default)]
@@ -405,6 +455,27 @@ struct CreateRunRequest {
     /// (`create_run_inner`) resolves it once against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
+    /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
+    /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
+    /// back-compatibly by the presence of `name` (a supplied `name` with no flag
+    /// keeps the name, exactly as before this field existed); `Some(b)` is an
+    /// explicit choice that wins. The UI always sends the flag; the CLI / bare API
+    /// need not. Resolved once at the create chokepoint against the FRESH instance
+    /// default — see [`prompt_augmenter::default_auto_name_with`].
+    #[serde(default)]
+    auto_name: Option<bool>,
+}
+
+/// One repo line of a multi-repo create request (#465, ADR-0042).
+///
+/// The wire shape the front sends per row: a `repo` path plus an optional
+/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch). Index `[0]`
+/// is the primary; `[1..]` become read-only secondary snapshots.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct TargetRepoInput {
+    repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_branch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -904,6 +975,189 @@ pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()>
     if errors > 0 {
         anyhow::bail!("{errors} pipeline(s) failed to migrate");
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `pdo reap` (#480, #128 Track A) — the disk-janitor's mechanical half.
+// ---------------------------------------------------------------------------
+
+/// Human-readable byte size for reap reports (binary units, one decimal).
+fn human_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let f = n as f64;
+    if f >= GB {
+        format!("{:.1} GB", f / GB)
+    } else if f >= MB {
+        format!("{:.1} MB", f / MB)
+    } else if f >= KB {
+        format!("{:.1} KB", f / KB)
+    } else {
+        format!("{n} B")
+    }
+}
+
+/// snake_case status label for reap reports (mirrors the wire representation).
+fn reap_status_label(status: &event_log::RunStatus) -> &'static str {
+    match status {
+        event_log::RunStatus::Running => "running",
+        event_log::RunStatus::AwaitingUser => "awaiting_user",
+        event_log::RunStatus::Completed => "completed",
+        event_log::RunStatus::Failed => "failed",
+        event_log::RunStatus::Skipped => "skipped",
+        event_log::RunStatus::Halted => "halted",
+        event_log::RunStatus::Paused => "paused",
+        event_log::RunStatus::Archived => "archived",
+    }
+}
+
+/// One-shot `pdo reap` (#480): the mechanical, deterministic half of the disk
+/// janitor. Lists `GET /runs/reapable?size=true`, runs the pure
+/// [`reap_policy`] over it, and — unless `--count`/`--dry-run` — archives each
+/// selected Run via `POST /runs/{id}/commands {"kind":"cleanup_run"}`.
+///
+/// Blocking, no tokio (mirrors `run_complete`/`run_migrate`): it uses
+/// `reqwest::blocking`. The daemon URL comes from `PDO_DAEMON_URL` (injected into
+/// every node session) or the built-in default.
+///
+/// **Exit semantics.** Failure to *list* is fatal (a broken URL that silently
+/// no-ops forever is worse than a visible node failure). Per-run reclaim errors
+/// and a wall-clock cutoff are **not** fatal — the function still returns `Ok`
+/// (exit 0), because a failed janitor Run would leave its *own* worktree behind,
+/// which a `completed`-only policy never reclaims → monotone residue. Progress is
+/// reported honestly; the rest waits for the next fire.
+pub fn run_reap(
+    count: bool,
+    dry_run: bool,
+    ttl_hours: Option<i64>,
+    terminal_ttl_hours: Option<i64>,
+    budget_secs: u64,
+) -> Result<()> {
+    let url = cli_daemon_url();
+    let client = reqwest::blocking::Client::new();
+    let listing = format!("{url}/runs/reapable?size=true");
+
+    // `?size=true` so the plan can order biggest-first and report bytes.
+    let list_runs = |client: &reqwest::blocking::Client| -> Result<Vec<reap_policy::ReapableRun>> {
+        client
+            .get(&listing)
+            .send()
+            .context("failed to reach daemon (GET /runs/reapable)")?
+            .error_for_status()
+            .context("daemon rejected GET /runs/reapable")?
+            .json()
+            .context("failed to parse /runs/reapable response")
+    };
+
+    let runs = list_runs(&client)?;
+
+    let mut policy = reap_policy::ReapPolicy::default();
+    if let Some(h) = ttl_hours {
+        policy.completed_ttl_secs = h.saturating_mul(3600);
+    }
+    if let Some(h) = terminal_ttl_hours {
+        policy.terminal_ttl_secs = h.saturating_mul(3600);
+    }
+
+    let plan = policy.plan(&runs);
+
+    // Guard mode: just the count. Exit 0 either way — the caller reads stdout.
+    if count {
+        println!("{}", plan.reclaim.len());
+        return Ok(());
+    }
+
+    if plan.reclaim.is_empty() {
+        println!(
+            "disk-janitor: nothing to reclaim ({} terminal run(s) listed, none past TTL)",
+            plan.retained
+        );
+        return Ok(());
+    }
+
+    println!(
+        "disk-janitor: {} run(s) to reclaim (~{}), {} retained",
+        plan.reclaim.len(),
+        human_bytes(plan.reclaim_bytes),
+        plan.retained
+    );
+    for d in &plan.reclaim {
+        println!(
+            "  {} [{}] ~{} — {}",
+            d.run_id,
+            reap_status_label(&d.status),
+            human_bytes(d.approx_disk_bytes.unwrap_or(0)),
+            d.reason
+        );
+    }
+
+    if dry_run {
+        println!("disk-janitor: --dry-run, no reclaim issued");
+        return Ok(());
+    }
+
+    // Reclaim within the wall-clock budget.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(budget_secs.max(1));
+    let mut reclaimed_ids: Vec<String> = Vec::new();
+    let mut deferred = 0usize;
+    let mut errors = 0usize;
+
+    for d in &plan.reclaim {
+        if std::time::Instant::now() >= deadline {
+            deferred += 1;
+            continue;
+        }
+        let endpoint = format!("{url}/runs/{}/commands", d.run_id);
+        match client
+            .post(&endpoint)
+            .json(&serde_json::json!({ "kind": "cleanup_run" }))
+            .send()
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let code = status.as_u16();
+                let body = resp.text().unwrap_or_default();
+                // A bare `200` is not proof here (a mistyped path 200s the SPA
+                // shell, and `cleanup_run` swallows fs/git errors) — assert on the
+                // body. `409` = archived between listing and now (benign no-op).
+                // Either way the command was accepted; the re-list below is what
+                // actually confirms the bytes left.
+                if code == 409 || (code == 200 && body.contains("\"archived\"")) {
+                    reclaimed_ids.push(d.run_id.clone());
+                } else {
+                    errors += 1;
+                    eprintln!("  cleanup_run {} → {} {}", d.run_id, status, body.trim());
+                }
+            }
+            Err(e) => {
+                errors += 1;
+                eprintln!("  cleanup_run {} → transport error: {e}", d.run_id);
+            }
+        }
+    }
+
+    // Honest proof: re-list and confirm the reclaimed ids are gone. A `200` /
+    // `409` above only says the command was accepted, not that the bytes left.
+    let confirmed = match list_runs(&client) {
+        Ok(after) => {
+            let still: std::collections::HashSet<String> =
+                after.into_iter().map(|r| r.run_id).collect();
+            reclaimed_ids
+                .iter()
+                .filter(|id| !still.contains(*id))
+                .count()
+        }
+        // Can't re-list — report the accepted count without the confirmation.
+        Err(_) => reclaimed_ids.len(),
+    };
+
+    println!(
+        "disk-janitor: reclaimed {} run(s) ({confirmed} confirmed gone), {deferred} deferred (budget {budget_secs}s), {errors} error(s)",
+        reclaimed_ids.len()
+    );
+
     Ok(())
 }
 
@@ -1577,6 +1831,7 @@ impl DaemonHandle {
                 pipeline_id: pipeline_id.to_string(),
                 pipeline_name: pipeline_id.to_string(),
                 target_repo: None,
+                target_repos: None,
                 source_branch: None,
                 input_template: "seeded input".to_string(),
                 variables: serde_json::json!({}),
@@ -1585,6 +1840,7 @@ impl DaemonHandle {
                 overlap_policy: "skip".to_string(),
                 max_concurrent: None,
                 sandbox: None,
+                auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
         )
@@ -1812,6 +2068,22 @@ pub struct DaemonConfig {
     /// the user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
+    /// Run the ~30 s background Trigger-scheduler loop (#450). `true` in
+    /// production (the loop fires due Triggers on a heartbeat, and
+    /// `tokio::time::interval` runs its FIRST tick immediately, so boot catches
+    /// up any missed slot at once). `false` in the layer-3 test literals: those
+    /// tests drive firing deterministically through
+    /// [`DaemonHandle::run_trigger_tick`], and that immediate boot tick races the
+    /// seam — reading `paused`/`due_triggers` and firing (or not) a Run out from
+    /// under a test's `force_trigger_due` + `run_trigger_tick`, which is the
+    /// contention flake behind #450 and the whole family of trigger-scheduler
+    /// tests it poisons under load. Disabling only the background loop leaves the
+    /// deterministic seam as the sole tick; the production TOCTOU it exposed is
+    /// fixed independently in `run_trigger_scheduler_tick` (a last-moment re-read
+    /// of the pause kill-switch), so neutralising the loop here masks nothing.
+    /// Same charter as `price_refresh_at_boot`: true in prod, false in the
+    /// `tests/common/mod.rs` literals — never a process-global env read (#181).
+    pub run_trigger_scheduler_loop: bool,
 }
 
 impl DaemonConfig {
@@ -1860,6 +2132,10 @@ impl DaemonConfig {
             price_refresh_at_boot: std::env::var("PDO_PRICE_SYNC")
                 .map(|v| !v.is_empty() && v != "0" && v != "off")
                 .unwrap_or(true),
+            // #450: production always runs the background scheduler heartbeat.
+            // No env seam — the loop is core daemon behaviour, only the layer-3
+            // test literals opt out (deterministic tick seam).
+            run_trigger_scheduler_loop: true,
         }
     }
 }
@@ -1943,6 +2219,11 @@ pub async fn serve_with_config(
         Some(o) => o.into_health(),
         None => compute_service_health(),
     });
+
+    // #450: capture the background-scheduler switch before `config` is consumed
+    // into `AppState` below. `true` in prod, `false` in the layer-3 test literals
+    // (see `DaemonConfig::run_trigger_scheduler_loop`).
+    let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
 
     let state = Arc::new(AppState {
         db,
@@ -2085,8 +2366,11 @@ pub async fn serve_with_config(
     // Background task: Trigger scheduler (sibling of reaper/stale). Fires due
     // Triggers on a ~30s tick. Best-effort: only runs while the daemon lives,
     // forward-only (no backfill of missed slots). Suppressed in a nested daemon
-    // for the same reason the reaper is — a sub-claude must stay passive.
-    let _trigger_handle = if nested_daemon {
+    // for the same reason the reaper is — a sub-claude must stay passive — and in
+    // the layer-3 test harness (#450), where the immediate-first-tick boot tick
+    // would race the deterministic `run_trigger_tick` seam. Production sets
+    // `run_trigger_scheduler_loop = true`, so the boot catch-up is unchanged.
+    let _trigger_handle = if nested_daemon || !run_trigger_scheduler_loop {
         None
     } else {
         let trigger_state = state.clone();
@@ -2535,6 +2819,11 @@ struct CreateTriggerRequest {
     pipeline_id: String,
     #[serde(default)]
     target_repo: Option<String>,
+    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042).
+    /// Stored on the Trigger as raw JSON TEXT and forwarded at fire time. Absent →
+    /// mono-repo fire.
+    #[serde(default)]
+    target_repos: Vec<TargetRepoInput>,
     #[serde(default)]
     source_branch: Option<String>,
     #[serde(default)]
@@ -2556,10 +2845,22 @@ struct CreateTriggerRequest {
     /// request's explicit tier.
     #[serde(default)]
     sandbox: Option<String>,
+    /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
+    /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
+    /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
+    #[serde(default = "default_true")]
+    auto_name: bool,
 }
 
 fn default_overlap_policy() -> String {
     "skip".to_string()
+}
+
+/// serde default for the flat `auto_name` bool on trigger create (#338): an omitted
+/// field means "auto-name", matching the `NOT NULL DEFAULT 1` column and the built-in
+/// resolver default.
+fn default_true() -> bool {
+    true
 }
 
 /// The SHARED existence gate for any `sandbox` reference a client can store (#432,
@@ -2856,6 +3157,12 @@ async fn create_trigger(
         pipeline_id: req.pipeline_id,
         pipeline_name,
         target_repo: Some(target_repo),
+        // #465: persist the secondary list as raw JSON TEXT (empty → NULL/mono-repo).
+        target_repos: if req.target_repos.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&req.target_repos).ok()
+        },
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables,
@@ -2870,6 +3177,10 @@ async fn create_trigger(
         // #410: normalise `Some("")` to `None` (inherit the instance default), so an
         // empty selector value never persists as a bogus stored mode.
         sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
+        // #338: freeze the auto-naming choice on the row (seeded from the instance
+        // default in the modal). No re-resolution at fire time — the runtime never
+        // decides autonomy (ADR-0012 frontier).
+        auto_name: req.auto_name,
         next_fire_at,
     };
 
@@ -3006,6 +3317,11 @@ struct PatchTriggerRequest {
     /// sending exactly that on every Trigger save (`NewRunModal.tsx`).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     target_repo: Option<Option<String>>,
+    /// #465: the read-only secondary list, double-wrapped like `target_repo`: absent
+    /// = leave, present `null`/`[]` = clear to mono-repo, an array = set. Stored on the
+    /// row as raw JSON TEXT; forwarded and re-frozen at fire time.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    target_repos: Option<Option<Vec<TargetRepoInput>>>,
     #[serde(default)]
     source_branch: Option<Option<String>>,
     #[serde(default)]
@@ -3025,6 +3341,12 @@ struct PatchTriggerRequest {
     /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     sandbox: Option<Option<String>>,
+    /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
+    /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
+    /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
+    /// `Some(v)` sets it.
+    #[serde(default)]
+    auto_name: Option<bool>,
 }
 
 async fn patch_trigger(
@@ -3242,6 +3564,14 @@ async fn patch_trigger(
         // #470: the trimmed, validated path — never the raw field. `None` here
         // means "absent from the body", i.e. leave the stored value alone.
         target_repo: validated_target_repo,
+        // #465: map the request's `Option<Option<Vec<..>>>` to the stored raw-JSON
+        // `Option<Option<String>>`. Absent → leave; present `null`/`[]` → clear to
+        // mono-repo (`Some(None)`); a non-empty array → the serialized JSON.
+        target_repos: req.target_repos.map(|inner| {
+            inner
+                .filter(|list| !list.is_empty())
+                .and_then(|list| serde_json::to_string(&list).ok())
+        }),
         source_branch: req.source_branch,
         input_template: req.input_template,
         variables: req
@@ -3261,6 +3591,8 @@ async fn patch_trigger(
         // instance default, `None` leaves it. The FE maps the "use instance default"
         // option to `null`, so an empty string never reaches here.
         sandbox: req.sandbox,
+        // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
+        auto_name: req.auto_name,
         next_fire_at,
         // Fold the enable/disable toggle into the single UpdateTrigger write
         // (#372): the enable bit and the forward next_fire_at land in one atomic
@@ -4176,6 +4508,30 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     };
 
     for trigger in due {
+        // #450 TOCTOU close: re-read the #348 kill-switch at the last moment,
+        // just before touching any Trigger state. The tick-start read above is
+        // stale by now — `due_triggers` suspends on a DB round-trip, and neither
+        // `POST /triggers/pause` nor the `force_trigger_due` seam takes
+        // `trigger_tick_lock` (a blocking lock held across the guard subprocess
+        // would make the brake hang ~guard-timeout — a brake that hangs is no
+        // brake). So a pause that lands during that suspension is invisible to
+        // the tick-start read, and without this re-read a tick already inside
+        // its critical section would still fire a Run *after* the operator
+        // paused (the exact window the boot tick loses in
+        // `unpause_does_forward_only_one_shot_catchup` under CI contention).
+        // Bail the whole tick, mirroring the tick-start gate: `next_fire_at` is
+        // left frozen in the past (no `due_triggers`/dangling clear/fire touches
+        // it here), so the one-shot catch-up on unpause is preserved with no
+        // dedicated code. Fail-OPEN on a read error, same posture as the
+        // tick-start read. "Run now" (Manual) never reaches this Cron path, so
+        // it stays exempt from the pause.
+        if instance_config::triggers_paused(&state.db)
+            .await
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         // Debug-only fault injection (#222): prove the tick's panic is isolated.
         if state.panic_on_trigger_name.as_deref() == Some(trigger.name.as_str()) {
             panic!(
@@ -4295,6 +4651,16 @@ async fn fire_one_trigger(
                 variables: trigger_variables(trigger),
                 pipeline_id: Some(trigger.pipeline_id.clone()),
                 target_repo: trigger.target_repo.clone(),
+                // #465 (ADR-0042): forward the Trigger's frozen secondary list. Stored
+                // as raw JSON TEXT (trigger_store stays decoupled from lib types); a
+                // blank/absent/malformed value defers to a mono-repo fire. `[0]` still
+                // being the primary, the chokepoint reconciles it with `target_repo`.
+                target_repos: trigger
+                    .target_repos
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .and_then(|s| serde_json::from_str::<Vec<TargetRepoInput>>(s).ok())
+                    .unwrap_or_default(),
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
@@ -4314,6 +4680,11 @@ async fn fire_one_trigger(
                     .sandbox
                     .as_deref()
                     .and_then(event_log::SandboxMode::parse),
+                // #338: pass the Trigger's frozen auto-naming choice as the explicit
+                // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
+                // fire with `auto_name=false` keeps a stable per-id name and the manager
+                // is never told to rename — covers cron AND manual fire in one line.
+                auto_name: Some(trigger.auto_name),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -6099,6 +6470,10 @@ async fn parse_multipart_create_run(
     let mut variables: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut pipeline_id = None;
     let mut target_repo = None;
+    // #465: the multi-repo list rides the multipart create (browser create with
+    // attached images) as a single JSON field, mirroring `variables`. Empty/absent →
+    // mono-repo. Parsed into the same `Vec<TargetRepoInput>` the JSON path deserializes.
+    let mut target_repos: Vec<TargetRepoInput> = Vec::new();
     let mut source_branch = None;
     let mut name = None;
     // #410: an explicit sandbox mode may ride the multipart (browser) create when
@@ -6106,6 +6481,11 @@ async fn parse_multipart_create_run(
     // defers to the trigger/instance default at the chokepoint. An unknown token is
     // treated as unset (defensive; the FE only ever sends valid variants).
     let mut sandbox: Option<event_log::SandboxMode> = None;
+    // #338: an explicit auto-naming choice may ride the multipart (browser) create
+    // when images are attached, so an unchecked "Auto-generated" box is honoured on
+    // that path too. `None` when the field is absent — the chokepoint then resolves
+    // back-compat by the presence of `name`.
+    let mut auto_name: Option<bool> = None;
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -6155,6 +6535,18 @@ async fn parse_multipart_create_run(
                     target_repo = Some(v);
                 }
             }
+            "target_repos" => {
+                // #465: a JSON array of {repo, base_branch?}. Empty string → leave the
+                // default empty Vec (mono-repo). Malformed JSON is a 400, like `variables`.
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field target_repos: {e}"))?;
+                if !text.is_empty() {
+                    target_repos = serde_json::from_str(&text)
+                        .map_err(|e| format!("invalid target_repos JSON: {e}"))?;
+                }
+            }
             "source_branch" => {
                 let v = field
                     .text()
@@ -6187,6 +6579,18 @@ async fn parse_multipart_create_run(
                     sandbox = event_log::SandboxMode::parse(&v);
                 }
             }
+            "auto_name" => {
+                // #338: an explicit flag off the multipart form. Reuses the shared
+                // boolean parser; an unrecognised token leaves `None` (defer to the
+                // name-presence back-compat resolution at the chokepoint).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field auto_name: {e}"))?;
+                if !v.is_empty() {
+                    auto_name = stale_detector::parse_bool_setting(&v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -6213,6 +6617,7 @@ async fn parse_multipart_create_run(
         variables,
         pipeline_id,
         target_repo,
+        target_repos,
         source_branch,
         name,
         triggered_by: None,
@@ -6220,6 +6625,8 @@ async fn parse_multipart_create_run(
         // create with attached images). `None` when the field is absent — the
         // chokepoint then defers to the trigger/instance default.
         sandbox,
+        // #338: the explicit auto-naming choice threaded off the multipart form.
+        auto_name,
     };
     Ok((req, images))
 }
@@ -6302,15 +6709,28 @@ fn placeholder_run_name(run_id: &str) -> String {
     format!("Untitled run {}", &run_id[..15])
 }
 
-/// Decide how the daemon should treat naming for a run at spawn (#184).
+/// Decide how the daemon should treat naming for a run at spawn (#184, #338).
 ///
-/// Three mutually-exclusive cases, gated on `req.input` (NOT on the pipeline's
-/// `prompt_required` flag): a user-supplied name always wins; otherwise an empty
-/// input means there is nothing to summarise yet, so the daemon sets a
-/// deterministic placeholder and the manager renames best-effort later; a
-/// non-empty input lets the manager derive the name immediately from `_input`.
-fn run_name_hint(name: Option<&str>, input: &str) -> prompt_augmenter::RunNameHint {
-    if name.is_some_and(|n| !n.is_empty()) {
+/// `auto_name` is the resolved autonomy decision (see the resolution at the create
+/// chokepoint). When it is `false` the manager is never instructed to rename — the
+/// caller keeps whatever name it supplied, or a stable placeholder if it supplied
+/// none. When it is `true` the pre-#338 behaviour holds, gated on `input` (NOT on
+/// the pipeline's `prompt_required` flag): an empty input means there is nothing to
+/// summarise yet, so the daemon sets a deterministic placeholder and the manager
+/// renames best-effort later; a non-empty input lets the manager derive the name
+/// immediately from `_input`.
+///
+/// Note that with `auto_name == false` the branch no longer looks at `name`: the
+/// display name is chosen by the caller (`create_run_inner`), and this hint only
+/// governs whether the manager is *told to rename*. A blank name under `false` still
+/// yields `UserProvided` — a stable placeholder with no rename instruction — which
+/// is exactly what the Trigger case needs.
+fn run_name_hint(
+    auto_name: bool,
+    _name: Option<&str>,
+    input: &str,
+) -> prompt_augmenter::RunNameHint {
+    if !auto_name {
         prompt_augmenter::RunNameHint::UserProvided
     } else if input.trim().is_empty() {
         prompt_augmenter::RunNameHint::Placeholder
@@ -6344,21 +6764,62 @@ async fn create_run_inner(
     // prompts) but is never again an implicit Run target — a Run must not mutate
     // code in a repository nobody named. Read-side resolution keeps its fallback
     // for historical runs (`effective_repo_root`); see ADR-0033.
-    let run_repo_root = match required_target_repo(req.target_repo.as_deref()) {
+    // #465 (ADR-0042): the primary is `target_repos[0]` when the client speaks the
+    // multi-repo shape, else the legacy scalar `target_repo`. We normalise to the
+    // scalar here so the ENTIRE downstream primary path (worktree, merge-back, cost,
+    // ADR-0033) is byte-for-byte unchanged — the array only ever ADDS secondaries.
+    let effective_target_repo: Option<String> = req
+        .target_repo
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            req.target_repos
+                .first()
+                .map(|r| r.repo.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
+    let run_repo_root = match required_target_repo(effective_target_repo.as_deref()) {
         Ok(p) => p,
         Err(msg) => {
             return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
     };
 
-    // Validate source_branch if provided
-    let source_ref = if let Some(ref branch) = req.source_branch {
+    // Validate source_branch if provided. The primary's base branch is the scalar
+    // `source_branch` when present, else `target_repos[0].base_branch` (#465): row 0
+    // of the multi-repo modal carries the primary's branch in the same field the
+    // secondaries use.
+    let effective_source_branch: Option<String> = req
+        .source_branch
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            req.target_repos
+                .first()
+                .and_then(|r| r.base_branch.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
+    let source_ref = if let Some(ref branch) = effective_source_branch {
         if let Err(msg) = validate_source_branch(&run_repo_root, branch) {
             return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
         }
         branch.as_str()
     } else {
         "HEAD"
+    };
+
+    // #465 (ADR-0042): resolve the read-only secondary repos into frozen pins. The
+    // request's `target_repos` list is `[0]` = primary (already validated above as
+    // `run_repo_root`), `[1..]` = secondaries. Absent/primary-only → mono-repo, empty
+    // Vec, and the payload/events stay byte-identical to a legacy create. Each
+    // secondary is validated (absolute + git) and its base ref resolved to a single
+    // commit NOW — no fetch, so the base is the operator's LOCAL ref (default HEAD).
+    // Resolving before `append_event`/`create_worktree` keeps "a bad repo → no Run".
+    let secondary_pins = match resolve_secondary_pins(&run_repo_root, &req.target_repos) {
+        Ok(pins) => pins,
+        Err(msg) => {
+            return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
+        }
     };
 
     let (yaml, pipeline_path) = if let Some(ref lib_id) = req.pipeline_id {
@@ -6576,6 +7037,14 @@ async fn create_run_inner(
     // rather than the raw field. Historical events keep their legitimate
     // `null`; the read side resolves those (ADR-0033).
     run_payload["target_repo"] = serde_json::json!(run_repo_root.to_string_lossy());
+    // #465 (ADR-0042): carry the frozen secondary pins, but ONLY when there is at
+    // least one — a mono-repo Run writes no `target_repos` key, keeping its payload
+    // byte-identical to the historical (and absent-key → empty-Vec) shape. Each pin
+    // is {repo, alias, sha, base_branch}; the snapshots are materialised on disk
+    // just after `create_worktree`, below.
+    if !secondary_pins.is_empty() {
+        run_payload["target_repos"] = serde_json::json!(secondary_pins);
+    }
     // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
     // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
     // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
@@ -6610,16 +7079,49 @@ async fn create_run_inner(
             run_payload["sandbox_image"] = serde_json::json!(image);
         }
     }
-    if let Some(ref branch) = req.source_branch {
+    if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
-    // Naming decision (#184), shared between the payload write here and the
-    // manager spawn below so they can never disagree. The user's name wins; with
-    // no name, an empty input gets a deterministic placeholder (the prompt-less
-    // case), and a non-empty input is left unnamed so the manager derives it.
-    let name_hint = run_name_hint(req.name.as_deref(), &req.input);
+    // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
+    // same chokepoint as the sandbox default, and read FRESH from the DB so a
+    // `PUT /settings` bites on the very next create with no restart (never cached at
+    // boot — the reaper-TTL trap of ADR-0015).
+    //
+    // Back-compat is load-bearing: an omitted flag (`None`) with a supplied `name`
+    // must keep that name (`false`), so the CLI / bare API / every pre-#338 caller
+    // that passes a `name` without the new flag is unaffected. Only an omitted flag
+    // AND no name consults the instance default. An explicit `Some(b)` always wins.
+    let auto_name = match req.auto_name {
+        Some(b) => b,
+        None => {
+            if req.name.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+                false
+            } else {
+                let stored = instance_config::get(&state.db)
+                    .await
+                    .ok()
+                    .and_then(|c| c.default_auto_name);
+                prompt_augmenter::default_auto_name_with(stored)
+            }
+        }
+    };
+
+    // Naming decision (#184, #338), shared between the payload write here and the
+    // manager spawn below so they can never disagree. With auto-naming OFF the Run
+    // keeps its supplied name, or a stable per-id placeholder when none was given
+    // (the manager is NOT told to rename); with it ON, an empty input gets a
+    // deterministic placeholder (the prompt-less case) and a non-empty input is left
+    // unnamed so the manager derives it.
+    let name_hint = run_name_hint(auto_name, req.name.as_deref(), &req.input);
     let display_name: Option<String> = match name_hint {
-        prompt_augmenter::RunNameHint::UserProvided => req.name.clone(),
+        // #338: UserProvided now also covers the auto_name=false case. If no name was
+        // supplied, fall back to the stable placeholder so a Trigger with autonomy off
+        // does not leave every fire sharing one blank name — WITHOUT re-arming the
+        // rename instruction (that lives in the hint, still `UserProvided` here).
+        prompt_augmenter::RunNameHint::UserProvided => Some(match req.name.as_deref() {
+            Some(n) if !n.trim().is_empty() => n.to_string(),
+            _ => placeholder_run_name(&run_id),
+        }),
         prompt_augmenter::RunNameHint::Placeholder => Some(placeholder_run_name(&run_id)),
         prompt_augmenter::RunNameHint::DeriveFromInput => None,
     };
@@ -6673,6 +7175,26 @@ async fn create_run_inner(
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": format!("worktree creation failed: {e}") }),
         ));
+    }
+
+    // #465 (ADR-0042): materialise each secondary as a detached, pinned snapshot,
+    // a THIRD sibling of `worktree/`/`nodes/` under the Run dir. Done at Run start
+    // (not per-node spawn) → the reap surface stays minimal (no secondary analogue
+    // of `reap_orphan_sub_worktree`). Living under `run_repo_root` means the sandbox
+    // sees them at an identical path with no new mount. A failure here fails the Run
+    // loud (the pin is already in `RunStarted`; a Run whose secondary snapshot is
+    // missing would silently starve every node that reads it).
+    for pin in &secondary_pins {
+        let dest = secondary_snapshot_path(&run_repo_root, &run_id, &pin.alias);
+        if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
+            error!("failed to create secondary snapshot for {}: {e}", pin.repo);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": format!("secondary snapshot creation failed for {}: {e}", pin.repo)
+                }),
+            ));
+        }
     }
 
     // Copy pipeline YAML + prompts to run-scoped location (always in target repo)
@@ -7278,6 +7800,21 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- default auto-naming (bool ; built-in default `true`) (#338) ---
+    // Same discipline as `autocomplete_turn_end`: `effective` comes from the SAME
+    // resolver the create chokepoint consumes, so the disclosed default can never drift
+    // from what a nameless Run actually gets. Stored `0`/`1` both win over the env.
+    let dan_stored = cfg.default_auto_name.map(|v| v != 0);
+    let dan_env = prompt_augmenter::env_default_auto_name();
+    let dan_effective = prompt_augmenter::default_auto_name_with(cfg.default_auto_name);
+    let dan_source = if dan_stored.is_some() {
+        "stored"
+    } else if dan_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
@@ -7379,6 +7916,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             ate_stored,
             ate_env,
             stale_detector::AUTOCOMPLETE_TURN_END_DEFAULT,
+        ),
+        "default_auto_name": settings_field_bool(
+            dan_effective,
+            dan_source,
+            dan_stored,
+            dan_env,
+            prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
         ),
         "updated_at": cfg.updated_at,
     }))
@@ -10399,6 +10943,52 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
 /// `MERGE_RESOLVER_NODE_ID` is **not** handled here any more: #490 (ADR-0035 §6)
 /// hoisted it into [`node_done`], because it was the one branch whose "stopped
 /// short" was in fact a complete success. The sweep never reaches it either way.
+/// #465 (ADR-0042): the read-only guard for secondary repos, as a pure probe.
+///
+/// Returns the FIRST secondary whose snapshot has uncommitted **tracked** changes,
+/// as a non-terminal [`completion_refusal::CompletionRefusal::SecondaryRepoDirtied`]
+/// (409). `worktree_has_tracked_changes` ignores `??`, so untracked scratch files are
+/// tolerated (the tester relies on this polarity). A transient git error fails OPEN
+/// (warn + skip) rather than blocking a legitimate completion. `None` (and no work)
+/// for a mono-repo Run. Called at the completion edge, never from `transition_guard`.
+fn secondary_repos_dirtied_refusal(
+    repo_root: &Path,
+    run_id: &str,
+    run_state: &event_log::RunState,
+) -> Option<completion_refusal::CompletionRefusal> {
+    for pin in &run_state.target_repos {
+        let snapshot = secondary_snapshot_path(repo_root, run_id, &pin.alias);
+        if !snapshot.exists() {
+            continue;
+        }
+        match worktree_has_tracked_changes(&snapshot) {
+            Ok(true) => {
+                return Some(
+                    completion_refusal::CompletionRefusal::SecondaryRepoDirtied {
+                        alias: pin.alias.clone(),
+                        message: format!(
+                            "the read-only secondary repo '{}' ({}) has uncommitted changes to \
+                         tracked files; revert them (git checkout) before completing — a \
+                         secondary is read-only (#465)",
+                            pin.alias,
+                            snapshot.display()
+                        ),
+                    },
+                );
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!(
+                    "could not check secondary snapshot cleanliness for '{}' in run {run_id}: \
+                     {e}; allowing the completion",
+                    pin.alias
+                );
+            }
+        }
+    }
+    None
+}
+
 async fn complete_node_iteration(
     state: &Arc<AppState>,
     run_id: String,
@@ -10477,6 +11067,17 @@ async fn complete_node_iteration(
             CompletionHeadStop::NoOp { reason } => CompletionAttempt::NoOp { reason },
             CompletionHeadStop::Refused { refusal } => CompletionAttempt::refused(refusal),
         };
+    }
+
+    // #465 (ADR-0042): read-only guard for secondary repos. A node that wrote to a
+    // TRACKED file of a secondary snapshot is refused 409 `secondary_repo_dirtied`
+    // HERE — at the completion edge, after the transition gate but BEFORE any merge
+    // or terminal event. Non-terminal by design: the node stays alive, so once the
+    // agent reverts the tracked change (`git checkout`) and re-completes, the guard
+    // passes. Untracked scratch is tolerated (the probe ignores `??`). No-op for a
+    // mono-repo Run. Deliberately NOT in `transition_guard` (which is pure/IO-free).
+    if let Some(refusal) = secondary_repos_dirtied_refusal(&repo_root, &run_id, &pre_run_state) {
+        return CompletionAttempt::refused(refusal);
     }
 
     match find_node_type(&pre_run_state, &node_id) {
@@ -11078,11 +11679,18 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     };
     match transition_guard::validate_transition(Some(&run_state), &started_probe) {
         transition_guard::Verdict::Allow => {}
-        transition_guard::Verdict::NoOp { reason }
-        | transition_guard::Verdict::Reject { reason } => {
+        transition_guard::Verdict::NoOp { reason } => {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": reason })),
+            )
+                .into_response();
+        }
+        transition_guard::Verdict::Reject { reason } => {
+            // #515: the typed cause renders to the same prose in the body.
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": reason.to_string() })),
             )
                 .into_response();
         }
@@ -11951,6 +12559,18 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
+    // #465 (ADR-0042): tear down each secondary snapshot BEFORE `remove_dir_all` —
+    // and, critically, from inside the SECONDARY repo. The `--detach` registration
+    // lives in the secondary's `.git`, OUTSIDE `repo_root`, so `remove_dir_all(run_dir)`
+    // below cannot clear it; without the per-secondary `prune`, every multi-repo Run
+    // leaks a dangling registration (the #498 class) and a future `worktree add` at the
+    // same path fails 255. Best-effort, but `remove_secondary_snapshot` never skips the
+    // prune. `cleanup_run` today prunes NOTHING, hence the dedicated helper.
+    for pin in &run_state.target_repos {
+        let snapshot_dir = secondary_snapshot_path(&repo_root, run_id, &pin.alias);
+        remove_secondary_snapshot(Path::new(&pin.repo), &snapshot_dir);
+    }
+
     if run_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&run_dir) {
             warn!("failed to remove run dir {}: {e}", run_dir.display());
@@ -12217,6 +12837,99 @@ fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
             Err(format!("git branch --list failed: {stderr}"))
         }
         Err(e) => Err(format!("failed to run git: {e}")),
+    }
+}
+
+/// Validate and freeze the read-only secondary repos of a multi-repo create
+/// (#465, ADR-0042).
+///
+/// `inputs` is the full `target_repos` list as the client sent it: `[0]` is the
+/// primary (already validated as `primary_root`; only cross-checked here for
+/// self-reference), `[1..]` the secondaries. Returns one [`event_log::RepoPin`]
+/// per secondary, each with `sha` resolved NOW against the local `base_branch`
+/// (default `HEAD`, no fetch) and an `alias` disambiguated on basename collision.
+/// An empty or primary-only list yields an empty Vec — the Run is mono-repo.
+///
+/// Fails the whole create (400) on the first bad secondary — resolving here, before
+/// `RunStarted` and `create_worktree`, keeps the "a bad repo → no Run" guarantee.
+fn resolve_secondary_pins(
+    primary_root: &Path,
+    inputs: &[TargetRepoInput],
+) -> Result<Vec<event_log::RepoPin>, String> {
+    if inputs.len() <= 1 {
+        return Ok(Vec::new());
+    }
+    // Compare by canonical path so a trailing slash / symlink cannot smuggle the
+    // primary (or a duplicate) back in as a "different" repo. `validate_target_repo`
+    // already proved each dir exists, so canonicalize should succeed; fall back to the
+    // validated path if it somehow does not.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let primary_canon = canon(primary_root);
+
+    let mut pins: Vec<event_log::RepoPin> = Vec::new();
+    let mut seen_canon: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut used_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for input in &inputs[1..] {
+        let repo = validate_target_repo(input.repo.trim())?;
+        let repo_canon = canon(&repo);
+        // A repo cannot be its own secondary: a self-snapshot registers a detached
+        // worktree inside the repo it snapshots and buys nothing (the nodes already
+        // work in the primary).
+        if repo_canon == primary_canon {
+            return Err(format!(
+                "secondary repo {} is the same as the primary; a repo cannot be its own secondary",
+                repo.display()
+            ));
+        }
+        // Two identical secondaries would produce two snapshots of the same repo and
+        // fight over the alias — a mistake, not a use case in slice 1.
+        if !seen_canon.insert(repo_canon) {
+            return Err(format!("secondary repo {} is listed twice", repo.display()));
+        }
+        let base = input
+            .base_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let rev = base.unwrap_or("HEAD");
+        let sha = rev_parse_verified(&repo, rev).map_err(|e| {
+            format!(
+                "cannot resolve base branch '{rev}' in secondary {}: {e}",
+                repo.display()
+            )
+        })?;
+        let alias = disambiguate_alias(&repo, &mut used_aliases);
+        pins.push(event_log::RepoPin {
+            repo: repo.to_string_lossy().to_string(),
+            alias,
+            sha,
+            base_branch: base.map(str::to_string),
+        });
+    }
+    Ok(pins)
+}
+
+/// A filesystem-safe, collision-free directory name for a secondary snapshot
+/// (#465). Starts from the repo's basename and appends `-2`, `-3`, … until unused.
+/// `used` accumulates across the call so two secondaries of the same basename get
+/// distinct aliases — the snapshot paths (`.pdo/runs/<id>/repos/<alias>/`) must
+/// never collide, or one snapshot would clobber another.
+fn disambiguate_alias(repo: &Path, used: &mut std::collections::HashSet<String>) -> String {
+    let base = repo
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("repo");
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
     }
 }
 
@@ -13760,6 +14473,61 @@ mod tests {
         assert!(
             e.get("approx_disk_bytes").is_none() || e["approx_disk_bytes"].is_null(),
             "approx_disk_bytes must be absent without ?size=true"
+        );
+    }
+
+    /// End-to-end janitor loop (#480): a real `/runs/reapable?size=true`
+    /// response parses into `reap_policy::ReapableRun`, the pure policy selects
+    /// the terminal run, and `cleanup_run` archives it so a re-list is empty.
+    /// Ties the two independently-tested halves — endpoint shape and pure policy
+    /// — to the `cleanup_run` contract `pdo reap` depends on. Leak-free (all
+    /// state is an in-memory DB + a tempdir).
+    #[tokio::test]
+    async fn reap_policy_selects_and_cleanup_removes_a_real_reapable_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reap-e2e-completed";
+        seed_run_with_run_events(
+            &state,
+            run_id,
+            "some-pipe",
+            &[event_log::EventKind::RunCompleted],
+        )
+        .await;
+        mk_run_worktree_dir(tmp.path(), run_id);
+
+        // The real endpoint payload (with sizes) deserializes into the policy's
+        // own type — no hand-written fixture.
+        let raw = get_reapable(&state, "?size=true").await;
+        let runs: Vec<crate::reap_policy::ReapableRun> =
+            serde_json::from_value(serde_json::Value::Array(raw)).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, run_id);
+
+        // A freshly-seeded run has age ≈ 0; a 0-second completed TTL selects it
+        // (the graded default TTLs are pinned by the `reap_policy` unit tests).
+        let policy = crate::reap_policy::ReapPolicy {
+            completed_ttl_secs: 0,
+            self_pipeline: None,
+            ..Default::default()
+        };
+        let plan = policy.plan(&runs);
+        assert_eq!(
+            plan.reclaim.len(),
+            1,
+            "the completed worktree-present run must be selected"
+        );
+        assert_eq!(plan.reclaim[0].run_id, run_id);
+
+        // Reclaim it and confirm the surface no longer lists it (archived + the
+        // run dir removed) — the honest proof `pdo reap` re-lists for.
+        let resp = cleanup_run(&state, run_id).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let after = get_reapable(&state, "?size=true").await;
+        assert!(
+            after.is_empty(),
+            "a reclaimed run must no longer be reapable: {after:?}"
         );
     }
 
@@ -19242,6 +20010,62 @@ edges:
         assert!(Cli::try_parse_from(["pdo", "fail"]).is_err());
     }
 
+    // --- Layer 1: `pdo reap` CLI parsing (#480) ---
+
+    #[test]
+    fn cli_parses_reap_with_defaults() {
+        let cli = Cli::try_parse_from(["pdo", "reap"]).unwrap();
+        match cli.command {
+            Commands::Reap {
+                count,
+                dry_run,
+                ttl_hours,
+                terminal_ttl_hours,
+                budget_secs,
+            } => {
+                assert!(!count);
+                assert!(!dry_run);
+                assert_eq!(ttl_hours, None);
+                assert_eq!(terminal_ttl_hours, None);
+                assert_eq!(budget_secs, 40, "the wall-clock budget defaults to 40s");
+            }
+            _ => panic!("expected Reap subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_reap_flags() {
+        let cli = Cli::try_parse_from([
+            "pdo",
+            "reap",
+            "--count",
+            "--dry-run",
+            "--ttl-hours",
+            "1",
+            "--terminal-ttl-hours",
+            "48",
+            "--budget-secs",
+            "10",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Reap {
+                count,
+                dry_run,
+                ttl_hours,
+                terminal_ttl_hours,
+                budget_secs,
+            } => {
+                assert!(count);
+                assert!(dry_run);
+                assert_eq!(ttl_hours, Some(1));
+                assert_eq!(terminal_ttl_hours, Some(48));
+                assert_eq!(budget_secs, 10);
+            }
+            _ => panic!("expected Reap subcommand"),
+        }
+    }
+
     // --- Layer 1: `pdo service` CLI parsing (#156) ---
 
     #[test]
@@ -21050,6 +21874,46 @@ edges:
     }
 
     #[tokio::test]
+    async fn settings_view_discloses_the_default_auto_name_tiers() {
+        // #338 / ADR-0015: `effective` comes from the SAME resolver the create
+        // chokepoint consumes, the built-in default is ON, and both directions of an
+        // explicit save are a STORED decision (a stored 0 must beat
+        // `PDO_DEFAULT_AUTO_NAME=1`, or unticking the box would be a no-op with the env set).
+        let state = test_state().await;
+
+        let fresh = build_settings_view(&state).await.unwrap();
+        assert_eq!(fresh["default_auto_name"]["effective"], true);
+        assert_eq!(fresh["default_auto_name"]["default"], true);
+        assert!(fresh["default_auto_name"]["stored"].is_null());
+
+        for on in [false, true] {
+            instance_config::update(
+                &state.db,
+                instance_config::UpdateInstanceConfig {
+                    default_auto_name: Some(on),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let view = build_settings_view(&state).await.unwrap();
+            assert_eq!(
+                view["default_auto_name"]["effective"],
+                serde_json::json!(on)
+            );
+            assert_eq!(
+                view["default_auto_name"]["stored"],
+                serde_json::json!(on),
+                "the stored tier is disclosed as a bool, not as 0/1"
+            );
+            assert_eq!(
+                view["default_auto_name"]["source"],
+                serde_json::json!("stored")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn restart_node_rejected_while_newer_iteration_is_live() {
         // #196: restart_node on a stale iter must not race the scheduler's
         // newer live iteration — reject with a readable cause, spawn nothing.
@@ -22310,7 +23174,11 @@ edges:
         );
         assert_eq!(parsed["reused_sub_worktree"], false, "got {body}");
         assert!(parsed["base_sha"].is_null(), "got {body}");
-        assert!(parsed["stale_git_lock"].is_null(), "got {body}");
+        assert_eq!(
+            parsed["interrupted_git_ops"],
+            serde_json::json!([]),
+            "got {body}"
+        );
 
         let events = load_events(&state.db, run_id).await.unwrap();
         let cmd = events
@@ -26168,23 +27036,38 @@ edges:
     #[test]
     fn run_name_hint_matrix() {
         use prompt_augmenter::RunNameHint;
-        // A user-supplied (non-empty) name always wins, regardless of input.
-        assert_eq!(run_name_hint(Some("My Run"), ""), RunNameHint::UserProvided);
+        // #338: the hint is now gated on the RESOLVED `auto_name`, not on the name.
+        // With auto-naming OFF the manager is never told to rename — `UserProvided`
+        // regardless of name or input (the display name is chosen by the caller).
         assert_eq!(
-            run_name_hint(Some("My Run"), "some input"),
+            run_name_hint(false, Some("My Run"), ""),
             RunNameHint::UserProvided
         );
-        // No name + no (meaningful) input → deterministic placeholder.
-        assert_eq!(run_name_hint(None, ""), RunNameHint::Placeholder);
-        assert_eq!(run_name_hint(None, "   \n\t "), RunNameHint::Placeholder);
-        assert_eq!(run_name_hint(Some(""), ""), RunNameHint::Placeholder);
-        // No name but real input → manager derives the name from `_input`.
         assert_eq!(
-            run_name_hint(None, "do a thing"),
+            run_name_hint(false, Some("My Run"), "some input"),
+            RunNameHint::UserProvided
+        );
+        assert_eq!(run_name_hint(false, None, ""), RunNameHint::UserProvided);
+        assert_eq!(
+            run_name_hint(false, None, "do a thing"),
+            RunNameHint::UserProvided
+        );
+
+        // With auto-naming ON the pre-#338 behaviour holds, gated on input only.
+        // No (meaningful) input → deterministic placeholder, renamed best-effort later.
+        assert_eq!(run_name_hint(true, None, ""), RunNameHint::Placeholder);
+        assert_eq!(
+            run_name_hint(true, None, "   \n\t "),
+            RunNameHint::Placeholder
+        );
+        assert_eq!(run_name_hint(true, Some(""), ""), RunNameHint::Placeholder);
+        // Real input → manager derives the name from `_input` immediately.
+        assert_eq!(
+            run_name_hint(true, None, "do a thing"),
             RunNameHint::DeriveFromInput
         );
         assert_eq!(
-            run_name_hint(Some(""), "do a thing"),
+            run_name_hint(true, Some("ignored when auto"), "do a thing"),
             RunNameHint::DeriveFromInput
         );
     }
@@ -26612,6 +27495,39 @@ edges:
                 .autocomplete_turn_end,
             Some(0),
             "off must persist a stored 0, never NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_round_trips_the_default_auto_name_flag_both_ways() {
+        // #338: the checkbox is authoritative in BOTH directions. Unticking must persist a
+        // stored `0` (source still "stored"), not clear back to unset — otherwise it could
+        // not override `PDO_DEFAULT_AUTO_NAME=1`.
+        let state = test_state().await;
+
+        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": false}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["default_auto_name"]["effective"], false);
+        assert_eq!(view["default_auto_name"]["source"], "stored");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .default_auto_name,
+            Some(0),
+            "off must persist a stored 0, never NULL"
+        );
+
+        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": true}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["default_auto_name"]["effective"], true);
+        assert_eq!(view["default_auto_name"]["source"], "stored");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .default_auto_name,
+            Some(1)
         );
     }
 

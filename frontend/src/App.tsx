@@ -7,11 +7,8 @@ import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import { rightPaneOwner } from "./lib/rightPaneOwner";
-import { shouldClearTriggerOnCanvasFocus } from "./lib/triggerCanvasReconcile";
-import { shouldCloseInfoOnTabChange } from "./lib/infoPanelReconcile";
-import type { RunListEntry, RunState, NodeState, Trigger, DaemonStatus } from "./types";
-import { isLiveRun } from "./types";
+import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
+import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
 import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
@@ -241,98 +238,26 @@ export default function App() {
   const isActiveRunArchived =
     isEditingRun && editTab?.runId === selectedRun?.run_id && isArchived;
 
-  // The Trigger backing the right-panel detail view (#162), shown whenever a
-  // Trigger is selected and the info overlay is closed — even while a run-edit
-  // tab owns the canvas (#247).
-  //
-  // A Trigger detail and a canvas selection compete for the right pane (#247).
-  // The Trigger now wins over a *persistent* run-edit tab (see rightPaneOwner),
-  // so we need an explicit way for the canvas to reclaim the pane — otherwise a
-  // once-selected Trigger would shadow every later node/edge/region inspector.
-  // Selecting a Trigger touches neither `selection` nor the active tab, so the
-  // canvas-focus signal below never fires on a fresh Trigger selection; any
-  // later canvas focus (a node/edge/region selection, or a tab switch/open —
-  // all of which change `selection` or `editActiveTabId`) clears it. Adjusting
-  // state during render (React's recommended reset-on-change pattern) rather
-  // than in an effect avoids painting one stale frame of the Trigger detail.
-  const [lastCanvasFocus, setLastCanvasFocus] = useState({
-    selection,
-    tabId: editActiveTabId,
-  });
-  if (
-    lastCanvasFocus.selection !== selection ||
-    lastCanvasFocus.tabId !== editActiveTabId
-  ) {
-    // setLastCanvasFocus MUST stay unconditional — gating it would make this
-    // block re-fire every render (infinite loop).
-    setLastCanvasFocus({ selection, tabId: editActiveTabId });
-    // #320: skip clearing the Trigger when this focus change is the Trigger's
-    // OWN openPipeline landing — i.e. the tab it opened is now active with
-    // nothing selected. A genuine canvas reclaim differs and STILL clears
-    // (preserving #247): a node/edge/region select makes selection.kind !==
-    // "none", and switching to another tab makes editActiveTabId !==
-    // triggerOpenedTabId.
-    if (
-      shouldClearTriggerOnCanvasFocus({
-        selectedTriggerId,
-        editActiveTabId,
-        selectionKind: selection.kind,
-        triggerOpenedTabId,
-      })
-    ) {
-      setSelectedTriggerId(null);
-    }
-  }
-
-  // #385: the Pipeline Info peek overlay is tab-scoped and shadows the right
-  // pane while open (rightPaneOwner gives it top precedence). Close it when the
-  // active tab changes — selecting a different run/library-pipeline (left
-  // panel), a Trigger opening its pipeline, or a TabBar switch all move
-  // `editActiveTabId`. Canvas node/edge/note clicks already close it via
-  // EditCanvas.onCloseInfo.
-  //
-  // Same render-time reset-on-change idiom as the #320 block above (adjust
-  // state during render, not in an effect, to avoid painting one stale frame).
-  // CRITICAL: advance `lastInfoTabId` UNCONDITIONALLY — if the advance were
-  // gated on `infoPanelOpen`, the tracker would go stale while the overlay is
-  // closed and spuriously close the NEXT overlay one frame after it opens on a
-  // new tab (and gating would also re-fire this block every render). `useState`
-  // (not a ref): the value is read during render, which react-hooks/refs
-  // forbids — the same reason `triggerOpenedTabId` above is state.
-  const [lastInfoTabId, setLastInfoTabId] = useState<string | null>(editActiveTabId);
-  if (lastInfoTabId !== editActiveTabId) {
-    const closeInfo = shouldCloseInfoOnTabChange({
-      prevTabId: lastInfoTabId,
-      nextTabId: editActiveTabId,
-      infoOpen: infoPanelOpen,
+  // The Trigger backing the right-panel detail view (#162), the pane-owner
+  // precedence (#247), the two render-time reconciliations (#320 canvas-reclaim,
+  // #385 info auto-close), and the synthesized pending run-pane node all live in
+  // useRightPaneRouter (#359). It runs the setState-during-render reconciliations
+  // in-body here (App owns `selectedTriggerId`/`infoPanelOpen`, passed in with
+  // their setters) so no stale frame of a shadowed panel is painted.
+  const { paneOwner, selectedTrigger, triggerPromptRequired, runNode } =
+    useRightPaneRouter({
+      selection,
+      editActiveTabId,
+      hasEditTab,
+      selectedTriggerId,
+      setSelectedTriggerId,
+      triggerOpenedTabId,
+      infoPanelOpen,
+      setInfoPanelOpen,
+      triggers,
+      pipelines,
+      selectedRun,
     });
-    setLastInfoTabId(editActiveTabId); // UNCONDITIONAL — mirrors the #320 block
-    if (closeInfo) setInfoPanelOpen(false);
-  }
-
-  const selectedTrigger =
-    selectedTriggerId != null
-      ? triggers.find((t) => t.id === selectedTriggerId) ?? null
-      : null;
-
-  // Prompt-required (#351): default true when the flag is absent (matches the
-  // daemon default); false when the pipeline can't be found, so a dangling
-  // reference shows no false "would be empty" caveat.
-  const triggerPromptRequired = selectedTrigger
-    ? (() => {
-        const p = pipelines.find((pl) => pl.id === selectedTrigger.pipeline_id);
-        return p ? p.prompt_required !== false : false;
-      })()
-    : false;
-
-  // Which view owns the right-hand detail pane (#247). A selected Trigger now
-  // wins over a persistent run-edit tab; the canvas-focus reconciliation above
-  // clears `selectedTriggerId` the moment the canvas is touched again.
-  const paneOwner = rightPaneOwner({
-    triggerSelected: selectedTrigger != null,
-    infoPanelOpen,
-    hasEditTab,
-  });
 
   const openNewRunModal = useCallback((intent: OpenIntent) => {
     setOpenIntent(intent);
@@ -411,32 +336,6 @@ export default function App() {
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
     useInspectorTab(editActiveTabId, isEditingRun);
-
-  // The Run-pane node. A node present in the pipeline (canvas) but absent from the
-  // run's node map is genuinely pending: the event-sourced projection only lists a
-  // node once it has been scheduled (NodeStarted / NodeWaiting / …), so a
-  // not-yet-reached downstream node has no entry. On a live run, synthesize a
-  // pending NodeState so the inspector renders NodeDetailPanel (with its force-start
-  // Start button, #204) instead of the passive RunTabPlaceholder — the daemon's
-  // force_spawn_node already accepts a node absent from run state. Terminal runs and
-  // start/end pseudo-nodes stay null.
-  const runNode: NodeState | null = (() => {
-    if (selection.kind !== "node" || !selection.id || !selectedRun) return null;
-    const existing = selectedRun.nodes[selection.id];
-    if (existing) return existing;
-    if (!isLiveRun(selectedRun.status)) return null;
-    const def = selectedRun.node_defs?.find((d) => d.id === selection.id);
-    if (!def || def.node_type === "start" || def.node_type === "end") return null;
-    return {
-      node_id: selection.id,
-      status: "pending",
-      iter: 0,
-      started_at: null,
-      completed_at: null,
-      failure_reason: null,
-      iterations: [],
-    };
-  })();
 
   // Both inspector panes are always rendered (with the inactive one hidden
   // via the `hidden` attribute) so that switching tabs does not unmount the

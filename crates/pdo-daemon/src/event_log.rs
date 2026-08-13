@@ -323,7 +323,7 @@ impl<'de> Deserialize<'de> for SandboxMode {
 /// Env var overriding the stored instance default (optional tier). Read ONCE at the
 /// edge (create-run chokepoint + `build_settings_view` disclosure), never in the
 /// resolver core — mirror of [`crate::sandbox_image::IMAGE_SOURCE_ENV`] (#410).
-pub const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
+pub(crate) const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
 
 /// Env tier for the settings disclosure / resolver: `Some(mode)` if a valid
 /// `PDO_DEFAULT_SANDBOX` is set, else `None` (unset/invalid).
@@ -343,7 +343,7 @@ fn env_default_sandbox() -> Option<SandboxMode> {
 /// A stored name that does not *exist* is no longer demoted to `off` at all: it wins the
 /// tier, and the create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent
 /// fallback toward less isolation).
-pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
+pub(crate) fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
     stored
         .filter(|s| !s.is_empty())
         .as_deref()
@@ -357,7 +357,7 @@ pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
 /// this is the layer-1 unit the "précédence testée" AC pins. `explicit` and `trigger`
 /// are mutually exclusive in production (a Run has one origin), but the 3-arg form is
 /// the canonical statement of the chain and keeps every arm exercised by the test.
-pub fn effective_sandbox(
+pub(crate) fn effective_sandbox(
     explicit: Option<SandboxMode>,
     trigger: Option<SandboxMode>,
     instance_default: SandboxMode,
@@ -578,8 +578,43 @@ pub struct CostStat {
     pub usd: f64,
     /// True when ≥1 session used a model absent from the price table: its tokens
     /// are excluded, so `usd` is a **lower bound**. Drives the UI "(lower bound)"
-    /// affordance.
+    /// affordance. Derived: `partial ⟺ !unpriced_models.is_empty()` (#425 AC#4).
     pub partial: bool,
+    /// The family keys (de-dated) of every model no tier could price — the
+    /// offenders `partial` used to hide (#425). Sorted and de-duplicated. Lets the
+    /// UI name *which* model was excluded instead of the anonymous "an unpriced
+    /// model": that anonymity is exactly how `claude-fable-5` — the priciest model
+    /// — stayed invisible on `/stats/cost` for weeks. Empty ⟺ `partial == false`.
+    #[serde(default)]
+    pub unpriced_models: Vec<String>,
+}
+
+/// A secondary repository pinned to a Run (#465, ADR-0042).
+///
+/// `target_repos[0]` is the **primary** repo and mirrors the legacy scalar
+/// `target_repo` exactly (ADR-0033) — it is not represented as a `RepoPin` in
+/// slice 1, it stays in `target_repo`. `RepoPin` describes each **secondary**
+/// (index `[1..]`): a read-only snapshot materialised by
+/// `git worktree add --detach <sha>` under
+/// `<primary>/.pdo/runs/<id>/repos/<alias>/`.
+///
+/// The `sha` is resolved once at Run start (`git rev-parse --verify` against
+/// `base_branch`, no fetch → base is the LOCAL ref) and frozen in the
+/// `RunStarted` payload, exactly like the sandbox freeze siblings — so a Run's
+/// view of a secondary can never move under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoPin {
+    /// Absolute path of the secondary repository on the host.
+    pub repo: String,
+    /// Directory name of the snapshot under `.pdo/runs/<id>/repos/`, disambiguated
+    /// on basename collision. Never derived from the basename alone at read time.
+    pub alias: String,
+    /// The commit the snapshot is detached at, frozen at Run start.
+    pub sha: String,
+    /// The ref the SHA was resolved from (default: `HEAD`, the local ref). Kept
+    /// for provenance / UI display; the SHA is what is authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -627,6 +662,19 @@ pub struct RunState {
     pub switch_states: HashMap<String, SwitchState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+    /// Secondary repositories associated with this Run in **read-only** (#465,
+    /// ADR-0042). Empty for a mono-repo Run (the overwhelming majority, incl. every
+    /// historical run) — `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
+    /// keeps a mono-repo Run's serialized state byte-identical to the pre-#465 shape
+    /// (mirror of `target_repo`'s `Option::is_none` skip); a Run with secondaries
+    /// serializes them.
+    ///
+    /// Each entry is a [`RepoPin`] frozen at Run start; the primary repo is NOT in
+    /// here (it stays in `target_repo`). Projected from the `RunStarted` payload key
+    /// `target_repos`; an unreadable value degrades to empty with a `warn!`, never a
+    /// panic — this applier runs before the transition guard.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_repos: Vec<RepoPin>,
     /// Isolation mode for this Run (#403 / #407 / #432) — `off`, or the name of the
     /// staging profile it was launched with. Immutable: set once from the
     /// `RunStarted` payload, never mutated. Absent payload field → `Off` (the
@@ -767,6 +815,7 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             target_repo: None,
+            target_repos: Vec::new(),
             sandbox: SandboxMode::Off,
             sandbox_entries: None,
             sandbox_entries_raw_error: None,
@@ -953,7 +1002,7 @@ fn upsert_iteration(iterations: &mut Vec<IterationInfo>, new: IterationInfo) {
     }
 }
 
-pub fn project(events: &[Event]) -> Option<RunState> {
+pub(crate) fn project(events: &[Event]) -> Option<RunState> {
     if events.is_empty() {
         return None;
     }
@@ -1093,6 +1142,23 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {
                     state.target_repo = Some(tr.to_string());
+                }
+                // #465 (ADR-0042): the secondary repos, frozen (repo/alias/sha) at
+                // Run start. Absent → the mono-repo default (empty), which is what
+                // every historical run and every mono-repo create carries. A present-
+                // but-unreadable value degrades to empty with a `warn!` (LOUD, never a
+                // panic — this runs before the transition guard): losing the read-only
+                // context is a soft failure, not a reason to fail the Run replay.
+                match payload.get("target_repos") {
+                    None => {}
+                    Some(raw) => match serde_json::from_value::<Vec<RepoPin>>(raw.clone()) {
+                        Ok(pins) => state.target_repos = pins,
+                        Err(e) => warn!(
+                            "run_started carries an unreadable `target_repos` value \
+                             ({raw}): {e}; projecting an empty secondary list (the Run \
+                             runs mono-repo)."
+                        ),
+                    },
                 }
                 // #407: isolation mode, projected once and never mutated. Absent
                 // (or malformed) → the `Off` default (host path). Never panics —
@@ -1988,7 +2054,7 @@ fn finalize(state: &mut RunState) {
 /// in the very same sweep — 27 ms after the `node_stale`, on the Run that
 /// produced #469. Two mechanisms contradicted each other, the terminal one won,
 /// and the doc described the other.
-pub fn is_stalled(run: &RunState) -> bool {
+pub(crate) fn is_stalled(run: &RunState) -> bool {
     if run.status != RunStatus::Running {
         return false;
     }
@@ -2008,11 +2074,11 @@ pub fn is_stalled(run: &RunState) -> bool {
     run.nodes.values().any(|n| n.status == NodeStatus::Stale)
 }
 
-pub fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-pub fn generate_run_id() -> String {
+pub(crate) fn generate_run_id() -> String {
     let now = chrono::Utc::now();
     let ts = now.format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
@@ -2025,7 +2091,7 @@ pub fn generate_run_id() -> String {
 /// completion). Both are issued as `CommandIssued` events; this is their
 /// projection onto a single region.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RegionRoute {
+pub(crate) struct RegionRoute {
     /// Extra iterations the manager added on top of the region's `max_iter`
     /// (sum of every `bump_region` command for this id).
     pub bumped_by: i64,
@@ -2038,7 +2104,7 @@ pub struct RegionRoute {
 /// id from the event log: `bump_region` accumulates `additional_iter`,
 /// `end_region` flips `ended`. The result drives `resume_run` continuation of an
 /// exhausted-unrouted region without restarting the daemon.
-pub fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
+pub(crate) fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
     let mut routes: HashMap<String, RegionRoute> = HashMap::new();
     for event in events {
         if event.kind != EventKind::CommandIssued {
@@ -2068,7 +2134,7 @@ pub fn collect_region_routes(events: &[Event]) -> HashMap<String, RegionRoute> {
     routes
 }
 
-pub fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
+pub(crate) fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64> {
     let mut extensions: HashMap<String, i64> = HashMap::new();
     for event in events {
         if event.kind != EventKind::CommandIssued {
@@ -4552,6 +4618,49 @@ mod tests {
             RunStatus::Running,
             "RunResumed on non-paused run is a no-op"
         );
+    }
+
+    /// #465 (ADR-0042): `RunStarted.target_repos` projects into
+    /// `RunState.target_repos`; a legacy payload without the key stays empty
+    /// (mono-repo); a malformed value degrades to empty with a `warn!` and NEVER
+    /// panics — `project()` runs before the transition guard.
+    #[test]
+    fn target_repos_projects_and_degrades_gracefully() {
+        // Present + well-formed → projected verbatim.
+        let with = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "target_repo": "/repos/primary",
+                "target_repos": [
+                    { "repo": "/repos/secondary", "alias": "secondary",
+                      "sha": "deadbeef", "base_branch": "main" }
+                ],
+            }),
+        )];
+        let state = project(&with).unwrap();
+        assert_eq!(state.target_repos.len(), 1);
+        assert_eq!(state.target_repos[0].repo, "/repos/secondary");
+        assert_eq!(state.target_repos[0].alias, "secondary");
+        assert_eq!(state.target_repos[0].sha, "deadbeef");
+        assert_eq!(state.target_repos[0].base_branch.as_deref(), Some("main"));
+
+        // Legacy payload (no key) → empty, mono-repo.
+        let legacy = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "target_repo": "/repos/primary" }),
+        )];
+        assert!(project(&legacy).unwrap().target_repos.is_empty());
+
+        // Malformed value → empty, NO panic (degrade with warn).
+        let malformed = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "target_repos": "not-an-array" }),
+        )];
+        assert!(project(&malformed).unwrap().target_repos.is_empty());
     }
 
     /// #503: a Run's whole failure signal used to be a red dot — every

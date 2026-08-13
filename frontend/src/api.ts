@@ -535,17 +535,31 @@ export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
 }
 
+/** One repo line of a multi-repo create (#465, ADR-0042): a path plus an optional
+ *  base branch (default HEAD, the local ref). `[0]` is the primary; `[1..]` become
+ *  read-only secondary snapshots. */
+export interface TargetRepoInput {
+  repo: string;
+  base_branch?: string;
+}
+
 export interface CreateRunRequest {
   pipeline: string;
   input: string;
   variables: Record<string, unknown>;
   pipeline_id?: string;
   target_repo?: string;
+  /** Read-only secondary repos (#465). `[0]` is the primary (kept in sync with
+   *  `target_repo`), `[1..]` are secondaries. Omit for a mono-repo Run. */
+  target_repos?: TargetRepoInput[];
   source_branch?: string;
   name?: string;
   /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
    *  server defers to the trigger/instance default at the create chokepoint. */
   sandbox?: string;
+  /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
+   *  the server resolves back-compat by the presence of `name`, then the instance default. */
+  auto_name?: boolean;
   images?: File[];
 }
 
@@ -563,12 +577,20 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     form.append("variables", JSON.stringify(req.variables));
     if (req.pipeline_id) form.append("pipeline_id", req.pipeline_id);
     if (req.target_repo) form.append("target_repo", req.target_repo);
+    // #465: the multi-repo list rides the multipart create as a JSON field (mirrors
+    // `variables`), so a Run created WITH attached images keeps its secondaries.
+    if (req.target_repos && req.target_repos.length > 0)
+      form.append("target_repos", JSON.stringify(req.target_repos));
     if (req.source_branch) form.append("source_branch", req.source_branch);
     if (req.name) form.append("name", req.name);
     // #410: thread the explicit sandbox mode through the multipart path too, so a
     // sandboxed Run created WITH attached images keeps its mode (the daemon's
     // multipart parser reads this field).
     if (req.sandbox) form.append("sandbox", req.sandbox);
+    // #338: thread the explicit auto-naming choice through the multipart path too, so an
+    // unchecked "Auto-generated" box is honoured on a create WITH attached images. Sent as
+    // a stringified bool; only when the caller made a choice (it always does from the modal).
+    if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
@@ -588,6 +610,9 @@ export interface CreateTriggerRequest {
   cron: string;
   input_template?: string;
   target_repo?: string;
+  /** Read-only secondary repos to associate with fired Runs (#465). `[0]` = primary
+   *  (kept in sync with `target_repo`), `[1..]` secondaries. Omit for mono-repo. */
+  target_repos?: TargetRepoInput[];
   source_branch?: string;
   variables?: Record<string, unknown>;
   guard_command?: string;
@@ -597,6 +622,9 @@ export interface CreateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/omit to
    *  inherit the instance default. */
   sandbox?: string | null;
+  /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
+   *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
+  auto_name?: boolean;
 }
 
 export function fetchTriggers(): Promise<Trigger[]> {
@@ -625,6 +653,9 @@ export interface UpdateTriggerRequest {
   input_template?: string;
   overlap_policy?: string;
   target_repo?: string | null;
+  /** Read-only secondary repos (#465): an array sets the list, `null` clears to
+   *  mono-repo, `undefined` leaves it unchanged. */
+  target_repos?: TargetRepoInput[] | null;
   source_branch?: string | null;
   guard_command?: string | null;
   variables?: Record<string, unknown>;
@@ -633,6 +664,9 @@ export interface UpdateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): a value sets it, `null` clears back to
    *  inheriting the instance default, `undefined` leaves it unchanged. */
   sandbox?: string | null;
+  /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
+   *  bool (no clear state) — mirror of `enabled`. */
+  auto_name?: boolean;
 }
 
 export function updateTrigger(

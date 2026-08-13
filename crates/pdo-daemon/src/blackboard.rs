@@ -1,13 +1,18 @@
 use std::path::{Path, PathBuf};
 
-pub fn port_dir(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+pub(crate) fn port_dir(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
     artifacts_dir
         .join(node_id)
         .join(format!("iter-{iter}"))
         .join(port_name)
 }
 
-pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+pub(crate) fn artifact_path(
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+    port_name: &str,
+) -> PathBuf {
     port_dir(artifacts_dir, node_id, iter, port_name).join("output.md")
 }
 
@@ -16,7 +21,7 @@ pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: 
 /// port's directory. A dedicated helper localizes the `output.html` choice to
 /// the three output sites that emit it, keeping the type-blind input side
 /// (which reads `output.md`) untouched.
-pub fn artifact_path_html(
+pub(crate) fn artifact_path_html(
     artifacts_dir: &Path,
     node_id: &str,
     iter: i64,
@@ -26,11 +31,16 @@ pub fn artifact_path_html(
 }
 
 #[allow(dead_code)]
-pub fn artifact_exists(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> bool {
+pub(crate) fn artifact_exists(
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+    port_name: &str,
+) -> bool {
     artifact_path(artifacts_dir, node_id, iter, port_name).exists()
 }
 
-pub fn input_path(artifacts_dir: &Path) -> PathBuf {
+pub(crate) fn input_path(artifacts_dir: &Path) -> PathBuf {
     artifacts_dir.join("_input").join("output.md")
 }
 

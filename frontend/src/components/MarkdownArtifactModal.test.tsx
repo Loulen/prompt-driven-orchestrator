@@ -163,6 +163,59 @@ describe("MarkdownArtifactModal", () => {
       expect(screen.getByTestId("iter-next")).toBeDisabled();
     });
 
+    // #369: NodeDetailPanel polls node I/O and re-renders every tick. Before the
+    // fix it rebuilt an equivalent-but-fresh `source` object each time, and the
+    // modal keyed its fetch effect on that reference — so it re-fetched (and reset
+    // file pagination + blanked the body, remounting the mermaid diagram) every
+    // tick. The effect must instead key on the primitive nav fields, so a parent
+    // re-render with an equivalent source triggers no new fetch.
+    it("does not re-fetch when the parent re-renders with an equivalent source", async () => {
+      fetchArtifactMock.mockResolvedValue("# content");
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          { port: "out", repeated: false, files: [makeFile("/iter-2/out.md")] },
+        ],
+      });
+
+      // A fresh source object (new reference, incl. a new iterations array) with
+      // identical field values — exactly what a poll-driven re-render produces.
+      const makeSource = () =>
+        ({
+          kind: "iter-nav",
+          nodeId: "node-1",
+          portKind: "output",
+          iterations: makeIters(3),
+          initialIter: 2,
+        }) as const;
+
+      const { rerender } = render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={makeSource()}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      expect(fetchNodeIOMock).toHaveBeenCalledTimes(1);
+
+      fetchNodeIOMock.mockClear();
+      rerender(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={makeSource()}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+
+      expect(fetchNodeIOMock).not.toHaveBeenCalled();
+      // The iter nav is still fully functional after the churn-free re-render.
+      expect(screen.getByText("iter 2 of 3")).toBeInTheDocument();
+    });
+
     it("does not show iter nav when only one iteration", async () => {
       fetchArtifactMock.mockResolvedValue("");
       fetchNodeIOMock.mockResolvedValue({

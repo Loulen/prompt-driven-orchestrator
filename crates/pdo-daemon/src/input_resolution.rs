@@ -36,7 +36,7 @@ use crate::pipeline::PipelineDef;
 /// `consumer_iter` when the source has no completed iteration at all (the
 /// path then points where the artifact will appear, preserving the previous
 /// positional behavior for overrides/injection flows).
-pub fn source_iter(run_state: &RunState, source_node_id: &str, consumer_iter: i64) -> i64 {
+pub(crate) fn source_iter(run_state: &RunState, source_node_id: &str, consumer_iter: i64) -> i64 {
     run_state
         .latest_completed_iter(source_node_id)
         .unwrap_or(consumer_iter)
@@ -45,7 +45,7 @@ pub fn source_iter(run_state: &RunState, source_node_id: &str, consumer_iter: i6
 /// Resolves, for one consumer node, the source iteration of every incoming
 /// edge: a map `source node id -> iter to read`. One entry per distinct
 /// source feeding `node_id`.
-pub fn resolved_source_iters(
+pub(crate) fn resolved_source_iters(
     pipeline: &PipelineDef,
     run_state: &RunState,
     node_id: &str,
@@ -75,7 +75,7 @@ pub fn resolved_source_iters(
 /// disk is never scanned for iterations, only read at the blessed ones. A
 /// source with no completed iteration maps to an empty `Vec` (the pool is
 /// empty — never a raw `iter-*` glob, which cannot exclude a failed iter).
-pub fn resolved_repeated_iters(
+pub(crate) fn resolved_repeated_iters(
     pipeline: &PipelineDef,
     run_state: &RunState,
     node_id: &str,
@@ -99,7 +99,7 @@ pub fn resolved_repeated_iters(
 /// adds `FileInfo`/frontmatter + a disk stat, the preamble adds prose and reads
 /// `from_start`, the forensic payload flattens `paths` to a `\n`-joined string.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedInput {
+pub(crate) struct ResolvedInput {
     /// The consumer-side (target) port this input feeds.
     pub port: String,
     /// True when the source is the Start node — the input is the run's user
@@ -126,7 +126,7 @@ pub struct ResolvedInput {
 /// absent from `source_iters` falls back to `consumer_iter` (positional), the
 /// same fallback [`source_iter`] applies for override/injection flows; a
 /// repeated source absent from `repeated_iters` pools nothing.
-pub fn resolve_consumer_inputs(
+pub(crate) fn resolve_consumer_inputs(
     pipeline: &PipelineDef,
     artifacts_dir: &Path,
     node_id: &str,

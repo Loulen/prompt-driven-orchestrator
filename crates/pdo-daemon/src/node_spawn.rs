@@ -131,9 +131,11 @@ pub(crate) enum SpawnOutcome {
         /// The commit the sub-worktree is cut from (#503 / ADR-0036), carried over
         /// unchanged on a reuse. `None` for a node with no sub-worktree.
         base_sha: Option<String>,
-        /// A git lock found in the reused worktree's private gitdir. Reported, not
-        /// removed — see `worktree_ops::ensure_sub_worktree`.
-        stale_git_lock: Option<String>,
+        /// Every interrupted git operation found in the reused worktree's private
+        /// gitdir (`index.lock`, `MERGE_HEAD`, `rebase-*`), in scan order (#516).
+        /// Reported, not removed — see `worktree_ops::ensure_sub_worktree`. Empty
+        /// for a fresh cut or a node with no sub-worktree.
+        interrupted_git_ops: Vec<String>,
     },
     /// Admission cap reached: the node entered `waiting` (`NodeWaiting`
     /// appended); `retry_waiting_nodes` re-drives it later.
@@ -183,8 +185,14 @@ pub(crate) async fn spawn_node(
     let projected = loaded.as_ref().map(|(_, s)| s);
     match transition_guard::validate_transition(projected, &started_probe) {
         transition_guard::Verdict::Allow => {}
-        transition_guard::Verdict::NoOp { reason }
-        | transition_guard::Verdict::Reject { reason } => {
+        transition_guard::Verdict::NoOp { reason } => {
+            warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
+            return SpawnOutcome::Refused { reason };
+        }
+        transition_guard::Verdict::Reject { reason } => {
+            // #515: the cause is typed now; forward its historical prose (the
+            // `Refused` outcome carries a `String`, unchanged).
+            let reason = reason.to_string();
             warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
             return SpawnOutcome::Refused { reason };
         }
@@ -320,7 +328,9 @@ pub(crate) async fn spawn_node(
     let mut spawn_base_sha: Option<String> = None;
     // #489: what the wire has to be able to say about the sub-worktree.
     let mut reused_sub_worktree = false;
-    let mut stale_git_lock: Option<String> = None;
+    // #516: every interrupted git op left in a reused sub-worktree, in scan order.
+    // Routed to both the re-spawned node's preamble and the wire response.
+    let mut interrupted_git_ops: Vec<String> = Vec::new();
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -346,7 +356,7 @@ pub(crate) async fn spawn_node(
             Ok(ensured) => {
                 spawn_base_sha = ensured.base_sha;
                 reused_sub_worktree = !ensured.created;
-                stale_git_lock = ensured.entry_state.stale_git_lock().map(str::to_string);
+                interrupted_git_ops = ensured.entry_state.interrupted_git_ops().to_vec();
                 // #489-B: `Some(...)` ONLY when this spawn created the worktree.
                 // On a reuse, any later abort in the panic-isolated span would send
                 // `fail_spawn_before_start` into `reap_orphan_sub_worktree`, and
@@ -441,22 +451,31 @@ pub(crate) async fn spawn_node(
         // pools from the SAME fresh projection — one artifact per COMPLETED
         // source iteration, so a failed iter's artifact is never pooled and no
         // raw `iter-*` glob reaches the agent/script.
-        let (source_iters, repeated_iters) = match reload_run_state_with(deps.db, run_id).await {
-            Some((_, fresh_state)) => (
-                input_resolution::resolved_source_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                    iter,
+        // #465: the secondary repos come from the SAME fresh projection, resolved to
+        // absolute snapshot paths for injection (the sub-worktree does not inherit
+        // the snapshot files).
+        let (source_iters, repeated_iters, secondary_repos) =
+            match reload_run_state_with(deps.db, run_id).await {
+                Some((_, fresh_state)) => (
+                    input_resolution::resolved_source_iters(
+                        spawn_ctx.pipeline,
+                        &fresh_state,
+                        &node.id,
+                        iter,
+                    ),
+                    input_resolution::resolved_repeated_iters(
+                        spawn_ctx.pipeline,
+                        &fresh_state,
+                        &node.id,
+                    ),
+                    prompt_augmenter::secondary_repo_contexts(
+                        spawn_ctx.repo_root,
+                        run_id,
+                        &fresh_state.target_repos,
+                    ),
                 ),
-                input_resolution::resolved_repeated_iters(
-                    spawn_ctx.pipeline,
-                    &fresh_state,
-                    &node.id,
-                ),
-            ),
-            None => (HashMap::new(), HashMap::new()),
-        };
+                None => (HashMap::new(), HashMap::new(), Vec::new()),
+            };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
         // stays pure (#274). Gate on `!prompt_required` (the only branch that
@@ -498,6 +517,13 @@ pub(crate) async fn spawn_node(
             start_prompt_present,
             source_iters,
             repeated_iters,
+            secondary_repos,
+            // #516: both computed above (outside this span), borrowed read-only
+            // here so `build_preamble` can route the interrupted-git-op notice. The
+            // `Vec` is moved into `SpawnOutcome::Spawned` only after this span is
+            // awaited, so the borrow is already released — see G7 in the plan.
+            reused_sub_worktree,
+            interrupted_git_ops: &interrupted_git_ops,
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
@@ -675,7 +701,7 @@ pub(crate) async fn spawn_node(
     SpawnOutcome::Spawned {
         reused_sub_worktree,
         base_sha: spawn_base_sha,
-        stale_git_lock,
+        interrupted_git_ops,
     }
 }
 

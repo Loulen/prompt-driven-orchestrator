@@ -1,0 +1,35 @@
+name: disk-janitor
+version: "1.0"
+prompt_required: false
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: bottom }
+    view: { x: 120, y: -80 }
+  - id: reap
+    name: Reclaim disk
+    type: script
+    outputs:
+      - { name: out, side: bottom }
+    view: { x: 120, y: 40 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 120, y: 160 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reap, port: go }
+  - source: { node: reap, port: out }
+    target: { node: end, port: result }
+notes:
+  - id: about
+    content: >-
+      Unattended disk janitor (#480, #128 Track A). The `reap` script node runs
+      `pdo reap`, which lists GET /runs/reapable, applies a graded-TTL policy,
+      and archives each match via cleanup_run. Deterministic, no LLM turn. Wire a
+      cron Trigger to fire it; see docs/recipes/disk-janitor.md.
+    view: { x: 320, y: 40 }

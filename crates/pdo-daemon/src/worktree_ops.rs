@@ -91,6 +91,26 @@ pub(crate) fn sub_worktree_branch(run_id: &str, node_id: &str, iter: i64) -> Str
     format!("pdo/sub-{run_id}-{node_id}-iter-{iter}")
 }
 
+/// On-disk location of a secondary repo's read-only snapshot (#465, ADR-0042).
+///
+/// A **third sibling** of `worktree/` and `nodes/` under the Run directory:
+/// `<repo_root>/.pdo/runs/<run_id>/repos/<alias>/`. Living under `repo_root`
+/// (the primary) is deliberate — the sandbox already bind-mounts `repo_root` at
+/// an identical path (invariant D3), so the snapshot is visible in-sandbox with
+/// **no new mount**, and `remove_dir_all(<run_dir>)` at cleanup reclaims it.
+///
+/// `alias` MUST already be disambiguated by the caller (two secondaries with the
+/// same basename would otherwise collide here) — the path never re-derives it
+/// from the repo basename.
+pub(crate) fn secondary_snapshot_path(repo_root: &Path, run_id: &str, alias: &str) -> PathBuf {
+    repo_root
+        .join(".pdo")
+        .join("runs")
+        .join(run_id)
+        .join("repos")
+        .join(alias)
+}
+
 /// Create a node's sub-worktree and return **the commit it was cut from**.
 ///
 /// That SHA is the whole basis of the #503 adoption rule (ADR-0036): a
@@ -151,10 +171,13 @@ pub(crate) enum SubWorktreeState {
         /// The base branch is no longer an ancestor of the sub-branch: the cut is
         /// stale. Reported, never "fixed" — see [`ensure_sub_worktree`].
         base_moved: bool,
-        /// A git lock left in the worktree's private gitdir (`index.lock`,
-        /// `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Reported, never
-        /// deleted: PDO cannot prove the writer is dead.
-        stale_git_lock: Option<String>,
+        /// Every interrupted git operation left in the worktree's private gitdir
+        /// (`index.lock`, `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`), in scan
+        /// order. **All** present markers, never just the first (#516): reporting
+        /// only `index.lock` once masked a coexisting `MERGE_HEAD`, and `pdo
+        /// complete` then took a two-parent merge commit nobody asked for, in
+        /// silence. Reported, never deleted: PDO cannot prove the writer is dead.
+        interrupted_git_ops: Vec<String>,
     },
     /// Registered but prunable, or an orphaned branch ref with no worktree, or a
     /// detached checkout of our own path. Nothing here has value; reap and re-cut.
@@ -165,12 +188,15 @@ pub(crate) enum SubWorktreeState {
 }
 
 impl SubWorktreeState {
-    /// The stale lock, if this state carries one. `None` for every state that is
-    /// about to be created from scratch.
-    pub(crate) fn stale_git_lock(&self) -> Option<&str> {
+    /// The interrupted git ops this state carries, in scan order. `&[]` for every
+    /// state that is about to be created from scratch.
+    pub(crate) fn interrupted_git_ops(&self) -> &[String] {
         match self {
-            Self::Reusable { stale_git_lock, .. } => stale_git_lock.as_deref(),
-            Self::Absent | Self::Recyclable { .. } | Self::Occupied { .. } => None,
+            Self::Reusable {
+                interrupted_git_ops,
+                ..
+            } => interrupted_git_ops,
+            Self::Absent | Self::Recyclable { .. } | Self::Occupied { .. } => &[],
         }
     }
 }
@@ -250,15 +276,23 @@ fn private_gitdir(sub_worktree_dir: &std::path::Path) -> Option<PathBuf> {
     Some(PathBuf::from(raw))
 }
 
-/// The name of the first git lock present in the worktree's private gitdir, if any.
-fn stale_git_lock_in(sub_worktree_dir: &std::path::Path) -> Option<String> {
-    let gitdir = private_gitdir(sub_worktree_dir)?;
-    for candidate in ["index.lock", "MERGE_HEAD", "rebase-merge", "rebase-apply"] {
-        if gitdir.join(candidate).exists() {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+/// **Every** interrupted-git-op marker present in the worktree's private gitdir,
+/// in scan order — never just the first (#516).
+///
+/// `index.lock` stays at the head of the scan on purpose: the preamble notice
+/// leans on "the first one must be removed before anything else" (the
+/// `--abort`/`--continue` commands themselves need the index lock free to run).
+/// Reporting only the first marker once hid a coexisting `MERGE_HEAD` behind an
+/// `index.lock`, and the merge-back then took a silent two-parent commit.
+fn interrupted_git_ops_in(sub_worktree_dir: &std::path::Path) -> Vec<String> {
+    let Some(gitdir) = private_gitdir(sub_worktree_dir) else {
+        return Vec::new();
+    };
+    ["index.lock", "MERGE_HEAD", "rebase-merge", "rebase-apply"]
+        .into_iter()
+        .filter(|candidate| gitdir.join(candidate).exists())
+        .map(str::to_string)
+        .collect()
 }
 
 fn dir_is_empty(dir: &std::path::Path) -> bool {
@@ -309,7 +343,7 @@ pub(crate) fn classify_sub_worktree(
                 Some(branch) if branch == want_ref => SubWorktreeState::Reusable {
                     has_work: has_any_change(sub_worktree_dir),
                     base_moved: !base_is_ancestor(repo_root, base_branch, &want_ref),
-                    stale_git_lock: stale_git_lock_in(sub_worktree_dir),
+                    interrupted_git_ops: interrupted_git_ops_in(sub_worktree_dir),
                 },
                 // Detached HEAD at our own path: only PDO ever creates a worktree
                 // there, so its branch was deleted from under it. Nothing to keep.
@@ -382,7 +416,7 @@ fn branch_ref_exists(repo_root: &std::path::Path, full_ref: &str) -> bool {
 #[derive(Debug)]
 pub(crate) struct EnsuredSubWorktree {
     /// The state the disk was in *before* this call — what the wire reports as
-    /// `reused_sub_worktree` and `stale_git_lock`.
+    /// `reused_sub_worktree` and `interrupted_git_ops`.
     pub entry_state: SubWorktreeState,
     /// `true` iff this call ran `git worktree add`. Gates `orphan_to_reap`: a
     /// reused worktree must never be reapable by a later spawn abort.
@@ -442,11 +476,11 @@ pub(crate) fn ensure_sub_worktree(
         SubWorktreeState::Reusable {
             has_work,
             base_moved,
-            stale_git_lock,
+            interrupted_git_ops,
         } => {
             info!(
                 "Reusing sub-worktree {} in place (branch {sub_branch}): has_work={has_work}, \
-                 base_moved={base_moved}, stale_git_lock={stale_git_lock:?} (#489)",
+                 base_moved={base_moved}, interrupted_git_ops={interrupted_git_ops:?} (#489)",
                 sub_worktree_dir.display()
             );
             if *base_moved {
@@ -456,10 +490,11 @@ pub(crate) fn ensure_sub_worktree(
                     sub_worktree_dir.display()
                 );
             }
-            if let Some(lock) = stale_git_lock {
+            if !interrupted_git_ops.is_empty() {
                 warn!(
-                    "Sub-worktree {} carries a git lock ({lock}); it is reported, not removed — \
-                     the merge-back will fail loudly if it is still there (#489)",
+                    "Sub-worktree {} carries interrupted git ops ({interrupted_git_ops:?}); they \
+                     are reported, not removed — the re-spawned agent resolves them before it \
+                     completes, or the merge-back records a merge nobody intended (#516)",
                     sub_worktree_dir.display()
                 );
             }
@@ -727,6 +762,42 @@ fn rev_parse(dir: &std::path::Path, rev: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Resolve `rev` to the SHA of a **single, unambiguous commit** in `dir`, or fail
+/// (#465, ADR-0042).
+///
+/// Unlike bare [`rev_parse`], this passes `--verify` and peels with `^{commit}`:
+/// `--verify` makes git refuse an ambiguous or partial ref instead of silently
+/// picking one, and `^{commit}` rejects a ref that points at a tag/tree/blob. This
+/// is what pins a secondary snapshot: the frozen SHA must be a real commit we can
+/// detach onto, resolved once at Run start against the **local** ref (there is no
+/// `git fetch` anywhere in the daemon — base is whatever the operator has checked
+/// out). Defaults to `HEAD` at the call site.
+pub(crate) fn rev_parse_verified(dir: &Path, rev: &str) -> Result<String> {
+    let arg = format!("{rev}^{{commit}}");
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", &arg])
+        .current_dir(dir)
+        .output()
+        .with_context(|| format!("failed to run git rev-parse --verify {arg}"))?;
+    // `--verify --quiet` exits non-zero (and prints nothing) on an unresolvable or
+    // ambiguous ref — the failure we want to surface with the ref's own name.
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-parse --verify {arg} failed: {} is not a single unambiguous commit in {}",
+            rev,
+            dir.display()
+        );
+    }
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if sha.is_empty() {
+        anyhow::bail!(
+            "git rev-parse --verify {arg} resolved to nothing in {}",
+            dir.display()
+        );
+    }
+    Ok(sha)
+}
+
 /// Everything a git invocation said, **stdout first** (#503 AC3).
 ///
 /// `git merge` reports a conflict on stdout and says nothing on stderr, while a
@@ -928,6 +999,81 @@ pub(crate) fn create_worktree(
 
     info!("Created worktree at {}", worktree_dir.display());
     Ok(())
+}
+
+/// Materialise a secondary repo's **read-only snapshot** (#465, ADR-0042).
+///
+/// Mirror of [`create_worktree`], with one load-bearing difference: `--detach`
+/// instead of `-b <branch>`. A detached worktree has **no branch**, so:
+/// - there is no ref to `branch -D` at cleanup — only a registration to `prune`;
+/// - it sidesteps the #498 class (a sub-worktree branch colliding with another
+///   Run's), because two Runs pinning the same secondary create two detached
+///   worktrees at different paths and no shared branch name.
+///
+/// `sha` is the frozen commit (resolved by [`rev_parse_verified`] at Run start);
+/// `dest_dir` is [`secondary_snapshot_path`]. Runs with `current_dir` set to the
+/// **secondary** repo (that is the repo the worktree registers into), and shares
+/// its object store — the snapshot costs no full clone.
+pub(crate) fn create_secondary_snapshot(
+    secondary_repo: &Path,
+    dest_dir: &Path,
+    sha: &str,
+) -> Result<()> {
+    std::fs::create_dir_all(dest_dir.parent().unwrap_or(std::path::Path::new(".")))?;
+
+    let output = std::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(dest_dir)
+        .arg(sha)
+        .current_dir(secondary_repo)
+        .output()
+        .context("failed to run git worktree add --detach for a secondary snapshot")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree add --detach (secondary) failed: {stderr}");
+    }
+
+    info!(
+        "Created secondary snapshot at {} (detached @ {sha}) from {}",
+        dest_dir.display(),
+        secondary_repo.display()
+    );
+    Ok(())
+}
+
+/// Tear down one secondary snapshot at cleanup (#465, ADR-0042).
+///
+/// Best-effort like [`reap_orphan_sub_worktree`] and `cleanup_run` — a missing
+/// snapshot / secondary is fine — but the **`prune` is never skipped**: the
+/// worktree registration lives in the *secondary* repo's `.git`, OUTSIDE
+/// `repo_root`, so the Run's `remove_dir_all(<run_dir>)` cannot clear it. Without
+/// the prune, every multi-repo Run leaves a dangling `--detach` registration in
+/// the secondary (the #498 class), and a future `worktree add` at the same path
+/// fails 255.
+///
+/// `current_dir` is the **secondary** repo, since that is where the registration
+/// and `prune` operate.
+pub(crate) fn remove_secondary_snapshot(secondary_repo: &Path, snapshot_dir: &Path) {
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(snapshot_dir)
+        .current_dir(secondary_repo)
+        .output();
+    // The prune is the part `cleanup_run` cannot do from the primary: it clears the
+    // dangling registration in the secondary's .git even if the dir is already gone.
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(secondary_repo)
+        .output();
+    if snapshot_dir.exists() {
+        let _ = std::fs::remove_dir_all(snapshot_dir);
+    }
+    info!(
+        "Reaped secondary snapshot {} from {} (worktree remove + prune, #465/#498)",
+        snapshot_dir.display(),
+        secondary_repo.display()
+    );
 }
 
 #[cfg(test)]
@@ -1876,7 +2022,7 @@ mod tests {
             SubWorktreeState::Reusable {
                 has_work: false,
                 base_moved: false,
-                stale_git_lock: None,
+                interrupted_git_ops: vec![],
             }
         );
 
@@ -1889,17 +2035,23 @@ mod tests {
             SubWorktreeState::Reusable {
                 has_work: true,
                 base_moved: false,
-                stale_git_lock: None,
+                interrupted_git_ops: vec![],
             }
         );
     }
 
-    /// A stale git lock is REPORTED, and the worktree stays reusable. Refusing here
-    /// would remove the last recovery lever on a state the restart can improve; and
-    /// deleting the lock ourselves is what git warns against — PDO cannot prove the
-    /// writer is dead (#485 is the precedent that cost).
+    /// Interrupted git ops are REPORTED, and the worktree stays reusable. Refusing
+    /// here would remove the last recovery lever on a state the restart can improve;
+    /// and deleting the markers ourselves is what git warns against — PDO cannot
+    /// prove the writer is dead (#485 is the precedent that cost).
+    ///
+    /// **THE #516 case.** Both an `index.lock` AND a `MERGE_HEAD` are planted, and
+    /// **both** must surface, in scan order. The pre-#516 scanner returned at the
+    /// first marker, hiding the `MERGE_HEAD` behind the `index.lock` — the agent
+    /// cleared the lock it was told about, ran `pdo complete`, and the merge-back
+    /// took a silent two-parent commit.
     #[test]
-    fn classify_reports_a_stale_lock_without_refusing_the_reuse() {
+    fn classify_reports_every_interrupted_git_op_without_refusing_the_reuse() {
         let tmp = tempfile::tempdir().unwrap();
         let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-lock");
         let dir = sub_worktree_path(&repo, "cls-lock", "impl-1", 1);
@@ -1911,18 +2063,26 @@ mod tests {
         // basename: `.git/worktrees/` is named by basename, so every node collides
         // on `iter-1` and git disambiguates to `iter-11`, `iter-12`…
         let gitdir = private_gitdir(&dir).expect("a linked worktree has a gitdir pointer");
-        std::fs::write(gitdir.join("index.lock"), "").unwrap();
 
-        let state = classify_sub_worktree(&repo, &dir, &branch, &base);
+        // A single marker still surfaces as a one-element Vec.
+        std::fs::write(gitdir.join("index.lock"), "").unwrap();
+        let one = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert_eq!(one.interrupted_git_ops(), ["index.lock"]);
+
+        // #516: a coexisting `MERGE_HEAD` must NOT be masked by the `index.lock`.
+        std::fs::write(gitdir.join("MERGE_HEAD"), "").unwrap();
+        let both = classify_sub_worktree(&repo, &dir, &branch, &base);
         assert_eq!(
-            state,
+            both,
             SubWorktreeState::Reusable {
                 has_work: true,
                 base_moved: false,
-                stale_git_lock: Some("index.lock".into()),
+                interrupted_git_ops: vec!["index.lock".into(), "MERGE_HEAD".into()],
             }
         );
-        assert_eq!(state.stale_git_lock(), Some("index.lock"));
+        // Scan order is load-bearing: `index.lock` first (the notice says "remove it
+        // before anything else").
+        assert_eq!(both.interrupted_git_ops(), ["index.lock", "MERGE_HEAD"]);
     }
 
     /// The #498 shape: the branch ref outlives its worktree, so `worktree add -b`
@@ -2191,6 +2351,173 @@ mod tests {
             err.chain().count(),
             2,
             "OS cause must be preserved as a distinct source(); got chain: {err:#}"
+        );
+    }
+
+    // ---- #465 (ADR-0042): secondary read-only snapshots ----
+
+    /// Seed a repo with a named tracked file and return its HEAD sha.
+    fn init_repo_with_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap()
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join(name), contents).unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-m", "init"]);
+        rev_parse(dir, "HEAD").unwrap()
+    }
+
+    #[test]
+    fn secondary_snapshot_path_is_third_sibling() {
+        let path = secondary_snapshot_path(
+            std::path::Path::new("/primary"),
+            "20260101-120000-abc",
+            "repoB",
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/primary/.pdo/runs/20260101-120000-abc/repos/repoB"),
+        );
+    }
+
+    #[test]
+    fn rev_parse_verified_resolves_head_and_rejects_bogus() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let sha = init_repo_with_file(repo, "B.txt", "SECONDARY-MARKER-v1\n");
+        assert_eq!(rev_parse_verified(repo, "HEAD").unwrap(), sha);
+        // A ref that resolves to nothing / is ambiguous must fail loud.
+        assert!(rev_parse_verified(repo, "no-such-branch").is_err());
+    }
+
+    #[test]
+    fn create_secondary_snapshot_pins_and_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repoA");
+        let secondary = tmp.path().join("repoB");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&secondary).unwrap();
+        init_test_repo(&primary);
+        let sha_b = init_repo_with_file(&secondary, "B.txt", "SECONDARY-MARKER-v1\n");
+
+        let run_id = "test-sec-run";
+        let dest = secondary_snapshot_path(&primary, run_id, "repoB");
+        create_secondary_snapshot(&secondary, &dest, &sha_b).unwrap();
+
+        // The snapshot exists, is a THIRD sibling of worktree/ and nodes/, is pinned
+        // to the frozen SHA, and its file is readable.
+        assert!(dest.join("B.txt").exists());
+        assert_eq!(rev_parse(&dest, "HEAD").unwrap(), sha_b);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("B.txt")).unwrap(),
+            "SECONDARY-MARKER-v1\n",
+        );
+        // Registered in the SECONDARY's .git, not the primary's.
+        let listed = std::process::Command::new("git")
+            .args(["worktree", "list"])
+            .current_dir(&secondary)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&listed.stdout).contains("repos/repoB"));
+    }
+
+    #[test]
+    fn secondary_snapshot_isolation_survives_local_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repoA");
+        let secondary = tmp.path().join("repoB");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&secondary).unwrap();
+        init_test_repo(&primary);
+        let sha_v1 = init_repo_with_file(&secondary, "B.txt", "SECONDARY-MARKER-v1\n");
+
+        let dest = secondary_snapshot_path(&primary, "iso-run", "repoB");
+        create_secondary_snapshot(&secondary, &dest, &sha_v1).unwrap();
+
+        // Advance the operator's LOCAL checkout of the secondary AFTER the snapshot.
+        std::fs::write(secondary.join("B.txt"), "SECONDARY-MARKER-v2\n").unwrap();
+        let commit = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&secondary)
+                .output()
+                .unwrap();
+        };
+        commit(&["commit", "-aqm", "B: v2"]);
+
+        // The snapshot must still be pinned at v1 (it is a snapshot, not a live mount).
+        assert_eq!(rev_parse(&dest, "HEAD").unwrap(), sha_v1);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("B.txt")).unwrap(),
+            "SECONDARY-MARKER-v1\n",
+        );
+    }
+
+    #[test]
+    fn dirty_tracked_trips_guard_untracked_is_tolerated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repoA");
+        let secondary = tmp.path().join("repoB");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&secondary).unwrap();
+        init_test_repo(&primary);
+        let sha = init_repo_with_file(&secondary, "B.txt", "SECONDARY-MARKER-v1\n");
+
+        let dest = secondary_snapshot_path(&primary, "guard-run", "repoB");
+        create_secondary_snapshot(&secondary, &dest, &sha).unwrap();
+
+        // Clean snapshot → not dirty.
+        assert!(!worktree_has_tracked_changes(&dest).unwrap());
+        // Untracked scratch → tolerated (the probe ignores `??`).
+        std::fs::write(dest.join("scratch_untracked.tmp"), "x").unwrap();
+        assert!(!worktree_has_tracked_changes(&dest).unwrap());
+        // A TRACKED modification → dirty (the guard trips).
+        std::fs::write(dest.join("B.txt"), "tampered\n").unwrap();
+        assert!(worktree_has_tracked_changes(&dest).unwrap());
+    }
+
+    #[test]
+    fn remove_secondary_snapshot_prunes_registration_anti_498() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repoA");
+        let secondary = tmp.path().join("repoB");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&secondary).unwrap();
+        init_test_repo(&primary);
+        let sha = init_repo_with_file(&secondary, "B.txt", "SECONDARY-MARKER-v1\n");
+
+        let dest = secondary_snapshot_path(&primary, "cleanup-run", "repoB");
+        create_secondary_snapshot(&secondary, &dest, &sha).unwrap();
+
+        remove_secondary_snapshot(&secondary, &dest);
+
+        // The registration is gone from the secondary (prune ran), and a fresh
+        // `worktree add` at the SAME path succeeds — the #498 anti-dangling control.
+        let listed = std::process::Command::new("git")
+            .args(["worktree", "list"])
+            .current_dir(&secondary)
+            .output()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&listed.stdout).contains("repos/repoB"));
+
+        let re_add = std::process::Command::new("git")
+            .args(["worktree", "add", "--detach"])
+            .arg(&dest)
+            .arg(&sha)
+            .current_dir(&secondary)
+            .output()
+            .unwrap();
+        assert!(
+            re_add.status.success(),
+            "re-add at the same path must succeed (no dangling registration): {}",
+            String::from_utf8_lossy(&re_add.stderr)
         );
     }
 }

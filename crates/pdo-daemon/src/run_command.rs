@@ -35,7 +35,7 @@ use crate::{
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
     retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
     scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest,
+    CreateRunRequest, TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because `run_command` is —
@@ -880,8 +880,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // thing that should have released it. Same posture as `node_stop`, which
             // has called this since #159.
             //
-            // The halt/pause arms and `boot_recovery` (which fails orphaned `Running`
-            // nodes) have the same hole; they are out of #489's scope and filed.
+            // The halt/pause arms (via `re_evaluate_after_command`) and
+            // `boot_recovery` (which fails orphaned `Running` nodes) had the same
+            // hole; #509 closed both — see the re-drive in `re_evaluate_after_command`
+            // and at the tail of `run_boot_recovery`.
             retry_waiting_nodes(&state).await;
 
             info!("kill_node: node {node_id} iter {iter} in run {run_id}");
@@ -942,7 +944,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     // the guard's reasons land here and are deliberately NOT
                     // discriminated: see `RestartRefusal::RestartRejected`.
                     let refusal = restart_verdict::RestartRefusal::RestartRejected {
-                        message: reason,
+                        // #515: forward the typed cause as its historical prose;
+                        // the slug stays `restart_refused` (still NOT
+                        // discriminated — see `RestartRefusal::RestartRejected`).
+                        message: reason.to_string(),
                         session_killed: false,
                     };
                     warn!(
@@ -1114,13 +1119,13 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 SpawnOutcome::Spawned {
                     reused_sub_worktree,
                     base_sha,
-                    stale_git_lock,
+                    interrupted_git_ops,
                 } => restart_verdict::RestartVerdict::Spawned {
                     node_id: node_id.clone(),
                     iter,
                     reused_sub_worktree,
                     base_sha,
-                    stale_git_lock,
+                    interrupted_git_ops,
                 },
                 // ADR-0037 §2: a `2xx`, and NOT a `noop`. A `NodeWaiting` was
                 // appended, it flipped the node to `Waiting`, and
@@ -1319,6 +1324,24 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_owned(),
             );
             let source_branch = run_state.source_branch.clone();
+            // #465 (ADR-0042): preserve the original Run's read-only secondaries so the
+            // retry runs in the same multi-repo context. Rebuild the full list with the
+            // primary at [0] (the create chokepoint re-freezes each secondary's SHA
+            // against its recorded base branch). Empty for a mono-repo original, keeping
+            // the retry byte-identical to pre-#465.
+            let target_repos: Vec<TargetRepoInput> = if run_state.target_repos.is_empty() {
+                Vec::new()
+            } else {
+                let mut v = vec![TargetRepoInput {
+                    repo: target_repo.clone().unwrap_or_default(),
+                    base_branch: source_branch.clone(),
+                }];
+                v.extend(run_state.target_repos.iter().map(|p| TargetRepoInput {
+                    repo: p.repo.clone(),
+                    base_branch: p.base_branch.clone(),
+                }));
+                v
+            };
 
             // Archive the current run (cleanup disk resources, keep events)
             let archive_resp = cleanup_run(&state, &run_id).await;
@@ -1340,6 +1363,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // stats bucket rather than falling back to the name.
                 pipeline_id: run_state.pipeline_id.clone(),
                 target_repo,
+                target_repos,
                 source_branch,
                 name: None,
                 triggered_by: None,
@@ -1357,6 +1381,13 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Side effect, intended: a profile deleted since makes the retry 400,
                 // loudly, instead of quietly running something else.
                 sandbox: Some(run_state.sandbox.clone()),
+                // #338: pin the historical retry behaviour exactly. A retry has always
+                // set `name: None` and re-derived the name (placeholder or from input);
+                // `Some(true)` reproduces that regardless of the instance default, so a
+                // changed `default_auto_name` cannot silently alter how a retried Run is
+                // named. Not carried from the original (no such field is projected from
+                // RunStarted) — same reasoning as the `sandbox_entries` note above.
+                auto_name: Some(true),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -1430,12 +1461,34 @@ impl ReEvalSummary {
     }
 }
 
-/// Re-evaluate the scheduler after a command (resume_run, extend_cycle).
-/// Loads the pipeline and run state, resolves variables (including cycle extensions),
-/// then re-evaluates outgoing edges of all completed nodes to find newly ready spawns.
-/// Returns what actually happened so command handlers can tell the truth
-/// (ADR-0025 / #327).
+/// Post-command re-evaluation (ADR-0025 / #327) that also re-drives the
+/// admission queue when the command drove the run to a **terminal** state.
+///
+/// #509: a run going `Halted`/`Completed` here stops counting its
+/// still-session-holding nodes against the global session cap
+/// (`admission::count_live_node_sessions` excludes terminal runs — see
+/// `excludes_halted_run_with_a_running_node`), so a slot frees. But the three
+/// command arms that reach this function (`extend_cycle`, `Region`
+/// bump/end, `resume_run`) never re-drove the nodes throttled into `waiting` in
+/// *other* runs. `retry_waiting_nodes` has no timer of its own — every one of its
+/// callers is event-driven (#159) — so a queued node could starve until an
+/// unrelated event happened to re-drive it. Same posture as the `kill_node` arm
+/// (#489-C): the site that frees a slot re-drives the queue. The sweep is global
+/// and idempotent (guard-superfluous dedup), so a single call after a terminal
+/// re-evaluation is correct.
 async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSummary {
+    let summary = re_evaluate_after_command_inner(state, run_id).await;
+    if summary.terminal.is_some() {
+        retry_waiting_nodes(state).await;
+    }
+    summary
+}
+
+/// The re-evaluation proper. Loads the pipeline and run state, resolves variables
+/// (including cycle extensions), then re-evaluates outgoing edges of all completed
+/// nodes to find newly ready spawns. Returns what actually happened so command
+/// handlers can tell the truth (ADR-0025 / #327).
+async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEvalSummary {
     let mut summary = ReEvalSummary::default();
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
@@ -2074,14 +2127,14 @@ mod tests {
 
     /// A plain `Spawned`, for tests that only care about the BUCKET
     /// `record_spawn` files an outcome in. #489 gave the variant three fields
-    /// (`reused_sub_worktree` / `base_sha` / `stale_git_lock`) that the summary
+    /// (`reused_sub_worktree` / `base_sha` / `interrupted_git_ops`) that the summary
     /// deliberately ignores: `ReEvalSummary` reports `spawned:[{node_id,iter}]`
     /// per ADR-0025, and the sub-worktree detail belongs to `restart_verdict`.
     fn spawned_sample() -> SpawnOutcome {
         SpawnOutcome::Spawned {
             reused_sub_worktree: false,
             base_sha: None,
-            stale_git_lock: None,
+            interrupted_git_ops: Vec::new(),
         }
     }
 

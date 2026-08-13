@@ -291,7 +291,7 @@ async fn restarting_a_doc_only_node_reports_the_spawn_it_really_did() {
     );
     assert_eq!(body["reused_sub_worktree"], false, "{body}");
     assert!(body["base_sha"].is_null(), "{body}");
-    assert!(body["stale_git_lock"].is_null(), "{body}");
+    assert_eq!(body["interrupted_git_ops"], serde_json::json!([]), "{body}");
 
     // The event log agrees with the body — the bidirectional proof
     // `loop_command_truth` pins for the loop commands.
@@ -368,8 +368,9 @@ async fn a_paused_run_refuses_the_restart_before_the_kill() {
 }
 
 /// Guard refusal #2 — a newer iteration of the same node is live. Same slug, and
-/// that is the point: `Verdict::Reject` carries no discriminant, so #489 copies
-/// #490's settled shape (one slug + prose) rather than inventing three.
+/// that is the point: `Verdict::Reject` **now carries a typed cause**
+/// (`RejectReason`, #515), but this route flattens it to #490's settled shape
+/// (one slug + prose) — discrimination on the retry route is #487.
 ///
 /// It also kills a slug that would have been FALSE: the guard tests
 /// `live_iter != iter`, so a restart of iter 5 while iter 1 lives lands in the same
@@ -654,4 +655,121 @@ async fn a_restart_at_a_full_cap_no_longer_throttles_against_itself() {
     assert_eq!(node_status(&daemon, &run_id, "planner").await, "running");
 
     kill_session(&daemon, &run_id, "planner", 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #516 — interrupted git ops are inventoried IN FULL and routed to the preamble
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A linked worktree's private gitdir, read from its `.git` pointer — never
+/// derived from the basename (git disambiguates colliding `iter-1` basenames to
+/// `iter-11`, `iter-12`…). Mirrors `worktree_ops::private_gitdir`, crate-private.
+fn private_gitdir(sub_worktree_dir: &std::path::Path) -> std::path::PathBuf {
+    let pointer = std::fs::read_to_string(sub_worktree_dir.join(".git"))
+        .expect("a linked worktree has a .git pointer file");
+    let raw = pointer
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("gitdir:"))
+        .expect("the .git pointer starts with `gitdir:`")
+        .trim();
+    std::path::PathBuf::from(raw)
+}
+
+/// **THE #516 end-to-end proof.** A `code-mutating` node killed mid git-operation
+/// leaves BOTH an `index.lock` and a `MERGE_HEAD` in its sub-worktree's private
+/// gitdir. `restart_node` must:
+///
+/// (a) inventory **both** markers on the wire, in scan order — never just the
+///     first, which once masked the `MERGE_HEAD` and let `pdo complete` take a
+///     silent two-parent merge commit; and
+/// (b) route a differentiated notice naming both markers into the re-spawned
+///     node's **own** preamble, not merely the manager-facing response body — the
+///     fresh agent no longer depends on the manager relaying the instruction.
+#[tokio::test]
+async fn a_restart_inventories_every_interrupted_git_op_and_routes_it_to_the_preamble() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    wait_for_node_status(&daemon, &run_id, "planner", "running").await;
+
+    // Complete `planner` so `impl-1` (the only code-mutating node) spawns and cuts
+    // its per-iteration sub-worktree.
+    let plan_dir = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/artifacts/planner/iter-1/plan");
+    std::fs::create_dir_all(&plan_dir).unwrap();
+    std::fs::write(plan_dir.join("output.md"), "# plan\n").unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/nodes/planner/done", daemon.url()))
+        .json(&serde_json::json!({ "iter": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for_node_status(&daemon, &run_id, "impl-1", "running").await;
+
+    // The dead session mid git-op: kill it, then plant the markers a SIGKILL
+    // during the `git commit` that concludes a merge leaves behind, plus an
+    // uncommitted file (the work the reuse exists to protect).
+    kill_session(&daemon, &run_id, "impl-1", 1);
+    let sub_wt = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("nodes/impl-1/iter-1");
+    let gitdir = private_gitdir(&sub_wt);
+    std::fs::write(gitdir.join("index.lock"), "").unwrap();
+    std::fs::write(gitdir.join("MERGE_HEAD"), "").unwrap();
+    std::fs::write(sub_wt.join("scratch.rs"), "fn main() {}\n").unwrap();
+
+    // (a) The wire inventories BOTH markers, in scan order, and reports the reuse.
+    let (status, body) = restart(&daemon, &run_id, "impl-1", 1).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["reused_sub_worktree"], true, "{body}");
+    assert_eq!(
+        body["interrupted_git_ops"],
+        serde_json::json!(["index.lock", "MERGE_HEAD"]),
+        "both markers, in scan order — the first must not mask the second: {body}"
+    );
+
+    // (b) The re-spawn wrote a fresh prompt file; its preamble carries the notice,
+    // naming both markers with their differentiated instructions.
+    wait_until("the impl-1 re-spawn", || async {
+        node_started_count(&daemon, &run_id, "impl-1").await >= 2
+    })
+    .await;
+    let resp = reqwest::get(format!(
+        "{}/runs/{run_id}/nodes/impl-1/prompt?iter=1",
+        daemon.url()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "GET /prompt should serve the re-spawn prompt"
+    );
+    let prompt = resp.text().await.unwrap();
+    assert!(
+        prompt.contains("REUSED from a previous attempt"),
+        "the reuse notice must be in the preamble: {prompt}"
+    );
+    assert!(prompt.contains("index.lock"), "{prompt}");
+    assert!(prompt.contains("MERGE_HEAD"), "{prompt}");
+    assert!(
+        prompt.contains("remove `.git/index.lock`"),
+        "index.lock gets the remove-first instruction: {prompt}"
+    );
+    assert!(
+        prompt.contains("git merge --abort"),
+        "MERGE_HEAD gets the finish-or-abort instruction: {prompt}"
+    );
+    assert!(
+        prompt.contains("nobody intended") && prompt.contains("**silently**"),
+        "the silent-merge warning must reach the agent directly: {prompt}"
+    );
+
+    kill_session(&daemon, &run_id, "impl-1", 1);
 }

@@ -14,8 +14,10 @@
 //! module never reads `$HOME` — one root in, path-math + `std::fs` out.
 //!
 //! This is an **estimate, not an invoice**: it uses public list prices (no
-//! enterprise discount), and any model absent from the table contributes $0 and
-//! flips the `partial` flag (lower-bound signalling). It mirrors `LocStat`'s
+//! enterprise discount), and any model absent from the table contributes $0,
+//! flips the `partial` flag, AND is named in `unpriced_models` (#425 AC#4:
+//! lower-bound signalling that says *which* model, not just *that* one exists).
+//! It mirrors `LocStat`'s
 //! "derived on read, never persisted" contract (see [`crate::event_log::CostStat`]),
 //! and happens to be *more* durable than LOC: archival deletes the run branch
 //! (so LOC → "—") but leaves `~/.claude/projects/` intact (merge_back flushed a
@@ -40,8 +42,8 @@
 //!   was observed) are skipped line-by-line, never `?`-propagated.
 
 use crate::event_log::CostStat;
-use crate::price_table::PriceTable;
-use std::collections::HashMap;
+use crate::price_table::{strip_date_suffix, PriceTable};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
@@ -136,13 +138,21 @@ fn parse_line(raw: &str) -> Option<Line> {
 }
 
 /// Dedup by `(message.id, requestId)` (keep first), price each surviving line
-/// against the resolved `prices` table, and flag `partial` when any line used a
-/// model no tier knows. Lines without a `message.id` are always counted (no key
+/// against the resolved `prices` table, and collect the family key of every line
+/// no tier could price. Lines without a `message.id` are always counted (no key
 /// to dedup on).
+///
+/// The unknown model ids are **de-dated** before collection (`strip_date_suffix`),
+/// so `claude-sonnet-5-20260501` and `claude-sonnet-5` name one offender, not two —
+/// the same family key a human would add to `models.yaml` to price it. `partial` is
+/// **derived** from that set (`⟺ !unpriced_models.is_empty()`): the invariant holds
+/// by construction, so no caller can flip one without the other. `<synthetic>` is
+/// priced $0 by the table (never `None`), so it never lands here — the negative
+/// control that keeps `partial` honest survives untouched.
 fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat {
     let mut seen = std::collections::HashSet::new();
     let mut usd = 0.0;
-    let mut partial = false;
+    let mut unpriced: BTreeSet<String> = BTreeSet::new();
     for l in lines {
         if let Some(id) = &l.message_id {
             if !seen.insert((id.clone(), l.request_id.clone())) {
@@ -151,10 +161,18 @@ fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat
         }
         match prices.price_for(&l.model) {
             Some(p) => usd += line_cost(&l.usage, p.input, p.output),
-            None => partial = true, // unknown real model → $0 + lower-bound flag
+            // Unknown real model → $0 + named in the lower-bound signal (#425).
+            None => {
+                unpriced.insert(strip_date_suffix(&l.model).to_string());
+            }
         }
     }
-    CostStat { usd, partial }
+    let unpriced_models: Vec<String> = unpriced.into_iter().collect();
+    CostStat {
+        usd,
+        partial: !unpriced_models.is_empty(),
+        unpriced_models,
+    }
 }
 
 /// Encode an absolute path exactly as Claude Code names its `~/.claude/projects`
@@ -166,7 +184,7 @@ fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat
 /// Delegates to [`crate::stale_detector::encode_working_dir`], the single source
 /// of truth for this encoding. (Historically this reimplemented the mapping to
 /// route around a bug in that function; #373 fixed and unified them.)
-pub fn cc_project_dirname(path: &Path) -> String {
+pub(crate) fn cc_project_dirname(path: &Path) -> String {
     crate::stale_detector::encode_working_dir(path)
 }
 
@@ -207,7 +225,7 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
 /// NOT the read root.
 /// `prices` is the table resolved at the request edge (#427) — mandatory; see the
 /// module header on why there is no defaulting wrapper.
-pub fn compute_run_cost(
+pub(crate) fn compute_run_cost(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,
@@ -269,7 +287,9 @@ static COST_MEMO: OnceLock<Mutex<CostMemoMap>> = OnceLock::new();
 
 /// Soft cap on memo entries. On overflow the whole map is cleared — dropping the
 /// cache is correctness-preserving (a miss just recomputes), so this bounds RAM
-/// without pulling in an `lru` crate. `CostStat` is 16 bytes, so this is roomy.
+/// without pulling in an `lru` crate. A `CostStat` is a handful of scalars plus a
+/// short `unpriced_models` vec (empty on the overwhelming majority of Runs), so
+/// this cap stays roomy.
 const COST_MEMO_CAP: usize = 4096;
 
 fn cost_memo() -> &'static Mutex<CostMemoMap> {
@@ -306,7 +326,11 @@ fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
 /// `0` when no transcript dir/file exists yet (so a later write bumps the key and
 /// invalidates the memo). A pure `stat` walk: no file contents are read, so it is
 /// far cheaper than the aggregate it guards.
-pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_id: &str) -> i64 {
+pub(crate) fn max_transcript_mtime_millis(
+    projects_root: &Path,
+    repo_root: &Path,
+    run_id: &str,
+) -> i64 {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
     let Ok(entries) = std::fs::read_dir(projects_root) else {
@@ -327,7 +351,7 @@ pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_i
 /// above). Used only by the `/stats/cost` aggregate (period-bounded fan-out);
 /// `get_run`'s single-run path is deliberately left calling [`compute_run_cost`]
 /// directly so ADR-0022's per-read contract is unchanged.
-pub fn compute_run_cost_cached(
+pub(crate) fn compute_run_cost_cached(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,
@@ -506,6 +530,37 @@ mod tests {
         // Only the priced line contributes; the unknown one flags partial + $0.
         assert!((c.usd - 5.0).abs() < 1e-9, "usd = {}", c.usd);
         assert!(c.partial);
+        // #425 AC#4: the offender is NAMED, not just counted.
+        assert_eq!(c.unpriced_models, vec!["some-future-model".to_string()]);
+    }
+
+    #[test]
+    fn aggregate_names_de_dates_and_dedups_unpriced_models() {
+        // #425: several lines, three of them on models no tier prices. The dated
+        // and undated forms of the SAME family collapse to one name (the family
+        // key a human would add to price it), and the set is sorted + unique.
+        let lines = vec![
+            line(Some("m1"), Some("r1"), "claude-opus-4-8", 1_000_000), // priced
+            line(Some("m2"), Some("r2"), "claude-sonnet-5", 1_000_000),
+            line(
+                Some("m3"),
+                Some("r3"),
+                "claude-sonnet-5-20260501",
+                1_000_000,
+            ), // same family
+            line(Some("m4"), Some("r4"), "claude-fable-5", 1_000_000),
+        ];
+        let c = aggregate(lines.into_iter(), &builtin());
+        // Only the one priced line contributes.
+        assert!((c.usd - 5.0).abs() < 1e-9, "usd = {}", c.usd);
+        assert!(c.partial);
+        assert_eq!(
+            c.unpriced_models,
+            vec!["claude-fable-5".to_string(), "claude-sonnet-5".to_string()],
+            "de-dated, de-duplicated, sorted"
+        );
+        // The invariant the whole design rests on.
+        assert_eq!(c.partial, !c.unpriced_models.is_empty());
     }
 
     #[test]
@@ -514,6 +569,8 @@ mod tests {
         let c = aggregate(lines.into_iter(), &builtin());
         assert_eq!(c.usd, 0.0);
         assert!(!c.partial);
+        // The negative control: a $0 sentinel is priced, so it never names itself.
+        assert!(c.unpriced_models.is_empty());
     }
 
     // --- compute_run_cost (filesystem) ---
@@ -696,6 +753,11 @@ mod tests {
         let unpriced = compute_run_cost_cached(&projects, repo.path(), run_id, &builtin()).unwrap();
         assert_eq!(unpriced.usd, 0.0);
         assert!(unpriced.partial, "an unknown model flags partial");
+        assert_eq!(
+            unpriced.unpriced_models,
+            vec!["claude-fable-5".to_string()],
+            "and the memo carries the offender's name, not just the flag (#425)"
+        );
 
         // Now price it — a DIFFERENT table (different fingerprint), same transcript.
         let home2 = tempfile::tempdir().unwrap();
@@ -722,6 +784,10 @@ mod tests {
             repriced.usd
         );
         assert!(!repriced.partial, "the model is priced now");
+        assert!(
+            repriced.unpriced_models.is_empty(),
+            "and no model is named as unpriced any more"
+        );
 
         // And the old entry is still reachable under its own key — the sync does not
         // (and need not) clear the memo.

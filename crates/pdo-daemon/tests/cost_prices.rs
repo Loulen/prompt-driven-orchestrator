@@ -324,6 +324,16 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
         before["cost"]["partial"], true,
         "and flips the lower-bound flag"
     );
+    // #425 AC#4: the offender is NAMED on the payload, not left anonymous — this
+    // is the whole point of the re-scoped issue (a `$0 †` you can act on).
+    let named: Vec<String> =
+        serde_json::from_value(before["cost"]["unpriced_models"].clone()).unwrap();
+    assert_eq!(
+        named,
+        vec!["claude-fable-5".to_string()],
+        "GET /runs/:id must name the unpriced model, got {}",
+        before["cost"]
+    );
 
     assert_eq!(sync(&daemon).await.status(), 200);
 
@@ -338,6 +348,13 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
     assert_eq!(
         after["cost"]["partial"], false,
         "nothing is unpriced any more"
+    );
+    let named_after: Vec<String> =
+        serde_json::from_value(after["cost"]["unpriced_models"].clone()).unwrap();
+    assert!(
+        named_after.is_empty(),
+        "and no model is named as unpriced any more, got {}",
+        after["cost"]
     );
 }
 

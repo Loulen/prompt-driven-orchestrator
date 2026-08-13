@@ -459,8 +459,11 @@ loops:
                     let probe = ev(EventKind::NodeStarted, Some(node_id), Some(*iter));
                     match transition_guard::validate_transition(Some(&projected), &probe) {
                         transition_guard::Verdict::Allow => events.push(probe),
-                        transition_guard::Verdict::NoOp { reason }
-                        | transition_guard::Verdict::Reject { reason } => refusals.push(reason),
+                        transition_guard::Verdict::NoOp { reason } => refusals.push(reason),
+                        // #515: the reject cause is typed; record its prose.
+                        transition_guard::Verdict::Reject { reason } => {
+                            refusals.push(reason.to_string())
+                        }
                     }
                 }
                 _ => {}
@@ -553,6 +556,7 @@ loops:
         let probe = ev(EventKind::NodeStarted, Some("sibling"), Some(2));
         match transition_guard::validate_transition(Some(&state), &probe) {
             transition_guard::Verdict::Reject { reason } => {
+                let reason = reason.to_string();
                 assert!(reason.contains("refusing concurrent iter 2"), "{reason}")
             }
             other => panic!("a non-member must keep the #212 refusal, got {other:?}"),

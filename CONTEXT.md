@@ -391,7 +391,7 @@ Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-suffi
 
 ### Échec / blocage
 
-NodeRun en échec, halt, Merge foiré → le Run passe en statut d'échec/blocage. La branche et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut : cleanup manuel, reprendre la main sur la branche, débloquer via le Pipeline Manager, éditer le graphe à chaud, ou automatiser la récupération *dans un pipeline* (janitor + Trigger, cf. *Deliberate, then autonomous*).
+NodeRun en échec, halt, Merge foiré → le Run passe en statut d'échec/blocage. La branche et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut : cleanup manuel, reprendre la main sur la branche, débloquer via le Pipeline Manager, éditer le graphe à chaud, ou automatiser la récupération *dans un pipeline* — `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux au worktree résiduel, et le pipeline **`disk-janitor`** (livré) + un Trigger cron exécute `pdo reap` (politique TTL graduée pure, `reap_policy`, ne rate jamais son propre Run sur un lot partiel) via `cleanup_run`. L'origine de la suppression reste *dans le pipeline*, jamais le runtime. Recette : `docs/recipes/disk-janitor.md` (#128, #480).
 
 ### Parallélisation entre Runs
 
@@ -404,7 +404,7 @@ Plusieurs Runs peuvent tourner simultanément sur le même repo. Conventions ant
 
 **Nom placeholder** *(terme)* : nom lisible posé par le daemon au spawn, déterministe et immédiat, garanti présent même pour un Run prompt-less. _Éviter_ : nom temporaire, titre par défaut.
 
-**Nom descriptif** *(terme)* : nom posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que fait le Run ; remplace le placeholder s'il aboutit (un Run a toujours un nom). _Éviter_ : nom final, rename automatique.
+**Nom descriptif** *(terme)* : nom posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom). **Désactivable par-Run et par-Trigger** (défaut d'instance `default_auto_name`, résolu `stored → env PDO_DEFAULT_AUTO_NAME → true`, ADR-0015, #338) : désactivé, le Run garde son nom placeholder et le manager n'est pas instruit de renommer. _Éviter_ : nom final, rename automatique.
 
 ### Statistiques de Run
 
@@ -413,8 +413,7 @@ Quatre métriques dans le panneau d'info (#100, #272) :
 - **Durée** : wall-clock entre `started_at` et `completed_at`, dérivée à l'affichage (jamais persistée), live tant que le Run est vivant. Un Run `Paused` continue de compter.
 - **Sessions de nœud lancées** : compte **cumulatif** des démarrages de session, re-spawns inclus, manager exclu. À distinguer de la gauge « sessions vivantes » du cap.
 - **LOC** : `git diff --numstat` en **trois-points** depuis le point de fork (stable même si `main` avance), **exclut `.pdo/`**. Live-only : « — » pour un Run archivé (branche supprimée), à distinguer de « 0 » (diff vide).
-- **Coût (est.)** : **estimation** — pas une facture — dérivée à la lecture des transcripts Claude Code locaux, jamais persistée. Agrège toutes les sessions du Run. Un modèle non tarifé ⇒ borne basse signalée « † ». Survit à l'archivage (les transcripts restent). Modèle de calcul et dédup → ADR-0022 ; table de prix → ADR-0034.
-
+- **Coût (est.)** : **estimation** — pas une facture — dérivée à la lecture des transcripts Claude Code locaux, jamais persistée. Agrège toutes les sessions du Run. Un modèle non tarifé ⇒ borne basse signalée « † » (`partial`), et `unpriced_models` (#425) nomme les familles concernées — champ rendu dans le tooltip du † et présent sur `GET /runs/:id` comme, unioné par bucket, sur `GET /stats/cost`. Survit à l'archivage (les transcripts restent). Modèle de calcul et dédup → ADR-0022 ; table de prix → ADR-0034.
 **Table de prix embarquée / fetchée / manuelle / résolue** *(termes, ADR-0034)* : l'**embarquée** est le plancher compilé dans le binaire ; la **fetchée** est écrite par le daemon seul depuis models.dev, hors du chemin de lecture ; la **manuelle** est écrite par l'humain seul ; la **résolue** est la fusion **par clé de famille** avec précédence `manuel → fetché → embarquée`. Un écrivain par fichier ; rien n'est jamais seedé. _Éviter_ : « surcharge de prix », « merge des tables », « prix seedés », « prix live » (la lecture est toujours locale).
 
 ### Statistiques d'instance (cockpit, #377)
@@ -443,7 +442,13 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **`effective_repo` (résolu) ≠ `target_repo` (brut)** : le brut reste la valeur saisie (badge, détail, pré-remplissage) ; le résolu ne sert qu'à la clé de regroupement des listes. On ne réécrit jamais le brut côté serveur. Le regroupement par repo (listes Runs/Triggers) n'apparaît que si ≥ 2 repos distincts ; sinon liste plate.
 - **Repos récents** : projection à la lecture des cibles portées par les Runs, comparaison verbatim.
 
-### Explorateur de fichiers (`GET /fs/browse` + `FsExplorerModal`)
+### Multi-repo par Run (#465, ADR-0042)
+
+- **Dépôt primaire** *(terme)* — celui sur lequel le Run écrit et mène ses MR ; `target_repos[0]`, sémantique de l'ancien `target_repo` (ADR-0033), reste dans `target_repo` (pas matérialisé en `RepoPin`).
+- **Dépôt secondaire** *(terme)* — associé en **lecture seule**, offert aux nœuds comme contexte via un snapshot figé à un SHA au démarrage. Ni worktree pipeline, ni archive/coût, ni MR ; en list/cost, le Run se range sous le primaire.
+- **Snapshot secondaire** *(terme)* — worktree détaché pinné au SHA de `RunStarted`, sous `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Read-only par convention (garde `secondary_repo_dirtied`, 409 sur fichiers *suivis*), injecté aux nœuds par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`). Récupéré au teardown par `worktree remove --force` **+ `prune`** (sans le prune : registration dangling, classe #498).
+
+### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
 
 La brique **unique** de sélection de chemin à la souris : un listing à **un niveau**, un composant, plusieurs consommateurs (sélecteur de repo, sélecteur de Dockerfile). Jamais de récursion, jamais de **contenus** renvoyés (noms seulement) ; liens cassés et fichiers spéciaux invisibles ; mode fichier = select-then-confirm. Surface non authentifiée comme tout le HTTP du daemon — portée LAN assumée (#260 closed). _Éviter_ : « repo browser » (généralisé en #431, sans alias).
 
@@ -540,6 +545,7 @@ L'effet de la plupart des commandes est l'**append d'un événement**. Trois fon
 
 Les commandes disent **la vérité sur leur effet** : cible inconnue ⇒ 400 avant tout append ; mauvais mécanisme ⇒ 409 orientant vers le bon ; valide mais sans effet ⇒ `200 {noop: true, reason}` honnête. La convention noop ne couvre que le *sans-effet* : un **refus** de complétion n'est jamais un 2xx (ADR-0035), et un **spawn demandé mais non advenu** non plus (ADR-0037) — le throttle d'admission répond `waiting`, pas `noop`. _Éviter_ : discriminer sur le statut HTTP plutôt que sur le slug d'erreur.
 
+**Opération git interrompue** *(terme, #516)* : les marqueurs qu'une session tuée laisse dans le gitdir d'un sous-worktree (`index.lock`, `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Sur une réutilisation, `restart_node` les **inventorie tous** dans `interrupted_git_ops` (corps de réponse **et** préambule du nœud re-spawné, consigne différenciée) et n'en supprime **aucun** — PDO ne peut pas prouver l'écrivain mort (#485), l'agent frais résout. _Éviter_ : « verrou git périmé » / `stale_git_lock` (faux pour 3 marqueurs sur 4, et le nom masquait le second marqueur → `pdo complete` prenait un merge à 2 parents silencieux).
 ### Ce que le manager ne peut **pas** faire
 
 **Spawner des sous-agents ad hoc hors-DAG.** Pas d'orchestration probabiliste émergente. Il peut force-spawn un nœud **déjà déclaré** dans le DAG (`start_node`). Pour une investigation profonde, l'utilisateur attache directement la session du nœud.

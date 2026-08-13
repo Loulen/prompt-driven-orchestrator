@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::pipeline::{NodeDef, PipelineDef, PortType, IMAGE_EXTENSIONS};
 
-pub struct InputResolution {
+pub(crate) struct InputResolution {
     pub port_name: String,
     /// The concrete artifact path(s) this input resolves to. A single wire is a
     /// one-element list; a `repeated`/pooled input (#353) is one path per
@@ -17,19 +17,52 @@ pub struct InputResolution {
     pub from_start: bool,
 }
 
-pub struct OutputDeclaration {
+pub(crate) struct OutputDeclaration {
     pub port_name: String,
     pub path: PathBuf,
     pub port_type: PortType,
 }
 
-pub struct ForEachContext {
+pub(crate) struct ForEachContext {
     pub current_item: String,
     pub current_iter: i64,
     pub total: i64,
 }
 
-pub struct AugmentContext<'a> {
+/// A read-only secondary repo made visible to a node (#465, ADR-0042), already
+/// resolved to its **absolute snapshot path** so this pure module never touches
+/// the run-dir path math. The absolute path is identical on host and in the
+/// sandbox (invariant D3), so the same string is valid from either.
+pub(crate) struct SecondaryRepoContext {
+    pub alias: String,
+    pub abs_path: String,
+    pub sha: String,
+}
+
+/// Build the per-node secondary-repo view from the Run's frozen pins (#465).
+///
+/// The nodes' sub-worktrees do NOT inherit the snapshots (they are siblings under
+/// the run dir and `.pdo/` is gitignored, so `git worktree add` materialises none
+/// of those files) — a node can only reach a secondary by **absolute path**, which
+/// is why the daemon resolves it here and injects it. Shared by both spawn sites
+/// so the preamble and the script env can never disagree.
+pub(crate) fn secondary_repo_contexts(
+    repo_root: &Path,
+    run_id: &str,
+    pins: &[crate::event_log::RepoPin],
+) -> Vec<SecondaryRepoContext> {
+    pins.iter()
+        .map(|pin| SecondaryRepoContext {
+            alias: pin.alias.clone(),
+            abs_path: crate::worktree_ops::secondary_snapshot_path(repo_root, run_id, &pin.alias)
+                .to_string_lossy()
+                .to_string(),
+            sha: pin.sha.clone(),
+        })
+        .collect()
+}
+
+pub(crate) struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
     #[allow(dead_code)]
@@ -64,9 +97,27 @@ pub struct AugmentContext<'a> {
     /// failed iterations are quarantined, and no raw `iter-*` glob is ever
     /// handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
+    /// Read-only secondary repos visible to this node (#465, ADR-0042), each with
+    /// its absolute snapshot path and pinned SHA. Empty for a mono-repo Run. The
+    /// nodes reach these ONLY by absolute path (their sub-worktrees do not inherit
+    /// the snapshot files), so `build_preamble` prints the paths and
+    /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS`.
+    pub secondary_repos: Vec<SecondaryRepoContext>,
+    /// The sub-worktree already existed on the right branch and was reused **in
+    /// place** at `restart_node` (#489): a prior agent's uncommitted work is still
+    /// there. Precomputed by the daemon; `build_preamble` stays pure (same pattern
+    /// as `start_prompt_present`). Always `false` on the start/retry path, where a
+    /// reuse is unreachable by construction.
+    pub reused_sub_worktree: bool,
+    /// Every interrupted git operation the reused sub-worktree carries, in scan
+    /// order (`index.lock` first) — `index.lock`, `MERGE_HEAD`, `rebase-merge/`,
+    /// `rebase-apply/` (#516). Borrowed: the owning `Vec` lives in `node_spawn` and
+    /// is also moved into `SpawnOutcome::Spawned`. `build_preamble` routes a
+    /// differentiated notice from its contents; empty means no notice.
+    pub interrupted_git_ops: &'a [String],
 }
 
-pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
+pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     let input_dir = artifacts_dir.join("_input");
     let entries = match std::fs::read_dir(&input_dir) {
         Ok(e) => e,
@@ -97,7 +148,7 @@ pub fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
 /// non-whitespace content. `Ok(false)` when the file is absent — the expected
 /// prompt-optional case, not an error. `Err` only on a genuine I/O failure, so the
 /// caller can surface it instead of silently reporting "no prompt" (#274).
-pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
+pub(crate) fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
     match std::fs::read_to_string(crate::blackboard::input_path(artifacts_dir)) {
         Ok(text) => Ok(!text.trim().is_empty()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -105,7 +156,7 @@ pub fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> 
     }
 }
 
-pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
+pub(crate) fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     // Project over the single edge-walk (#370): the iteration decision (source's
     // latest-completed iter, completed-iters pool, Start → `_input`) lives in
     // `input_resolution::resolve_consumer_inputs`, fed the precomputed maps the
@@ -141,7 +192,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     inputs
 }
 
-pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> {
+pub(crate) fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> {
     ctx.node
         .outputs
         .iter()
@@ -226,7 +277,7 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
 /// by `tmux_session_manager::wrap_with_env` and are *not* repeated here.
-pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
+pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
     let mut env = Vec::new();
 
     env.push((
@@ -258,6 +309,20 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
             format!("PDO_OUTPUT_{}", env_name_suffix(&output.port_name)),
             output.path.to_string_lossy().into_owned(),
         ));
+    }
+
+    // #465 (ADR-0042): read-only secondary repos as `alias=abspath` lines,
+    // `\n`-separated (same convention as a `repeated` input). Only set when there is
+    // at least one, so a mono-repo script's env is byte-identical to pre-#465. A
+    // script reads them with `readarray -t repos <<< "$PDO_SECONDARY_REPOS"`.
+    if !ctx.secondary_repos.is_empty() {
+        let value = ctx
+            .secondary_repos
+            .iter()
+            .map(|s| format!("{}={}", s.alias, s.abs_path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        env.push(("PDO_SECONDARY_REPOS".to_string(), value));
     }
 
     // HashMap iteration order is non-deterministic; sort so the emitted script
@@ -297,7 +362,7 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
 /// is `.../output.md` (create its parent); for an image port it is a directory
 /// (create it directly). Best-effort: a failure here is not fatal — the script's
 /// own redirect will surface any real problem.
-pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
+pub(crate) fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     for output in resolve_output_paths(ctx) {
         let dir = match output.port_type {
             PortType::Image | PortType::ImageList => output.path.clone(),
@@ -320,7 +385,7 @@ pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     }
 }
 
-pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
+pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     let inputs = resolve_input_paths(ctx);
     let outputs = resolve_output_paths(ctx);
 
@@ -490,6 +555,28 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
+    // #465 (ADR-0042): read-only secondary repositories. Injected by ABSOLUTE path
+    // because a node's sub-worktree does not inherit the snapshot files (they are
+    // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
+    // host and in the sandbox (invariant D3). Read-only by convention: writing to a
+    // tracked file trips the `secondary_repo_dirtied` guard (409).
+    if !ctx.secondary_repos.is_empty() {
+        preamble.push_str("## Secondary repositories (read-only)\n\n");
+        preamble.push_str(
+            "These repositories are associated with this Run as **read-only context** \
+             (#465). Read their files by **absolute path** (your sub-worktree does not \
+             contain them). Each is pinned to a fixed commit — do **not** modify, commit \
+             in, or open MRs against them; writing to a tracked file will be refused.\n\n",
+        );
+        for sec in &ctx.secondary_repos {
+            preamble.push_str(&format!(
+                "- `{}` (pinned @ `{}`): `{}`\n",
+                sec.alias, sec.sha, sec.abs_path
+            ));
+        }
+        preamble.push('\n');
+    }
+
     // Source code edits (only for nodes that get a per-iteration sub-worktree)
     if let Some(sub_wt) = ctx.source_worktree_dir {
         preamble.push_str("## Source code edits\n\n");
@@ -508,6 +595,58 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              silently dropped from the merge.\n\n",
             sub_wt.display()
         ));
+
+        // #516: route the interrupted-git-op notice into the re-spawned node's own
+        // preamble — no longer only into the response the manager sees. Two parts,
+        // BOTH conditional and rendered mechanically from `ctx`, so a fresh cut (the
+        // common case) gets neither.
+        if ctx.reused_sub_worktree {
+            preamble.push_str(
+                "> **This worktree was REUSED from a previous attempt.** A prior agent may \
+                 have left uncommitted work here. Inspect what is already in the working \
+                 directory (`git status`, read the changed files) BEFORE you start over — do \
+                 not blindly reset or redo work that is already done.\n\n",
+            );
+        }
+        if !ctx.interrupted_git_ops.is_empty() {
+            let listed = ctx
+                .interrupted_git_ops
+                .iter()
+                .map(|op| format!("`{op}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            preamble.push_str(&format!(
+                "> ⚠ **An interrupted git operation was left in this worktree:** {listed}\n>\n"
+            ));
+            // One sentence per marker, in vector order — `index.lock` leads, and its
+            // instruction ("remove it before anything else") depends on that.
+            for op in ctx.interrupted_git_ops {
+                let line = match op.as_str() {
+                    "index.lock" => "> - `index.lock`: first confirm no git process is running \
+                         here, then remove `.git/index.lock` **before anything else** — the \
+                         `--abort` / `--continue` commands below themselves need the index lock \
+                         free to run.\n"
+                        .to_string(),
+                    "MERGE_HEAD" => "> - `MERGE_HEAD`: a merge is in progress. Inspect it (`git \
+                         status`, `git diff`) — it may carry conflicts a previous agent already \
+                         resolved (work worth keeping). Decide deliberately: finish it (`git \
+                         commit`) **or** abandon it (`git merge --abort`). Never `--abort` \
+                         blindly.\n"
+                        .to_string(),
+                    "rebase-merge" | "rebase-apply" => "> - a rebase is in progress. `git \
+                         status` to inspect; `git rebase --continue` to finish or `git rebase \
+                         --abort` to abandon.\n"
+                        .to_string(),
+                    other => format!("> - `{other}`: resolve this git state before completing.\n"),
+                };
+                preamble.push_str(&line);
+            }
+            preamble.push_str(
+                ">\n> Do NOT run `pdo complete` until the worktree is in a clean git state — \
+                 otherwise the merge-back may record a merge commit nobody intended, \
+                 **silently**.\n\n",
+            );
+        }
     }
 
     // CLI commands
@@ -581,14 +720,52 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     preamble
 }
 
-pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
+pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
     let preamble = build_preamble(ctx);
     format!("{preamble}---\n\n{role_prompt}")
 }
 
+/// Env seam for the instance default of Run auto-naming (#338, ADR-0015). Middle
+/// tier of `stored → env → default(true)`; the resolver is
+/// [`default_auto_name_with`].
+pub(crate) const DEFAULT_AUTO_NAME_ENV: &str = "PDO_DEFAULT_AUTO_NAME";
+
+/// Built-in default for Run auto-naming: **on**.
+///
+/// `true` preserves the pre-#338 behaviour exactly — a Run created with no name is
+/// auto-named by the manager (from its input, or a placeholder renamed best-effort).
+/// #338 only makes that *configurable*; the floor stays what it always was.
+pub(crate) const DEFAULT_AUTO_NAME_DEFAULT: bool = true;
+
+/// The `env` tier of the Run auto-naming default (#338). Reuses the shared boolean
+/// parser so a typo falls through to the next tier rather than silently meaning
+/// `false`.
+pub(crate) fn env_default_auto_name() -> Option<bool> {
+    std::env::var(DEFAULT_AUTO_NAME_ENV)
+        .ok()
+        .as_deref()
+        .and_then(crate::stale_detector::parse_bool_setting)
+}
+
+/// Resolve the instance default for auto-naming: `stored → env → default(true)`
+/// (#338, ADR-0015).
+///
+/// `stored` is the raw `instance_config.default_auto_name` column: `Some(0)` is a
+/// stored **off** and wins over the env, exactly like any other bool knob on that
+/// table; only SQL `NULL` (`None`) falls through.
+///
+/// This is only ever the *default* — the create-run chokepoint consults it solely
+/// when the request carries neither an explicit `auto_name` flag nor a `name`.
+pub(crate) fn default_auto_name_with(stored: Option<i64>) -> bool {
+    match stored {
+        Some(v) => v != 0,
+        None => env_default_auto_name().unwrap_or(DEFAULT_AUTO_NAME_DEFAULT),
+    }
+}
+
 /// How the manager should treat run naming, decided by the daemon at spawn (#184).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RunNameHint {
+pub(crate) enum RunNameHint {
     /// The user supplied a display name — do not rename.
     UserProvided,
     /// No name, but there is input to summarise — name it now from `_input`.
@@ -598,7 +775,11 @@ pub enum RunNameHint {
     Placeholder,
 }
 
-pub fn build_manager_preamble(run_id: &str, daemon_url: &str, name_hint: RunNameHint) -> String {
+pub(crate) fn build_manager_preamble(
+    run_id: &str,
+    daemon_url: &str,
+    name_hint: RunNameHint,
+) -> String {
     let auto_name_instruction = match name_hint {
         RunNameHint::UserProvided => String::new(),
         RunNameHint::DeriveFromInput =>
@@ -677,7 +858,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"restart_node","node_id":"<node-id>","iter":<N>}}'
 ```
 
-The response tells you what actually happened; it never blanket-claims success (#489, ADR-0037). `200 {{"ok":true,"spawned":[{{"node_id":"…","iter":N}}],"reused_sub_worktree":<bool>,"base_sha":"<sha>"|null,"stale_git_lock":"index.lock"|null}}` when the node was re-spawned — when `reused_sub_worktree` is true, tell the fresh agent to look at what is already in its working directory before it starts over, and if `stale_git_lock` is set, tell it to clear that lock or its merge-back will fail. `200 {{"ok":true,"waiting":true,"reason":"…"}}` when the session cap queued it: a `NodeWaiting` **was** recorded and the admission sweep owns it — it will spawn, do not re-issue. Otherwise: `409 {{"error":"<slug>","recoverable":<bool>, …}}` with `restart_refused`, `sandbox_prep_not_ready` or `sub_worktree_occupied`; `400 {{"error":"node_not_found"}}`; `500 {{"error":"spawn_failed","run_failed":<bool>}}`. Discriminate on `error`, never on the status.
+The response tells you what actually happened; it never blanket-claims success (#489, ADR-0037). `200 {{"ok":true,"spawned":[{{"node_id":"…","iter":N}}],"reused_sub_worktree":<bool>,"base_sha":"<sha>"|null,"interrupted_git_ops":["index.lock",…]|[]}}` when the node was re-spawned. The re-spawned agent is told **directly in its own preamble** what to do about a reused worktree and any interrupted git operation left in it, so you do not need to relay instructions — `reused_sub_worktree` and `interrupted_git_ops` are there for your situational awareness (`interrupted_git_ops` lists every marker found, in order — `index.lock`, `MERGE_HEAD`, `rebase-*` — and is `[]` when the reused worktree's git state was clean). `200 {{"ok":true,"waiting":true,"reason":"…"}}` when the session cap queued it: a `NodeWaiting` **was** recorded and the admission sweep owns it — it will spawn, do not re-issue. Otherwise: `409 {{"error":"<slug>","recoverable":<bool>, …}}` with `restart_refused`, `sandbox_prep_not_ready` or `sub_worktree_occupied`; `400 {{"error":"node_not_found"}}`; `500 {{"error":"spawn_failed","run_failed":<bool>}}`. Discriminate on `error`, never on the status.
 
 Every knowable refusal is raised **before** the session is killed: an error body with `session_killed:false` means nothing was touched, so fix the cause and re-issue. `session_killed:true` means the session is gone and nothing replaced it — that node needs a different lever, not a retry of this one.
 
@@ -751,7 +932,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
     )
 }
 
-pub fn build_manager_prompt(
+pub(crate) fn build_manager_prompt(
     run_id: &str,
     daemon_url: &str,
     role_prompt: &str,
@@ -826,6 +1007,9 @@ mod tests {
             start_prompt_present: false,
             source_iters: HashMap::new(),
             repeated_iters: HashMap::new(),
+            secondary_repos: Vec::new(),
+            reused_sub_worktree: false,
+            interrupted_git_ops: &[],
         }
     }
 
@@ -1974,6 +2158,109 @@ mod tests {
         assert!(
             !preamble.contains("Input Images"),
             "preamble should not contain Input Images section when no images"
+        );
+    }
+
+    // --- #516: the interrupted-git-op notice is ROUTED into the re-spawned node's
+    // own preamble. Pure string-in → string-out, exercised directly. ---
+
+    const SUB_WT: &str = "/repo/.pdo/runs/r/nodes/impl-1/iter-1";
+
+    /// **THE #516 case.** A reused worktree carrying BOTH an `index.lock` and a
+    /// `MERGE_HEAD` gets a notice that names both markers, gives the differentiated
+    /// instruction for each (remove the lock first; inspect-then-finish-or-abort the
+    /// merge), and warns that `pdo complete` on a dirty git state records a merge
+    /// nobody intended, silently.
+    #[test]
+    fn preamble_routes_every_interrupted_git_op_with_differentiated_advice() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = true;
+        let ops = vec!["index.lock".to_string(), "MERGE_HEAD".to_string()];
+        ctx.interrupted_git_ops = &ops;
+
+        let preamble = build_preamble(&ctx);
+
+        // The reuse notice.
+        assert!(
+            preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        // Both markers surface — neither is masked by the other.
+        assert!(preamble.contains("index.lock"), "{preamble}");
+        assert!(preamble.contains("MERGE_HEAD"), "{preamble}");
+        // Differentiated instructions.
+        assert!(
+            preamble.contains("remove `.git/index.lock`"),
+            "index.lock must get the remove-first instruction: {preamble}"
+        );
+        assert!(
+            preamble.contains("git merge --abort"),
+            "MERGE_HEAD must get the finish-or-abort instruction: {preamble}"
+        );
+        // The load-bearing warning: a silent merge commit is the whole bug.
+        assert!(
+            preamble.contains("nobody intended") && preamble.contains("**silently**"),
+            "the silent-merge warning is the point of #516: {preamble}"
+        );
+        // Scan order: `index.lock` is mentioned before `MERGE_HEAD`.
+        assert!(
+            preamble.find("index.lock").unwrap() < preamble.find("MERGE_HEAD").unwrap(),
+            "index.lock must lead (remove-first depends on it): {preamble}"
+        );
+    }
+
+    /// **A/B negative control.** A fresh cut — `reused_sub_worktree=false`,
+    /// `interrupted_git_ops=[]` — gets NEITHER notice. Proves the notice is not
+    /// unconditional prose that just happens to be true in the positive test.
+    #[test]
+    fn preamble_omits_both_notices_on_a_fresh_cut() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = false;
+        ctx.interrupted_git_ops = &[];
+
+        let preamble = build_preamble(&ctx);
+
+        // The base "Source code edits" section is still there…
+        assert!(preamble.contains("## Source code edits"), "{preamble}");
+        // …but neither the reuse notice nor the interrupted-op notice.
+        assert!(
+            !preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        assert!(
+            !preamble.contains("interrupted git operation"),
+            "{preamble}"
+        );
+    }
+
+    /// A reused worktree with a CLEAN git state gets the "inspect what is here"
+    /// notice but NOT the interrupted-op part.
+    #[test]
+    fn preamble_reuse_notice_without_ops_when_git_state_is_clean() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+        ctx.reused_sub_worktree = true;
+        ctx.interrupted_git_ops = &[];
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("REUSED from a previous attempt"),
+            "{preamble}"
+        );
+        assert!(
+            !preamble.contains("interrupted git operation"),
+            "no ops means no interrupted-op notice: {preamble}"
         );
     }
 

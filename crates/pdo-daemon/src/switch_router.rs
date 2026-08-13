@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::condition;
 use crate::pipeline::{NodeDef, NodeType};
 
-pub fn route<'a>(
+pub(crate) fn route<'a>(
     switch: &'a NodeDef,
     frontmatter: &HashMap<String, serde_yaml::Value>,
     vars: &HashMap<String, serde_yaml::Value>,

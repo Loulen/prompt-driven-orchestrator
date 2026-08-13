@@ -10,6 +10,11 @@
 > et sa préséance), **ni** à la veille de vivacité d'ADR-0032 (qui lit des événements, jamais des
 > statuts HTTP), **ni** au fail-fast d'ADR-0017. Suit ADR-0004 : aucun critère fermé sans test de
 > couche ≥ 3.
+>
+> **Amendé par #516** (1.13.0) : l'opération git interrompue laissée dans un sous-worktree réutilisé est
+> désormais **inventoriée en entier** et **routée** — vers le corps de réponse *et* le préambule du nœud
+> re-spawné (consigne différenciée), plus seulement signalée au manager. Le champ filaire `stale_git_lock`
+> (`string|null`) devient `interrupted_git_ops` (`array`, `[]` si rien). Cf. « Limites acceptées ».
 
 ## Contexte
 
@@ -123,10 +128,10 @@ sous-worktree en **quatre** états — trois ne suffisent pas :
 | `Recyclable` | prunable, HEAD détaché, ou branche orpheline sans worktree | on reape, puis on coupe |
 | `Occupied` | branche checkoutée dans un autre worktree vivant, ou répertoire non-worktree non vide | on refuse et on **nomme** ce qui le tient |
 
-Le quatrième état est la décision. Un découpage à trois (« bloqué, donc reap ») rend `restart_node`
-destructeur : un verrou git périmé sur un arbre **sale** n'est pas « déjà inutilisable », c'est
-précisément le travail que #489 existe pour sauver. Il faut séparer *recyclable* (rien à perdre)
-d'*occupé* (tenu par un tiers).
+Le quatrième état est la décision. Un découpage à trois (`Absent` / `Reusable` / « bloqué, donc
+reap ») rend `restart_node` destructeur : une opération git interrompue (un `index.lock`, un
+`MERGE_HEAD`) sur un arbre **sale** n'est pas « déjà inutilisable », c'est précisément le travail que
+#489 existe pour sauver. Il faut séparer *recyclable* (rien à perdre) d'*occupé* (tenu par un tiers).
 
 Le prédicat de réutilisation est « worktree **enregistré** sur la bonne branche », jamais « la
 branche pointe sur la base attendue » : le second est satisfait par un agent coincé qui n'a rien
@@ -185,8 +190,9 @@ libérer le slot qu'un restart throttlé attend, et le retry des nœuds en atten
   tranche, introduit en fraude dans une tranche de véracité. #490 a déjà tranché ce cas exact sur
   cette forme exacte (un slug, la prose dans `message`) ; diverger donnerait deux discriminations
   filaires différentes au **même** garde. Bonus : ça élimine un slug qui aurait été **faux** (il
-  encodait un fait que le garde ne teste pas). Le discriminant reste une issue à part, co-possédée
-  avec #487.
+  encodait un fait que le garde ne teste pas). #515 a depuis livré `RejectReason` (cause typée), mais
+  cette route continue de l'aplatir sur le seul slug `restart_refused` ; la discrimination filaire
+  reste une issue à part, co-possédée avec #487.
 - **`202 Accepted` pour le throttle.** Défendable, mais ce serait le premier `202` du dépôt pour un
   bras de commande, et ADR-0025 a déjà légiféré ce cas en `200` : la discrimination appartient au
   corps.
@@ -201,11 +207,13 @@ libérer le slot qu'un restart throttlé attend, et le retry des nœuds en atten
 
 ## Limites acceptées
 
-- **Un verrou git périmé est signalé, pas supprimé.** Il remonte dans le corps (`stale_git_lock`)
-  et en warn, et le worktree reste réutilisable. Refuser supprimerait le dernier levier de
-  récupération sur un état que le restart peut améliorer (un agent frais peut retirer le verrou
-  lui-même) ; le supprimer nous-mêmes est l'opération contre laquelle git met en garde, et PDO ne
-  peut pas prouver que l'écrivain est mort — #485 est le précédent qui coûte cher.
+- **Une opération git interrompue est inventoriée et routée, jamais supprimée (#516).** Contrat de
+  routage : tous les marqueurs présents remontent — `interrupted_git_ops` (tableau, `[]` si rien) — et
+  la consigne différenciée arrive **dans le préambule du nœud re-spawné**, pas seulement dans le corps.
+  Le worktree reste réutilisable. Le scanner 1.12.0 ne remontait que le premier marqueur → un
+  `index.lock` masquait un `MERGE_HEAD`, et le merge-back prenait un commit à 2 parents silencieux (le
+  filet §7 est en aval du commit). PDO ne peut pas prouver l'écrivain mort — #485 est le précédent qui
+  coûte cher ; l'agent frais résout.
 - **La base n'est pas rafraîchie**, cf. ci-dessus. `base_moved` est calculé et remonté ; rien de
   plus.
 - **La vérité filaire livrée ici n'est observable par aucun humain via l'UI** : le client jette le
@@ -223,8 +231,9 @@ libérer le slot qu'un restart throttlé attend, et le retry des nœuds en atten
   laisse le nœud non terminal). Trou nommé par CONTEXT.md ; cette ADR ne le ferme pas.
 - **Les corps d'erreur en texte brut** (Run absent, pipeline illisible) restent tels quels : les
   normaliser est le périmètre de **#491**.
-- **Le retry des nœuds en attente n'a toujours aucun timer**, et deux autres libérateurs de slot ne
-  le réveillent pas (halt/pause, boot recovery). #489 ferme `kill_node` seul ; le reste est fiché.
+- ~~**Le retry des nœuds en attente n'a aucun timer**~~ **Fermé par #509** : `re_evaluate_after_command`
+  re-drive la file d'admission quand une commande rend un Run terminal, et `boot_recovery` la re-drive
+  en fin de passe. Toujours pas de timer — fix événementiel, même posture que `kill_node` (#489-C).
 - **Le comptage d'admission reste par nœud, pas par itération** (#453) : pré-existant ; l'exclusion
   ne se construit pas sur une hypothèse contraire.
 

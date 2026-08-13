@@ -31,9 +31,10 @@ pub(crate) enum RestartVerdict {
         /// La base de coupe du sous-worktree (#503 / ADR-0036), reportée telle quelle
         /// sur une réutilisation.
         base_sha: Option<String>,
-        /// Un verrou git trouvé dans le gitdir privé du sous-worktree réutilisé.
-        /// Signalé, jamais supprimé.
-        stale_git_lock: Option<String>,
+        /// Toutes les opérations git interrompues trouvées dans le gitdir privé du
+        /// sous-worktree réutilisé, dans l'ordre du scan (#516). Signalées, jamais
+        /// supprimées. `[]` sur une coupe fraîche ou un nœud sans sous-worktree.
+        interrupted_git_ops: Vec<String>,
     },
     /// Le cap d'admission a mis le nœud en file : un `NodeWaiting` **a** été appendé,
     /// il flippe le statut du nœud à `Waiting`, et l'`admission sweep`
@@ -67,9 +68,10 @@ pub(crate) enum RestartRefusal {
     ///
     /// Trois raisons du garde y atterrissent (Run non vivant, itération concurrente
     /// vivante, itération déjà complétée) et elles ne sont **pas** discriminées :
-    /// `Verdict::Reject` n'a aucun discriminant, ses dix sites de construction
-    /// passent tous par un helper privé qui ne porte qu'une `String`, et #490 a déjà
-    /// tranché ce cas exact sur cette forme exacte. Ne jamais sniffer la prose au
+    /// depuis #515, `Verdict::Reject` **porte** une cause typée (`RejectReason`),
+    /// mais **ce consommateur l'aplatit** sur un seul slug (`restart_refused`), la
+    /// prose dans `message` — comme `CompletionRefusal::CompletionRejected` (#490).
+    /// Discriminer sur la route de retry est #487. Ne jamais sniffer la prose au
     /// `contains()`.
     RestartRejected {
         message: String,
@@ -173,7 +175,7 @@ pub(crate) fn restart_response(v: &RestartVerdict) -> Response {
             iter,
             reused_sub_worktree,
             base_sha,
-            stale_git_lock,
+            interrupted_git_ops,
         } => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -183,7 +185,9 @@ pub(crate) fn restart_response(v: &RestartVerdict) -> Response {
                 "spawned": [{ "node_id": node_id, "iter": iter }],
                 "reused_sub_worktree": reused_sub_worktree,
                 "base_sha": base_sha,
-                "stale_git_lock": stale_git_lock,
+                // #516: toujours un tableau, jamais `null` ni absent — un client
+                // (futur #492) lit `body.interrupted_git_ops.length` sans garde.
+                "interrupted_git_ops": interrupted_git_ops,
             })),
         )
             .into_response(),
@@ -249,7 +253,7 @@ mod tests {
                 iter: 1,
                 reused_sub_worktree: true,
                 base_sha: Some("abc123".into()),
-                stale_git_lock: Some("index.lock".into()),
+                interrupted_git_ops: vec!["index.lock".into(), "MERGE_HEAD".into()],
             },
             RestartVerdict::Waiting {
                 reason: "session cap reached (20/20 live)".into(),
@@ -342,7 +346,7 @@ mod tests {
                     iter: 1,
                     reused_sub_worktree: false,
                     base_sha: None,
-                    stale_git_lock: None,
+                    interrupted_git_ops: vec![],
                 },
                 StatusCode::OK,
             ),
@@ -469,7 +473,8 @@ mod tests {
     }
 
     /// Le succès dit ce qu'il a fait du sous-worktree — la garantie neuve de #489-B
-    /// sur laquelle un opérateur (et le manager) va s'appuyer.
+    /// sur laquelle un opérateur (et le manager) va s'appuyer. #516 : `interrupted_git_ops`
+    /// remonte **tous** les marqueurs, dans l'ordre, jamais un seul.
     #[tokio::test]
     async fn spawned_reports_the_sub_worktree_it_reused() {
         let body = body_of(&RestartVerdict::Spawned {
@@ -477,7 +482,7 @@ mod tests {
             iter: 3,
             reused_sub_worktree: true,
             base_sha: Some("deadbeef".into()),
-            stale_git_lock: Some("index.lock".into()),
+            interrupted_git_ops: vec!["index.lock".into(), "MERGE_HEAD".into()],
         })
         .await;
         assert_eq!(body["ok"], true);
@@ -485,21 +490,30 @@ mod tests {
         assert_eq!(body["spawned"][0]["iter"], 3);
         assert_eq!(body["reused_sub_worktree"], true);
         assert_eq!(body["base_sha"], "deadbeef");
-        assert_eq!(body["stale_git_lock"], "index.lock");
+        // #516 : le tableau complet, dans l'ordre du scan — pas un scalaire, pas le
+        // premier marqueur seul (qui masquait le second).
+        assert_eq!(
+            body["interrupted_git_ops"],
+            serde_json::json!(["index.lock", "MERGE_HEAD"])
+        );
 
-        // Un nœud sans sous-worktree rend les trois champs en `null`/`false`, jamais
-        // absents : un client qui lit `body.base_sha` ne doit pas voir `undefined`
-        // selon le type de nœud.
+        // Un nœud sans sous-worktree rend `base_sha` en `null`, `reused` en `false`
+        // et `interrupted_git_ops` en `[]` — jamais absents, jamais `null` pour le
+        // tableau : un client (#492) lit `body.interrupted_git_ops.length` sans garde.
         let plain = body_of(&RestartVerdict::Spawned {
             node_id: "worker".into(),
             iter: 1,
             reused_sub_worktree: false,
             base_sha: None,
-            stale_git_lock: None,
+            interrupted_git_ops: vec![],
         })
         .await;
         assert_eq!(plain["reused_sub_worktree"], false);
         assert!(plain["base_sha"].is_null());
-        assert!(plain["stale_git_lock"].is_null());
+        assert_eq!(plain["interrupted_git_ops"], serde_json::json!([]));
+        assert!(
+            !plain["interrupted_git_ops"].is_null(),
+            "jamais `null` : toujours un tableau"
+        );
     }
 }

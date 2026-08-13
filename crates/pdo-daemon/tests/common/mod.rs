@@ -73,6 +73,9 @@ impl TestDaemon {
                 sandbox_home_override: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
+                // background heartbeat's immediate boot tick would race the seam.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;
@@ -117,6 +120,9 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
+                // background heartbeat's immediate boot tick would race the seam.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;
@@ -163,6 +169,9 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
+                // background heartbeat's immediate boot tick would race the seam.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;
@@ -212,6 +221,9 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
+                // background heartbeat's immediate boot tick would race the seam.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;
@@ -250,6 +262,9 @@ impl TestDaemon {
                 sandbox_home_override: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
+                // background heartbeat's immediate boot tick would race the seam.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;
@@ -297,6 +312,8 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: Some(price_source_url),
                 price_refresh_at_boot: true,
+                // #450: deterministic tick seam — no background heartbeat.
+                run_trigger_scheduler_loop: false,
             },
         )
         .await?;

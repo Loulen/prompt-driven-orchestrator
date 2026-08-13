@@ -184,3 +184,128 @@ async fn user_named_run_keeps_its_name() {
         "a user-supplied name must be preserved"
     );
 }
+
+// --- #338: configurable auto-naming ------------------------------------------
+
+/// PUT `/settings`, asserting 200.
+async fn put_settings(daemon: &TestDaemon, body: serde_json::Value) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "PUT /settings should succeed for {body}"
+    );
+}
+
+/// #338: an explicit `auto_name:false` with a name keeps that name — the same as
+/// the back-compat name-presence path, but now stated by the flag the UI sends.
+#[tokio::test]
+async fn explicit_auto_name_false_with_name_keeps_it() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let run_id = create_run(
+        &daemon,
+        serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "do a thing",
+            "name": "Kept name",
+            "auto_name": false,
+        }),
+    )
+    .await;
+
+    let entry = run_entry(&daemon.url(), &run_id).await;
+    assert_eq!(
+        entry["name"], "Kept name",
+        "auto_name:false must keep the supplied name even with input present"
+    );
+}
+
+/// #338: `auto_name:false` with input but NO name gets a stable per-id placeholder —
+/// NOT a derived name and NOT an absent one. This is the load-bearing new case: a
+/// value the manager is NOT instructed to rename (the Trigger-off situation).
+#[tokio::test]
+async fn explicit_auto_name_false_without_name_gets_stable_placeholder() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let run_id = create_run(
+        &daemon,
+        serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "do a thing",
+            "auto_name": false,
+        }),
+    )
+    .await;
+
+    let entry = run_entry(&daemon.url(), &run_id).await;
+    let name = entry["name"]
+        .as_str()
+        .expect("auto_name:false with no name must carry a stable placeholder, not stay absent");
+    assert_eq!(
+        name,
+        format!("Untitled run {}", &run_id[..15]),
+        "auto_name:false must pin a stable placeholder, overriding the input-derivation"
+    );
+}
+
+/// #338: `auto_name:true` with an empty input yields the placeholder — the pre-#338
+/// behaviour, unchanged, expressed explicitly.
+#[tokio::test]
+async fn explicit_auto_name_true_with_empty_input_gets_placeholder() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let run_id = create_run(
+        &daemon,
+        serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "", "auto_name": true }),
+    )
+    .await;
+
+    let entry = run_entry(&daemon.url(), &run_id).await;
+    assert_eq!(
+        entry["name"].as_str(),
+        Some(format!("Untitled run {}", &run_id[..15]).as_str()),
+    );
+}
+
+/// #338: the instance default is read FRESH at the create chokepoint. With the
+/// default flipped OFF (and no explicit flag, no name), a run with input gets a
+/// stable placeholder instead of being left unnamed for the manager to derive —
+/// and it bites on the very next create, no restart.
+#[tokio::test]
+async fn instance_default_off_is_read_fresh_for_a_nameless_run() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Baseline: with the default ON (built-in), a nameless run with input is left
+    // unnamed (DeriveFromInput).
+    let derived = create_run(
+        &daemon,
+        serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "do a thing" }),
+    )
+    .await;
+    let entry = run_entry(&daemon.url(), &derived).await;
+    assert!(
+        entry.get("name").is_none() || entry["name"].is_null(),
+        "default ON: a nameless run with input must stay unnamed, got {:?}",
+        entry.get("name")
+    );
+
+    // Flip the instance default OFF, then create again — no restart.
+    put_settings(&daemon, serde_json::json!({ "default_auto_name": false })).await;
+    let placeholdered = create_run(
+        &daemon,
+        serde_json::json!({ "pipeline": PIPELINE_NAME, "input": "do a thing" }),
+    )
+    .await;
+    let entry = run_entry(&daemon.url(), &placeholdered).await;
+    assert_eq!(
+        entry["name"].as_str(),
+        Some(format!("Untitled run {}", &placeholdered[..15]).as_str()),
+        "default OFF must pin a placeholder on the very next create (fresh read, no restart)"
+    );
+}

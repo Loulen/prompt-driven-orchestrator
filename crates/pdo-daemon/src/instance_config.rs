@@ -27,7 +27,7 @@ use sqlx::{Row, SqlitePool};
 /// The persisted singleton config row. Each field is `None` when unset (the
 /// resolver then falls through to env → default).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstanceConfig {
+pub(crate) struct InstanceConfig {
     /// Stored global session cap, or `None` when unset.
     pub session_cap: Option<i64>,
     /// Stored tmux reaper TTL in seconds, or `None` when unset.
@@ -62,6 +62,18 @@ pub struct InstanceConfig {
     /// DEFAULT 0` (the stored tier then always wins, shadowing the env) and being
     /// nullable anyway.
     pub autocomplete_turn_end: Option<i64>,
+    /// Stored instance-wide default for auto-naming a Run as `0`/`1`, or `None` when
+    /// unset (#338). `None` falls through to the env seam
+    /// ([`crate::prompt_augmenter::DEFAULT_AUTO_NAME_ENV`]) then the built-in default
+    /// (`true`, the pre-#338 behaviour). The resolver
+    /// ([`crate::prompt_augmenter::default_auto_name_with`]) owns the precedence; the
+    /// create-run chokepoint reads it FRESH at the edge (never cached at boot) and only
+    /// when the request neither supplies an explicit `auto_name` flag nor a `name`.
+    ///
+    /// `Option<i64>` and not `Option<bool>` for the same reason as
+    /// [`Self::autocomplete_turn_end`]: `NULL` is what makes the `stored → env → default`
+    /// fall-through work; a stored `0` is a decision that beats the env.
+    pub default_auto_name: Option<i64>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -77,7 +89,7 @@ pub struct InstanceConfig {
 /// default). This keeps the double-`Option` still deferred while giving the UI
 /// a "Default" (unset) affordance.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct UpdateInstanceConfig {
+pub(crate) struct UpdateInstanceConfig {
     pub session_cap: Option<i64>,
     pub reaper_ttl_secs: Option<i64>,
     pub guard_timeout_secs: Option<i64>,
@@ -94,6 +106,13 @@ pub struct UpdateInstanceConfig {
     /// `0` rather than `NULL` for "off" is deliberate — unticking the box must
     /// override a `PDO_AUTOCOMPLETE_TURN_END=1`, which a `NULL` would not.
     pub autocomplete_turn_end: Option<bool>,
+    /// Set the instance-wide default for auto-naming Runs (#338): `Some(true)` stores
+    /// `1`, `Some(false)` stores `0`, `None` leaves it untouched.
+    ///
+    /// Same set-only, `0`-not-`NULL` discipline as [`Self::autocomplete_turn_end`]:
+    /// storing `0` for "off" is what lets unticking the box override a
+    /// `PDO_DEFAULT_AUTO_NAME=1`, which a `NULL` fall-through would not.
+    pub default_auto_name: Option<bool>,
 }
 
 impl UpdateInstanceConfig {
@@ -104,6 +123,7 @@ impl UpdateInstanceConfig {
             && self.default_model.is_none()
             && self.default_sandbox.is_none()
             && self.autocomplete_turn_end.is_none()
+            && self.default_auto_name.is_none()
     }
 }
 
@@ -113,7 +133,7 @@ impl UpdateInstanceConfig {
 /// Future knobs are added via an idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` (precedent: `max_concurrent` #239 in
 /// `trigger_store`), never a migration runner.
-pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
+pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS instance_config (
             id                 INTEGER PRIMARY KEY CHECK (id = 1),
@@ -124,6 +144,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             triggers_paused    INTEGER,
             default_sandbox    TEXT,
             autocomplete_turn_end INTEGER,
+            default_auto_name  INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -203,6 +224,23 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#338 databases: the `default_auto_name` column is absent
+    // on tables created before the configurable manager auto-naming default. Same guarded
+    // `ADD COLUMN` idiom as the columns above — safe on every boot, and NULLABLE so an
+    // existing install falls through env → the built-in default (`true`), preserving the
+    // pre-#338 behaviour (a nameless Run is auto-named by the manager).
+    let has_default_auto_name = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_auto_name'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_default_auto_name {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN default_auto_name INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -214,12 +252,13 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         default_model: row.get("default_model"),
         default_sandbox: row.get("default_sandbox"),
         autocomplete_turn_end: row.get("autocomplete_turn_end"),
+        default_auto_name: row.get("default_auto_name"),
         updated_at: row.get("updated_at"),
     }
 }
 
 /// Fetch the singleton config row. Always present after [`init`].
-pub async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
+pub(crate) async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM instance_config WHERE id = 1")
         .fetch_optional(db)
         .await?;
@@ -230,7 +269,7 @@ pub async fn get(db: &SqlitePool) -> Result<InstanceConfig, sqlx::Error> {
 
 /// Apply a partial config edit and return the updated row. A no-op edit (no
 /// field set) returns the current row unchanged and does not bump `updated_at`.
-pub async fn update(
+pub(crate) async fn update(
     db: &SqlitePool,
     edit: UpdateInstanceConfig,
 ) -> Result<InstanceConfig, sqlx::Error> {
@@ -258,6 +297,9 @@ pub async fn update(
     }
     if edit.autocomplete_turn_end.is_some() {
         sets.push("autocomplete_turn_end = ?");
+    }
+    if edit.default_auto_name.is_some() {
+        sets.push("default_auto_name = ?");
     }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
@@ -293,6 +335,11 @@ pub async fn update(
         // tier, not a fall-through (#469).
         query = query.bind(if v { 1_i64 } else { 0_i64 });
     }
+    if let Some(v) = edit.default_auto_name {
+        // 0/1, never NULL: unticking must persist a stored `0` that beats a
+        // `PDO_DEFAULT_AUTO_NAME=1`, not fall through to it (#338).
+        query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;
 
@@ -309,7 +356,7 @@ pub async fn update(
 /// the per-field settings view would only add noise. It rides the same
 /// singleton `instance_config` row purely for storage — the first knob on that
 /// table excluded from the settings resolver.
-pub async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
+pub(crate) async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
     let v: Option<i64> =
         sqlx::query_scalar("SELECT triggers_paused FROM instance_config WHERE id = 1")
             .fetch_optional(db)
@@ -321,7 +368,7 @@ pub async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error> {
 /// Set (or clear) the global Trigger pause flag (#348). Unpausing stores SQL
 /// `NULL` (≡ not paused) rather than `0`, keeping the "unset ≡ off" convention
 /// the rest of the table follows. Bumps `updated_at` like [`update`].
-pub async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
+pub(crate) async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE instance_config SET triggers_paused = ?, updated_at = ? WHERE id = 1")
         .bind(if paused { Some(1_i64) } else { None })
         .bind(crate::event_log::now_iso())
@@ -335,7 +382,7 @@ pub async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sq
 ///
 /// Ordered as the boot warning should read them, and paired with the env var that survived — the
 /// only remaining instance-wide way to move that same knob.
-pub const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
+pub(crate) const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
     ("image_source", crate::sandbox_image::IMAGE_SOURCE_ENV),
     ("dockerfile_path", crate::sandbox_image::DOCKERFILE_PATH_ENV),
 ];
@@ -354,7 +401,7 @@ pub const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
 /// one created after does NOT. An absent column must be silence, not an error.
 ///
 /// Empty strings are skipped: `""` was the clear sentinel, so it never meant a value.
-pub async fn retired_sandbox_image_values(
+pub(crate) async fn retired_sandbox_image_values(
     db: &SqlitePool,
 ) -> Result<Vec<(&'static str, String)>, sqlx::Error> {
     let mut found = Vec::new();
@@ -410,6 +457,7 @@ mod tests {
         assert_eq!(cfg.default_model, None);
         assert_eq!(cfg.default_sandbox, None);
         assert_eq!(cfg.autocomplete_turn_end, None);
+        assert_eq!(cfg.default_auto_name, None);
         assert!(!cfg.updated_at.is_empty(), "seed must stamp updated_at");
     }
 
@@ -829,6 +877,122 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.autocomplete_turn_end, Some(1));
+    }
+
+    #[tokio::test]
+    async fn update_stores_default_auto_name_as_zero_or_one() {
+        // #338: a bool on the wire, 0/1 in the column. Both directions PERSIST —
+        // "off" must be a stored decision, not a fall-through, or unticking the box
+        // could not override `PDO_DEFAULT_AUTO_NAME=1`.
+        let db = test_db().await;
+
+        let on = update(
+            &db,
+            UpdateInstanceConfig {
+                default_auto_name: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(on.default_auto_name, Some(1));
+        assert_eq!(get(&db).await.unwrap().default_auto_name, Some(1));
+
+        let off = update(
+            &db,
+            UpdateInstanceConfig {
+                default_auto_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            off.default_auto_name,
+            Some(0),
+            "unticking must persist a stored 0, never NULL"
+        );
+        // Sibling knobs stay untouched.
+        assert_eq!(off.session_cap, None);
+    }
+
+    #[tokio::test]
+    async fn default_auto_name_only_edit_is_not_a_noop() {
+        // Guard-rail for the `is_empty()` addition: an edit touching ONLY this knob
+        // must still write. Without the clause it would fall into the no-op branch
+        // and the checkbox would silently never persist.
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_auto_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_auto_name, Some(0));
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_default_auto_name_schema() {
+        // Installs created before #338 lack the column. Simulate that schema, then
+        // prove `init` adds it idempotently, the existing knob survives, and an
+        // upgraded install resolves to the pre-#338 behaviour (auto-name ON) unless
+        // the env tier says otherwise.
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap        INTEGER,
+                reaper_ttl_secs    INTEGER,
+                guard_timeout_secs INTEGER,
+                updated_at         TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 21, ?)")
+            .bind(crate::event_log::now_iso())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(
+            cfg.session_cap,
+            Some(21),
+            "existing knob must survive the ALTER"
+        );
+        assert_eq!(
+            cfg.default_auto_name, None,
+            "an upgraded install must default to unset, i.e. fall through to env/default"
+        );
+        assert!(
+            crate::prompt_augmenter::default_auto_name_with(cfg.default_auto_name)
+                || crate::prompt_augmenter::env_default_auto_name() == Some(false),
+            "resolved ON (pre-#338 behaviour) unless the env tier says otherwise"
+        );
+
+        // And the migrated column is writable.
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_auto_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_auto_name, Some(0));
     }
 
     #[tokio::test]

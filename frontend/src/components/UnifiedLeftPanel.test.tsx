@@ -322,6 +322,7 @@ describe("UnifiedLeftPanel three-tab strip", () => {
             variables: {},
             cron: "0 9 * * *",
             overlap_policy: "skip",
+            auto_name: true,
             enabled: true,
           },
         ]}
@@ -1206,6 +1207,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     variables: {},
     cron: "0 9 * * *",
     overlap_policy: "skip",
+    auto_name: true,
     enabled: true,
   };
 

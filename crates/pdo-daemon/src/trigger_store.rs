@@ -14,9 +14,16 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
+/// serde default for [`Trigger::auto_name`] (#338): a Trigger deserialised from a
+/// payload predating the field keeps auto-naming, matching the `NOT NULL DEFAULT 1`
+/// column.
+fn default_true() -> bool {
+    true
+}
+
 /// A persisted Trigger row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Trigger {
+pub(crate) struct Trigger {
     pub id: String,
     pub name: String,
     /// Library pipeline id the Trigger fires.
@@ -26,6 +33,14 @@ pub struct Trigger {
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
+    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042),
+    /// stored as raw JSON TEXT (a `[{repo, base_branch?}]` array) so `trigger_store`
+    /// stays decoupled from lib's request types. `None`/blank → mono-repo fire.
+    /// Forwarded to the create request at fire time; the create chokepoint re-freezes
+    /// each secondary's SHA. Clearable back to `None` via the double-`Option`
+    /// `UpdateTrigger.target_repos` (mirror of `sandbox`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_repos: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
     #[serde(default)]
@@ -50,6 +65,13 @@ pub struct Trigger {
     /// double-`Option` `UpdateTrigger.sandbox` (mirror of `max_concurrent`, #239).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    /// Whether Runs fired from this Trigger are auto-named by the manager (#338). A
+    /// flat bool (mirror of [`Self::enabled`]), NOT a nullable inherit: the choice is
+    /// frozen at creation from the instance default and read at fire time. `true`
+    /// (the column and serde default) preserves the pre-#338 behaviour, where every
+    /// Trigger fire is auto-named. Toggled via the flat `UpdateTrigger.auto_name`.
+    #[serde(default = "default_true")]
+    pub auto_name: bool,
     pub enabled: bool,
     /// The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
     /// Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
@@ -66,11 +88,13 @@ pub struct Trigger {
 
 /// The fields supplied at creation time; scheduling state is derived/initial.
 #[derive(Debug, Clone)]
-pub struct NewTrigger {
+pub(crate) struct NewTrigger {
     pub name: String,
     pub pipeline_id: String,
     pub pipeline_name: String,
     pub target_repo: Option<String>,
+    /// Read-only secondary repos as raw JSON TEXT (#465); `None` → mono-repo.
+    pub target_repos: Option<String>,
     pub source_branch: Option<String>,
     pub input_template: String,
     pub variables: serde_json::Value,
@@ -81,13 +105,16 @@ pub struct NewTrigger {
     pub max_concurrent: Option<i64>,
     /// Per-Trigger sandbox mode (#410); `None` inherits the instance default.
     pub sandbox: Option<String>,
+    /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
+    /// default in the create modal and frozen here; `true` is the pre-#338 behaviour.
+    pub auto_name: bool,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
 }
 
 /// One audit row in `trigger_fires`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TriggerFire {
+pub(crate) struct TriggerFire {
     pub id: i64,
     pub trigger_id: String,
     pub ts: String,
@@ -114,7 +141,7 @@ pub struct TriggerFire {
 
 /// What happened on a tick, persisted to the audit table.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FireRecord {
+pub(crate) struct FireRecord {
     pub outcome: String,
     pub reason: Option<String>,
     pub run_id: Option<String>,
@@ -127,7 +154,7 @@ pub struct FireRecord {
 }
 
 /// Create the `triggers` and `trigger_fires` tables if they do not exist.
-pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
+pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS triggers (
             id TEXT PRIMARY KEY,
@@ -135,6 +162,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             pipeline_id TEXT NOT NULL,
             pipeline_name TEXT NOT NULL DEFAULT '',
             target_repo TEXT,
+            target_repos TEXT,
             source_branch TEXT,
             input_template TEXT NOT NULL DEFAULT '',
             variables JSON NOT NULL DEFAULT '{}',
@@ -143,6 +171,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             overlap_policy TEXT NOT NULL DEFAULT 'skip',
             max_concurrent INTEGER,
             sandbox TEXT,
+            auto_name INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 1,
             next_fire_at TEXT,
             last_fired_at TEXT,
@@ -203,6 +232,37 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration (#465): per-Trigger read-only secondary repos, as raw JSON
+    // TEXT. Same PRAGMA-guarded `ALTER` precedent as `sandbox` above — a pre-#465
+    // `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`, a no-op there,
+    // so the column must be added out-of-band. NULLABLE: a NULL row fires mono-repo.
+    let has_target_repos =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'target_repos'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_target_repos {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN target_repos TEXT")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration (#338): per-Trigger `auto_name`. Same PRAGMA-guarded `ALTER`
+    // precedent as `sandbox`/`max_concurrent` above. `NOT NULL DEFAULT 1` — unlike the
+    // nullable columns, a Trigger's autonomy is a plain flat bool (mirror of `enabled`),
+    // and the default `1` is load-bearing: every pre-#338 Trigger keeps auto-naming its
+    // Runs, exactly as it did before this column existed.
+    let has_auto_name =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'auto_name'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_auto_name {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN auto_name INTEGER NOT NULL DEFAULT 1")
+            .execute(db)
+            .await?;
+    }
+
     // Additive migration (#244): the guard-output columns on `trigger_fires`.
     // Same PRAGMA-guarded `ALTER` precedent as `max_concurrent` above — a
     // pre-#244 `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`,
@@ -251,30 +311,31 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
 }
 
 /// Generate a Trigger id (`trg-<ts>-<short uuid>`).
-pub fn generate_trigger_id() -> String {
+pub(crate) fn generate_trigger_id() -> String {
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
     format!("trg-{ts}-{short}")
 }
 
 /// Insert a new Trigger, returning the stored row.
-pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
+pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
     let id = generate_trigger_id();
     let now = crate::event_log::now_iso();
     let variables_str = serde_json::to_string(&new.variables).unwrap_or_else(|_| "{}".to_string());
 
     sqlx::query(
         "INSERT INTO triggers
-            (id, name, pipeline_id, pipeline_name, target_repo, source_branch,
+            (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
     .bind(&new.pipeline_id)
     .bind(&new.pipeline_name)
     .bind(&new.target_repo)
+    .bind(&new.target_repos)
     .bind(&new.source_branch)
     .bind(&new.input_template)
     .bind(&variables_str)
@@ -283,6 +344,7 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .bind(&new.overlap_policy)
     .bind(new.max_concurrent)
     .bind(&new.sandbox)
+    .bind(if new.auto_name { 1_i64 } else { 0_i64 })
     .bind(&new.next_fire_at)
     .bind(&now)
     .execute(db)
@@ -300,6 +362,8 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         pipeline_id: row.get("pipeline_id"),
         pipeline_name: row.get("pipeline_name"),
         target_repo: row.get("target_repo"),
+        // #465: tolerant of a legacy-NULL / pre-migration read — absence fires mono-repo.
+        target_repos: row.try_get("target_repos").unwrap_or(None),
         source_branch: row.get("source_branch"),
         input_template: row.get("input_template"),
         variables,
@@ -308,6 +372,9 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         overlap_policy: row.get("overlap_policy"),
         max_concurrent: row.get("max_concurrent"),
         sandbox: row.get("sandbox"),
+        // #338: tolerant of a legacy NULL (a pre-migration row read mid-upgrade) —
+        // absence reads as auto-name ON, the pre-#338 behaviour.
+        auto_name: row.try_get::<i64, _>("auto_name").unwrap_or(1) != 0,
         enabled: row.get::<i64, _>("enabled") != 0,
         next_fire_at: row.get("next_fire_at"),
         last_fired_at: row.get("last_fired_at"),
@@ -316,7 +383,7 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
 }
 
 /// Fetch one Trigger by id.
-pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Error> {
+pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM triggers WHERE id = ?")
         .bind(id)
         .fetch_optional(db)
@@ -325,7 +392,7 @@ pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<Trigger>, sqlx::Err
 }
 
 /// List all Triggers, newest first.
-pub async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
+pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query("SELECT * FROM triggers ORDER BY created_at DESC")
         .fetch_all(db)
         .await?;
@@ -333,7 +400,7 @@ pub async fn list(db: &SqlitePool) -> Result<Vec<Trigger>, sqlx::Error> {
 }
 
 /// Delete a Trigger by id; returns whether a row was removed.
-pub async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("DELETE FROM triggers WHERE id = ?")
         .bind(id)
         .execute(db)
@@ -352,7 +419,7 @@ pub async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
 /// and would silently go dormant for hours. `julianday()` parses `Z`/`±HH:MM`/
 /// fractional-second RFC3339 to a UTC instant, so any offset compares correctly.
 /// `now` is a canonical-UTC RFC3339-millis now-string (`…Z`).
-pub async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
+pub(crate) async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT * FROM triggers
          WHERE enabled = 1 AND next_fire_at IS NOT NULL
@@ -367,7 +434,7 @@ pub async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sq
 
 /// Record a fire-audit row and roll up `last_fired_at`/`last_outcome` onto the
 /// Trigger. `last_fired_at` is only advanced for an actual fire.
-pub async fn record_fire(
+pub(crate) async fn record_fire(
     db: &SqlitePool,
     trigger_id: &str,
     record: &FireRecord,
@@ -409,7 +476,7 @@ pub async fn record_fire(
 }
 
 /// Fire history for a Trigger, newest first.
-pub async fn fire_history(
+pub(crate) async fn fire_history(
     db: &SqlitePool,
     trigger_id: &str,
 ) -> Result<Vec<TriggerFire>, sqlx::Error> {
@@ -442,7 +509,7 @@ pub async fn fire_history(
 }
 
 /// Update the next scheduled fire.
-pub async fn set_next_fire(
+pub(crate) async fn set_next_fire(
     db: &SqlitePool,
     trigger_id: &str,
     next_fire_at: Option<&str>,
@@ -460,7 +527,7 @@ pub async fn set_next_fire(
 /// distinguish "leave alone" (`None`) from "set to NULL" (`Some(None)`); the
 /// route recomputes it whenever the schedule changes.
 #[derive(Debug, Clone, Default)]
-pub struct UpdateTrigger {
+pub(crate) struct UpdateTrigger {
     pub name: Option<String>,
     /// Repoint the Trigger to a different library pipeline (#230). The route is
     /// responsible for validating the target exists; both `pipeline_id` and the
@@ -469,6 +536,10 @@ pub struct UpdateTrigger {
     pub pipeline_id: Option<String>,
     pub pipeline_name: Option<String>,
     pub target_repo: Option<Option<String>>,
+    /// Read-only secondary repos as raw JSON TEXT (#465), double-wrapped like
+    /// `target_repo`: `None` leaves it, `Some(None)` clears to NULL (mono-repo),
+    /// `Some(Some(json))` sets the list.
+    pub target_repos: Option<Option<String>>,
     pub source_branch: Option<Option<String>>,
     pub input_template: Option<String>,
     pub variables: Option<serde_json::Value>,
@@ -484,6 +555,10 @@ pub struct UpdateTrigger {
     /// `serde(default)` would make present-`null` indistinguishable from omitted, so
     /// the UI could never reset a Trigger back to inheriting.
     pub sandbox: Option<Option<String>>,
+    /// Auto-naming toggle (#338): `None` leaves the flag, `Some(v)` sets it. A FLAT
+    /// `Option<bool>` (mirror of [`Self::enabled`]), NOT double-wrapped like `sandbox`
+    /// — there is no "inherit" state to clear back to; the choice is a plain on/off.
+    pub auto_name: Option<bool>,
     pub next_fire_at: Option<Option<String>>,
     /// Enable/disable toggle (#372): `None` leaves the bit, `Some(v)` sets it.
     /// Folded in here so the enable bit and a forward `next_fire_at` land in one
@@ -497,6 +572,7 @@ impl UpdateTrigger {
             && self.pipeline_id.is_none()
             && self.pipeline_name.is_none()
             && self.target_repo.is_none()
+            && self.target_repos.is_none()
             && self.source_branch.is_none()
             && self.input_template.is_none()
             && self.variables.is_none()
@@ -505,13 +581,14 @@ impl UpdateTrigger {
             && self.overlap_policy.is_none()
             && self.max_concurrent.is_none()
             && self.sandbox.is_none()
+            && self.auto_name.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
     }
 }
 
 /// Apply a partial config edit to a Trigger. A no-op when no field is set.
-pub async fn update(
+pub(crate) async fn update(
     db: &SqlitePool,
     trigger_id: &str,
     edit: UpdateTrigger,
@@ -534,6 +611,9 @@ pub async fn update(
     }
     if edit.target_repo.is_some() {
         sets.push("target_repo = ?");
+    }
+    if edit.target_repos.is_some() {
+        sets.push("target_repos = ?");
     }
     if edit.source_branch.is_some() {
         sets.push("source_branch = ?");
@@ -559,6 +639,9 @@ pub async fn update(
     if edit.sandbox.is_some() {
         sets.push("sandbox = ?");
     }
+    if edit.auto_name.is_some() {
+        sets.push("auto_name = ?");
+    }
     if edit.next_fire_at.is_some() {
         sets.push("next_fire_at = ?");
     }
@@ -578,6 +661,10 @@ pub async fn update(
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repo {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.target_repos {
+        // `Some(None)` → SQL NULL (mono-repo); `Some(Some(json))` → the JSON list.
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.source_branch {
@@ -605,6 +692,11 @@ pub async fn update(
         // `Some(None)` → binds SQL NULL (inherit the instance default);
         // `Some(Some(mode))` → binds the mode string. Mirror of `target_repo`.
         query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.auto_name {
+        // Flat bool → 0/1 (mirror of `enabled`), never NULL: the column is
+        // `NOT NULL DEFAULT 1` and the choice is a plain on/off (#338).
+        query = query.bind(if *v { 1_i64 } else { 0_i64 });
     }
     if let Some(v) = &edit.next_fire_at {
         query = query.bind(v.clone());
@@ -637,6 +729,7 @@ mod tests {
             pipeline_id: "lib-pipe-1".to_string(),
             pipeline_name: "Auditor".to_string(),
             target_repo: Some("/repos/foo".to_string()),
+            target_repos: None,
             source_branch: Some("main".to_string()),
             input_template: "audit the codebase".to_string(),
             variables: serde_json::json!({"depth": "full"}),
@@ -645,6 +738,7 @@ mod tests {
             overlap_policy: "skip".to_string(),
             max_concurrent: None,
             sandbox: None,
+            auto_name: true,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }
     }
@@ -1335,6 +1429,145 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get(&db, &t.id).await.unwrap().unwrap().sandbox, None);
+    }
+
+    #[tokio::test]
+    async fn create_then_get_round_trips_auto_name() {
+        // #338: the flag persists as 0/1 and reads back as a bool. Default (from the
+        // sample helper) is `true`, and an explicit `false` round-trips.
+        let db = test_db().await;
+
+        let on = create(&db, sample("named", "0 9 * * *")).await.unwrap();
+        assert!(on.auto_name, "sample() defaults to auto-name ON");
+        assert!(get(&db, &on.id).await.unwrap().unwrap().auto_name);
+
+        let mut manual = sample("manual", "0 9 * * *");
+        manual.auto_name = false;
+        let off = create(&db, manual).await.unwrap();
+        assert!(!off.auto_name, "an explicit false must persist");
+        assert!(!get(&db, &off.id).await.unwrap().unwrap().auto_name);
+    }
+
+    #[tokio::test]
+    async fn update_toggles_auto_name() {
+        // #338: a flat toggle (mirror of `enabled`) — `Some(v)` sets, `None` leaves.
+        let db = test_db().await;
+        let t = create(&db, sample("t", "0 9 * * *")).await.unwrap();
+        assert!(t.auto_name);
+
+        // Some(false) turns it off.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                auto_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!get(&db, &t.id).await.unwrap().unwrap().auto_name);
+
+        // An unrelated edit (None) leaves it off.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                input_template: Some("changed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!get(&db, &t.id).await.unwrap().unwrap().auto_name);
+
+        // Some(true) turns it back on.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                auto_name: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(get(&db, &t.id).await.unwrap().unwrap().auto_name);
+    }
+
+    /// #338 migration: a `~/.pdo/pdo.db` created before `auto_name` existed must pick up
+    /// the column on the next `init`, and every legacy row must read back as auto-name ON
+    /// (the pre-#338 behaviour) thanks to the `NOT NULL DEFAULT 1` column.
+    #[tokio::test]
+    async fn init_adds_auto_name_to_legacy_table_defaulting_on() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Pre-#338 schema: the `triggers` table WITHOUT `auto_name` (but WITH the
+        // earlier `max_concurrent`/`sandbox` columns, so this exercises the tail ALTER).
+        sqlx::query(
+            "CREATE TABLE triggers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                pipeline_id TEXT NOT NULL,
+                pipeline_name TEXT NOT NULL DEFAULT '',
+                target_repo TEXT,
+                source_branch TEXT,
+                input_template TEXT NOT NULL DEFAULT '',
+                variables JSON NOT NULL DEFAULT '{}',
+                cron TEXT NOT NULL,
+                guard_command TEXT,
+                overlap_policy TEXT NOT NULL DEFAULT 'skip',
+                max_concurrent INTEGER,
+                sandbox TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                next_fire_at TEXT,
+                last_fired_at TEXT,
+                last_outcome TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, cron, created_at)
+             VALUES ('trg-legacy', 'legacy', 'lib-pipe', '0 9 * * *', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // The column does not exist yet.
+        let before =
+            sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'auto_name'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(
+            before.is_none(),
+            "precondition: legacy table lacks the column"
+        );
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let after =
+            sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'auto_name'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(after.is_some(), "init must add the auto_name column");
+
+        // The legacy row reads back auto-name ON — the pre-#338 behaviour is preserved.
+        let migrated = get(&db, "trg-legacy").await.unwrap().unwrap();
+        assert!(
+            migrated.auto_name,
+            "a pre-#338 Trigger must keep auto-naming its Runs"
+        );
     }
 
     /// #239 migration: a `~/.pdo/pdo.db` created before `max_concurrent` existed

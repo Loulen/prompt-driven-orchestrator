@@ -28,6 +28,9 @@ _Avoid_: Client, buyer, account
 - **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
 - **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
 - **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
+- **Glossary, not spec.** A full entry is: definition, the non-obvious *why*, `_Avoid_` aliases, and a pointer to the ADR that fixed the contract (`see ADR-NNNN`). The detailed contract lives in that ADR; the implementation lives in the code. Tripwire: if you're typing a function name, an HTTP status table, an exit code, a test name, or a `file:line`, you're writing the wrong document — move it or drop it.
+- **No changelog.** Git owns history. When a definition changes, rewrite the entry in place; never keep "shipped by #123" bullets, dated corrections, or notes about what the entry used to say wrongly.
+- **Prune as you go.** Inline updates are also the pruning mechanism: when you touch an entry that already violates these rules, shrink it in the same edit.
 
 ## Single vs multi-context repos
 

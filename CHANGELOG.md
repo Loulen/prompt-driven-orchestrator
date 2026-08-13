@@ -10,11 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.21.0
+## 1.22.0
 
 Rien de cassant. La **liste de dépôts d'un Run devient éditable en cours de Run** — ajout/retrait de
-dépôts secondaires read-only, primaire verrouillé (#465 slice 2, ADR-0042). Bump posé contre
-`origin/main` (1.20.0) ; à re-poser au next-free si un autre Run livre entre-temps.
+dépôts secondaires read-only, primaire verrouillé (#465 slice 2, ADR-0042). Bump **re-posé au
+next-free** (1.22.0 contre `origin/main` 1.21.0) après collision avec #528, comme prévu à la pose
+initiale.
 
 ### Édition mid-run de la liste de dépôts (#465, ADR-0042)
 
@@ -37,6 +38,21 @@ on reste dans le modèle snapshot read-only (aucun merge-back, aucun `base_sha`,
   reprenne aussitôt (sinon l'édition « à tout moment » était infaisable au navigateur).
 - Restent différés : le sélecteur `repo:` par nœud, le `git` in-sandbox sur un secondaire, et
   l'écriture / MR dans un secondaire.
+
+## 1.21.0
+
+Rien de cassant. Un champ **purement additif, lecture seule** : `GET /stats/cost` porte désormais un
+tableau **`resolved`** — une entrée par clé de famille, avec le **tier gagnant** (`manual` / `fetched`
+/ `embedded`) et le **`$/MTok`** effectivement appliqué (#528). Rendu dans l'onglet **Stats → Cost**,
+à côté du bouton **« Sync costs »** : on synchronise les prix et on lit ce que PDO sait tarifer au
+même endroit, et le refetch déclenché par la synchro rafraîchit la table. C'est la même `PriceTable`
+que celle avec laquelle le fold de coût chiffre, donc la vue ne peut jamais diverger de ce qui tarifie
+réellement (#373). **Dans le cadre d'ADR-0034** : cette slice **amende sa hors-scope** (qui déclinait
+un `GET /prices` en le jugeant redondant avec `manual_keys` + `fetched_rows`) — **pas de nouvel ADR**,
+**pas de route dédiée** (champ additif sur un endpoint déjà consommé par l'onglet Cost, rétro-compatible,
+zéro taxe proxy vite dev, cf. *Versioning*). Bump re-posé contre `origin/main` (1.20.0, #527) après
+collision de bump : la vue `resolved` reflète désormais aussi le plancher gen-5 introduit par #527
+(quatorze familles embarquées au lieu de onze).
 
 ## 1.20.0
 

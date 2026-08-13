@@ -35,7 +35,7 @@ const OVERVIEW: StatsOverview = {
   triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 0 },
 };
 
-const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [] };
+const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [], resolved: [] };
 
 function report(overrides: Partial<SyncCostPricesReport> = {}): SyncCostPricesReport {
   return {

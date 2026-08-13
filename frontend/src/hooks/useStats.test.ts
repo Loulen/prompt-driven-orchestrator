@@ -18,7 +18,7 @@ const OVERVIEW: StatsOverview = {
   triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 1 },
 };
 
-const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [] };
+const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [], resolved: [] };
 
 beforeEach(() => {
   vi.mocked(api.fetchStatsOverview).mockReset().mockResolvedValue(OVERVIEW);

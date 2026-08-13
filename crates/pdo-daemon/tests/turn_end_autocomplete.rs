@@ -553,6 +553,233 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
     );
 }
 
+// --- #433 / ADR-0043: the Stop hook's `pdo complete --auto` wire path ---------
+
+/// POST `…/done` with `{ "iter": …, "auto": … }`, the exact body
+/// `pdo complete --auto` sends. Returns the HTTP status.
+async fn post_done(daemon_url: &str, run_id: &str, node: &str, iter: i64, auto: bool) -> u16 {
+    reqwest::Client::new()
+        .post(format!("{daemon_url}/runs/{run_id}/nodes/{node}/done"))
+        .json(&serde_json::json!({ "iter": iter, "auto": auto }))
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// The Stop hook's completion goes through the SAME `…/done` body as the agent,
+/// but with `auto: true` — so it records `NodeAutoCompleted` (the log says
+/// "automatic"), never a plain `NodeCompleted`. This pins the source wiring
+/// (`auto → CompletionSource::StopHook`) end to end through the HTTP handler.
+#[tokio::test]
+async fn done_with_auto_true_records_node_auto_completed() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let socket = daemon.tmux_socket();
+    let home = daemon.repo_root().to_path_buf();
+
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
+
+    let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
+    write_valid_outputs(&worktree);
+
+    let status = post_done(&daemon.url(), &run_id, NODE_ID, 1, true).await;
+    assert_eq!(status, 200, "a valid auto-completion is granted");
+
+    // The completion tail is detached (#304 / ADR-0023), so poll.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if node_status(&daemon.url(), &run_id, NODE_ID)
+            .await
+            .as_deref()
+            == Some("completed")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let kinds = event_kinds(&daemon.url(), &run_id).await;
+    assert!(
+        kinds.iter().any(|k| k == "node_auto_completed"),
+        "auto:true must record node_auto_completed; saw {kinds:?}"
+    );
+    assert!(
+        !kinds.iter().any(|k| k == "node_completed"),
+        "auto:true must NOT record a plain node_completed; saw {kinds:?}"
+    );
+
+    kill_session(&socket, &session);
+}
+
+/// The other side of the wire: `auto: false` (or a legacy body without the field)
+/// stays the agent-typed `Explicit` path → `NodeCompleted`. Proven together so a
+/// regression that hard-wires one source can't hide behind the other.
+#[tokio::test]
+async fn done_with_auto_false_records_plain_node_completed() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let socket = daemon.tmux_socket();
+    let home = daemon.repo_root().to_path_buf();
+
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
+
+    let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
+    write_valid_outputs(&worktree);
+
+    let status = post_done(&daemon.url(), &run_id, NODE_ID, 1, false).await;
+    assert_eq!(status, 200);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if node_status(&daemon.url(), &run_id, NODE_ID)
+            .await
+            .as_deref()
+            == Some("completed")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let kinds = event_kinds(&daemon.url(), &run_id).await;
+    assert!(
+        kinds.iter().any(|k| k == "node_completed"),
+        "auto:false is the agent-typed path → node_completed; saw {kinds:?}"
+    );
+    assert!(
+        !kinds.iter().any(|k| k == "node_auto_completed"),
+        "auto:false must NOT record node_auto_completed; saw {kinds:?}"
+    );
+
+    kill_session(&socket, &session);
+}
+
+/// Idempotence hook ↔ fallback (the property that makes `pdo complete --auto`
+/// safe to run on *every* turn end): once a node is complete, a second `…/done`
+/// with `auto: true` — the hook firing after the sweep already won, say — records
+/// **no second terminal event** and leaves the node completed. The daemon's exact
+/// status here is topology-dependent (a legal-duplicate `NoOp` 200 while the run
+/// is still live — proven source-agnostically in `cli_complete_does_not_panic` —
+/// or the terminal-run refusal once the run has advanced to `Completed`); either
+/// way the hook's `; exit 0` neutralises it and, crucially, the completion guard
+/// never doubles the terminal event.
+#[tokio::test]
+async fn a_repeat_auto_completion_never_doubles_the_terminal_event() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let socket = daemon.tmux_socket();
+    let home = daemon.repo_root().to_path_buf();
+
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
+
+    let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
+    write_valid_outputs(&worktree);
+
+    assert_eq!(
+        post_done(&daemon.url(), &run_id, NODE_ID, 1, true).await,
+        200
+    );
+    // Let the detached completion settle.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if node_status(&daemon.url(), &run_id, NODE_ID)
+            .await
+            .as_deref()
+            == Some("completed")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Second auto-completion. Never a 5xx breakdown (that would be the daemon
+    // failing to decide), and — the load-bearing assertion — no double completion.
+    let second = post_done(&daemon.url(), &run_id, NODE_ID, 1, true).await;
+    assert!(
+        second < 500,
+        "a repeat auto-completion must get a verdict, not a 5xx breakdown; got {second}"
+    );
+    assert_eq!(
+        node_status(&daemon.url(), &run_id, NODE_ID)
+            .await
+            .as_deref(),
+        Some("completed"),
+        "the node stays completed after a repeat auto-completion"
+    );
+    let kinds = event_kinds(&daemon.url(), &run_id).await;
+    let terminal = kinds
+        .iter()
+        .filter(|k| *k == "node_auto_completed" || *k == "node_completed")
+        .count();
+    assert_eq!(terminal, 1, "no double completion; saw {kinds:?}");
+
+    kill_session(&socket, &session);
+}
+
+/// Safety of the `; exit 0` wrapper: an auto-completion with the output still
+/// missing is a **recoverable** refusal (409), and — critically — nothing
+/// terminal is recorded (ADR-0035). So the hook's `exit 3` (swallowed by
+/// `; exit 0`) leaves the node running for the fallback / a human, never wedged.
+#[tokio::test]
+async fn auto_done_with_missing_output_is_recoverable_and_records_nothing() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let socket = daemon.tmux_socket();
+
+    let run_id = create_run(&daemon, DOC_PIPELINE).await;
+    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
+
+    // No outputs written → the completion is refused, recoverably.
+    let status = post_done(&daemon.url(), &run_id, NODE_ID, 1, true).await;
+    assert_eq!(status, 409, "missing output ⇒ recoverable refusal, not 2xx");
+
+    // Give any (erroneous) terminal append a beat to land, then assert none did.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        node_status(&daemon.url(), &run_id, NODE_ID)
+            .await
+            .as_deref(),
+        Some("running"),
+        "a refused auto-completion must leave the node running"
+    );
+    let kinds = event_kinds(&daemon.url(), &run_id).await;
+    assert!(
+        !kinds
+            .iter()
+            .any(|k| k == "node_auto_completed" || k == "node_completed" || k == "node_failed"),
+        "a recoverable refusal records nothing terminal (ADR-0035); saw {kinds:?}"
+    );
+
+    kill_session(&socket, &session);
+}
+
 // --- AC9: the §3 defect — the commit must reach the pipeline branch ----------
 
 /// The test that catches the defect of the old design: on a `code-mutating` node,

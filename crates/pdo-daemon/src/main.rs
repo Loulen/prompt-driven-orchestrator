@@ -15,8 +15,8 @@ fn main() -> ExitCode {
     // a failure the daemon already recorded — so they are as much a public API as
     // the wire shape. It therefore owns its own return, and the other arms keep the
     // plain `Result` → `0`/`1` mapping they have always had.
-    if let Commands::Complete = cli.command {
-        return run_complete();
+    if let Commands::Complete { auto } = cli.command {
+        return run_complete(auto);
     }
 
     let res: Result<()> = match cli.command {
@@ -38,7 +38,7 @@ fn main() -> ExitCode {
                 .and_then(|rt| rt.block_on(run_daemon(port)))
         }
         // Unreachable: intercepted above so it can return its own exit code.
-        Commands::Complete => unreachable!("`complete` returns its own ExitCode"),
+        Commands::Complete { .. } => unreachable!("`complete` returns its own ExitCode"),
         Commands::Fail { reason } => run_fail(reason),
         Commands::Skip { reason } => run_skip(reason),
         // A blocking one-shot like Complete/Fail/Skip — no tokio runtime (#156).

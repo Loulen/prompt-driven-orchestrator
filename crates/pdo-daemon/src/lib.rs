@@ -38,6 +38,7 @@ mod price_table;
 mod prompt_augmenter;
 mod pty_bridge;
 mod reap_policy;
+pub(crate) mod repo_edit_refusal;
 pub(crate) mod restart_verdict;
 mod run_advance;
 mod run_command;
@@ -476,6 +477,24 @@ struct TargetRepoInput {
     repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_branch: Option<String>,
+}
+
+/// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's read-only
+/// secondary list (#465 slice 2, ADR-0042).
+///
+/// A dedicated endpoint, NOT a new `kind` of `POST /runs/{id}/commands`: a command's
+/// payload is a bag of scalars frozen byte-for-byte, whereas a list edit needs the
+/// `add` / `remove` arrays. Both fields `#[serde(default)]`, so an empty body is a
+/// legal no-op `200`. `add` entries are exactly the secondary rows of a create
+/// (`repo` + optional `base_branch`); `remove` names aliases. The primary
+/// (`target_repos[0]` at create) is never in either — it has no alias, so a `remove`
+/// cannot reach it and an `add` equal to it is refused (`secondary_is_primary`).
+#[derive(Deserialize, Debug, Default)]
+struct PatchRunReposRequest {
+    #[serde(default)]
+    add: Vec<TargetRepoInput>,
+    #[serde(default)]
+    remove: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -3759,6 +3778,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/diff", get(node_diff))
         .route("/runs/{run_id}/artifact", get(artifact))
         .route("/runs/{run_id}/pipeline", get(get_run_pipeline))
+        .route(
+            "/runs/{run_id}/repos",
+            axum::routing::patch(patch_run_repos),
+        )
         .route(
             "/runs/{run_id}/pipeline",
             axum::routing::put(save_run_pipeline),
@@ -12564,16 +12587,42 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
-    // #465 (ADR-0042): tear down each secondary snapshot BEFORE `remove_dir_all` —
-    // and, critically, from inside the SECONDARY repo. The `--detach` registration
-    // lives in the secondary's `.git`, OUTSIDE `repo_root`, so `remove_dir_all(run_dir)`
-    // below cannot clear it; without the per-secondary `prune`, every multi-repo Run
-    // leaks a dangling registration (the #498 class) and a future `worktree add` at the
-    // same path fails 255. Best-effort, but `remove_secondary_snapshot` never skips the
-    // prune. `cleanup_run` today prunes NOTHING, hence the dedicated helper.
-    for pin in &run_state.target_repos {
-        let snapshot_dir = secondary_snapshot_path(&repo_root, run_id, &pin.alias);
-        remove_secondary_snapshot(Path::new(&pin.repo), &snapshot_dir);
+    // #465 slice 2 (ADR-0042): tear down every secondary snapshot BEFORE
+    // `remove_dir_all` — and, critically, from inside the SECONDARY repo. The
+    // `--detach` registration lives in the secondary's `.git`, OUTSIDE `repo_root`, so
+    // `remove_dir_all(run_dir)` below cannot clear it; without the per-secondary
+    // `prune`, every multi-repo Run leaks a dangling registration (the #498 class) and
+    // a future `worktree add` at the same path fails 255.
+    //
+    // DISK-DRIVEN, not projection-driven: the scan covers snapshots the projection no
+    // longer lists — a secondary REMOVED mid-run keeps its snapshot on disk until now
+    // (decision 5, deferred teardown), and an ORPHAN snapshot (created, its event
+    // never appended on a crash) has no pin at all. Iterating `target_repos` would
+    // skip both and leak them. The owning secondary is resolved from each snapshot's
+    // own `.git` pointer. Best-effort throughout — a moved/missing secondary is a warn
+    // + skip, never a cleanup that fails.
+    let repos_dir = secondary_repos_dir(&repo_root, run_id);
+    for entry in std::fs::read_dir(&repos_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let snapshot_dir = entry.path();
+        if !snapshot_dir.is_dir() {
+            continue;
+        }
+        match snapshot_owning_secondary(&snapshot_dir) {
+            Some(secondary) => remove_secondary_snapshot(&secondary, &snapshot_dir),
+            None => {
+                warn!(
+                    "cleanup_run: cannot resolve the owning secondary repo of snapshot {} \
+                     (its git pointer is unreadable); removing the directory but leaving any \
+                     dangling registration for `git worktree prune` in the secondary",
+                    snapshot_dir.display()
+                );
+                let _ = std::fs::remove_dir_all(&snapshot_dir);
+            }
+        }
     }
 
     if run_dir.exists() {
@@ -12864,54 +12913,88 @@ fn resolve_secondary_pins(
     if inputs.len() <= 1 {
         return Ok(Vec::new());
     }
-    // Compare by canonical path so a trailing slash / symlink cannot smuggle the
-    // primary (or a duplicate) back in as a "different" repo. `validate_target_repo`
-    // already proved each dir exists, so canonicalize should succeed; fall back to the
-    // validated path if it somehow does not.
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let primary_canon = canon(primary_root);
+    let primary_canon = canonical_or_self(primary_root);
 
     let mut pins: Vec<event_log::RepoPin> = Vec::new();
     let mut seen_canon: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut used_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
     for input in &inputs[1..] {
-        let repo = validate_target_repo(input.repo.trim())?;
-        let repo_canon = canon(&repo);
-        // A repo cannot be its own secondary: a self-snapshot registers a detached
-        // worktree inside the repo it snapshots and buys nothing (the nodes already
-        // work in the primary).
-        if repo_canon == primary_canon {
-            return Err(format!(
-                "secondary repo {} is the same as the primary; a repo cannot be its own secondary",
-                repo.display()
-            ));
-        }
-        // Two identical secondaries would produce two snapshots of the same repo and
-        // fight over the alias — a mistake, not a use case in slice 1.
-        if !seen_canon.insert(repo_canon) {
-            return Err(format!("secondary repo {} is listed twice", repo.display()));
-        }
-        let base = input
-            .base_branch
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let rev = base.unwrap_or("HEAD");
-        let sha = rev_parse_verified(&repo, rev).map_err(|e| {
-            format!(
-                "cannot resolve base branch '{rev}' in secondary {}: {e}",
-                repo.display()
-            )
-        })?;
-        let alias = disambiguate_alias(&repo, &mut used_aliases);
-        pins.push(event_log::RepoPin {
-            repo: repo.to_string_lossy().to_string(),
-            alias,
-            sha,
-            base_branch: base.map(str::to_string),
-        });
+        // #465 slice 2: both the create path and `patch_run_repos` freeze a secondary
+        // through this ONE helper, so the two surfaces cannot drift (the #509 "second
+        // divergent site" class). The create path surfaces its typed refusal as the
+        // legacy 400 string it always returned.
+        let pin =
+            resolve_one_secondary_pin(input, &primary_canon, &mut seen_canon, &mut used_aliases)
+                .map_err(|r| r.message())?;
+        pins.push(pin);
     }
     Ok(pins)
+}
+
+/// Canonicalize for comparison, falling back to the path itself when it cannot be
+/// resolved (a repo that has just been validated should canonicalize; the fallback
+/// only matters for the exotic race where it disappears between checks). Shared by
+/// both the create and the mid-run edit paths so "is this the primary / a dup?" is
+/// answered identically on both.
+fn canonical_or_self(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Validate and freeze **one** secondary repo into a [`event_log::RepoPin`] — the
+/// single per-repo validator both `resolve_secondary_pins` (Run create) and
+/// [`patch_run_repos`] (mid-run edit) route through (#465 slice 2, ADR-0042).
+///
+/// `seen_canon` and `used_aliases` are the caller's running sets: the create path
+/// seeds them empty and grows them across `[1..]`; the edit path seeds them from the
+/// Run's SURVIVING secondaries **and the snapshot folders present on disk** (so a
+/// removed-but-persistent snapshot's alias is never reused). Both mutate them here,
+/// which is what keeps a batch internally collision-free.
+///
+/// Fails fast with a typed [`repo_edit_refusal::RepoEditRefusal`] and writes nothing
+/// to disk — the caller decides whether to project it (edit path) or flatten it to a
+/// 400 string (create path).
+fn resolve_one_secondary_pin(
+    input: &TargetRepoInput,
+    primary_canon: &Path,
+    seen_canon: &mut std::collections::HashSet<PathBuf>,
+    used_aliases: &mut std::collections::HashSet<String>,
+) -> Result<event_log::RepoPin, repo_edit_refusal::RepoEditRefusal> {
+    use repo_edit_refusal::RepoEditRefusal;
+    let raw = input.repo.trim();
+    let repo = validate_target_repo(raw).map_err(|error| RepoEditRefusal::BadRepo {
+        repo: raw.to_string(),
+        error,
+    })?;
+    let repo_display = repo.to_string_lossy().to_string();
+    let repo_canon = canonical_or_self(&repo);
+    // A repo cannot be its own secondary: a self-snapshot registers a detached
+    // worktree inside the repo it snapshots and buys nothing (the nodes already work
+    // in the primary).
+    if repo_canon == primary_canon {
+        return Err(RepoEditRefusal::SelfReference { repo: repo_display });
+    }
+    // A repo already listed (in this batch, or — on the edit path — already an active
+    // secondary of the Run) would produce two snapshots fighting over one alias.
+    if !seen_canon.insert(repo_canon) {
+        return Err(RepoEditRefusal::RepoAlreadyPinned { repo: repo_display });
+    }
+    let base = input
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let rev = base.unwrap_or("HEAD");
+    let sha = rev_parse_verified(&repo, rev).map_err(|e| RepoEditRefusal::BadRepo {
+        repo: repo_display.clone(),
+        error: format!("cannot resolve base branch '{rev}': {e}"),
+    })?;
+    let alias = disambiguate_alias(&repo, used_aliases);
+    Ok(event_log::RepoPin {
+        repo: repo_display,
+        alias,
+        sha,
+        base_branch: base.map(str::to_string),
+    })
 }
 
 /// A filesystem-safe, collision-free directory name for a secondary snapshot
@@ -12935,6 +13018,222 @@ fn disambiguate_alias(repo: &Path, used: &mut std::collections::HashSet<String>)
             return candidate;
         }
         n += 1;
+    }
+}
+
+/// The directory that parents a Run's secondary snapshots: `<run_dir>/repos/`.
+fn secondary_repos_dir(repo_root: &Path, run_id: &str) -> PathBuf {
+    repo_root
+        .join(".pdo")
+        .join("runs")
+        .join(run_id)
+        .join("repos")
+}
+
+/// The snapshot folder names present on disk under `<run_dir>/repos/` (#465 slice 2).
+///
+/// The DISK is the source of truth for taken aliases: a removed-but-persistent
+/// snapshot (decision 5 — the teardown is deferred to cleanup) still owns its folder
+/// name, so a later `add` must not reuse it or `git worktree add` would fail on the
+/// existing directory. Best-effort — a missing `repos/` yields an empty list.
+fn existing_snapshot_dir_names(repo_root: &Path, run_id: &str) -> Vec<String> {
+    std::fs::read_dir(secondary_repos_dir(repo_root, run_id))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .collect()
+}
+
+/// Resolve the **secondary repo** that owns a detached snapshot at `snapshot_dir`
+/// (#465 slice 2), so [`remove_secondary_snapshot`] can `prune` its registration
+/// from inside it. Two roads, git-authoritative first:
+///
+/// - `git -C <snapshot> rev-parse --path-format=absolute --git-common-dir` returns
+///   the secondary's shared `.git`; its parent is the repo root.
+/// - Fallback: the `gitdir:` pointer in `<snapshot>/.git` is
+///   `<secondary>/.git/worktrees/<name>`; the root is the path before `/.git/`.
+///
+/// `None` when neither resolves (a snapshot whose secondary was moved/deleted) — the
+/// caller then only removes the directory and warns; the registration is already
+/// unreachable.
+fn snapshot_owning_secondary(snapshot_dir: &Path) -> Option<PathBuf> {
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(snapshot_dir)
+        .output()
+    {
+        if output.status.success() {
+            let common = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if let Some(root) = Path::new(&common).parent() {
+                if !root.as_os_str().is_empty() {
+                    return Some(root.to_path_buf());
+                }
+            }
+        }
+    }
+    // Fallback: read the worktree's `.git` pointer file directly.
+    let pointer = std::fs::read_to_string(snapshot_dir.join(".git")).ok()?;
+    let raw = pointer.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let gitdir = Path::new(raw);
+    let idx = gitdir
+        .iter()
+        .position(|c| c == std::ffi::OsStr::new(".git"))?;
+    let root: PathBuf = gitdir.iter().take(idx).collect();
+    (!root.as_os_str().is_empty()).then_some(root)
+}
+
+/// `PATCH /runs/{run_id}/repos` — add / remove read-only secondary repos on a **live**
+/// Run (#465 slice 2, ADR-0042).
+///
+/// Additive to the slice-1 snapshot model: no merge-back, no `base_sha`, no
+/// `commit-tree`. The one slice-1 invariant it relaxes is that `RunState.target_repos`
+/// is frozen at `RunStarted` — it now also moves on `RunReposEdited`. The contract is
+/// **spawn-time visibility**: an edit affects nodes launched AFTER it; already-live
+/// nodes keep the context frozen at their spawn (preamble + `PDO_SECONDARY_REPOS` are
+/// written once at launch and never re-read).
+///
+/// Order mirrors `run_command`: forgotten (410) → project (404) → terminal (409,
+/// #221) → validate removes+adds → materialise adds → append → reproject. Returns
+/// `Option<Response>` convention throughout (typed [`repo_edit_refusal`]), never
+/// `Result<_, axum::Response>` (clippy `result_large_err`, CI `-D warnings`).
+async fn patch_run_repos(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+    Json(req): Json<PatchRunReposRequest>,
+) -> Response {
+    use repo_edit_refusal::{repo_edit_refusal_response, RepoEditRefusal};
+
+    // (1) #328 / ADR-0024: a forgotten Run is a tombstone — 410 before any side effect.
+    match run_is_forgotten(&state.db, &run_id).await {
+        Ok(true) => {
+            return repo_edit_refusal_response(&RepoEditRefusal::RunForgotten { run_id });
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return repo_edit_refusal_response(&RepoEditRefusal::Internal {
+                error: format!("forgotten-run check failed: {e}"),
+            });
+        }
+    }
+
+    // (2) Project — 404 if the log renders no Run.
+    let Some((_, run_state)) = reload_run_state(&state, &run_id).await else {
+        return repo_edit_refusal_response(&RepoEditRefusal::RunNotFound);
+    };
+
+    // (3) #221 (double guard, handler half): a terminal Run's list is frozen for good.
+    if run_state.status.is_terminal() {
+        return repo_edit_refusal_response(&RepoEditRefusal::RunTerminal {
+            status: run_state.status,
+        });
+    }
+
+    // An empty edit is a no-op — return the current projection without touching the
+    // log (the "empty body = 200" contract).
+    if req.add.is_empty() && req.remove.is_empty() {
+        return (StatusCode::OK, Json(run_state)).into_response();
+    }
+
+    let repo_root = effective_repo_root(&state, &run_state);
+    let primary_canon = canonical_or_self(&repo_root);
+
+    // (4) Removals first, by alias. An absent alias is a silent no-op (idempotent —
+    // the UI removes by displayed alias, and a double-click must not 404).
+    let remove_set: std::collections::HashSet<&str> = req
+        .remove
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut active: Vec<event_log::RepoPin> = run_state
+        .target_repos
+        .iter()
+        .filter(|p| !remove_set.contains(p.alias.as_str()))
+        .cloned()
+        .collect();
+
+    // (5) Seed the disambiguation sets from the SURVIVING pins (so a re-add of a
+    // still-pinned repo is refused, and its alias is not reused) AND from the folders
+    // present on disk (so a removed-but-persistent snapshot's alias is not reused
+    // either — the alias-collision-after-remove-readd trap). `seen_canon` is seeded
+    // ONLY from survivors, so a repo just removed in this same request may be re-added.
+    let mut seen_canon: std::collections::HashSet<PathBuf> = active
+        .iter()
+        .map(|p| canonical_or_self(Path::new(&p.repo)))
+        .collect();
+    let mut used_aliases: std::collections::HashSet<String> =
+        active.iter().map(|p| p.alias.clone()).collect();
+    for name in existing_snapshot_dir_names(&repo_root, &run_id) {
+        used_aliases.insert(name);
+    }
+
+    // (6) Validate every add BEFORE writing anything to disk — a bad repo yields no
+    // snapshot and no event (fail-fast, mirror of the create boundary).
+    let mut new_pins: Vec<event_log::RepoPin> = Vec::new();
+    for input in &req.add {
+        match resolve_one_secondary_pin(input, &primary_canon, &mut seen_canon, &mut used_aliases) {
+            Ok(pin) => new_pins.push(pin),
+            Err(r) => return repo_edit_refusal_response(&r),
+        }
+    }
+
+    // (7) Materialise each add — a detached snapshot under `<run_dir>/repos/<alias>`,
+    // visible in-sandbox through the existing `repo_root:rw` mount (0 new mount). Done
+    // BEFORE any append, so the log can never carry a pin whose snapshot is missing. A
+    // failure here is a 500 (panne), and a snapshot orphaned by a later add's failure
+    // is reaped by the disk-driven `cleanup_run` and invisible to the projection.
+    for pin in &new_pins {
+        let dest = secondary_snapshot_path(&repo_root, &run_id, &pin.alias);
+        if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
+            error!("patch_run_repos: snapshot failed for {}: {e:#}", pin.repo);
+            return repo_edit_refusal_response(&RepoEditRefusal::SnapshotMaterializeFailed {
+                repo: pin.repo.clone(),
+                error: format!("{e:#}"),
+            });
+        }
+    }
+
+    // The new active list = (current − removed) + added.
+    active.extend(new_pins);
+
+    // If nothing actually changed (removes hit no alias, no adds), skip the append —
+    // the empty-body no-op, generalised. Adds always change the list (each gets a
+    // fresh alias), so this only short-circuits genuine no-ops.
+    let before: Vec<&str> = run_state
+        .target_repos
+        .iter()
+        .map(|p| p.alias.as_str())
+        .collect();
+    let after: Vec<&str> = active.iter().map(|p| p.alias.as_str()).collect();
+    if before == after {
+        return (StatusCode::OK, Json(run_state)).into_response();
+    }
+
+    // (8) Append the whole re-frozen active list as one `RunReposEdited` event.
+    let event = event_log::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunReposEdited,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "target_repos": active })),
+    };
+    if let Err(e) = append_event(&state, &event).await {
+        error!("patch_run_repos: append failed for run {run_id}: {e:#}");
+        return repo_edit_refusal_response(&RepoEditRefusal::AppendFailed {
+            error: format!("{e:#}"),
+        });
+    }
+
+    // (9) 200 with the reprojected RunState so the UI refreshes in one round-trip.
+    match reload_run_state(&state, &run_id).await {
+        Some((_, refreshed)) => (StatusCode::OK, Json(refreshed)).into_response(),
+        None => repo_edit_refusal_response(&RepoEditRefusal::Internal {
+            error: "run vanished immediately after a repos edit".into(),
+        }),
     }
 }
 

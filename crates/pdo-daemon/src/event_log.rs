@@ -130,6 +130,17 @@ pub enum EventKind {
     RunResumed,
     RunArchived,
     RunRenamed,
+    /// The Run's read-only secondary list was edited mid-run (#465 slice 2,
+    /// ADR-0042). The payload carries the **complete, re-frozen** active list under
+    /// `target_repos` (a `Vec<RepoPin>`, SHAs already resolved and aliases already
+    /// disambiguated by the handler) — never raw input, so replay re-resolves
+    /// nothing, exactly like `RunStarted`. The reducer overwrites
+    /// `RunState::target_repos` wholesale (idempotent, order-independent), and is a
+    /// strict no-op on a terminal Run (#221 — a passive metadata event must never
+    /// un-terminalize a Run). Absent on every mono-repo and every Run that never
+    /// edited its list, so those payloads stay byte-identical. Wire form:
+    /// `"run_repos_edited"`.
+    RunReposEdited,
     /// Informational (#410): a sandboxed Run's image is being prepared (pull/build)
     /// at the head of the detached prep task, before the first session spawns. Emitted
     /// only on the create path and only when the resolved mode is `full`/`minimal` (the
@@ -1020,6 +1031,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::RunPaused
             | EventKind::RunResumed
             | EventKind::RunRenamed
+            | EventKind::RunReposEdited
             | EventKind::RunArchived
             | EventKind::SandboxPrepStarted
             | EventKind::SandboxPrepReady => apply_run_event(&mut state, event),
@@ -1388,6 +1400,35 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                     } else {
                         state.name = Some(new_name.to_string());
                     }
+                }
+            }
+        }
+        EventKind::RunReposEdited => {
+            // #221 (double guard, reducer half): a terminal Run keeps the list it
+            // was frozen with — a metadata event appended after a terminal event
+            // (hand-crafted, replayed, or racing a completion) must NEVER re-open it
+            // nor mutate its context. The handler already refuses the edit with a
+            // 409, but the reducer is inert on its own so the log stays the single
+            // source of truth even if an edit slipped in around the terminal event.
+            if state.status.is_terminal() {
+                return;
+            }
+            // The payload carries the whole re-frozen active list under
+            // `target_repos` (mirror of the `RunStarted` arm above): overwrite
+            // wholesale. Absent/unreadable degrades LOUDLY to "keep the previous
+            // list" — never a panic (this applier runs inside `append_event`, before
+            // the transition guard), and never a reset that would silently starve a
+            // node reading a snapshot the projection forgot.
+            if let Some(ref payload) = event.payload {
+                match payload.get("target_repos") {
+                    None => {}
+                    Some(raw) => match serde_json::from_value::<Vec<RepoPin>>(raw.clone()) {
+                        Ok(pins) => state.target_repos = pins,
+                        Err(e) => warn!(
+                            "run_repos_edited carries an unreadable `target_repos` value \
+                             ({raw}): {e}; keeping the previous secondary list."
+                        ),
+                    },
                 }
             }
         }
@@ -4661,6 +4702,121 @@ mod tests {
             serde_json::json!({ "pipeline_name": "p", "target_repos": "not-an-array" }),
         )];
         assert!(project(&malformed).unwrap().target_repos.is_empty());
+    }
+
+    /// #465 slice 2 (ADR-0042): `RunReposEdited` overwrites `target_repos`
+    /// wholesale with the re-frozen active list — the reducer mirrors the
+    /// `RunStarted` arm, so a mono-repo Run can grow secondaries mid-run and a
+    /// multi-repo Run can shed them, and the last edit wins.
+    #[test]
+    fn run_repos_edited_overwrites_the_active_list() {
+        // A Run that started mono-repo gains a secondary.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p", "target_repo": "/repos/primary" }),
+            ),
+            make_event_with_payload(
+                EventKind::RunReposEdited,
+                None,
+                serde_json::json!({
+                    "target_repos": [
+                        { "repo": "/repos/lib", "alias": "lib", "sha": "cafe1234",
+                          "base_branch": "main" }
+                    ]
+                }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.target_repos.len(), 1);
+        assert_eq!(state.target_repos[0].alias, "lib");
+        assert_eq!(state.target_repos[0].sha, "cafe1234");
+
+        // A second edit REPLACES the list (not appends) — removal is the empty list.
+        let mut removed = events.clone();
+        removed.push(make_event_with_payload(
+            EventKind::RunReposEdited,
+            None,
+            serde_json::json!({ "target_repos": [] }),
+        ));
+        assert!(project(&removed).unwrap().target_repos.is_empty());
+    }
+
+    /// #465 slice 2 / #221 (double guard, reducer half): a `RunReposEdited`
+    /// appended AFTER a terminal event must not touch the frozen list and, above
+    /// all, must not un-terminalize the Run — the same invariant
+    /// `apply_pipeline_event` holds against a stray `PipelineModified`.
+    #[test]
+    fn run_repos_edited_after_terminal_is_inert() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "p",
+                    "target_repo": "/repos/primary",
+                    "target_repos": [
+                        { "repo": "/repos/lib", "alias": "lib", "sha": "aaaa1111" }
+                    ],
+                }),
+            ),
+            make_event(EventKind::RunCompleted, None, None),
+            // The passive edit races in after completion.
+            make_event_with_payload(
+                EventKind::RunReposEdited,
+                None,
+                serde_json::json!({
+                    "target_repos": [
+                        { "repo": "/repos/other", "alias": "other", "sha": "bbbb2222" }
+                    ]
+                }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.status,
+            RunStatus::Completed,
+            "RunReposEdited after RunCompleted must NOT reopen the run (#221)"
+        );
+        assert!(state.completed_at.is_some());
+        assert_eq!(
+            state.target_repos.len(),
+            1,
+            "the frozen list must survive a post-terminal edit"
+        );
+        assert_eq!(
+            state.target_repos[0].alias, "lib",
+            "the terminal Run keeps its original secondary, not the racing edit"
+        );
+    }
+
+    /// A malformed `RunReposEdited` payload keeps the PREVIOUS list (never resets
+    /// it to empty) and never panics — a soft failure must not silently strand a
+    /// live node reading a snapshot the projection would otherwise forget.
+    #[test]
+    fn run_repos_edited_malformed_keeps_previous_list() {
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({
+                    "pipeline_name": "p",
+                    "target_repo": "/repos/primary",
+                    "target_repos": [
+                        { "repo": "/repos/lib", "alias": "lib", "sha": "aaaa1111" }
+                    ],
+                }),
+            ),
+            make_event_with_payload(
+                EventKind::RunReposEdited,
+                None,
+                serde_json::json!({ "target_repos": "not-an-array" }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.target_repos.len(), 1);
+        assert_eq!(state.target_repos[0].alias, "lib");
     }
 
     /// #503: a Run's whole failure signal used to be a red dot — every

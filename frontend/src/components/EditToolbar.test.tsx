@@ -169,6 +169,56 @@ describe("EditToolbar", () => {
       expect(buttons[0]).toHaveAccessibleName("Pipeline info");
     });
   });
+
+  // #465 slice 2 (F1): the Run-info / Repositories toggle, shown only on the
+  // live run tabs where the App auto-snaps to the running node — the exact set
+  // where the sidebar is otherwise unreachable.
+  describe("run-info toggle (#465 slice 2, F1)", () => {
+    it("is absent on a non-run canvas (default)", () => {
+      renderToolbar({ onToggleInfo: vi.fn() });
+      expect(screen.queryByTestId("toolbar-run-info")).toBeNull();
+    });
+
+    it("stays absent when shown without a handler wired", () => {
+      renderToolbar({ showRunInfo: true });
+      expect(screen.queryByTestId("toolbar-run-info")).toBeNull();
+    });
+
+    it("renders named, unpressed at rest, and toggles on click", () => {
+      const onToggleRunInfo = vi.fn();
+      renderToolbar({ showRunInfo: true, onToggleRunInfo });
+      const btn = screen.getByTestId("toolbar-run-info");
+      expect(btn).toHaveAccessibleName("Run repositories");
+      expect(btn).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(btn);
+      expect(onToggleRunInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it("reflects the pressed state while the sidebar is open", () => {
+      renderToolbar({
+        showRunInfo: true,
+        onToggleRunInfo: vi.fn(),
+        runInfoActive: true,
+      });
+      expect(screen.getByTestId("toolbar-run-info")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    it("adds exactly one more named button beside Pipeline info", () => {
+      renderToolbar({
+        showRunInfo: true,
+        onToggleRunInfo: vi.fn(),
+        onToggleInfo: vi.fn(),
+      });
+      const buttons = [
+        ...screen.getByTestId("edit-toolbar").querySelectorAll("button"),
+      ];
+      expect(buttons).toHaveLength(8); // 7 core + run-info
+      for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
+    });
+  });
 });
 
 describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {

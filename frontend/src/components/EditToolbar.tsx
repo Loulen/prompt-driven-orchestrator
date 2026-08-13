@@ -1,4 +1,4 @@
-import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus } from "lucide-react";
+import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FolderGit2 } from "lucide-react";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -21,13 +21,20 @@ interface Props {
   getDropPosition?: () => { x: number; y: number };
   infoOpen?: boolean;
   onToggleInfo?: () => void;
+  // #465 slice 2 (F1): on a live run the App auto-snaps the selection to the
+  // running node, so the Run-info / Repositories sidebar (mounted when nothing
+  // is selected) is otherwise unreachable. This toggle opens it explicitly. Only
+  // passed for the run tabs where auto-snap applies (`isNodeActiveRun`).
+  showRunInfo?: boolean;
+  runInfoActive?: boolean;
+  onToggleRunInfo?: () => void;
   // #315: an archived run's canvas is read-only — hide every editing control
   // (add node/note, library insert, merge/script, undo/redo). Only the
   // Pipeline-info button survives so the archived pipeline stays inspectable.
   readOnly?: boolean;
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, readOnly = false }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, showRunInfo = false, runInfoActive = false, onToggleRunInfo, readOnly = false }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add/merge callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -156,10 +163,35 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
+      {/* #465 slice 2 (F1): reach the Run-info / Repositories sidebar on a live
+          run whose node is running. Shown only for those run tabs — elsewhere
+          the panel is reachable by deselecting, so the button would be a no-op. */}
+      {showRunInfo && onToggleRunInfo && (
+        <>
+          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+
+          <Tooltip content="Run repositories">
+            <button
+              data-testid="toolbar-run-info"
+              aria-label="Run repositories"
+              aria-pressed={runInfoActive}
+              onClick={onToggleRunInfo}
+              className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
+                runInfoActive
+                  ? "bg-acc text-bg-0"
+                  : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+              }`}
+            >
+              <FolderGit2 size={14} />
+            </button>
+          </Tooltip>
+        </>
+      )}
+
       {onToggleInfo && (
         <>
           {/* #315: no leading separator when the info button is the sole control. */}
-          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {!readOnly && !showRunInfo && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           <Tooltip content="Pipeline info">
             <button

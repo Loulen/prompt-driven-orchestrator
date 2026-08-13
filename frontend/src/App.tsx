@@ -9,6 +9,7 @@ import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth,
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
 import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
+import { shouldAutoSnapToLiveNode } from "./lib/autoSnap";
 import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
@@ -51,11 +52,6 @@ import {
 
 const PANEL_IDS = ["left", "center", "right"];
 const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
-
-const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "running",
-  "awaiting_user",
-]);
 
 function useRuns() {
   const [runs, setRuns] = useState<RunListEntry[]>([]);
@@ -418,14 +414,13 @@ export default function App() {
 
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
-  // Re-fires whenever the user deselects on a still-live run.
+  // Re-fires whenever the user deselects on a still-live run — but never over a
+  // deliberate selection (a node, an inspector, or the Run-info sidebar, #465
+  // slice 2, F1). The gate is `shouldAutoSnapToLiveNode`; this effect only
+  // resolves the concrete node and applies it.
   useEffect(() => {
     if (!selectedRun) return;
-    if (selection.kind === "node" && selection.id) return;
-    // An explicit region/edge/note selection (#150 / #147 / #307) wins over the
-    // auto-snap: the user opened an inspector and must keep it on a live run.
-    if (selection.kind === "region" || selection.kind === "edge" || selection.kind === "note") return;
-    if (!LIVE_RUN_STATUSES.has(selectedRun.status)) return;
+    if (!shouldAutoSnapToLiveNode(selection.kind, !!selection.id, selectedRun.status)) return;
     const nodeId = pickLatestLiveNode(selectedRun);
     if (!nodeId) return;
     setSelection({ kind: "node", id: nodeId });
@@ -714,9 +709,15 @@ export default function App() {
                 ) : selection.kind === "note" ? (
                   <NoteInspector />
                 ) : null}
-                {selection.kind === "none" && isEditingRun && selectedRun && (
-                  <RunInfoSidebar run={selectedRun} />
-                )}
+                {/* `"none"` reaches this on a terminal/paused run (deselect, or
+                    selecting the run — #503 red-dot panel); `"run"` is the
+                    explicit toggle that keeps it reachable while a live node
+                    runs (#465 slice 2, F1). */}
+                {(selection.kind === "none" || selection.kind === "run") &&
+                  isEditingRun &&
+                  selectedRun && (
+                    <RunInfoSidebar run={selectedRun} onEdited={refreshRun} />
+                  )}
                 {selection.kind === "none" && !isEditingRun && (
                   <PipelineInspector
                     libraryPipelines={libraryPipelines}

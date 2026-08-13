@@ -9,6 +9,7 @@ import {
   browseFs,
   deletePipeline,
   duplicateLibraryPipeline,
+  editRunRepos,
   fetchPipeline,
   markNodeDone,
   request,
@@ -425,5 +426,50 @@ describe("markNodeDone outcome union (#490)", () => {
       node_id: "n1",
       iter: 3,
     });
+  });
+});
+
+// #465 slice 2 / ADR-0042 — mid-run edit of a Run's read-only secondary list.
+describe("editRunRepos outcome union (#465)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("PATCHes /runs/{id}/repos with the add/remove body", async () => {
+    const fetchMock = captureFetch(200, { run_id: "r1", target_repos: [] });
+    await editRunRepos("r1", { add: [{ repo: "/repos/lib" }], remove: ["old"] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/runs/r1/repos");
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      add: [{ repo: "/repos/lib" }],
+      remove: ["old"],
+    });
+  });
+
+  it("returns the reprojected run on 200", async () => {
+    stubFetchWith(200, { run_id: "r1", target_repos: [{ alias: "lib" }] });
+    const out = await editRunRepos("r1", { add: [{ repo: "/repos/lib" }] });
+    if (out.kind !== "ok") throw new Error("expected ok");
+    expect(out.run.run_id).toBe("r1");
+  });
+
+  it("surfaces a typed refusal as a verdict, not a thrown error", async () => {
+    stubFetchWith(409, {
+      error: "run_not_editable",
+      message: "run is completed and its repository list is frozen",
+      status: "completed",
+    });
+    const out = await editRunRepos("r1", { remove: ["lib"] });
+    if (out.kind !== "refused") throw new Error("expected a refusal");
+    expect(out.slug).toBe("run_not_editable");
+    expect(out.status).toBe(409);
+    expect(out.message).toContain("frozen");
+  });
+
+  it("carries the daemon's message even when the slug is unknown", async () => {
+    stubFetchWith(400, { error: "bad_secondary_repo", message: "not a git repository" });
+    const out = await editRunRepos("r1", { add: [{ repo: "/nope" }] });
+    if (out.kind !== "refused") throw new Error("expected a refusal");
+    expect(out.slug).toBe("bad_secondary_repo");
+    expect(out.message).toContain("not a git repository");
   });
 });

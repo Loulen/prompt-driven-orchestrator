@@ -6,6 +6,19 @@ export function isLiveRun(status: RunStatus): boolean {
 }
 
 /**
+ * A run with an actively-running (or user-awaiting) node — the states in which
+ * the App auto-snaps the selection to that node so its terminal is shown at
+ * once. NARROWER than `isLiveRun`: a `paused` run does not auto-snap, so its
+ * Run-info panel is already reachable by deselecting. This is exactly the set
+ * where the panel is otherwise unreachable, so the canvas exposes an explicit
+ * toggle for it (#465 slice 2, F1). Keep the auto-snap guard and that toggle's
+ * visibility on this single predicate so they can never drift apart.
+ */
+export function isNodeActiveRun(status: RunStatus): boolean {
+  return status === "running" || status === "awaiting_user";
+}
+
+/**
  * Mirror of Rust `RunStatus::is_terminal()` (the total complement of `is_live`):
  * `{completed, failed, skipped, halted, archived}`. NOTE this INCLUDES
  * `archived` — callers that gate on "terminal AND not archived" (e.g. the
@@ -604,6 +617,20 @@ export interface CollectionStateInfo {
   members?: string[];
 }
 
+/**
+ * One read-only secondary repo pinned to a Run (#465, ADR-0042). Mirror of the
+ * server `RepoPin`: `repo` is the absolute host path, `alias` the disambiguated
+ * snapshot folder name (the handle a `remove` names), `sha` the frozen commit, and
+ * `base_branch` the ref it was resolved from (provenance only; the SHA is
+ * authoritative). Absent `base_branch` means the pin defaulted to `HEAD`.
+ */
+export interface RepoPin {
+  repo: string;
+  alias: string;
+  sha: string;
+  base_branch?: string | null;
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -630,6 +657,14 @@ export interface RunState {
   foreach_states?: Record<string, ForEachStateInfo>;
   collection_states?: Record<string, CollectionStateInfo>;
   target_repo?: string | null;
+  /**
+   * The Run's read-only secondary repos (#465, ADR-0042). Absent/empty on a
+   * mono-repo Run. **Editable mid-run** (slice 2) via `editRunRepos`: adding/removing
+   * a secondary rewrites this list, and the change is visible to nodes launched
+   * AFTER the edit (spawn-time visibility) — already-live nodes keep their frozen
+   * context. Never contains the primary (that stays in `target_repo`).
+   */
+  target_repos?: RepoPin[];
   source_branch?: string | null;
   /**
    * Isolation for this Run (#403 / #407 / #410 / #432): `"off"`, or the name of the

@@ -16,6 +16,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
+import { isNodeActiveRun } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
@@ -253,6 +254,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
+  const selection = useEditStore((s) => s.selection);
   const updateNodeViews = useEditStore((s) => s.updateNodeViews);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const deleteNode = useEditStore((s) => s.deleteNode);
@@ -315,6 +317,21 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   // actions. Keyed on `archived` ONLY, so editing-during-run (ADR-0007) stays
   // intact for running/completed runs.
   const readOnly = activeRunState?.status === "archived";
+
+  // #465 slice 2 (F1): expose the Run-info / Repositories sidebar toggle only on
+  // the run tabs where the App auto-snaps to the running node — the exact set
+  // where the panel is otherwise unreachable. `"run"` survives the auto-snap;
+  // toggling back to `"none"` lets it re-select the live node (back to terminal).
+  const showRunInfo =
+    activeRunState != null && isNodeActiveRun(activeRunState.status);
+  const runInfoActive = selection.kind === "run";
+  const toggleRunInfo = useCallback(() => {
+    setSelection(
+      selection.kind === "run"
+        ? { kind: "none", id: null }
+        : { kind: "run", id: null },
+    );
+  }, [selection.kind, setSelection]);
 
   const pipelineSync = usePipelineLibraryState(
     pipeline ?? null,
@@ -674,6 +691,9 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         getDropPosition={computeDropPosition}
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
+        showRunInfo={showRunInfo}
+        runInfoActive={runInfoActive}
+        onToggleRunInfo={toggleRunInfo}
         readOnly={readOnly}
       />
       {pipeline && tab && (

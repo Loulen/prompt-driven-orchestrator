@@ -10,7 +10,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
 } from "recharts";
-import type { StatsOverview, StatsCost, StatsCostBucket } from "../types";
+import type { StatsOverview, StatsCost, StatsCostBucket, PriceRow } from "../types";
 import { formatBucketCost } from "../lib/costLabel";
 
 // This module is the ONLY importer of `recharts`, so it is code-split via
@@ -212,6 +212,44 @@ function CostSection({
   );
 }
 
+/** The resolved price table (#528): one row per family — the WINNING tier and the
+ *  $/MTok actually in force. Reads the same table the fold bills with, so pressing
+ *  "Sync costs" (just above) and reading what PDO can price happen in one place.
+ *  Defensive `?.` for the same `vite dev` reason as the cost buckets. */
+function ResolvedPrices({ resolved }: { resolved: PriceRow[] | undefined }) {
+  if (!resolved?.length) return null;
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="stats-cost-resolved">
+      <h4 className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
+        What PDO can price
+      </h4>
+      <div className="flex flex-col gap-1">
+        {resolved.map((row) => (
+          <div
+            key={row.key}
+            className="flex items-center justify-between rounded bg-bg-3 px-2 py-1 font-mono text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid={`price-row-${row.key}`}
+          >
+            <span>{row.key}</span>
+            <span className="flex items-center gap-2">
+              <span
+                className="rounded bg-bg-4 px-1.5 py-0.5 text-fg-4"
+                data-testid={`price-row-tier-${row.key}`}
+              >
+                {row.tier}
+              </span>
+              <span className="text-fg-2">
+                ${row.input}/${row.output} /MTok
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CostTab({ cost, error }: { cost: StatsCost | null; error: string | null }) {
   if (error)
     return (
@@ -266,6 +304,7 @@ function CostTab({ cost, error }: { cost: StatsCost | null; error: string | null
         title="By project"
         rows={cost.by_project.map((b) => ({ label: b.key, bucket: b }))}
       />
+      <ResolvedPrices resolved={cost.resolved} />
     </div>
   );
 }

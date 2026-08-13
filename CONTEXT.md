@@ -586,10 +586,11 @@ l'**humain seul** et jamais touchée par PDO. La **résolue** est celle avec laq
 `compute_run_cost` chiffre : précédence **`manuel → fetché → embarquée`**, **par clé de famille**,
 jamais un remplacement. Un écrivain par fichier, et une empreinte de la table résolue entre dans la
 clé du memo de `/stats/cost`.
-Depuis #528, la table **résolue** est aussi **exposée en lecture** : le bloc `price_table` de
-`GET /settings` porte un tableau **`resolved`** (une entrée par clé de famille : tier gagnant +
-`$/MTok`), à côté de `manual_keys` et `fetched_rows` — additif, lecture seule, aucune route dédiée
-(cf. *Versioning*).
+Depuis #528, la table **résolue** est aussi **exposée en lecture** : `GET /stats/cost` porte un
+tableau **`resolved`** (une entrée par clé de famille : tier gagnant + `$/MTok`), rendu dans l'onglet
+**Stats → Cost** à côté du bouton **« Sync costs »** — on synchronise et on lit ce que PDO sait
+tarifer au même endroit. Additif, lecture seule, aucune route dédiée (cf. *Versioning*) ; il lit la
+**même** `PriceTable` que le fold de coût, donc la vue ne peut jamais diverger du tarificateur.
 _Éviter_ : « surcharge de prix » (dans ce domaine « surcharge » désigne déjà un supplément tarifaire,
 cf. ADR-0022 *Hors-scope* « surcharge input Sonnet-4.5 ») ; « override de prix » (dans PDO un
 override est un **tier de précédence**, pas un contournement) ; « merge » / « fusion des tables » ;

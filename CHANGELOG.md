@@ -12,15 +12,17 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 
 ## 1.20.0
 
-Rien de cassant. Un champ **purement additif, lecture seule** : le bloc `price_table` de
-`GET /settings` porte désormais un tableau **`resolved`** — une entrée par clé de famille, avec le
-**tier gagnant** (`manual` / `fetched` / `embedded`) et le **`$/MTok`** effectivement appliqué
-(#528). C'est la même map `resolved` que celle avec laquelle `price_for` chiffre, donc la vue ne peut
-jamais diverger de ce qui tarifie réellement (#373). **Dans le cadre d'ADR-0034** : cette slice
-**amende sa hors-scope** (qui déclinait un `GET /prices` en le jugeant redondant avec `manual_keys` +
-`fetched_rows`) — **pas de nouvel ADR**, **pas de route dédiée** (champ additif rétro-compatible, cf.
-*Versioning*). Bump posé contre `origin/main` (1.19.0) ; à re-poser au next-free si un autre Run livre
-entre-temps.
+Rien de cassant. Un champ **purement additif, lecture seule** : `GET /stats/cost` porte désormais un
+tableau **`resolved`** — une entrée par clé de famille, avec le **tier gagnant** (`manual` / `fetched`
+/ `embedded`) et le **`$/MTok`** effectivement appliqué (#528). Rendu dans l'onglet **Stats → Cost**,
+à côté du bouton **« Sync costs »** : on synchronise les prix et on lit ce que PDO sait tarifer au
+même endroit, et le refetch déclenché par la synchro rafraîchit la table. C'est la même `PriceTable`
+que celle avec laquelle le fold de coût chiffre, donc la vue ne peut jamais diverger de ce qui tarifie
+réellement (#373). **Dans le cadre d'ADR-0034** : cette slice **amende sa hors-scope** (qui déclinait
+un `GET /prices` en le jugeant redondant avec `manual_keys` + `fetched_rows`) — **pas de nouvel ADR**,
+**pas de route dédiée** (champ additif sur un endpoint déjà consommé par l'onglet Cost, rétro-compatible,
+zéro taxe proxy vite dev, cf. *Versioning*). Bump posé contre `origin/main` (1.19.0) ; à re-poser au
+next-free si un autre Run livre entre-temps.
 
 ## 1.18.0
 

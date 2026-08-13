@@ -10,7 +10,10 @@
 //!   [`crate::run_cost::compute_run_cost_cached`], and folds the per-run scalars
 //!   app-side into by-period / by-pipeline / by-project buckets (cost has no
 //!   pipeline/project dimension in SQL, and "by project" needs the
-//!   `effective_repo_root` runtime fallback).
+//!   `effective_repo_root` runtime fallback). It also carries the **resolved
+//!   price table** (#528): one row per family key — the winning tier and the
+//!   `$/MTok` in force — read from the SAME table the fold prices with, so the
+//!   Cost tab can never show a set the pricer would price otherwise (#373).
 //!
 //! Everything is derived on read — no snapshot table, no metric-freezing event
 //! (preserves ADR-0022). Aggregated cost is a **sum of lower bounds**: partial
@@ -256,11 +259,30 @@ pub(crate) struct CostKeyBucket {
     pub unpriced_models: Vec<String>,
 }
 
+/// One resolved price row (#528): a family key, the tier that decides it, and the
+/// `$/MTok` actually in force. `tier` serializes as `"manual" | "fetched" |
+/// "embedded"` (the `PriceTier` `rename_all = "lowercase"`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct ResolvedPriceRow {
+    pub key: String,
+    pub tier: crate::price_table::PriceTier,
+    /// $/MTok in — the price ACTUALLY applied (the winning tier).
+    pub input: f64,
+    /// $/MTok out — the price ACTUALLY applied (the winning tier).
+    pub output: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsCost {
     pub by_period: Vec<CostPeriodBucket>,
     pub by_pipeline: Vec<CostKeyBucket>,
     pub by_project: Vec<CostKeyBucket>,
+    /// The resolved price table (#528), one row per family key in BTreeMap
+    /// (alphabetical) order — the winning tier + resolved `$/MTok`. Independent of
+    /// the `[from, to)` window: it is a property of the price table, not the fold.
+    /// The pure [`fold_cost`] leaves this empty; the handler injects the live table
+    /// so the "Sync costs" button refreshes it on the same refetch it triggers.
+    pub resolved: Vec<ResolvedPriceRow>,
 }
 
 /// One run's contribution to the cost fold: its period bucket, pipeline key,
@@ -355,7 +377,28 @@ fn fold_cost(rows: &[CostRow]) -> StatsCost {
         by_period: period,
         by_pipeline: to_key_buckets(by_pipeline),
         by_project: to_key_buckets(by_project),
+        // The pure fold knows nothing of prices; the handler fills this from the
+        // live table (#528).
+        resolved: Vec::new(),
     }
+}
+
+/// Project the resolved price table into wire rows (#528): one entry per family
+/// key — the winning tier and the `$/MTok` in force — in `BTreeMap` order. Reads
+/// the SAME `resolved` map `price_for` bills from, so the Cost tab can never
+/// enumerate a set the pricer would price otherwise (#373). Pure; the handler
+/// injects the live table. `PriceTable::load` always seeds the embedded floor, so
+/// this never yields `[]` even with no HOME state (D9).
+fn resolved_price_rows(prices: &crate::price_table::PriceTable) -> Vec<ResolvedPriceRow> {
+    prices
+        .resolved_entries()
+        .map(|(key, price, tier)| ResolvedPriceRow {
+            key: key.to_string(),
+            tier,
+            input: price.input,
+            output: price.output,
+        })
+        .collect()
 }
 
 /// The "by project" bucket of a cost row: the Run's `target_repo`, else the
@@ -480,7 +523,12 @@ pub(crate) async fn stats_cost(
         });
     }
 
-    Json(fold_cost(&cost_rows)).into_response()
+    // #528: carry the resolved price table alongside the fold — the same `prices`
+    // that billed every row above, so the Cost tab shows exactly what the pricer
+    // would apply, and a "Sync costs" refetch refreshes it in one round-trip.
+    let mut stats = fold_cost(&cost_rows);
+    stats.resolved = resolved_price_rows(&prices);
+    Json(stats).into_response()
 }
 
 #[cfg(test)]
@@ -838,6 +886,44 @@ mod tests {
             ],
             "union across the bucket, de-duplicated and sorted"
         );
+    }
+
+    #[test]
+    fn fold_cost_leaves_resolved_empty_the_handler_fills_it() {
+        // The pure fold knows nothing of prices — the handler injects the live
+        // table (#528). This pins the contract so a future refactor can't wire the
+        // price table into the fold by accident.
+        assert!(fold_cost(&[]).resolved.is_empty());
+    }
+
+    #[test]
+    fn resolved_price_rows_project_the_floor_faithfully() {
+        // The projection `resolved_entries -> ResolvedPriceRow` is faithful: the
+        // eleven embedded families, every one `Embedded`, with the single most
+        // error-prone distinction surviving (opus-4-8 5/25 ≠ opus-4-1 15/75), in
+        // BTreeMap key order. The winning-tier PRECEDENCE (manual > fetched >
+        // embedded) is exercised by `price_table::resolved_entries_*` and
+        // end-to-end over `/stats/cost` in `tests/cost_prices.rs`.
+        use crate::price_table::{PriceTable, PriceTier};
+        let floor = resolved_price_rows(&PriceTable::builtin());
+        assert_eq!(floor.len(), 11);
+        assert!(floor.iter().all(|r| r.tier == PriceTier::Embedded));
+        let by = |key: &str| floor.iter().find(|r| r.key == key).unwrap();
+        assert_eq!(
+            (by("claude-opus-4-8").input, by("claude-opus-4-8").output),
+            (5.0, 25.0)
+        );
+        assert_eq!(
+            (by("claude-opus-4-1").input, by("claude-opus-4-1").output),
+            (15.0, 75.0)
+        );
+        // Rows come out in BTreeMap key order (families grouped for free, D4).
+        let keys: Vec<&str> = floor.iter().map(|r| r.key.as_str()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted);
+        // The sentinel is a `price_for` short-circuit, never a table row.
+        assert!(floor.iter().all(|r| r.key != "<synthetic>"));
     }
 
     #[test]

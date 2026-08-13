@@ -76,8 +76,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       default: true,
     },
     // Price table (#427): the default state of every instance — neither file exists,
-    // never synced, nothing inert. The paths are reported all the same. #528: the
-    // resolved floor (every family `embedded`) is exposed even with no disk tier.
+    // never synced, nothing inert. The paths are reported all the same.
     price_table: {
       manual_path: "/home/user/.pdo/prices/models.yaml",
       fetched_path: "/home/user/.pdo/prices/fetched.json",
@@ -85,10 +84,6 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       fetched_at: null,
       fetched_rows: 0,
       manual_keys: [],
-      resolved: [
-        { key: "claude-haiku-4-5", tier: "embedded", input: 1, output: 5 },
-        { key: "claude-opus-4-8", tier: "embedded", input: 5, output: 25 },
-      ],
       reason: null,
     },
     updated_at: "2026-07-01T10:00:00.000Z",
@@ -266,55 +261,6 @@ describe("SettingsModal", () => {
     );
     // Absent is SILENT: no advisory when nothing is wrong.
     expect(screen.queryByTestId("setting-price-table-reason")).not.toBeInTheDocument();
-
-    // #528: the resolved floor is exposed even with no disk tier — every family
-    // `embedded`, with the price actually in force.
-    expect(screen.getByTestId("setting-price-table-resolved")).toBeInTheDocument();
-    const floorRow = screen.getByTestId("price-row-claude-opus-4-8");
-    expect(floorRow).toHaveTextContent("claude-opus-4-8");
-    expect(floorRow).toHaveTextContent("$5/$25 /MTok");
-    expect(screen.getByTestId("price-row-tier-claude-opus-4-8")).toHaveTextContent(
-      "embedded",
-    );
-  });
-
-  it("renders the resolved table with the winning tier per family (#528)", async () => {
-    // The whole point of #528: a hand override wins and the view SAYS so — the same
-    // `resolved` map the pricer bills from, so what shows can never drift (#373).
-    fetchSettingsMock.mockResolvedValue(
-      sample({
-        price_table: {
-          manual_path: "/home/user/.pdo/prices/models.yaml",
-          fetched_path: "/home/user/.pdo/prices/fetched.json",
-          source: "https://models.dev/api.json",
-          fetched_at: "2026-07-30T14:12:03Z",
-          fetched_rows: 15,
-          manual_keys: ["claude-opus-4-8"],
-          resolved: [
-            { key: "claude-opus-4-8", tier: "manual", input: 4.5, output: 22.5 },
-            { key: "claude-opus-5", tier: "fetched", input: 5, output: 25 },
-            { key: "claude-sonnet-4-5", tier: "embedded", input: 3, output: 15 },
-          ],
-          reason: null,
-        },
-      }),
-    );
-    render(<SettingsModal open onClose={() => {}} />);
-    await screen.findByTestId("setting-price-table-resolved");
-
-    // The manually overridden family: winning $/MTok + the `manual` badge.
-    const manualRow = screen.getByTestId("price-row-claude-opus-4-8");
-    expect(manualRow).toHaveTextContent("$4.5/$22.5 /MTok");
-    expect(screen.getByTestId("price-row-tier-claude-opus-4-8")).toHaveTextContent(
-      "manual",
-    );
-    // A fetch-only family carries the `fetched` badge, an untouched one `embedded`.
-    expect(screen.getByTestId("price-row-tier-claude-opus-5")).toHaveTextContent(
-      "fetched",
-    );
-    expect(screen.getByTestId("price-row-tier-claude-sonnet-4-5")).toHaveTextContent(
-      "embedded",
-    );
   });
 
   it("surfaces the daemon's reason when a price row went inert", async () => {
@@ -330,10 +276,6 @@ describe("SettingsModal", () => {
           fetched_at: "2026-07-30T14:12:03Z",
           fetched_rows: 15,
           manual_keys: ["claude-opus-4-8"],
-          resolved: [
-            { key: "claude-opus-4-8", tier: "manual", input: 4.5, output: 22.5 },
-            { key: "claude-opus-5", tier: "fetched", input: 5, output: 25 },
-          ],
           reason:
             "price table (#427) — manual price tier refused 1 row(s): `claude-opus-5-20260501` (write `claude-opus-5` instead)",
         },

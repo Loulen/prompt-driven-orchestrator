@@ -326,10 +326,13 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
   qu'un tier masque un autre.~~ **Réalisé en #528**, et l'argument de suffisance était faux : juxtaposer
   `manual_keys` et `fetched_rows` ne **rend** pas le tier **gagnant** — c'est un calcul de précédence par
   clé de famille, pas une lecture. #425 a livré `unpriced_models` sans absorber cette vue. #528 l'expose
-  comme un tableau **`resolved`** (une entrée par **famille** : tier gagnant + **`$/MTok`**) **ajouté au
-  bloc `price_table` de `GET /settings`**, **pas** une route `GET /prices` (champ additif rétro-compatible,
-  cf. CONTEXT.md *Versioning*). Purement additif, lecture seule, dans le cadre de cet ADR — **pas de
-  nouvel ADR**.
+  comme un tableau **`resolved`** (une entrée par **famille** : tier gagnant + **`$/MTok`**) **porté par
+  `GET /stats/cost`** et rendu dans l'onglet **Stats → Cost**, à côté du bouton **« Sync costs »** : on
+  synchronise et on lit ce que PDO sait tarifer au même endroit. **Pas** une route `GET /prices` (champ
+  additif rétro-compatible sur un endpoint déjà consommé par cet onglet, zéro taxe proxy vite dev, cf.
+  CONTEXT.md *Versioning*). Il lit **la même** `PriceTable` que le fold de coût, donc la vue ne peut
+  jamais énumérer un ensemble que le tarificateur chiffrerait autrement (#373). Purement additif, lecture
+  seule, dans le cadre de cet ADR — **pas de nouvel ADR**.
 - **Un adaptateur LiteLLM** — le repli nommé ci-dessus.
 - **Le mode fast** et le **palier long-contexte > 200K** : ce sont des **paliers**, pas des prix de
   famille ; ni un multiplicateur ni une ligne de plus ne les exprime, et le premier n'a de toute façon

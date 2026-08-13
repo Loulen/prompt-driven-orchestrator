@@ -944,7 +944,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     // the guard's reasons land here and are deliberately NOT
                     // discriminated: see `RestartRefusal::RestartRejected`.
                     let refusal = restart_verdict::RestartRefusal::RestartRejected {
-                        message: reason,
+                        // #515: forward the typed cause as its historical prose;
+                        // the slug stays `restart_refused` (still NOT
+                        // discriminated — see `RestartRefusal::RestartRejected`).
+                        message: reason.to_string(),
                         session_killed: false,
                     };
                     warn!(

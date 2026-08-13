@@ -230,15 +230,19 @@ slot qu'un restart throttlé attend, et `retry_waiting_nodes` n'a aucun timer.
   complétion : `recoverable()` y est un `matches!` sur deux variantes de complétion, et y ajouter une
   variante `2xx` falsifierait `only_the_two_still_your_turn_refusals_are_recoverable`.
 - **Trois slugs discriminants pour le refus du garde** (`run_not_live`, `iteration_already_completed`,
-  `newer_iteration_live`). Mesuré : `Verdict::Reject` n'a **aucun** discriminant, ses dix sites de
-  construction passent tous par un helper privé qui ne porte qu'une `String`, et les distinguer
-  coûterait dix constructions plus neuf destructurations dans cinq fichiers — un refactor de la taille
-  de la tranche B, introduit en fraude dans une tranche de véracité. #490 a déjà tranché ce cas exact
-  sur cette forme exacte (`completion_rejected`, un slug, la prose dans `message`, épinglé par un
-  test) ; diverger donnerait deux discriminations filaires différentes au **même** garde. Bonus : ça
+  `newer_iteration_live`). Mesuré **à l'époque** : `Verdict::Reject` n'**avait aucun** discriminant, ses
+  dix sites de construction **passaient** tous par un helper privé qui ne **portait** qu'une `String`, et
+  les distinguer coûterait dix constructions plus neuf destructurations dans cinq fichiers — un refactor
+  de la taille de la tranche B, introduit en fraude dans une tranche de véracité. #490 a déjà tranché ce
+  cas exact sur cette forme exacte (`completion_rejected`, un slug, la prose dans `message`, épinglé par
+  un test) ; diverger donnerait deux discriminations filaires différentes au **même** garde. Bonus : ça
   élimine un slug **faux** — le garde teste `live_iter != iter`, donc un restart de l'iter 5 pendant
   que l'iter 1 vit tomberait dans `newer_iteration_live`, qui encoderait un fait que le garde ne teste
-  pas. Le discriminant `RejectKind` reste une issue à part, co-possédée avec #487.
+  pas. Le discriminant **a depuis été livré par #515** (`RejectReason` — le nom `RejectKind` proposé ici
+  a cédé à l'idiome du crate `KillReason`/`SkipReason`) : `Verdict::Reject` porte désormais une cause
+  typée, une variante par condition testée, sa prose régénérée à l'octet par `Display`. **Cette route
+  continue néanmoins de l'aplatir sur le seul slug `restart_refused`** ; la discrimination filaire sur
+  la route de retry reste #487.
 - **`202 Accepted` pour le throttle.** Défendable, mais ce serait le premier `202` du dépôt pour un
   bras de commande, et ADR-0025 a déjà légiféré ce `SpawnOutcome` en `200` : la discrimination
   appartient au corps.

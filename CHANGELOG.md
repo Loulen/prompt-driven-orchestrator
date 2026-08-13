@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.20.0
+
+Rien de cassant. Un champ **purement additif, lecture seule** : le bloc `price_table` de
+`GET /settings` porte désormais un tableau **`resolved`** — une entrée par clé de famille, avec le
+**tier gagnant** (`manual` / `fetched` / `embedded`) et le **`$/MTok`** effectivement appliqué
+(#528). C'est la même map `resolved` que celle avec laquelle `price_for` chiffre, donc la vue ne peut
+jamais diverger de ce qui tarifie réellement (#373). **Dans le cadre d'ADR-0034** : cette slice
+**amende sa hors-scope** (qui déclinait un `GET /prices` en le jugeant redondant avec `manual_keys` +
+`fetched_rows`) — **pas de nouvel ADR**, **pas de route dédiée** (champ additif rétro-compatible, cf.
+*Versioning*). Bump posé contre `origin/main` (1.19.0) ; à re-poser au next-free si un autre Run livre
+entre-temps.
+
 ## 1.18.0
 
 Rien de cassant. Une capacité **purement additive** : un Run peut désormais lire plusieurs dépôts

@@ -321,9 +321,15 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
 - **Nommer le modèle non tarifé** dans l'UI (`unpriced_models`, rendre `—` au lieu de `~$0.00`) :
   **#425**, AC #4. Sans elle, l'utilisateur reste incapable d'apprendre **quel** modèle manque quand
   aucun tier ne le connaît — et c'est ainsi que `claude-fable-5` est resté invisible.
-- **Un `GET /prices` exposant le tier gagnant par modèle.** C'est de la découvrabilité de modèles, donc
+- **Un `GET /prices` exposant le tier gagnant par modèle.** ~~C'est de la découvrabilité de modèles, donc
   le territoire de #425. `manual_keys` et `fetched_rows` sur `GET /settings` suffisent à rendre visible
-  qu'un tier masque un autre.
+  qu'un tier masque un autre.~~ **Réalisé en #528**, et l'argument de suffisance était faux : juxtaposer
+  `manual_keys` et `fetched_rows` ne **rend** pas le tier **gagnant** — c'est un calcul de précédence par
+  clé de famille, pas une lecture. #425 a livré `unpriced_models` sans absorber cette vue. #528 l'expose
+  comme un tableau **`resolved`** (une entrée par **famille** : tier gagnant + **`$/MTok`**) **ajouté au
+  bloc `price_table` de `GET /settings`**, **pas** une route `GET /prices` (champ additif rétro-compatible,
+  cf. CONTEXT.md *Versioning*). Purement additif, lecture seule, dans le cadre de cet ADR — **pas de
+  nouvel ADR**.
 - **Un adaptateur LiteLLM** — le repli nommé ci-dessus.
 - **Le mode fast** et le **palier long-contexte > 200K** : ce sont des **paliers**, pas des prix de
   famille ; ni un multiplicateur ni une ligne de plus ne les exprime, et le premier n'a de toute façon

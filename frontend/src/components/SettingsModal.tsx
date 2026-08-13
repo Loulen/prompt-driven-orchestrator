@@ -642,6 +642,38 @@ function SettingsForm({
                 ? `Last synced ${settings.price_table.fetched_at}${settings.price_table.source ? ` from ${settings.price_table.source}` : ""}`
                 : "Never synced — only the built-in prices apply."}
             </div>
+            {/* #528: the resolved table — one row per family, the WINNING tier and
+                the $/MTok actually in force. Reads the same `resolved` map the pricer
+                uses, so this can never drift from what bills (#373). Defensive `?.`
+                for the same `vite dev` reason as the block above. */}
+            {settings.price_table.resolved?.length ? (
+              <div
+                className="flex flex-col gap-0.5"
+                data-testid="setting-price-table-resolved"
+              >
+                {settings.price_table.resolved.map((row) => (
+                  <div
+                    key={row.key}
+                    className="flex items-center justify-between font-mono text-fg-3"
+                    style={{ fontSize: "10.5px" }}
+                    data-testid={`price-row-${row.key}`}
+                  >
+                    <span>{row.key}</span>
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="rounded bg-bg-3 px-1.5 py-0.5 text-fg-4"
+                        data-testid={`price-row-tier-${row.key}`}
+                      >
+                        {row.tier}
+                      </span>
+                      <span>
+                        ${row.input}/${row.output} /MTok
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {/* Server-supplied, because a hand-edited file passes through no
                 validator at all: an inert file or refused row is only visible here
                 (and in journalctl, which is this product's recurring blind spot). */}

@@ -543,6 +543,91 @@ async fn settings_names_both_price_paths_even_when_no_file_exists() {
     assert_eq!(fixture.hits(), 0, "reading settings must not egress");
 }
 
+// --- 7b. the resolved read view: winning tier + $/MTok per family (#528) ------
+
+#[tokio::test]
+async fn settings_resolved_lists_the_embedded_floor_on_a_fresh_home() {
+    // With no disk tier, `GET /settings` still exposes what PDO can price: the
+    // eleven embedded families, every one flagged `embedded`. `resolved: []` would
+    // lie — the const prices even with no HOME state.
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+
+    let s = settings(&daemon).await;
+    let rows = s["price_table"]["resolved"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        11,
+        "the embedded floor is eleven families: {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|r| r["tier"] == "embedded"),
+        "every floor row is the embedded tier: {rows:?}"
+    );
+
+    let row = |key: &str| rows.iter().find(|r| r["key"] == key).unwrap();
+    // The single most error-prone distinction: opus-4-8 at (5,25) ≠ opus-4-1 at (15,75).
+    assert_eq!(row("claude-opus-4-8")["input"].as_f64(), Some(5.0));
+    assert_eq!(row("claude-opus-4-8")["output"].as_f64(), Some(25.0));
+    assert_eq!(row("claude-opus-4-1")["input"].as_f64(), Some(15.0));
+    assert_eq!(row("claude-opus-4-1")["output"].as_f64(), Some(75.0));
+
+    // The sentinel is a `price_for` short-circuit, never a table row.
+    assert!(rows.iter().all(|r| r["key"] != "<synthetic>"));
+    assert_eq!(fixture.hits(), 0, "reading settings must not egress");
+}
+
+#[tokio::test]
+async fn settings_resolved_reports_a_manual_override_as_manual() {
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+    // A hand-written enterprise discount on a floor family.
+    std::fs::create_dir_all(manual_path(&daemon).parent().unwrap()).unwrap();
+    std::fs::write(
+        manual_path(&daemon),
+        "models:\n  claude-opus-4-8: { input: 4.5, output: 22.5 }\n",
+    )
+    .unwrap();
+
+    let s = settings(&daemon).await;
+    let rows = s["price_table"]["resolved"].as_array().unwrap();
+    let row = rows.iter().find(|r| r["key"] == "claude-opus-4-8").unwrap();
+    assert_eq!(row["tier"], "manual");
+    assert_eq!(row["input"].as_f64(), Some(4.5));
+    assert_eq!(row["output"].as_f64(), Some(22.5));
+
+    // The two signals agree — a resolved `manual` row is also in `manual_keys`.
+    let manual_keys: Vec<String> =
+        serde_json::from_value(s["price_table"]["manual_keys"].clone()).unwrap();
+    assert!(
+        manual_keys.contains(&"claude-opus-4-8".to_string()),
+        "manual_keys and the resolved tier must not disagree: {manual_keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn settings_resolved_reports_a_fetched_family_as_fetched() {
+    let fixture = spawn_fixture(MODELS_DEV).await;
+    let daemon = TestDaemon::spawn_with_price_source(seed, fixture.url())
+        .await
+        .unwrap();
+    assert_eq!(sync(&daemon).await.status(), 200);
+
+    let s = settings(&daemon).await;
+    let rows = s["price_table"]["resolved"].as_array().unwrap();
+    // `claude-opus-5` is fetch-only (absent from the embedded floor) → Fetched decides.
+    let row = rows.iter().find(|r| r["key"] == "claude-opus-5").unwrap();
+    assert_eq!(row["tier"], "fetched");
+    assert_eq!(row["input"].as_f64(), Some(5.0));
+    assert_eq!(row["output"].as_f64(), Some(25.0));
+    // Still no sentinel, even after a sync.
+    assert!(rows.iter().all(|r| r["key"] != "<synthetic>"));
+}
+
 #[tokio::test]
 async fn a_refused_row_is_inert_and_reported_but_never_fails_a_read() {
     let fixture = spawn_fixture(MODELS_DEV).await;

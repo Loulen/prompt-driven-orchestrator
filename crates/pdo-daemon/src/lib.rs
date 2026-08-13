@@ -7855,6 +7855,23 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // Both paths are ALWAYS reported, even when neither file exists — nothing is
     // ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming the paths
     // IS the entire discoverability story.
+    // #528: the resolved table, one row per family key — winning tier + $/MTok.
+    // Reads the SAME `resolved` map `price_for` uses, so the view can never
+    // enumerate a set the pricer would price otherwise (#373). The wire JSON is
+    // assembled HERE, not in `price_table.rs` (accessors there, formatting here).
+    let resolved_rows = |table: &price_table::PriceTable| -> Vec<serde_json::Value> {
+        table
+            .resolved_entries()
+            .map(|(key, price, tier)| {
+                serde_json::json!({
+                    "key": key,
+                    "tier": tier, // "manual" | "fetched" | "embedded" (rename_all lowercase)
+                    "input": price.input, // $/MTok
+                    "output": price.output, // $/MTok
+                })
+            })
+            .collect()
+    };
     let price_table_view = match &host_home_path {
         Some(home) => {
             let table = price_table::PriceTable::load(home);
@@ -7866,6 +7883,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
                 "fetched_at": table.fetched_at(),
                 "fetched_rows": table.fetched_rows(),
                 "manual_keys": table.manual_keys(),
+                // #528: one entry per family key, winning tier + resolved $/MTok.
+                "resolved": resolved_rows(&table),
                 // The SAME string the loader logs — one pure constructor, so the page
                 // and the journal can never disagree.
                 "reason": table.diagnostic(),
@@ -7879,6 +7898,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "fetched_at": null,
             "fetched_rows": 0,
             "manual_keys": [],
+            // #528, D9: the disk tiers are unreadable, but the const still prices —
+            // render the embedded floor, never `[]` (that would lie about what PDO
+            // can price).
+            "resolved": resolved_rows(&price_table::PriceTable::builtin()),
             "reason": "HOME is unset, so the price files have no resolvable path — \
                        only the prices compiled into the binary apply",
         }),

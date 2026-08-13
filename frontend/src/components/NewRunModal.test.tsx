@@ -37,7 +37,7 @@ vi.mock("../api", () => ({
     // #338: the modal seeds the "Auto-generated" box from this; default is ON.
     default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
     // #427: required on InstanceSettings; this modal does not read it.
-    price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+    price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], resolved: [], reason: null },
     updated_at: "2026-07-01T10:00:00.000Z",
   }),
   // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
@@ -800,7 +800,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       home: "/home/user",
       autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
       default_auto_name: { effective, source: effective ? "default" : "stored", stored: effective ? null : false, env: null, default: true },
-      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], resolved: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
     };
   }
@@ -1553,7 +1553,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     // #338: the modal seeds the "Auto-generated" box from this; default is ON.
     default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
-      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], resolved: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -1835,7 +1835,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
     // #338: the modal seeds the "Auto-generated" box from this; default is ON.
     default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
-      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], resolved: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
       ...overrides,
     };
@@ -2045,7 +2045,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
     // #338: the modal seeds the "Auto-generated" box from this; default is ON.
     default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
       // #427: required on InstanceSettings; this modal does not read it.
-      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], resolved: [], reason: null },
       updated_at: "2026-07-01T10:00:00.000Z",
     });
   });

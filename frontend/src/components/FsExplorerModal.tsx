@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 // `File` is aliased: the bare name would shadow the DOM `File` global in this module.
 import { ArrowUp, File as FileIcon, Folder, FolderGit2, Link2 } from "lucide-react";
 import { browseFs } from "../api";
@@ -52,9 +52,12 @@ interface Props {
  * unchanged to the pixel) and the settings Dockerfile picker (`mode="file"`,
  * `showHidden`).
  *
- * `role="dialog"` / a focus trap are deliberately out of scope: they are absent since
- * #131, and adding them here would change observable behaviour under an extraction
- * that is meant to change none.
+ * Accessible dialog (#437): `role="dialog"` + `aria-modal`, a name via
+ * `aria-labelledby` (the title row) or an `aria-label` derived from `mode`, a
+ * Tab/Shift+Tab focus trap, initial focus on the card, and focus restored to the
+ * opener on close. First focus trap in the app; if a PARENT modal ever gains its
+ * own trap, the two `document` Tab listeners must be coordinated so only the
+ * topmost is active (mark the background `inert`, or a shared trap stack).
  */
 export default function FsExplorerModal({
   mode = "dir",
@@ -75,6 +78,7 @@ export default function FsExplorerModal({
   const [truncated, setTruncated] = useState(false);
   /** File mode only: the selected file, `null` until one is clicked. */
   const [picked, setPicked] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Navigate to `path` (omit → backend default root). Always lands on a 200 shape: an
   // in-body `error` (e.g. permission denied) is surfaced inline while the breadcrumb is
@@ -138,6 +142,57 @@ export default function FsExplorerModal({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
+  // Focus initial + restitution (#437). Montage == ouverture (cf. l'effet de fetch
+  // ci-dessus). On capture l'opener (la loupe déclencheuse) AVANT de bouger le focus,
+  // on pose le focus sur la carte pour que le lecteur d'écran annonce le dialogue par
+  // son nom accessible, et on rend le focus à l'opener au démontage. `[]` volontaire :
+  // mêmes sémantiques "ouvrir une fois" que l'effet de fetch. StrictMode double-invoque
+  // de façon idempotente (capture -> restore -> capture lit le même opener).
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus?.();
+    };
+  }, []);
+
+  // Piège de focus (#437) : garde Tab / Shift+Tab dans la carte. Effet distinct de
+  // l'Escape pour ne pas perturber son stopPropagation / ordre d'écouteurs. document +
+  // phase bubble, comme l'Escape de ce fichier. Interception AUX BORDS seulement : on ne
+  // redirige qu'au premier/dernier focusable, le Tab au milieu reste natif (pas de calcul
+  // sur les ~1000 lignes, le scroll-suit-focus marche tout seul). Re-query à chaque Tab
+  // pour suivre le churn asynchrone des lignes (navigateTo).
+  useEffect(() => {
+    function handleTab(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      const card = dialogRef.current;
+      if (!card) return;
+      const items = card.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), ' +
+          'select:not([disabled]), textarea:not([disabled]), ' +
+          '[tabindex]:not([tabindex="-1"])',
+      );
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const inside = card.contains(active);
+      if (e.shiftKey) {
+        if (active === first || !inside) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last || !inside) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", handleTab);
+    return () => document.removeEventListener("keydown", handleTab);
+  }, []);
+
   const handleRow = (entry: BrowseEntry) => {
     // Dir mode: the listing is directories-only by contract, so a row is ALWAYS a
     // navigation and `is_dir` is never consulted — which keeps the frozen
@@ -172,13 +227,23 @@ export default function FsExplorerModal({
       }}
     >
       <div
-        className="flex max-h-[70vh] w-[460px] flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? `${modalId}-title` : undefined}
+        aria-label={title ? undefined : mode === "file" ? "Choose a file" : "Choose a folder"}
+        className="flex max-h-[70vh] w-[460px] flex-col rounded-lg border border-line bg-bg-4 shadow-xl focus:outline-none"
         data-testid={modalId}
         onClick={(e) => e.stopPropagation()}
       >
         {title && (
           <div className="border-b border-line px-3 py-2">
-            <span className="font-semibold text-fg" style={{ fontSize: "12.5px" }}>
+            <span
+              id={`${modalId}-title`}
+              className="font-semibold text-fg"
+              style={{ fontSize: "12.5px" }}
+            >
               {title}
             </span>
           </div>
